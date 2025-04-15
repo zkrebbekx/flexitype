@@ -1,0 +1,223 @@
+# Product Catalog Type Definitions
+
+# Base Product Type
+product:
+  id: "product-001"
+  name: "Product"
+  description: "Product item with categories and tags"
+  attributes:
+    - id: "attr-001"
+      name: "name"
+      description: "Product name"
+      dataType: "string"
+      required: true
+      validationRules:
+        - type: "required"
+    
+    - id: "attr-002"
+      name: "price"
+      description: "Product price"
+      dataType: "float"
+      required: true
+      validationRules:
+        - type: "required"
+        - type: "range"
+          min: 0.01
+    
+    - id: "attr-003"
+      name: "categories"
+      description: "Product categories"
+      dataType: "string"
+      required: true
+      multiValued: true
+      validationRules:
+        - type: "enum"
+          values:
+            - "Electronics"
+            - "Computers"
+            - "Smartphones"
+            - "Audio"
+            - "Cameras"
+            - "Home"
+            - "Kitchen"
+            - "Furniture"
+            - "Decor"
+            - "Appliances"
+            - "Clothing"
+            - "Shoes"
+            - "Accessories"
+            - "Outerwear"
+            - "Sportswear"
+    
+    - id: "attr-004"
+      name: "tags"
+      description: "Product tags"
+      dataType: "string"
+      required: false
+      multiValued: true
+      validationRules:
+        - type: "enum"
+          values:
+            - "New"
+            - "Featured"
+            - "Sale"
+            - "Clearance"
+            - "Limited"
+            - "Exclusive"
+            - "Premium"
+            - "Budget"
+            - "Bestseller"
+            - "Trending"
+            - "Seasonal"
+      cascades:
+        - enabled: true
+          behavior: "inherit"
+          logic: "price > 500 => tags = \"Premium\""
+          weight: 300
+        - enabled: true
+          behavior: "inherit"
+          logic: "stockQuantity < 50 && stockQuantity > 0 => tags = \"Limited\""
+          weight: 400
+        - enabled: true
+          behavior: "inherit"
+          logic: "stockQuantity < 10 && stockQuantity > 0 => tags = \"Clearance\""
+          weight: 500
+    
+    - id: "attr-005"
+      name: "stockQuantity"
+      description: "Number of items in stock"
+      dataType: "int"
+      required: true
+      defaultValue: 0
+      validationRules:
+        - type: "required"
+
+# Electronics Product Type
+electronics_product:
+  id: "product-002"
+  name: "ElectronicsProduct"
+  description: "Electronics product with specialized attributes"
+  parentType: "product-001"
+  attributes:
+    - id: "attr-006"
+      name: "warrantyMonths"
+      description: "Warranty period in months"
+      dataType: "int"
+      required: true
+      defaultValue: 12
+    
+    - id: "attr-007"
+      name: "specifications"
+      description: "Technical specifications"
+      dataType: "string"
+      required: false
+      multiValued: true
+    
+    # Override the tags attribute with additional cascade
+    - id: "attr-004"
+      name: "tags"
+      description: "Product tags"
+      dataType: "string"
+      required: false
+      multiValued: true
+      cascades:
+        - enabled: true
+          behavior: "inherit"
+          logic: "warrantyMonths > 24 => tags = \"Premium\""
+          weight: 600
+
+# Sample Instances
+
+instances:
+  # Standard product
+  - id: "product-inst-001"
+    typeId: "product-001"
+    attributes:
+      name: "Standard Office Desk"
+      price: 299.99
+      categories:
+        - "Home"
+        - "Furniture"
+      tags:
+        - "New"
+        - "Featured"
+      stockQuantity: 100
+  
+  # Premium product
+  - id: "product-inst-002"
+    typeId: "product-001"
+    attributes:
+      name: "Premium Executive Desk"
+      price: 899.99
+      categories:
+        - "Home"
+        - "Furniture"
+        - "Premium"
+      tags:
+        - "New"
+      stockQuantity: 75
+  
+  # Limited stock product
+  - id: "product-inst-003"
+    typeId: "product-001"
+    attributes:
+      name: "Designer Lamp"
+      price: 129.99
+      categories:
+        - "Home"
+        - "Decor"
+      tags:
+        - "New"
+      stockQuantity: 35
+  
+  # Clearance product
+  - id: "product-inst-004"
+    typeId: "product-001"
+    attributes:
+      name: "Vintage Bookshelf"
+      price: 199.99
+      categories:
+        - "Home"
+        - "Furniture"
+      tags:
+        - "Sale"
+      stockQuantity: 5
+  
+  # Electronics product with extended warranty
+  - id: "product-inst-005"
+    typeId: "product-002"
+    attributes:
+      name: "Ultrabook Pro"
+      price: 1299.99
+      categories:
+        - "Electronics"
+        - "Computers"
+      tags:
+        - "New"
+        - "Featured"
+      stockQuantity: 50
+      warrantyMonths: 36
+      specifications:
+        - "16GB RAM"
+        - "1TB SSD"
+        - "Intel i7"
+        - "14-inch Display"
+  
+  # Electronics product with standard warranty and low stock
+  - id: "product-inst-006"
+    typeId: "product-002"
+    attributes:
+      name: "Smartphone XL"
+      price: 699.99
+      categories:
+        - "Electronics"
+        - "Smartphones"
+      tags:
+        - "New"
+      stockQuantity: 8
+      warrantyMonths: 12
+      specifications:
+        - "6GB RAM"
+        - "128GB Storage"
+        - "6.5-inch OLED"
+        - "48MP Camera"

@@ -1,0 +1,233 @@
+syntax = "proto3";
+
+package flexitype.v1;
+
+option go_package = "github.com/zac300/flexitype/api/flexitypev1;flexitypev1";
+
+// FlexiTypeService provides API for managing dynamic types and instances
+service FlexiTypeService {
+  // Type operations
+  rpc CreateType(CreateTypeRequest) returns (TypeResponse);
+  rpc GetType(GetTypeRequest) returns (TypeResponse);
+  rpc ListTypes(ListTypesRequest) returns (ListTypesResponse);
+  rpc UpdateType(UpdateTypeRequest) returns (TypeResponse);
+  rpc ArchiveType(ArchiveTypeRequest) returns (TypeResponse);
+  rpc UnarchiveType(UnarchiveTypeRequest) returns (TypeResponse);
+  
+  // Attribute operations
+  rpc AddAttribute(AddAttributeRequest) returns (TypeResponse);
+  rpc UpdateAttribute(UpdateAttributeRequest) returns (TypeResponse);
+  rpc DeleteAttribute(DeleteAttributeRequest) returns (TypeResponse);
+  rpc SetAttributeDisabledState(SetAttributeDisabledStateRequest) returns (TypeResponse);
+  
+  // Instance operations
+  rpc CreateInstance(CreateInstanceRequest) returns (InstanceResponse);
+  rpc GetInstance(GetInstanceRequest) returns (InstanceResponse);
+  rpc QueryInstances(QueryInstancesRequest) returns (QueryInstancesResponse);
+  rpc UpdateInstance(UpdateInstanceRequest) returns (InstanceResponse);
+  rpc ArchiveInstance(ArchiveInstanceRequest) returns (InstanceResponse);
+  rpc UnarchiveInstance(UnarchiveInstanceRequest) returns (InstanceResponse);
+  
+  // Schema operations
+  rpc ExportTypeSchema(ExportTypeSchemaRequest) returns (SchemaResponse);
+  rpc ImportTypeSchema(ImportTypeSchemaRequest) returns (TypeResponse);
+}
+
+// Type-related messages
+message CreateTypeRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string parent_type_id = 4;
+}
+
+message GetTypeRequest {
+  string id = 1;
+}
+
+message ListTypesRequest {
+  // Pagination and filtering options
+  int32 page_size = 1;
+  string page_token = 2;
+  bool include_archived = 3; // If true, include archived types in the results
+}
+
+message ListTypesResponse {
+  repeated TypeDefinition types = 1;
+  string next_page_token = 2;
+}
+
+message UpdateTypeRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string parent_type_id = 4;
+}
+
+message ArchiveTypeRequest {
+  string id = 1;
+}
+
+message UnarchiveTypeRequest {
+  string id = 1;
+}
+
+message TypeResponse {
+  TypeDefinition type = 1;
+}
+
+// Attribute-related messages
+message AddAttributeRequest {
+  string type_id = 1;
+  AttributeDefinition attribute = 2;
+}
+
+message UpdateAttributeRequest {
+  string type_id = 1;
+  AttributeDefinition attribute = 2;
+}
+
+message DeleteAttributeRequest {
+  string type_id = 1;
+  string attribute_id = 2;
+}
+
+message SetAttributeDisabledStateRequest {
+  string type_id = 1;
+  string attribute_id = 2;
+  bool disabled = 3;
+}
+
+// Instance-related messages
+message CreateInstanceRequest {
+  string id = 1;
+  string type_id = 2;
+  map<string, AttributeValue> attribute_values = 3;
+}
+
+message GetInstanceRequest {
+  string id = 1;
+}
+
+message QueryInstancesRequest {
+  string type_id = 1;
+  map<string, AttributeValue> attribute_filters = 2;
+  int32 page_size = 3;
+  string page_token = 4;
+  bool include_archived = 5; // If true, include archived instances in query results
+}
+
+message QueryInstancesResponse {
+  repeated Instance instances = 1;
+  string next_page_token = 2;
+}
+
+message UpdateInstanceRequest {
+  string id = 1;
+  map<string, AttributeValue> attribute_values = 2;
+}
+
+message ArchiveInstanceRequest {
+  string id = 1;
+}
+
+message UnarchiveInstanceRequest {
+  string id = 1;
+}
+
+message InstanceResponse {
+  Instance instance = 1;
+}
+
+// Schema operations
+message ExportTypeSchemaRequest {
+  string type_id = 1;
+}
+
+message ImportTypeSchemaRequest {
+  string yaml_content = 1;
+}
+
+message SchemaResponse {
+  string yaml_content = 1;
+}
+
+// Type definition
+message TypeDefinition {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  int32 version = 4;
+  string parent_type_id = 5;
+  repeated AttributeDefinition attributes = 6;
+  string created_at = 7;  // ISO8601 formatted timestamp when the type was created
+  string updated_at = 8;  // ISO8601 formatted timestamp when the type was last updated
+  string archived_at = 9; // ISO8601 formatted timestamp when the type was archived
+}
+
+// Attribute definition
+message AttributeDefinition {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string data_type = 4;
+  bool required = 5;
+  AttributeValue default_value = 6;
+  bool multi_valued = 7;
+  bool disabled = 8;
+  repeated CascadeDefinition cascades = 13; // Multiple cascades for inheritance
+  repeated ValidationRule validation_rules = 10;
+  string created_at = 11; // ISO8601 formatted timestamp when the attribute was created
+  string updated_at = 12; // ISO8601 formatted timestamp when the attribute was last updated
+}
+
+// Cascade definition for inheritance
+message CascadeDefinition {
+  bool enabled = 1;
+  string behavior = 2;  // "inherit", "override", or "disabled"
+  string logic = 3;     // Logic expression
+  int32 weight = 4;     // Execution weight (higher weight = higher priority)
+}
+
+// Multiple cascades definition for attributes
+message MultiCascadeDefinition {
+  repeated CascadeDefinition cascades = 1;
+}
+
+// Validation rule
+message ValidationRule {
+  string type = 1;
+  map<string, AttributeValue> parameters = 2;
+}
+
+// Instance
+message Instance {
+  string id = 1;
+  string type_id = 2;
+  int32 type_version = 3;
+  map<string, AttributeValue> attribute_values = 4;
+  string created_at = 5;  // ISO8601 formatted timestamp when the instance was created
+  string updated_at = 6;  // ISO8601 formatted timestamp when the instance was last updated
+  string archived_at = 7; // ISO8601 formatted timestamp when the instance was archived
+}
+
+// Attribute value - can be of different types
+message AttributeValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double float_value = 3;
+    bool bool_value = 4;
+    string date_value = 5; // ISO8601 formatted string
+    ObjectValue object_value = 6;
+    ArrayValue array_value = 7;
+  }
+}
+
+message ObjectValue {
+  map<string, AttributeValue> fields = 1;
+}
+
+message ArrayValue {
+  repeated AttributeValue values = 1;
+}

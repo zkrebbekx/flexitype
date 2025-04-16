@@ -155,11 +155,60 @@ func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinit
 
 		// Save cascades
 		for _, cascade := range attr.Cascades {
+			// Handle validation cascade values
+			var validationAction, validationTargetField sql.NullString
+			var validationValues []byte
+			var validationStringValue sql.NullString
+			var validationNumericValue sql.NullFloat64
+
+			// Set validation fields if this is a validation cascade
+			if cascade.ValidationConfig != nil {
+				validationAction = sql.NullString{
+					String: string(cascade.ValidationConfig.Action),
+					Valid:  true,
+				}
+
+				if cascade.ValidationConfig.TargetField != "" {
+					validationTargetField = sql.NullString{
+						String: cascade.ValidationConfig.TargetField,
+						Valid:  true,
+					}
+				}
+
+				// Convert values array to JSON if present
+				if len(cascade.ValidationConfig.Values) > 0 {
+					valuesJSON, err := json.Marshal(cascade.ValidationConfig.Values)
+					if err != nil {
+						return fmt.Errorf("failed to marshal validation values: %w", err)
+					}
+					validationValues = valuesJSON
+				}
+
+				// Set string or numeric value if present
+				if cascade.ValidationConfig.StringValue != "" {
+					validationStringValue = sql.NullString{
+						String: cascade.ValidationConfig.StringValue,
+						Valid:  true,
+					}
+				}
+
+				if cascade.ValidationConfig.NumericValue != 0 {
+					validationNumericValue = sql.NullFloat64{
+						Float64: cascade.ValidationConfig.NumericValue,
+						Valid:   true,
+					}
+				}
+			}
+
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO flexitype.attribute_cascade (
-					attribute_id, cascade_id, enabled, behavior, logic, weight
-				) VALUES ($1, $2, $3, $4, $5, $6)`,
-				attr.ID, cascade.ID, cascade.Enabled, string(cascade.Behavior), cascade.Logic, cascade.Weight)
+					attribute_id, cascade_id, enabled, behavior, logic, weight,
+					validation_action, validation_target_field, validation_values,
+					validation_string_value, validation_numeric_value
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+				attr.ID, cascade.ID, cascade.Enabled, string(cascade.Behavior), cascade.Logic, cascade.Weight,
+				validationAction, validationTargetField, validationValues,
+				validationStringValue, validationNumericValue)
 			if err != nil {
 				return fmt.Errorf("failed to insert cascade: %w", err)
 			}
@@ -214,13 +263,18 @@ type attributeRecord struct {
 
 // cascadeRecord is the database representation of an attribute cascade
 type cascadeRecord struct {
-	ID          int64  `db:"id"`
-	AttributeID string `db:"attribute_id"`
-	CascadeID   string `db:"cascade_id"`
-	Enabled     bool   `db:"enabled"`
-	Behavior    string `db:"behavior"`
-	Logic       string `db:"logic"`
-	Weight      int    `db:"weight"`
+	ID                    int64           `db:"id"`
+	AttributeID           string          `db:"attribute_id"`
+	CascadeID             string          `db:"cascade_id"`
+	Enabled               bool            `db:"enabled"`
+	Behavior              string          `db:"behavior"`
+	Logic                 string          `db:"logic"`
+	Weight                int             `db:"weight"`
+	ValidationAction      sql.NullString  `db:"validation_action"`
+	ValidationTargetField sql.NullString  `db:"validation_target_field"`
+	ValidationValues      []byte          `db:"validation_values"`
+	ValidationStringValue sql.NullString  `db:"validation_string_value"`
+	ValidationNumericVal  sql.NullFloat64 `db:"validation_numeric_value"`
 }
 
 // validationRuleRecord is the database representation of a validation rule
@@ -323,7 +377,9 @@ func (r *TypeRepositoryImpl) GetByID(ctx context.Context, id string) (*core.Type
 		// Get cascades
 		var cascades []*cascadeRecord
 		err = tx.SelectContext(ctx, &cascades,
-			`SELECT id, attribute_id, cascade_id, enabled, behavior, logic, weight
+			`SELECT id, attribute_id, cascade_id, enabled, behavior, logic, weight,
+			 validation_action, validation_target_field, validation_values,
+			 validation_string_value, validation_numeric_value
 			 FROM flexitype.attribute_cascade
 			 WHERE attribute_id = $1`,
 			attrRecord.ID)
@@ -333,6 +389,7 @@ func (r *TypeRepositoryImpl) GetByID(ctx context.Context, id string) (*core.Type
 
 		// Process cascades
 		for _, cascadeRecord := range cascades {
+			// Add the cascade
 			attr.AddCascade(
 				cascadeRecord.CascadeID,
 				cascadeRecord.Enabled,
@@ -340,6 +397,48 @@ func (r *TypeRepositoryImpl) GetByID(ctx context.Context, id string) (*core.Type
 				cascadeRecord.Logic,
 				cascadeRecord.Weight,
 			)
+
+			// Get a reference to the cascade we just added
+			if len(attr.Cascades) == 0 {
+				continue // Safeguard against empty cascade list
+			}
+			cascadeIndex := len(attr.Cascades) - 1
+			cascade := &attr.Cascades[cascadeIndex]
+
+			// Add validation configuration if present
+			if cascadeRecord.ValidationAction.Valid {
+				// Create validation config
+				validationConfig := &core.CascadeValidationConfig{
+					Action: core.CascadeValidationAction(cascadeRecord.ValidationAction.String),
+				}
+
+				// Set target field if present
+				if cascadeRecord.ValidationTargetField.Valid {
+					validationConfig.TargetField = cascadeRecord.ValidationTargetField.String
+				}
+
+				// Parse values from JSON if present
+				if len(cascadeRecord.ValidationValues) > 0 {
+					var values []interface{}
+					if err := json.Unmarshal(cascadeRecord.ValidationValues, &values); err != nil {
+						return nil, fmt.Errorf("failed to unmarshal validation values: %w", err)
+					}
+					validationConfig.Values = values
+				}
+
+				// Set string value if present
+				if cascadeRecord.ValidationStringValue.Valid {
+					validationConfig.StringValue = cascadeRecord.ValidationStringValue.String
+				}
+
+				// Set numeric value if present
+				if cascadeRecord.ValidationNumericVal.Valid {
+					validationConfig.NumericValue = cascadeRecord.ValidationNumericVal.Float64
+				}
+
+				// Set validation config on cascade
+				cascade.ValidationConfig = validationConfig
+			}
 		}
 
 		// Get validation rules

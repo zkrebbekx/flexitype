@@ -24,18 +24,50 @@ const (
 type CascadeBehavior string
 
 const (
-	CascadeInherit  CascadeBehavior = "inherit"  // Inherit cascade as-is
-	CascadeOverride CascadeBehavior = "override" // Override with child's own value
-	CascadeDisabled CascadeBehavior = "disabled" // Disable the cascade in this child
+	CascadeInherit      CascadeBehavior = "inherit"       // Inherit cascade as-is
+	CascadeOverride     CascadeBehavior = "override"      // Override with child's own value
+	CascadeDisabled     CascadeBehavior = "disabled"      // Disable the cascade in this child
+	CascadeValidation   CascadeBehavior = "validation"    // Cascade modifies validation rules
+	CascadeRequirement  CascadeBehavior = "requirement"   // Cascade changes whether field is required
+	CascadeEnumValues   CascadeBehavior = "enum_values"   // Cascade modifies enum allowed values
+	CascadeDefaultValue CascadeBehavior = "default_value" // Cascade modifies default value
 )
+
+// CascadeValidationAction specifies what validation action to perform
+type CascadeValidationAction string
+
+const (
+	ActionMakeRequired     CascadeValidationAction = "make_required"      // Make the field required
+	ActionMakeOptional     CascadeValidationAction = "make_optional"      // Make the field optional
+	ActionSetEnumValues    CascadeValidationAction = "set_enum_values"    // Set/replace enum allowed values
+	ActionAddEnumValues    CascadeValidationAction = "add_enum_values"    // Add values to an enum
+	ActionRemoveEnumValues CascadeValidationAction = "remove_enum_values" // Remove values from an enum
+	ActionSetMinValue      CascadeValidationAction = "set_min_value"      // Set min value for numeric fields
+	ActionSetMaxValue      CascadeValidationAction = "set_max_value"      // Set max value for numeric fields
+	ActionSetMinLength     CascadeValidationAction = "set_min_length"     // Set min length for string fields
+	ActionSetMaxLength     CascadeValidationAction = "set_max_length"     // Set max length for string fields
+	ActionSetPattern       CascadeValidationAction = "set_pattern"        // Set regex pattern for string fields
+	ActionSetDefaultValue  CascadeValidationAction = "set_default_value"  // Set default value
+)
+
+// CascadeValidationConfig contains configuration for validation modifications
+type CascadeValidationConfig struct {
+	Action       CascadeValidationAction // Action to perform
+	TargetField  string                  // Target field to apply the validation to (empty for self)
+	Values       []interface{}           // Values to use (enum values, min/max, etc.)
+	StringValue  string                  // String value (for pattern, etc.)
+	NumericValue float64                 // Numeric value (for min/max, etc.)
+}
 
 // Cascade represents an attribute that can be inherited by child types
 type Cascade struct {
-	ID       string          // Unique identifier for the cascade
-	Enabled  bool            // If true, this attribute is a cascade that cascades to child types
-	Behavior CascadeBehavior // How the cascade behaves when inherited by children
-	Logic    string          // Optional expression for dynamic logic/constraints
-	Weight   int             // Execution weight for the cascade (higher weight = higher priority)
+	ID               string                   // Unique identifier for the cascade
+	Enabled          bool                     // If true, this attribute is a cascade that cascades to child types
+	Behavior         CascadeBehavior          // How the cascade behaves when inherited by children
+	Logic            string                   // Optional expression for dynamic logic/constraints
+	Weight           int                      // Execution weight for the cascade (higher weight = higher priority)
+	ValidationConfig *CascadeValidationConfig // Configuration for validation cascades (used when Behavior is CascadeValidation*)
+	expression       ExpressionEvaluator      // Optional custom expression evaluator
 }
 
 // AttributeDefinition represents a dynamic attribute that can be assigned to a type
@@ -95,6 +127,120 @@ func (a *AttributeDefinition) AddCascade(id string, enabled bool, behavior Casca
 	}
 	a.Cascades = append(a.Cascades, cascade)
 	a.UpdatedAt = time.Now()
+}
+
+// AddValidationCascade adds a cascade that modifies validation rules based on conditions
+func (a *AttributeDefinition) AddValidationCascade(id string, enabled bool, behavior CascadeBehavior,
+	logic string, weight int, validationConfig *CascadeValidationConfig) {
+
+	cascade := Cascade{
+		ID:               id,
+		Enabled:          enabled,
+		Behavior:         behavior,
+		Logic:            logic,
+		Weight:           weight,
+		ValidationConfig: validationConfig,
+		expression:       NewExpression(logic),
+	}
+	a.Cascades = append(a.Cascades, cascade)
+	a.UpdatedAt = time.Now()
+}
+
+// AddValidationCascadeWithCustomExpr adds a cascade with a custom expression evaluator
+func (a *AttributeDefinition) AddValidationCascadeWithCustomExpr(id string, enabled bool,
+	behavior CascadeBehavior, expr ExpressionEvaluator, weight int, validationConfig *CascadeValidationConfig) {
+
+	cascade := Cascade{
+		ID:               id,
+		Enabled:          enabled,
+		Behavior:         behavior,
+		Logic:            "Custom expression",
+		Weight:           weight,
+		ValidationConfig: validationConfig,
+		expression:       expr,
+	}
+	a.Cascades = append(a.Cascades, cascade)
+	a.UpdatedAt = time.Now()
+}
+
+// AddRequirementCascade is a shorthand for adding a cascade that makes a field required or optional
+func (a *AttributeDefinition) AddRequirementCascade(id string, enabled bool, logic string, weight int,
+	targetField string, makeRequired bool) {
+
+	action := ActionMakeOptional
+	if makeRequired {
+		action = ActionMakeRequired
+	}
+
+	cfg := &CascadeValidationConfig{
+		Action:      action,
+		TargetField: targetField,
+	}
+
+	a.AddValidationCascade(id, enabled, CascadeRequirement, logic, weight, cfg)
+}
+
+// AddEnumValuesCascade is a shorthand for adding a cascade that modifies enum values
+func (a *AttributeDefinition) AddEnumValuesCascade(id string, enabled bool, logic string, weight int,
+	targetField string, action CascadeValidationAction, values []interface{}) {
+
+	cfg := &CascadeValidationConfig{
+		Action:      action,
+		TargetField: targetField,
+		Values:      values,
+	}
+
+	a.AddValidationCascade(id, enabled, CascadeEnumValues, logic, weight, cfg)
+}
+
+// AddNumericConstraintCascade adds a cascade that sets min/max values for numeric fields
+func (a *AttributeDefinition) AddNumericConstraintCascade(id string, enabled bool, logic string, weight int,
+	targetField string, action CascadeValidationAction, value float64) {
+
+	cfg := &CascadeValidationConfig{
+		Action:       action,
+		TargetField:  targetField,
+		NumericValue: value,
+	}
+
+	a.AddValidationCascade(id, enabled, CascadeValidation, logic, weight, cfg)
+}
+
+// AddStringConstraintCascade adds a cascade that sets min/max length or pattern for string fields
+func (a *AttributeDefinition) AddStringConstraintCascade(id string, enabled bool, logic string, weight int,
+	targetField string, action CascadeValidationAction, value interface{}) {
+
+	cfg := &CascadeValidationConfig{
+		Action:      action,
+		TargetField: targetField,
+	}
+
+	// Handle different actions
+	switch action {
+	case ActionSetMinLength, ActionSetMaxLength:
+		if numValue, ok := value.(int); ok {
+			cfg.NumericValue = float64(numValue)
+		}
+	case ActionSetPattern:
+		if strValue, ok := value.(string); ok {
+			cfg.StringValue = strValue
+		}
+	}
+
+	a.AddValidationCascade(id, enabled, CascadeValidation, logic, weight, cfg)
+}
+
+// AddDefaultValueCascade adds a cascade that sets a default value based on conditions
+func (a *AttributeDefinition) AddDefaultValueCascade(id string, enabled bool, logic string, weight int,
+	targetField string, defaultValue interface{}) {
+
+	cfg := &CascadeValidationConfig{
+		Action:      ActionSetDefaultValue,
+		TargetField: targetField,
+		Values:      []interface{}{defaultValue},
+	}
+
+	a.AddValidationCascade(id, enabled, CascadeDefaultValue, logic, weight, cfg)
 }
 
 // GetCascades returns all enabled cascades sorted by weight (highest weight first)

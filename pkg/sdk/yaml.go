@@ -53,13 +53,23 @@ type TypeDefinitionYAML struct {
 	Attributes  []AttributeYAML `yaml:"attributes"`
 }
 
+// ValidationConfigYAML represents validation configuration in YAML format
+type ValidationConfigYAML struct {
+	Action       string        `yaml:"action,omitempty"`
+	TargetField  string        `yaml:"targetField,omitempty"`
+	Values       []interface{} `yaml:"values,omitempty"`
+	StringValue  string        `yaml:"stringValue,omitempty"`
+	NumericValue float64       `yaml:"numericValue,omitempty"`
+}
+
 // CascadeYAML represents cascade properties in YAML format
 type CascadeYAML struct {
-	ID       string `yaml:"id,omitempty"`
-	Enabled  bool   `yaml:"enabled"`
-	Behavior string `yaml:"behavior,omitempty"`
-	Logic    string `yaml:"logic,omitempty"`
-	Weight   int    `yaml:"weight,omitempty"`
+	ID               string                `yaml:"id,omitempty"`
+	Enabled          bool                  `yaml:"enabled"`
+	Behavior         string                `yaml:"behavior,omitempty"`
+	Logic            string                `yaml:"logic,omitempty"`
+	Weight           int                   `yaml:"weight,omitempty"`
+	ValidationConfig *ValidationConfigYAML `yaml:"validationConfig,omitempty"`
 }
 
 // AttributeYAML represents an attribute definition in YAML format
@@ -122,6 +132,19 @@ func ExportTypeToYAML(typeDef *core.TypeDefinition) (*TypeDefinitionYAML, error)
 				Logic:    cascade.Logic,
 				Weight:   cascade.Weight,
 			}
+
+			// Add validation configuration if present
+			if cascade.ValidationConfig != nil {
+				yamlValidationConfig := &ValidationConfigYAML{
+					Action:       string(cascade.ValidationConfig.Action),
+					TargetField:  cascade.ValidationConfig.TargetField,
+					Values:       cascade.ValidationConfig.Values,
+					StringValue:  cascade.ValidationConfig.StringValue,
+					NumericValue: cascade.ValidationConfig.NumericValue,
+				}
+				yamlCascade.ValidationConfig = yamlValidationConfig
+			}
+
 			yamlAttr.Cascades = append(yamlAttr.Cascades, yamlCascade)
 		}
 
@@ -211,6 +234,7 @@ func ImportTypeFromYAML(yamlDef *TypeDefinitionYAML) (*core.TypeDefinition, erro
 
 			// Add all cascades from YAML
 			for _, yamlCascade := range yamlAttr.Cascades {
+				// Create normal cascade
 				attr.AddCascade(
 					yamlCascade.ID,
 					yamlCascade.Enabled,
@@ -218,6 +242,24 @@ func ImportTypeFromYAML(yamlDef *TypeDefinitionYAML) (*core.TypeDefinition, erro
 					yamlCascade.Logic,
 					yamlCascade.Weight,
 				)
+
+				// Add validation configuration if present, using the last added cascade
+				if yamlCascade.ValidationConfig != nil && len(attr.Cascades) > 0 {
+					// Get the last cascade we just added
+					cascadeIndex := len(attr.Cascades) - 1
+
+					// Create validation config
+					validationConfig := &core.CascadeValidationConfig{
+						Action:       core.CascadeValidationAction(yamlCascade.ValidationConfig.Action),
+						TargetField:  yamlCascade.ValidationConfig.TargetField,
+						Values:       yamlCascade.ValidationConfig.Values,
+						StringValue:  yamlCascade.ValidationConfig.StringValue,
+						NumericValue: yamlCascade.ValidationConfig.NumericValue,
+					}
+
+					// Add validation config to the cascade
+					attr.Cascades[cascadeIndex].ValidationConfig = validationConfig
+				}
 			}
 		}
 

@@ -20,6 +20,8 @@ const (
 	DataTypeArray   = "array"
 )
 
+// All constants have been moved to helper.go
+
 // Client provides a high-level API for working with FlexiType
 type Client struct {
 	typeRepo     ports.TypeRepository
@@ -203,6 +205,141 @@ func (c *Client) AddCascadeToAttribute(ctx context.Context, typeID, attributeID 
 	}
 
 	return typeDef, nil
+}
+
+// AddValidationCascade adds a cascade that modifies validation rules based on conditions
+func (c *Client) AddValidationCascade(ctx context.Context, typeID, attributeID, cascadeID string, enabled bool, 
+	behavior core.CascadeBehavior, logic string, weight int, config *core.CascadeValidationConfig) (*core.TypeDefinition, error) {
+	
+	// Get the type
+	typeDef, err := c.typeRepo.GetByID(ctx, typeID)
+	if err != nil {
+		return nil, fmt.Errorf("type with ID '%s' not found: %w", typeID, err)
+	}
+
+	// Find the attribute
+	var foundAttr *core.AttributeDefinition
+	for _, attr := range typeDef.Attributes {
+		if attr.ID == attributeID {
+			foundAttr = attr
+			break
+		}
+	}
+
+	if foundAttr == nil {
+		return nil, fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeID, typeID)
+	}
+
+	// Add the validation cascade
+	foundAttr.AddValidationCascade(cascadeID, enabled, behavior, logic, weight, config)
+
+	// Increment the version since the type definition is changing
+	typeDef.IncrementVersion()
+
+	// Save the updated type
+	err = c.typeRepo.Save(ctx, typeDef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to save type: %w", err)
+	}
+
+	return typeDef, nil
+}
+
+// AddRequirementCascade adds a cascade that makes a field required/optional based on conditions
+func (c *Client) AddRequirementCascade(ctx context.Context, typeID, attributeID, cascadeID string, 
+	enabled bool, logic string, weight int, targetField string, makeRequired bool) (*core.TypeDefinition, error) {
+	
+	action := core.ActionMakeOptional
+	if makeRequired {
+		action = core.ActionMakeRequired
+	}
+	
+	cfg := &core.CascadeValidationConfig{
+		Action:      action,
+		TargetField: targetField,
+	}
+	
+	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled, 
+		core.CascadeRequirement, logic, weight, cfg)
+}
+
+// AddEnumValuesCascade adds a cascade that modifies enum values based on conditions
+func (c *Client) AddEnumValuesCascade(ctx context.Context, typeID, attributeID, cascadeID string, 
+	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction, 
+	values []interface{}) (*core.TypeDefinition, error) {
+	
+	cfg := &core.CascadeValidationConfig{
+		Action:      action,
+		TargetField: targetField,
+		Values:      values,
+	}
+	
+	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled, 
+		core.CascadeEnumValues, logic, weight, cfg)
+}
+
+// AddNumericConstraintCascade adds a cascade that sets min/max values for numeric fields
+func (c *Client) AddNumericConstraintCascade(ctx context.Context, typeID, attributeID, cascadeID string, 
+	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction, 
+	value float64) (*core.TypeDefinition, error) {
+	
+	cfg := &core.CascadeValidationConfig{
+		Action:       action,
+		TargetField:  targetField,
+		NumericValue: value,
+	}
+	
+	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled, 
+		core.CascadeValidation, logic, weight, cfg)
+}
+
+// AddStringConstraintCascade adds a cascade that sets string constraints (min/max length, pattern)
+func (c *Client) AddStringConstraintCascade(ctx context.Context, typeID, attributeID, cascadeID string, 
+	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction, 
+	value interface{}) (*core.TypeDefinition, error) {
+	
+	cfg := &core.CascadeValidationConfig{
+		Action:      action,
+		TargetField: targetField,
+	}
+	
+	// Handle different actions
+	switch action {
+	case core.ActionSetMinLength, core.ActionSetMaxLength:
+		if numValue, ok := value.(int); ok {
+			cfg.NumericValue = float64(numValue)
+		} else if floatValue, ok := value.(float64); ok {
+			cfg.NumericValue = floatValue
+		} else {
+			return nil, fmt.Errorf("expected numeric value for min/max length but got %T", value)
+		}
+	case core.ActionSetPattern:
+		if strValue, ok := value.(string); ok {
+			cfg.StringValue = strValue
+		} else {
+			return nil, fmt.Errorf("expected string value for pattern but got %T", value)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported string constraint action: %s", action)
+	}
+	
+	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled, 
+		core.CascadeValidation, logic, weight, cfg)
+}
+
+// AddDefaultValueCascade adds a cascade that sets a default value based on conditions
+func (c *Client) AddDefaultValueCascade(ctx context.Context, typeID, attributeID, cascadeID string, 
+	enabled bool, logic string, weight int, targetField string, 
+	defaultValue interface{}) (*core.TypeDefinition, error) {
+	
+	cfg := &core.CascadeValidationConfig{
+		Action:      core.ActionSetDefaultValue,
+		TargetField: targetField,
+		Values:      []interface{}{defaultValue},
+	}
+	
+	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled, 
+		core.CascadeDefaultValue, logic, weight, cfg)
 }
 
 // RemoveCascadeFromAttribute removes a cascade with the specified logic from an attribute

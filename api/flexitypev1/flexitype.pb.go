@@ -1458,13 +1458,14 @@ func (x *AttributeDefinition) GetUpdatedAt() string {
 
 // Cascade definition for inheritance
 type CascadeDefinition struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	Behavior      string                 `protobuf:"bytes,2,opt,name=behavior,proto3" json:"behavior,omitempty"` // "inherit", "override", or "disabled"
-	Logic         string                 `protobuf:"bytes,3,opt,name=logic,proto3" json:"logic,omitempty"`       // Logic expression
-	Weight        int32                  `protobuf:"varint,4,opt,name=weight,proto3" json:"weight,omitempty"`    // Execution weight (higher weight = higher priority)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Enabled          bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Behavior         string                 `protobuf:"bytes,2,opt,name=behavior,proto3" json:"behavior,omitempty"`                                         // "inherit", "override", "disabled", or validation behaviors
+	Logic            string                 `protobuf:"bytes,3,opt,name=logic,proto3" json:"logic,omitempty"`                                               // Logic expression
+	Weight           int32                  `protobuf:"varint,4,opt,name=weight,proto3" json:"weight,omitempty"`                                            // Execution weight (higher weight = higher priority)
+	ValidationConfig *ValidationConfig      `protobuf:"bytes,5,opt,name=validation_config,json=validationConfig,proto3" json:"validation_config,omitempty"` // Optional validation configuration
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *CascadeDefinition) Reset() {
@@ -1525,6 +1526,90 @@ func (x *CascadeDefinition) GetWeight() int32 {
 	return 0
 }
 
+func (x *CascadeDefinition) GetValidationConfig() *ValidationConfig {
+	if x != nil {
+		return x.ValidationConfig
+	}
+	return nil
+}
+
+// Validation configuration for validation cascades
+type ValidationConfig struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Action        string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"`                                   // "REQUIRE", "ENABLE", "ENUM_VALUES", "LENGTH", "PATTERN", "RANGE", etc.
+	TargetField   string                 `protobuf:"bytes,2,opt,name=target_field,json=targetField,proto3" json:"target_field,omitempty"`      // Target field for the validation
+	Values        []string               `protobuf:"bytes,3,rep,name=values,proto3" json:"values,omitempty"`                                   // Array of string values (used for enum values)
+	StringValue   string                 `protobuf:"bytes,4,opt,name=string_value,json=stringValue,proto3" json:"string_value,omitempty"`      // String value (used for patterns)
+	NumericValue  float64                `protobuf:"fixed64,5,opt,name=numeric_value,json=numericValue,proto3" json:"numeric_value,omitempty"` // Numeric value (used for range limits)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ValidationConfig) Reset() {
+	*x = ValidationConfig{}
+	mi := &file_flexitype_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ValidationConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ValidationConfig) ProtoMessage() {}
+
+func (x *ValidationConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_flexitype_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ValidationConfig.ProtoReflect.Descriptor instead.
+func (*ValidationConfig) Descriptor() ([]byte, []int) {
+	return file_flexitype_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ValidationConfig) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *ValidationConfig) GetTargetField() string {
+	if x != nil {
+		return x.TargetField
+	}
+	return ""
+}
+
+func (x *ValidationConfig) GetValues() []string {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+func (x *ValidationConfig) GetStringValue() string {
+	if x != nil {
+		return x.StringValue
+	}
+	return ""
+}
+
+func (x *ValidationConfig) GetNumericValue() float64 {
+	if x != nil {
+		return x.NumericValue
+	}
+	return 0
+}
+
 // Multiple cascades definition for attributes
 type MultiCascadeDefinition struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1535,7 +1620,7 @@ type MultiCascadeDefinition struct {
 
 func (x *MultiCascadeDefinition) Reset() {
 	*x = MultiCascadeDefinition{}
-	mi := &file_flexitype_proto_msgTypes[26]
+	mi := &file_flexitype_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1547,7 +1632,7 @@ func (x *MultiCascadeDefinition) String() string {
 func (*MultiCascadeDefinition) ProtoMessage() {}
 
 func (x *MultiCascadeDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_flexitype_proto_msgTypes[26]
+	mi := &file_flexitype_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1560,7 +1645,7 @@ func (x *MultiCascadeDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MultiCascadeDefinition.ProtoReflect.Descriptor instead.
 func (*MultiCascadeDefinition) Descriptor() ([]byte, []int) {
-	return file_flexitype_proto_rawDescGZIP(), []int{26}
+	return file_flexitype_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *MultiCascadeDefinition) GetCascades() []*CascadeDefinition {
@@ -1581,7 +1666,7 @@ type ValidationRule struct {
 
 func (x *ValidationRule) Reset() {
 	*x = ValidationRule{}
-	mi := &file_flexitype_proto_msgTypes[27]
+	mi := &file_flexitype_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1593,7 +1678,7 @@ func (x *ValidationRule) String() string {
 func (*ValidationRule) ProtoMessage() {}
 
 func (x *ValidationRule) ProtoReflect() protoreflect.Message {
-	mi := &file_flexitype_proto_msgTypes[27]
+	mi := &file_flexitype_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1606,7 +1691,7 @@ func (x *ValidationRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidationRule.ProtoReflect.Descriptor instead.
 func (*ValidationRule) Descriptor() ([]byte, []int) {
-	return file_flexitype_proto_rawDescGZIP(), []int{27}
+	return file_flexitype_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ValidationRule) GetType() string {
@@ -1639,7 +1724,7 @@ type Instance struct {
 
 func (x *Instance) Reset() {
 	*x = Instance{}
-	mi := &file_flexitype_proto_msgTypes[28]
+	mi := &file_flexitype_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1651,7 +1736,7 @@ func (x *Instance) String() string {
 func (*Instance) ProtoMessage() {}
 
 func (x *Instance) ProtoReflect() protoreflect.Message {
-	mi := &file_flexitype_proto_msgTypes[28]
+	mi := &file_flexitype_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1664,7 +1749,7 @@ func (x *Instance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Instance.ProtoReflect.Descriptor instead.
 func (*Instance) Descriptor() ([]byte, []int) {
-	return file_flexitype_proto_rawDescGZIP(), []int{28}
+	return file_flexitype_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *Instance) GetId() string {
@@ -1735,7 +1820,7 @@ type AttributeValue struct {
 
 func (x *AttributeValue) Reset() {
 	*x = AttributeValue{}
-	mi := &file_flexitype_proto_msgTypes[29]
+	mi := &file_flexitype_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1747,7 +1832,7 @@ func (x *AttributeValue) String() string {
 func (*AttributeValue) ProtoMessage() {}
 
 func (x *AttributeValue) ProtoReflect() protoreflect.Message {
-	mi := &file_flexitype_proto_msgTypes[29]
+	mi := &file_flexitype_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1760,7 +1845,7 @@ func (x *AttributeValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttributeValue.ProtoReflect.Descriptor instead.
 func (*AttributeValue) Descriptor() ([]byte, []int) {
-	return file_flexitype_proto_rawDescGZIP(), []int{29}
+	return file_flexitype_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AttributeValue) GetValue() isAttributeValue_Value {
@@ -1888,7 +1973,7 @@ type ObjectValue struct {
 
 func (x *ObjectValue) Reset() {
 	*x = ObjectValue{}
-	mi := &file_flexitype_proto_msgTypes[30]
+	mi := &file_flexitype_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1900,7 +1985,7 @@ func (x *ObjectValue) String() string {
 func (*ObjectValue) ProtoMessage() {}
 
 func (x *ObjectValue) ProtoReflect() protoreflect.Message {
-	mi := &file_flexitype_proto_msgTypes[30]
+	mi := &file_flexitype_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1913,7 +1998,7 @@ func (x *ObjectValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObjectValue.ProtoReflect.Descriptor instead.
 func (*ObjectValue) Descriptor() ([]byte, []int) {
-	return file_flexitype_proto_rawDescGZIP(), []int{30}
+	return file_flexitype_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ObjectValue) GetFields() map[string]*AttributeValue {
@@ -1932,7 +2017,7 @@ type ArrayValue struct {
 
 func (x *ArrayValue) Reset() {
 	*x = ArrayValue{}
-	mi := &file_flexitype_proto_msgTypes[31]
+	mi := &file_flexitype_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1944,7 +2029,7 @@ func (x *ArrayValue) String() string {
 func (*ArrayValue) ProtoMessage() {}
 
 func (x *ArrayValue) ProtoReflect() protoreflect.Message {
-	mi := &file_flexitype_proto_msgTypes[31]
+	mi := &file_flexitype_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1957,7 +2042,7 @@ func (x *ArrayValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArrayValue.ProtoReflect.Descriptor instead.
 func (*ArrayValue) Descriptor() ([]byte, []int) {
-	return file_flexitype_proto_rawDescGZIP(), []int{31}
+	return file_flexitype_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ArrayValue) GetValues() []*AttributeValue {
@@ -2081,12 +2166,19 @@ const file_flexitype_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\v \x01(\tR\tcreatedAt\x12\x1d\n" +
 	"\n" +
-	"updated_at\x18\f \x01(\tR\tupdatedAt\"w\n" +
+	"updated_at\x18\f \x01(\tR\tupdatedAt\"\xc4\x01\n" +
 	"\x11CascadeDefinition\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1a\n" +
 	"\bbehavior\x18\x02 \x01(\tR\bbehavior\x12\x14\n" +
 	"\x05logic\x18\x03 \x01(\tR\x05logic\x12\x16\n" +
-	"\x06weight\x18\x04 \x01(\x05R\x06weight\"U\n" +
+	"\x06weight\x18\x04 \x01(\x05R\x06weight\x12K\n" +
+	"\x11validation_config\x18\x05 \x01(\v2\x1e.flexitype.v1.ValidationConfigR\x10validationConfig\"\xad\x01\n" +
+	"\x10ValidationConfig\x12\x16\n" +
+	"\x06action\x18\x01 \x01(\tR\x06action\x12!\n" +
+	"\ftarget_field\x18\x02 \x01(\tR\vtargetField\x12\x16\n" +
+	"\x06values\x18\x03 \x03(\tR\x06values\x12!\n" +
+	"\fstring_value\x18\x04 \x01(\tR\vstringValue\x12#\n" +
+	"\rnumeric_value\x18\x05 \x01(\x01R\fnumericValue\"U\n" +
 	"\x16MultiCascadeDefinition\x12;\n" +
 	"\bcascades\x18\x01 \x03(\v2\x1f.flexitype.v1.CascadeDefinitionR\bcascades\"\xcf\x01\n" +
 	"\x0eValidationRule\x12\x12\n" +
@@ -2166,7 +2258,7 @@ func file_flexitype_proto_rawDescGZIP() []byte {
 	return file_flexitype_proto_rawDescData
 }
 
-var file_flexitype_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_flexitype_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_flexitype_proto_goTypes = []any{
 	(*CreateTypeRequest)(nil),                // 0: flexitype.v1.CreateTypeRequest
 	(*GetTypeRequest)(nil),                   // 1: flexitype.v1.GetTypeRequest
@@ -2194,87 +2286,89 @@ var file_flexitype_proto_goTypes = []any{
 	(*TypeDefinition)(nil),                   // 23: flexitype.v1.TypeDefinition
 	(*AttributeDefinition)(nil),              // 24: flexitype.v1.AttributeDefinition
 	(*CascadeDefinition)(nil),                // 25: flexitype.v1.CascadeDefinition
-	(*MultiCascadeDefinition)(nil),           // 26: flexitype.v1.MultiCascadeDefinition
-	(*ValidationRule)(nil),                   // 27: flexitype.v1.ValidationRule
-	(*Instance)(nil),                         // 28: flexitype.v1.Instance
-	(*AttributeValue)(nil),                   // 29: flexitype.v1.AttributeValue
-	(*ObjectValue)(nil),                      // 30: flexitype.v1.ObjectValue
-	(*ArrayValue)(nil),                       // 31: flexitype.v1.ArrayValue
-	nil,                                      // 32: flexitype.v1.CreateInstanceRequest.AttributeValuesEntry
-	nil,                                      // 33: flexitype.v1.QueryInstancesRequest.AttributeFiltersEntry
-	nil,                                      // 34: flexitype.v1.UpdateInstanceRequest.AttributeValuesEntry
-	nil,                                      // 35: flexitype.v1.ValidationRule.ParametersEntry
-	nil,                                      // 36: flexitype.v1.Instance.AttributeValuesEntry
-	nil,                                      // 37: flexitype.v1.ObjectValue.FieldsEntry
+	(*ValidationConfig)(nil),                 // 26: flexitype.v1.ValidationConfig
+	(*MultiCascadeDefinition)(nil),           // 27: flexitype.v1.MultiCascadeDefinition
+	(*ValidationRule)(nil),                   // 28: flexitype.v1.ValidationRule
+	(*Instance)(nil),                         // 29: flexitype.v1.Instance
+	(*AttributeValue)(nil),                   // 30: flexitype.v1.AttributeValue
+	(*ObjectValue)(nil),                      // 31: flexitype.v1.ObjectValue
+	(*ArrayValue)(nil),                       // 32: flexitype.v1.ArrayValue
+	nil,                                      // 33: flexitype.v1.CreateInstanceRequest.AttributeValuesEntry
+	nil,                                      // 34: flexitype.v1.QueryInstancesRequest.AttributeFiltersEntry
+	nil,                                      // 35: flexitype.v1.UpdateInstanceRequest.AttributeValuesEntry
+	nil,                                      // 36: flexitype.v1.ValidationRule.ParametersEntry
+	nil,                                      // 37: flexitype.v1.Instance.AttributeValuesEntry
+	nil,                                      // 38: flexitype.v1.ObjectValue.FieldsEntry
 }
 var file_flexitype_proto_depIdxs = []int32{
 	23, // 0: flexitype.v1.ListTypesResponse.types:type_name -> flexitype.v1.TypeDefinition
 	23, // 1: flexitype.v1.TypeResponse.type:type_name -> flexitype.v1.TypeDefinition
 	24, // 2: flexitype.v1.AddAttributeRequest.attribute:type_name -> flexitype.v1.AttributeDefinition
 	24, // 3: flexitype.v1.UpdateAttributeRequest.attribute:type_name -> flexitype.v1.AttributeDefinition
-	32, // 4: flexitype.v1.CreateInstanceRequest.attribute_values:type_name -> flexitype.v1.CreateInstanceRequest.AttributeValuesEntry
-	33, // 5: flexitype.v1.QueryInstancesRequest.attribute_filters:type_name -> flexitype.v1.QueryInstancesRequest.AttributeFiltersEntry
-	28, // 6: flexitype.v1.QueryInstancesResponse.instances:type_name -> flexitype.v1.Instance
-	34, // 7: flexitype.v1.UpdateInstanceRequest.attribute_values:type_name -> flexitype.v1.UpdateInstanceRequest.AttributeValuesEntry
-	28, // 8: flexitype.v1.InstanceResponse.instance:type_name -> flexitype.v1.Instance
+	33, // 4: flexitype.v1.CreateInstanceRequest.attribute_values:type_name -> flexitype.v1.CreateInstanceRequest.AttributeValuesEntry
+	34, // 5: flexitype.v1.QueryInstancesRequest.attribute_filters:type_name -> flexitype.v1.QueryInstancesRequest.AttributeFiltersEntry
+	29, // 6: flexitype.v1.QueryInstancesResponse.instances:type_name -> flexitype.v1.Instance
+	35, // 7: flexitype.v1.UpdateInstanceRequest.attribute_values:type_name -> flexitype.v1.UpdateInstanceRequest.AttributeValuesEntry
+	29, // 8: flexitype.v1.InstanceResponse.instance:type_name -> flexitype.v1.Instance
 	24, // 9: flexitype.v1.TypeDefinition.attributes:type_name -> flexitype.v1.AttributeDefinition
-	29, // 10: flexitype.v1.AttributeDefinition.default_value:type_name -> flexitype.v1.AttributeValue
+	30, // 10: flexitype.v1.AttributeDefinition.default_value:type_name -> flexitype.v1.AttributeValue
 	25, // 11: flexitype.v1.AttributeDefinition.cascades:type_name -> flexitype.v1.CascadeDefinition
-	27, // 12: flexitype.v1.AttributeDefinition.validation_rules:type_name -> flexitype.v1.ValidationRule
-	25, // 13: flexitype.v1.MultiCascadeDefinition.cascades:type_name -> flexitype.v1.CascadeDefinition
-	35, // 14: flexitype.v1.ValidationRule.parameters:type_name -> flexitype.v1.ValidationRule.ParametersEntry
-	36, // 15: flexitype.v1.Instance.attribute_values:type_name -> flexitype.v1.Instance.AttributeValuesEntry
-	30, // 16: flexitype.v1.AttributeValue.object_value:type_name -> flexitype.v1.ObjectValue
-	31, // 17: flexitype.v1.AttributeValue.array_value:type_name -> flexitype.v1.ArrayValue
-	37, // 18: flexitype.v1.ObjectValue.fields:type_name -> flexitype.v1.ObjectValue.FieldsEntry
-	29, // 19: flexitype.v1.ArrayValue.values:type_name -> flexitype.v1.AttributeValue
-	29, // 20: flexitype.v1.CreateInstanceRequest.AttributeValuesEntry.value:type_name -> flexitype.v1.AttributeValue
-	29, // 21: flexitype.v1.QueryInstancesRequest.AttributeFiltersEntry.value:type_name -> flexitype.v1.AttributeValue
-	29, // 22: flexitype.v1.UpdateInstanceRequest.AttributeValuesEntry.value:type_name -> flexitype.v1.AttributeValue
-	29, // 23: flexitype.v1.ValidationRule.ParametersEntry.value:type_name -> flexitype.v1.AttributeValue
-	29, // 24: flexitype.v1.Instance.AttributeValuesEntry.value:type_name -> flexitype.v1.AttributeValue
-	29, // 25: flexitype.v1.ObjectValue.FieldsEntry.value:type_name -> flexitype.v1.AttributeValue
-	0,  // 26: flexitype.v1.FlexiTypeService.CreateType:input_type -> flexitype.v1.CreateTypeRequest
-	1,  // 27: flexitype.v1.FlexiTypeService.GetType:input_type -> flexitype.v1.GetTypeRequest
-	2,  // 28: flexitype.v1.FlexiTypeService.ListTypes:input_type -> flexitype.v1.ListTypesRequest
-	4,  // 29: flexitype.v1.FlexiTypeService.UpdateType:input_type -> flexitype.v1.UpdateTypeRequest
-	5,  // 30: flexitype.v1.FlexiTypeService.ArchiveType:input_type -> flexitype.v1.ArchiveTypeRequest
-	6,  // 31: flexitype.v1.FlexiTypeService.UnarchiveType:input_type -> flexitype.v1.UnarchiveTypeRequest
-	8,  // 32: flexitype.v1.FlexiTypeService.AddAttribute:input_type -> flexitype.v1.AddAttributeRequest
-	9,  // 33: flexitype.v1.FlexiTypeService.UpdateAttribute:input_type -> flexitype.v1.UpdateAttributeRequest
-	10, // 34: flexitype.v1.FlexiTypeService.DeleteAttribute:input_type -> flexitype.v1.DeleteAttributeRequest
-	11, // 35: flexitype.v1.FlexiTypeService.SetAttributeDisabledState:input_type -> flexitype.v1.SetAttributeDisabledStateRequest
-	12, // 36: flexitype.v1.FlexiTypeService.CreateInstance:input_type -> flexitype.v1.CreateInstanceRequest
-	13, // 37: flexitype.v1.FlexiTypeService.GetInstance:input_type -> flexitype.v1.GetInstanceRequest
-	14, // 38: flexitype.v1.FlexiTypeService.QueryInstances:input_type -> flexitype.v1.QueryInstancesRequest
-	16, // 39: flexitype.v1.FlexiTypeService.UpdateInstance:input_type -> flexitype.v1.UpdateInstanceRequest
-	17, // 40: flexitype.v1.FlexiTypeService.ArchiveInstance:input_type -> flexitype.v1.ArchiveInstanceRequest
-	18, // 41: flexitype.v1.FlexiTypeService.UnarchiveInstance:input_type -> flexitype.v1.UnarchiveInstanceRequest
-	20, // 42: flexitype.v1.FlexiTypeService.ExportTypeSchema:input_type -> flexitype.v1.ExportTypeSchemaRequest
-	21, // 43: flexitype.v1.FlexiTypeService.ImportTypeSchema:input_type -> flexitype.v1.ImportTypeSchemaRequest
-	7,  // 44: flexitype.v1.FlexiTypeService.CreateType:output_type -> flexitype.v1.TypeResponse
-	7,  // 45: flexitype.v1.FlexiTypeService.GetType:output_type -> flexitype.v1.TypeResponse
-	3,  // 46: flexitype.v1.FlexiTypeService.ListTypes:output_type -> flexitype.v1.ListTypesResponse
-	7,  // 47: flexitype.v1.FlexiTypeService.UpdateType:output_type -> flexitype.v1.TypeResponse
-	7,  // 48: flexitype.v1.FlexiTypeService.ArchiveType:output_type -> flexitype.v1.TypeResponse
-	7,  // 49: flexitype.v1.FlexiTypeService.UnarchiveType:output_type -> flexitype.v1.TypeResponse
-	7,  // 50: flexitype.v1.FlexiTypeService.AddAttribute:output_type -> flexitype.v1.TypeResponse
-	7,  // 51: flexitype.v1.FlexiTypeService.UpdateAttribute:output_type -> flexitype.v1.TypeResponse
-	7,  // 52: flexitype.v1.FlexiTypeService.DeleteAttribute:output_type -> flexitype.v1.TypeResponse
-	7,  // 53: flexitype.v1.FlexiTypeService.SetAttributeDisabledState:output_type -> flexitype.v1.TypeResponse
-	19, // 54: flexitype.v1.FlexiTypeService.CreateInstance:output_type -> flexitype.v1.InstanceResponse
-	19, // 55: flexitype.v1.FlexiTypeService.GetInstance:output_type -> flexitype.v1.InstanceResponse
-	15, // 56: flexitype.v1.FlexiTypeService.QueryInstances:output_type -> flexitype.v1.QueryInstancesResponse
-	19, // 57: flexitype.v1.FlexiTypeService.UpdateInstance:output_type -> flexitype.v1.InstanceResponse
-	19, // 58: flexitype.v1.FlexiTypeService.ArchiveInstance:output_type -> flexitype.v1.InstanceResponse
-	19, // 59: flexitype.v1.FlexiTypeService.UnarchiveInstance:output_type -> flexitype.v1.InstanceResponse
-	22, // 60: flexitype.v1.FlexiTypeService.ExportTypeSchema:output_type -> flexitype.v1.SchemaResponse
-	7,  // 61: flexitype.v1.FlexiTypeService.ImportTypeSchema:output_type -> flexitype.v1.TypeResponse
-	44, // [44:62] is the sub-list for method output_type
-	26, // [26:44] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	28, // 12: flexitype.v1.AttributeDefinition.validation_rules:type_name -> flexitype.v1.ValidationRule
+	26, // 13: flexitype.v1.CascadeDefinition.validation_config:type_name -> flexitype.v1.ValidationConfig
+	25, // 14: flexitype.v1.MultiCascadeDefinition.cascades:type_name -> flexitype.v1.CascadeDefinition
+	36, // 15: flexitype.v1.ValidationRule.parameters:type_name -> flexitype.v1.ValidationRule.ParametersEntry
+	37, // 16: flexitype.v1.Instance.attribute_values:type_name -> flexitype.v1.Instance.AttributeValuesEntry
+	31, // 17: flexitype.v1.AttributeValue.object_value:type_name -> flexitype.v1.ObjectValue
+	32, // 18: flexitype.v1.AttributeValue.array_value:type_name -> flexitype.v1.ArrayValue
+	38, // 19: flexitype.v1.ObjectValue.fields:type_name -> flexitype.v1.ObjectValue.FieldsEntry
+	30, // 20: flexitype.v1.ArrayValue.values:type_name -> flexitype.v1.AttributeValue
+	30, // 21: flexitype.v1.CreateInstanceRequest.AttributeValuesEntry.value:type_name -> flexitype.v1.AttributeValue
+	30, // 22: flexitype.v1.QueryInstancesRequest.AttributeFiltersEntry.value:type_name -> flexitype.v1.AttributeValue
+	30, // 23: flexitype.v1.UpdateInstanceRequest.AttributeValuesEntry.value:type_name -> flexitype.v1.AttributeValue
+	30, // 24: flexitype.v1.ValidationRule.ParametersEntry.value:type_name -> flexitype.v1.AttributeValue
+	30, // 25: flexitype.v1.Instance.AttributeValuesEntry.value:type_name -> flexitype.v1.AttributeValue
+	30, // 26: flexitype.v1.ObjectValue.FieldsEntry.value:type_name -> flexitype.v1.AttributeValue
+	0,  // 27: flexitype.v1.FlexiTypeService.CreateType:input_type -> flexitype.v1.CreateTypeRequest
+	1,  // 28: flexitype.v1.FlexiTypeService.GetType:input_type -> flexitype.v1.GetTypeRequest
+	2,  // 29: flexitype.v1.FlexiTypeService.ListTypes:input_type -> flexitype.v1.ListTypesRequest
+	4,  // 30: flexitype.v1.FlexiTypeService.UpdateType:input_type -> flexitype.v1.UpdateTypeRequest
+	5,  // 31: flexitype.v1.FlexiTypeService.ArchiveType:input_type -> flexitype.v1.ArchiveTypeRequest
+	6,  // 32: flexitype.v1.FlexiTypeService.UnarchiveType:input_type -> flexitype.v1.UnarchiveTypeRequest
+	8,  // 33: flexitype.v1.FlexiTypeService.AddAttribute:input_type -> flexitype.v1.AddAttributeRequest
+	9,  // 34: flexitype.v1.FlexiTypeService.UpdateAttribute:input_type -> flexitype.v1.UpdateAttributeRequest
+	10, // 35: flexitype.v1.FlexiTypeService.DeleteAttribute:input_type -> flexitype.v1.DeleteAttributeRequest
+	11, // 36: flexitype.v1.FlexiTypeService.SetAttributeDisabledState:input_type -> flexitype.v1.SetAttributeDisabledStateRequest
+	12, // 37: flexitype.v1.FlexiTypeService.CreateInstance:input_type -> flexitype.v1.CreateInstanceRequest
+	13, // 38: flexitype.v1.FlexiTypeService.GetInstance:input_type -> flexitype.v1.GetInstanceRequest
+	14, // 39: flexitype.v1.FlexiTypeService.QueryInstances:input_type -> flexitype.v1.QueryInstancesRequest
+	16, // 40: flexitype.v1.FlexiTypeService.UpdateInstance:input_type -> flexitype.v1.UpdateInstanceRequest
+	17, // 41: flexitype.v1.FlexiTypeService.ArchiveInstance:input_type -> flexitype.v1.ArchiveInstanceRequest
+	18, // 42: flexitype.v1.FlexiTypeService.UnarchiveInstance:input_type -> flexitype.v1.UnarchiveInstanceRequest
+	20, // 43: flexitype.v1.FlexiTypeService.ExportTypeSchema:input_type -> flexitype.v1.ExportTypeSchemaRequest
+	21, // 44: flexitype.v1.FlexiTypeService.ImportTypeSchema:input_type -> flexitype.v1.ImportTypeSchemaRequest
+	7,  // 45: flexitype.v1.FlexiTypeService.CreateType:output_type -> flexitype.v1.TypeResponse
+	7,  // 46: flexitype.v1.FlexiTypeService.GetType:output_type -> flexitype.v1.TypeResponse
+	3,  // 47: flexitype.v1.FlexiTypeService.ListTypes:output_type -> flexitype.v1.ListTypesResponse
+	7,  // 48: flexitype.v1.FlexiTypeService.UpdateType:output_type -> flexitype.v1.TypeResponse
+	7,  // 49: flexitype.v1.FlexiTypeService.ArchiveType:output_type -> flexitype.v1.TypeResponse
+	7,  // 50: flexitype.v1.FlexiTypeService.UnarchiveType:output_type -> flexitype.v1.TypeResponse
+	7,  // 51: flexitype.v1.FlexiTypeService.AddAttribute:output_type -> flexitype.v1.TypeResponse
+	7,  // 52: flexitype.v1.FlexiTypeService.UpdateAttribute:output_type -> flexitype.v1.TypeResponse
+	7,  // 53: flexitype.v1.FlexiTypeService.DeleteAttribute:output_type -> flexitype.v1.TypeResponse
+	7,  // 54: flexitype.v1.FlexiTypeService.SetAttributeDisabledState:output_type -> flexitype.v1.TypeResponse
+	19, // 55: flexitype.v1.FlexiTypeService.CreateInstance:output_type -> flexitype.v1.InstanceResponse
+	19, // 56: flexitype.v1.FlexiTypeService.GetInstance:output_type -> flexitype.v1.InstanceResponse
+	15, // 57: flexitype.v1.FlexiTypeService.QueryInstances:output_type -> flexitype.v1.QueryInstancesResponse
+	19, // 58: flexitype.v1.FlexiTypeService.UpdateInstance:output_type -> flexitype.v1.InstanceResponse
+	19, // 59: flexitype.v1.FlexiTypeService.ArchiveInstance:output_type -> flexitype.v1.InstanceResponse
+	19, // 60: flexitype.v1.FlexiTypeService.UnarchiveInstance:output_type -> flexitype.v1.InstanceResponse
+	22, // 61: flexitype.v1.FlexiTypeService.ExportTypeSchema:output_type -> flexitype.v1.SchemaResponse
+	7,  // 62: flexitype.v1.FlexiTypeService.ImportTypeSchema:output_type -> flexitype.v1.TypeResponse
+	45, // [45:63] is the sub-list for method output_type
+	27, // [27:45] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_flexitype_proto_init() }
@@ -2282,7 +2376,7 @@ func file_flexitype_proto_init() {
 	if File_flexitype_proto != nil {
 		return
 	}
-	file_flexitype_proto_msgTypes[29].OneofWrappers = []any{
+	file_flexitype_proto_msgTypes[30].OneofWrappers = []any{
 		(*AttributeValue_StringValue)(nil),
 		(*AttributeValue_IntValue)(nil),
 		(*AttributeValue_FloatValue)(nil),
@@ -2297,7 +2391,7 @@ func file_flexitype_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flexitype_proto_rawDesc), len(file_flexitype_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   38,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

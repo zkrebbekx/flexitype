@@ -7,7 +7,12 @@ import (
 	"strings"
 )
 
-// Expression is a simple expression evaluator for dynamic cascade logic
+// ExpressionEvaluator is the interface for evaluating expressions in cascades
+type ExpressionEvaluator interface {
+	Evaluate(instance *Instance) (bool, error)
+}
+
+// Expression is a simple expression evaluator for dynamic cascade logic using string expressions
 type Expression struct {
 	Expression string
 }
@@ -17,6 +22,29 @@ func NewExpression(expr string) *Expression {
 	return &Expression{
 		Expression: expr,
 	}
+}
+
+// CustomExpressionFunc defines a function type for custom expression evaluation
+type CustomExpressionFunc func(instance *Instance) (bool, error)
+
+// CustomExpression uses a function for evaluation rather than parsing a string
+type CustomExpression struct {
+	EvalFunc CustomExpressionFunc
+}
+
+// NewCustomExpression creates a new custom expression evaluator
+func NewCustomExpression(evalFunc CustomExpressionFunc) *CustomExpression {
+	return &CustomExpression{
+		EvalFunc: evalFunc,
+	}
+}
+
+// Evaluate evaluates the custom expression
+func (e *CustomExpression) Evaluate(instance *Instance) (bool, error) {
+	if e.EvalFunc == nil {
+		return false, fmt.Errorf("no evaluation function provided")
+	}
+	return e.EvalFunc(instance)
 }
 
 // Token types for parsing

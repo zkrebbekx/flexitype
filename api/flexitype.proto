@@ -184,9 +184,19 @@ message AttributeDefinition {
 // Cascade definition for inheritance
 message CascadeDefinition {
   bool enabled = 1;
-  string behavior = 2;  // "inherit", "override", or "disabled"
+  string behavior = 2;  // "inherit", "override", "disabled", or validation behaviors
   string logic = 3;     // Logic expression
   int32 weight = 4;     // Execution weight (higher weight = higher priority)
+  ValidationConfig validation_config = 5;  // Optional validation configuration
+}
+
+// Validation configuration for validation cascades
+message ValidationConfig {
+  string action = 1;            // "REQUIRE", "ENABLE", "ENUM_VALUES", "LENGTH", "PATTERN", "RANGE", etc.
+  string target_field = 2;      // Target field for the validation
+  repeated string values = 3;   // Array of string values (used for enum values)
+  string string_value = 4;      // String value (used for patterns)
+  double numeric_value = 5;     // Numeric value (used for range limits)
 }
 
 // Multiple cascades definition for attributes

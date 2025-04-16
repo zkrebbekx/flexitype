@@ -123,10 +123,35 @@ type CascadeBehavior = core.CascadeBehavior
 
 // Common cascade behaviors for easier SDK usage
 const (
-	CascadeInherit  = core.CascadeInherit
-	CascadeOverride = core.CascadeOverride
-	CascadeDisabled = core.CascadeDisabled
+	CascadeInherit      = core.CascadeInherit
+	CascadeOverride     = core.CascadeOverride
+	CascadeDisabled     = core.CascadeDisabled
+	CascadeValidation   = core.CascadeValidation
+	CascadeRequirement  = core.CascadeRequirement
+	CascadeEnumValues   = core.CascadeEnumValues
+	CascadeDefaultValue = core.CascadeDefaultValue
 )
+
+// CascadeValidationAction is a type alias for the core validation actions
+type CascadeValidationAction = core.CascadeValidationAction
+
+// Common validation action types for easier SDK usage
+const (
+	ActionMakeRequired     = core.ActionMakeRequired
+	ActionMakeOptional     = core.ActionMakeOptional
+	ActionSetEnumValues    = core.ActionSetEnumValues
+	ActionAddEnumValues    = core.ActionAddEnumValues
+	ActionRemoveEnumValues = core.ActionRemoveEnumValues
+	ActionSetMinValue      = core.ActionSetMinValue
+	ActionSetMaxValue      = core.ActionSetMaxValue
+	ActionSetMinLength     = core.ActionSetMinLength
+	ActionSetMaxLength     = core.ActionSetMaxLength
+	ActionSetPattern       = core.ActionSetPattern
+	ActionSetDefaultValue  = core.ActionSetDefaultValue
+)
+
+// CascadeValidationConfig provides a type alias for core configuration
+type CascadeValidationConfig = core.CascadeValidationConfig
 
 // NewCascade creates a new cascade definition with specified parameters
 func NewCascade(enabled bool, behavior CascadeBehavior, logic string, weight int) core.Cascade {
@@ -136,4 +161,58 @@ func NewCascade(enabled bool, behavior CascadeBehavior, logic string, weight int
 		Logic:    logic,
 		Weight:   weight,
 	}
+}
+
+// NewValidationCascade creates a new validation cascade definition
+func NewValidationCascade(enabled bool, behavior CascadeBehavior, logic string, weight int, config *CascadeValidationConfig) core.Cascade {
+	return core.Cascade{
+		Enabled:          enabled,
+		Behavior:         behavior,
+		Logic:            logic,
+		Weight:           weight,
+		ValidationConfig: config,
+	}
+}
+
+// NewValidationConfig creates a new validation configuration for cascades
+func NewValidationConfig(action CascadeValidationAction, targetField string) *CascadeValidationConfig {
+	return &CascadeValidationConfig{
+		Action:      action,
+		TargetField: targetField,
+	}
+}
+
+// NewEnumValidationConfig creates a config for enum value modification
+func NewEnumValidationConfig(action CascadeValidationAction, targetField string, values []interface{}) *CascadeValidationConfig {
+	return &CascadeValidationConfig{
+		Action:      action,
+		TargetField: targetField,
+		Values:      values,
+	}
+}
+
+// NewNumericValidationConfig creates a config for numeric constraints
+func NewNumericValidationConfig(action CascadeValidationAction, targetField string, value float64) *CascadeValidationConfig {
+	return &CascadeValidationConfig{
+		Action:       action,
+		TargetField:  targetField,
+		NumericValue: value,
+	}
+}
+
+// NewStringValidationConfig creates a config for string constraints
+func NewStringValidationConfig(action CascadeValidationAction, targetField string, value string) *CascadeValidationConfig {
+	return &CascadeValidationConfig{
+		Action:      action,
+		TargetField: targetField,
+		StringValue: value,
+	}
+}
+
+// IsValidationCascade checks if a cascade behavior is related to validation
+func IsValidationCascade(behavior CascadeBehavior) bool {
+	return behavior == CascadeValidation ||
+		behavior == CascadeRequirement ||
+		behavior == CascadeEnumValues ||
+		behavior == CascadeDefaultValue
 }

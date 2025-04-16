@@ -2,6 +2,8 @@ package core
 
 import (
 	"time"
+
+	"github.com/zac300/flexitype/internal/domain/validation"
 )
 
 // TypeDefinition represents a dynamic type definition
@@ -127,4 +129,36 @@ func (t *TypeDefinition) GetAllAttributes() []*AttributeDefinition {
 	}
 
 	return result
+}
+
+// GetAttributeByName returns an attribute by name, or nil if not found
+func (t *TypeDefinition) GetAttributeByName(name string) *AttributeDefinition {
+	for _, attr := range t.Attributes {
+		if attr.Name == name {
+			return attr
+		}
+	}
+	return nil
+}
+
+// ValidateCascades performs validation on all cascades to ensure they reference valid attributes
+// and don't create circular dependencies
+func (t *TypeDefinition) ValidateCascades() []error {
+	// Create a new cascade validator
+	validator := validation.NewCascadeValidator()
+	
+	// Register all attributes and their enabled status
+	for _, attr := range t.Attributes {
+		validator.RegisterAttribute(attr.Name, !attr.Disabled)
+		
+		// Register all cascade logic for the validator to analyze
+		for _, cascade := range attr.Cascades {
+			if cascade.Enabled {
+				validator.RegisterCascade(attr.Name, cascade.Logic)
+			}
+		}
+	}
+	
+	// Validate cascades
+	return validator.Validate()
 }

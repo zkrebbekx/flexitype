@@ -58,6 +58,20 @@ func (c *Client) AddAttribute(ctx context.Context, typeID string, attr *core.Att
 	}
 
 	typeDef.AddAttribute(attr)
+	
+	// Validate cascades to ensure they reference existing attributes and have no circular dependencies
+	if errors := typeDef.ValidateCascades(); len(errors) > 0 {
+		// Combine all validation errors into a single message
+		errorMsgs := make([]string, 0, len(errors))
+		for _, err := range errors {
+			errorMsgs = append(errorMsgs, err.Error())
+		}
+		return fmt.Errorf("cascade validation failed: %s", errorMsgs)
+	}
+	
+	// Increment the version since the type definition is changing
+	typeDef.IncrementVersion()
+	
 	return c.typeRepo.Save(ctx, typeDef)
 }
 
@@ -119,8 +133,29 @@ func (c *Client) SetAttributeDisabledState(ctx context.Context, typeID, attribut
 		return nil, fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeID, typeID)
 	}
 
+	// If the disabled state is already what we want, no need to update
+	if foundAttr.Disabled == disabled {
+		return typeDef, nil
+	}
+
 	// Update the disabled state
 	foundAttr.SetDisabled(disabled)
+
+	// If we're disabling an attribute, we need to validate that it's not referenced by any cascades
+	if disabled {
+		// Validate cascades to ensure they don't reference this newly disabled attribute
+		if errors := typeDef.ValidateCascades(); len(errors) > 0 {
+			// Revert the change since validation failed
+			foundAttr.SetDisabled(!disabled)
+			
+			// Combine validation errors
+			errorMsgs := make([]string, 0, len(errors))
+			for _, err := range errors {
+				errorMsgs = append(errorMsgs, err.Error())
+			}
+			return nil, fmt.Errorf("cannot disable attribute: %s", errorMsgs)
+		}
+	}
 
 	// Increment the version since the type definition is changing
 	typeDef.IncrementVersion()
@@ -254,4 +289,59 @@ func (c *Client) UpdateInstance(ctx context.Context, id string, attributes map[s
 	}
 
 	return instance, nil
+}
+
+// DeleteAttribute removes an attribute from a type definition
+func (c *Client) DeleteAttribute(ctx context.Context, typeID string, attributeID string) error {
+	// Get the type
+	typeDef, err := c.typeRepo.GetByID(ctx, typeID)
+	if err != nil {
+		return fmt.Errorf("type with ID '%s' not found: %w", typeID, err)
+	}
+
+	// Find the attribute to be deleted
+	var attributeToDelete *core.AttributeDefinition
+	for _, attr := range typeDef.Attributes {
+		if attr.ID == attributeID {
+			attributeToDelete = attr
+			break
+		}
+	}
+
+	if attributeToDelete == nil {
+		return fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeID, typeID)
+	}
+
+	// Before removing, check if any other attributes reference this one in their cascades
+	// Temporarily disable the attribute (to simulate removal for validation)
+	attributeToDelete.SetDisabled(true)
+	
+	// Validate cascades to ensure they don't reference this soon-to-be-deleted attribute
+	if errors := typeDef.ValidateCascades(); len(errors) > 0 {
+		// Revert the temporary change 
+		attributeToDelete.SetDisabled(false)
+		
+		// Combine all validation errors into a single message
+		errorMsgs := make([]string, 0, len(errors))
+		for _, err := range errors {
+			errorMsgs = append(errorMsgs, err.Error())
+		}
+		return fmt.Errorf("cannot delete attribute: %s", errorMsgs)
+	}
+
+	// Now actually remove the attribute
+	newAttributes := make([]*core.AttributeDefinition, 0, len(typeDef.Attributes))
+	for _, attr := range typeDef.Attributes {
+		if attr.ID != attributeID {
+			newAttributes = append(newAttributes, attr)
+		}
+	}
+
+	typeDef.Attributes = newAttributes
+
+	// Increment the version since the type definition is changing
+	typeDef.IncrementVersion()
+
+	// Save the updated type
+	return c.typeRepo.Save(ctx, typeDef)
 }

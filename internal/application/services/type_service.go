@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/zac300/flexitype/internal/domain/core"
 	"github.com/zac300/flexitype/internal/ports"
@@ -221,6 +222,16 @@ func (s *TypeService) AddAttribute(ctx context.Context, typeID string, attribute
 	// Add the attribute
 	typeDef.AddAttribute(attribute)
 
+	// Validate cascades to ensure they reference existing attributes and have no circular dependencies
+	if errors := typeDef.ValidateCascades(); len(errors) > 0 {
+		// Combine all validation errors into a single message
+		errorMessages := make([]string, 0, len(errors))
+		for _, err := range errors {
+			errorMessages = append(errorMessages, err.Error())
+		}
+		return nil, fmt.Errorf("cascade validation failed: %s", strings.Join(errorMessages, "; "))
+	}
+
 	// Increment the version since the type definition is changing
 	typeDef.IncrementVersion()
 
@@ -241,20 +252,42 @@ func (s *TypeService) DeleteAttribute(ctx context.Context, typeID string, attrib
 		return nil, fmt.Errorf("type with ID '%s' not found", typeID)
 	}
 
-	// Find and remove the attribute
-	newAttributes := make([]*core.AttributeDefinition, 0, len(typeDef.Attributes))
-	found := false
-
+	// Find the attribute to be deleted
+	var attributeToDelete *core.AttributeDefinition
 	for _, attr := range typeDef.Attributes {
-		if attr.ID != attributeID {
-			newAttributes = append(newAttributes, attr)
-		} else {
-			found = true
+		if attr.ID == attributeID {
+			attributeToDelete = attr
+			break
 		}
 	}
 
-	if !found {
+	if attributeToDelete == nil {
 		return nil, fmt.Errorf("attribute with ID '%s' not found", attributeID)
+	}
+
+	// Before removing, check if any other attributes reference this one in their cascades
+	// Temporarily disable the attribute (to simulate removal for validation)
+	attributeToDelete.SetDisabled(true)
+	
+	// Validate cascades to ensure they don't reference this soon-to-be-deleted attribute
+	if errors := typeDef.ValidateCascades(); len(errors) > 0 {
+		// Revert the temporary change 
+		attributeToDelete.SetDisabled(false)
+		
+		// Combine all validation errors into a single message
+		errorMessages := make([]string, 0, len(errors))
+		for _, err := range errors {
+			errorMessages = append(errorMessages, err.Error())
+		}
+		return nil, fmt.Errorf("cannot delete attribute: %s", strings.Join(errorMessages, "; "))
+	}
+
+	// Now actually remove the attribute
+	newAttributes := make([]*core.AttributeDefinition, 0, len(typeDef.Attributes))
+	for _, attr := range typeDef.Attributes {
+		if attr.ID != attributeID {
+			newAttributes = append(newAttributes, attr)
+		}
 	}
 
 	typeDef.Attributes = newAttributes
@@ -305,6 +338,22 @@ func (s *TypeService) SetAttributeDisabledState(ctx context.Context, typeID, att
 
 	// Update the disabled state
 	foundAttr.SetDisabled(disabled)
+
+	// If we're disabling an attribute, we need to validate that it's not referenced by any cascades
+	if disabled {
+		// Validate cascades to ensure they don't reference this newly disabled attribute
+		if errors := typeDef.ValidateCascades(); len(errors) > 0 {
+			// Revert the change since validation failed
+			foundAttr.SetDisabled(!disabled)
+			
+			// Combine all validation errors into a single message
+			errorMessages := make([]string, 0, len(errors))
+			for _, err := range errors {
+				errorMessages = append(errorMessages, err.Error())
+			}
+			return nil, fmt.Errorf("cannot disable attribute: %s", strings.Join(errorMessages, "; "))
+		}
+	}
 
 	// Increment the version since the type definition is changing
 	typeDef.IncrementVersion()

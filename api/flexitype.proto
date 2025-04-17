@@ -22,7 +22,9 @@ service FlexiTypeService {
   
   // Instance operations
   rpc CreateInstance(CreateInstanceRequest) returns (InstanceResponse);
-  rpc GetInstance(GetInstanceRequest) returns (InstanceResponse);
+  rpc GetInstance(GetInstanceRequest) returns (InstanceResponse);                 // Gets latest version
+  rpc GetInstanceVersion(GetInstanceVersionRequest) returns (InstanceResponse);   // Gets specific version
+  rpc GetAllInstanceVersions(GetAllInstanceVersionsRequest) returns (InstanceVersionsResponse); // Gets all versions
   rpc QueryInstances(QueryInstancesRequest) returns (QueryInstancesResponse);
   rpc UpdateInstance(UpdateInstanceRequest) returns (InstanceResponse);
   rpc ArchiveInstance(ArchiveInstanceRequest) returns (InstanceResponse);
@@ -89,12 +91,12 @@ message UpdateAttributeRequest {
 
 message DeleteAttributeRequest {
   string type_id = 1;
-  string attribute_id = 2;
+  string attribute_name = 2;  // Changed from attribute_id to attribute_name
 }
 
 message SetAttributeDisabledStateRequest {
   string type_id = 1;
-  string attribute_id = 2;
+  string attribute_name = 2;  // Changed from attribute_id to attribute_name
   bool disabled = 3;
 }
 
@@ -109,12 +111,23 @@ message GetInstanceRequest {
   string id = 1;
 }
 
+message GetInstanceVersionRequest {
+  string id = 1;
+  int32 version = 2;  // Specific version to retrieve
+}
+
+message GetAllInstanceVersionsRequest {
+  string id = 1;      // Instance ID to get all versions for
+}
+
 message QueryInstancesRequest {
   string type_id = 1;
   map<string, AttributeValue> attribute_filters = 2;
   int32 page_size = 3;
   string page_token = 4;
   bool include_archived = 5; // If true, include archived instances in query results
+  bool latest_version_only = 6; // If true (default), only include the latest version of each instance
+  int32 specific_version = 7; // If set, only include instances with this specific version
 }
 
 message QueryInstancesResponse {
@@ -137,6 +150,10 @@ message UnarchiveInstanceRequest {
 
 message InstanceResponse {
   Instance instance = 1;
+}
+
+message InstanceVersionsResponse {
+  repeated Instance instances = 1;  // All versions of an instance
 }
 
 // Schema operations
@@ -213,12 +230,13 @@ message ValidationRule {
 // Instance
 message Instance {
   string id = 1;
-  string type_id = 2;
-  int32 type_version = 3;
-  map<string, AttributeValue> attribute_values = 4;
-  string created_at = 5;  // ISO8601 formatted timestamp when the instance was created
-  string updated_at = 6;  // ISO8601 formatted timestamp when the instance was last updated
-  string archived_at = 7; // ISO8601 formatted timestamp when the instance was archived
+  int32 version = 2;      // Version number of this instance
+  string type_id = 3;
+  int32 type_version = 4;
+  map<string, AttributeValue> attribute_values = 5;
+  string created_at = 6;  // ISO8601 formatted timestamp when the instance was created
+  string updated_at = 7;  // ISO8601 formatted timestamp when the instance was last updated
+  string archived_at = 8; // ISO8601 formatted timestamp when the instance was archived
 }
 
 // Attribute value - can be of different types

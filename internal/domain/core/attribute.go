@@ -72,8 +72,8 @@ type Cascade struct {
 
 // AttributeDefinition represents a dynamic attribute that can be assigned to a type
 type AttributeDefinition struct {
-	ID              string
-	Name            string
+	ID              string        // Internal ID, used for database storage
+	Name            string        // Name is the primary key for accessing attributes within a type context
 	Description     string
 	DataType        DataType
 	Required        bool

@@ -35,8 +35,9 @@ func NewTypeDefinition(id, name, description string) *TypeDefinition {
 }
 
 // AddAttribute adds an attribute to the type definition
+// The attribute's Name is used as the primary key for attribute identification
 func (t *TypeDefinition) AddAttribute(attr *AttributeDefinition) {
-	// Check if attribute already exists
+	// Check if attribute already exists by Name (not ID)
 	for i, existing := range t.Attributes {
 		if existing.Name == attr.Name {
 			// Replace existing attribute

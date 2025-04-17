@@ -21,7 +21,7 @@ func main() {
 	name := flag.String("name", "", "Type name for create action")
 	description := flag.String("desc", "", "Type description for create action")
 	parentID := flag.String("parent", "", "Parent type ID for create action")
-	attrID := flag.String("attr", "", "Attribute ID for attribute-related actions")
+	attr := flag.String("attr", "", "Attribute ID for attribute-related actions")
 
 	flag.Parse()
 
@@ -118,15 +118,15 @@ func main() {
 		}
 
 	case "disable-attr":
-		if *typeID == "" || *attrID == "" {
+		if *typeID == "" || *attr == "" {
 			log.Fatal("Type ID and attribute ID are required for disable-attr action")
 		}
 
 		// Disable an attribute
 		req := &flexitypev1.SetAttributeDisabledStateRequest{
-			TypeId:      *typeID,
-			AttributeId: *attrID,
-			Disabled:    true,
+			TypeId:        *typeID,
+			AttributeName: *attr,
+			Disabled:      true,
 		}
 
 		res, err := client.SetAttributeDisabledState(ctx, connect.NewRequest(req))
@@ -135,20 +135,20 @@ func main() {
 		}
 
 		fmt.Printf("Disabled attribute %s in type %s (version now %d)\n",
-			*attrID,
+			*attr,
 			res.Msg.Type.Name,
 			res.Msg.Type.Version)
 
 	case "enable-attr":
-		if *typeID == "" || *attrID == "" {
+		if *typeID == "" || *attr == "" {
 			log.Fatal("Type ID and attribute ID are required for enable-attr action")
 		}
 
 		// Enable an attribute
 		req := &flexitypev1.SetAttributeDisabledStateRequest{
-			TypeId:      *typeID,
-			AttributeId: *attrID,
-			Disabled:    false,
+			TypeId:        *typeID,
+			AttributeName: *attr,
+			Disabled:      false,
 		}
 
 		res, err := client.SetAttributeDisabledState(ctx, connect.NewRequest(req))
@@ -157,7 +157,7 @@ func main() {
 		}
 
 		fmt.Printf("Enabled attribute %s in type %s (version now %d)\n",
-			*attrID,
+			*attr,
 			res.Msg.Type.Name,
 			res.Msg.Type.Version)
 

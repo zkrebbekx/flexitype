@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/zac300/flexitype/internal/adapters/grpc"
@@ -50,32 +52,44 @@ func main() {
 	}
 
 	// Create services
-	_ = services.NewTypeService(typeRepo, instanceRepo)
-	_ = services.NewInstanceService(typeRepo, instanceRepo)
+	typeService := services.NewTypeService(typeRepo, instanceRepo)
+	instanceService := services.NewInstanceService(typeRepo, instanceRepo)
 
-	// Create Connect gRPC server
-	server := grpc.NewConnectServer(typeRepo, instanceRepo)
-
-	// Start server in a goroutine
-	go func() {
-		port := 8080
-		if portEnv := os.Getenv("FLEXITYPE_PORT"); portEnv != "" {
-			fmt.Sscanf(portEnv, "%d", &port)
+	// Determine gRPC server port
+	port := 50051
+	if portStr := os.Getenv("PORT"); portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = p
 		}
+	}
 
-		err := server.Start(port)
-		if err != nil && err.Error() != "http: Server closed" {
-			log.Fatalf("Failed to start Connect gRPC server: %v", err)
+	// Create and start the gRPC server
+	grpcServer := grpc.NewConnectServer(typeService, instanceService)
+
+	// Create a channel to listen for OS signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// Start gRPC server in a goroutine
+	go func() {
+		fmt.Printf("Starting gRPC server on port %d...\n", port)
+		if err := grpcServer.Start(port); err != nil {
+			if err == net.ErrClosed {
+				fmt.Println("Server stopped")
+			} else {
+				log.Fatalf("Failed to start gRPC server: %v", err)
+			}
 		}
 	}()
 
-	fmt.Println("FlexiType server is running. Press Ctrl+C to stop.")
+	// Wait for a signal to shut down
+	<-sigChan
+	fmt.Println("Shutting down...")
 
-	// Wait for interrupt signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh
+	// Stop the gRPC server
+	if err := grpcServer.Stop(); err != nil {
+		log.Fatalf("Failed to stop gRPC server: %v", err)
+	}
 
-	fmt.Println("Shutting down server...")
-	server.Stop()
+	fmt.Println("Server stopped")
 }

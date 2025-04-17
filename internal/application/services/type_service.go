@@ -245,24 +245,24 @@ func (s *TypeService) AddAttribute(ctx context.Context, typeID string, attribute
 }
 
 // DeleteAttribute removes an attribute from a type definition
-func (s *TypeService) DeleteAttribute(ctx context.Context, typeID string, attributeID string) (*core.TypeDefinition, error) {
+func (s *TypeService) DeleteAttribute(ctx context.Context, typeID string, attributeName string) (*core.TypeDefinition, error) {
 	// Get the type
 	typeDef, err := s.typeRepo.GetByID(ctx, typeID)
 	if err != nil {
 		return nil, fmt.Errorf("type with ID '%s' not found", typeID)
 	}
 
-	// Find the attribute to be deleted
+	// Find the attribute to be deleted by name
 	var attributeToDelete *core.AttributeDefinition
 	for _, attr := range typeDef.Attributes {
-		if attr.ID == attributeID {
+		if attr.Name == attributeName {
 			attributeToDelete = attr
 			break
 		}
 	}
 
 	if attributeToDelete == nil {
-		return nil, fmt.Errorf("attribute with ID '%s' not found", attributeID)
+		return nil, fmt.Errorf("attribute with name '%s' not found", attributeName)
 	}
 
 	// Before removing, check if any other attributes reference this one in their cascades
@@ -285,7 +285,7 @@ func (s *TypeService) DeleteAttribute(ctx context.Context, typeID string, attrib
 	// Now actually remove the attribute
 	newAttributes := make([]*core.AttributeDefinition, 0, len(typeDef.Attributes))
 	for _, attr := range typeDef.Attributes {
-		if attr.ID != attributeID {
+		if attr.Name != attributeName {
 			newAttributes = append(newAttributes, attr)
 		}
 	}
@@ -310,25 +310,30 @@ func (s *TypeService) ListTypes(ctx context.Context) ([]*core.TypeDefinition, er
 	return types, err
 }
 
+// QueryTypes lists type definitions with advanced query options
+func (s *TypeService) QueryTypes(ctx context.Context, options *ports.QueryOptions) ([]*core.TypeDefinition, int, error) {
+	return s.typeRepo.List(ctx, options)
+}
+
 // SetAttributeDisabledState enables or disables an attribute on a type definition
-func (s *TypeService) SetAttributeDisabledState(ctx context.Context, typeID, attributeID string, disabled bool) (*core.TypeDefinition, error) {
+func (s *TypeService) SetAttributeDisabledState(ctx context.Context, typeID, attributeName string, disabled bool) (*core.TypeDefinition, error) {
 	// Get the type
 	typeDef, err := s.typeRepo.GetByID(ctx, typeID)
 	if err != nil {
 		return nil, fmt.Errorf("type with ID '%s' not found", typeID)
 	}
 
-	// Find the attribute
+	// Find the attribute by name
 	var foundAttr *core.AttributeDefinition
 	for _, attr := range typeDef.Attributes {
-		if attr.ID == attributeID {
+		if attr.Name == attributeName {
 			foundAttr = attr
 			break
 		}
 	}
 
 	if foundAttr == nil {
-		return nil, fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeID, typeID)
+		return nil, fmt.Errorf("attribute with name '%s' not found in type '%s'", attributeName, typeID)
 	}
 
 	// If the disabled state is already what we want, no need to update

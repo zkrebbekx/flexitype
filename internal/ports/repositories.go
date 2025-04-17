@@ -25,6 +25,10 @@ type QueryOptions struct {
 	Name        string
 	Description string
 	Version     int
+	
+	// Instance field filters
+	InstanceID      string
+	InstanceVersion int
 
 	// Attribute filters
 	AttributeFilters map[string]interface{}
@@ -36,6 +40,9 @@ type QueryOptions struct {
 
 	// Include archived items in results (defaults to false)
 	IncludeArchived bool
+	
+	// Whether to get the latest version only (defaults to true)
+	LatestVersionOnly bool
 }
 
 // DefaultQueryOptions returns default query options
@@ -48,6 +55,7 @@ func DefaultQueryOptions() *QueryOptions {
 		IDs:              []string{},
 		AttributeFilters: make(map[string]interface{}),
 		IncludeArchived:  false, // By default, don't include archived items
+		LatestVersionOnly: true, // By default, get only the latest version
 	}
 }
 
@@ -86,24 +94,34 @@ type InstanceRepository interface {
 	// SaveMany persists multiple instances in a single transaction
 	SaveMany(ctx context.Context, instances []*core.Instance) error
 
-	// GetByID retrieves an instance by ID
+	// GetByID retrieves the latest instance version by ID
 	GetByID(ctx context.Context, id string) (*core.Instance, error)
+	
+	// GetByIDAndVersion retrieves a specific instance version by ID and version
+	GetByIDAndVersion(ctx context.Context, id string, version int) (*core.Instance, error)
+	
+	// GetLatestVersion returns the highest version number for the given instance ID
+	GetLatestVersion(ctx context.Context, id string) (int, error)
+	
+	// GetAllVersions retrieves all versions of an instance by ID
+	GetAllVersions(ctx context.Context, id string) ([]*core.Instance, error)
 
-	// GetByIDs retrieves multiple instances by IDs
+	// GetByIDs retrieves multiple instances by IDs (latest versions)
 	GetByIDs(ctx context.Context, ids []string) ([]*core.Instance, error)
 
 	// Query retrieves instances by query criteria (for backward compatibility)
 	Query(ctx context.Context, typeID string, attributeFilters map[string]interface{}) ([]*core.Instance, error)
 
 	// QueryWithOptions retrieves instances with pagination, ordering, and advanced filtering
+	// Using LatestVersionOnly option to control whether to return all versions or just the latest
 	QueryWithOptions(ctx context.Context, options *QueryOptions) ([]*core.Instance, int, error)
 
-	// Archive marks an instance as archived at the current time
+	// Archive marks an instance (all versions) as archived at the current time
 	Archive(ctx context.Context, id string) error
 
-	// Unarchive removes the archived status from an instance
+	// Unarchive removes the archived status from an instance (all versions)
 	Unarchive(ctx context.Context, id string) error
 
-	// ArchiveMany marks multiple instances as archived
+	// ArchiveMany marks multiple instances (all versions) as archived
 	ArchiveMany(ctx context.Context, ids []string) error
 }

@@ -62,59 +62,86 @@ func (s *InstanceService) CreateInstance(ctx context.Context, id string, typeID 
 	return instance, nil
 }
 
-// GetInstance retrieves an instance by ID
+// GetInstance retrieves the latest version of an instance by ID
 func (s *InstanceService) GetInstance(ctx context.Context, id string) (*core.Instance, error) {
 	return s.instanceRepo.GetByID(ctx, id)
 }
 
-// UpdateInstance updates an existing instance
+// GetInstanceVersion retrieves a specific version of an instance
+func (s *InstanceService) GetInstanceVersion(ctx context.Context, id string, version int) (*core.Instance, error) {
+	return s.instanceRepo.GetByIDAndVersion(ctx, id, version)
+}
+
+// GetAllInstanceVersions retrieves all versions of an instance
+func (s *InstanceService) GetAllInstanceVersions(ctx context.Context, id string) ([]*core.Instance, error) {
+	return s.instanceRepo.GetAllVersions(ctx, id)
+}
+
+// GetLatestInstanceVersion gets the latest version number for an instance
+func (s *InstanceService) GetLatestInstanceVersion(ctx context.Context, id string) (int, error) {
+	return s.instanceRepo.GetLatestVersion(ctx, id)
+}
+
+// UpdateInstance updates an existing instance by creating a new version
 func (s *InstanceService) UpdateInstance(ctx context.Context, id string, attributes map[string]interface{}) (*core.Instance, error) {
-	// Get the existing instance
-	instance, err := s.instanceRepo.GetByID(ctx, id)
+	// Get the existing instance (latest version)
+	existingInstance, err := s.instanceRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("instance with ID '%s' not found", id)
 	}
 
 	// Get the latest type definition to ensure we're using the latest version
-	latestTypeDef, err := s.typeRepo.GetByID(ctx, instance.TypeDefinition.ID)
+	latestTypeDef, err := s.typeRepo.GetByID(ctx, existingInstance.TypeDefinition.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get latest type definition: %w", err)
 	}
 
-	// Update the instance to use the latest type definition
-	instance.TypeDefinition = latestTypeDef
+	// Get the latest version number and increment it
+	latestVersion, err := s.instanceRepo.GetLatestVersion(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine latest version: %w", err)
+	}
+	
+	// Create a new instance version
+	newInstance := core.NewInstanceVersion(existingInstance, latestVersion+1)
+	newInstance.TypeDefinition = latestTypeDef
+	
+	// If the type definition version has changed, update the instance type version
+	if existingInstance.TypeVersion != latestTypeDef.Version {
+		newInstance.TypeVersion = latestTypeDef.Version
+	}
 
-	// Check if type version has changed
-	if instance.TypeVersion != latestTypeDef.Version {
-		// Migrate the instance to the latest type version
-		migrationErrors := instance.MigrateToLatestVersion()
-		if len(migrationErrors) > 0 {
-			return nil, fmt.Errorf("migration to type version %d failed: %v",
-				latestTypeDef.Version, migrationErrors)
+	// Copy all attributes from the previous version
+	for attrName, value := range existingInstance.Attributes {
+		// Check if the attribute is still active in the new type version
+		attrDef := newInstance.FindAttributeDefinition(attrName)
+		if attrDef != nil && !attrDef.Disabled {
+			// Only copy attributes that are still active
+			newInstance.Attributes[attrName] = value
 		}
 	}
 
-	// Update the instance's attributes
+	// Apply the new/updated attributes
 	for name, value := range attributes {
-		err := instance.SetAttribute(name, value)
+		err := newInstance.SetAttribute(name, value)
 		if err != nil {
 			return nil, fmt.Errorf("failed to set attribute '%s': %w", name, err)
 		}
 	}
 
 	// Validate the instance
-	errors := instance.Validate()
+	errors := newInstance.Validate()
 	if len(errors) > 0 {
 		return nil, fmt.Errorf("validation failed: %v", errors)
 	}
 
-	// Save the updated instance
-	err = s.instanceRepo.Save(ctx, instance)
+	// Save the new instance version
+	err = s.instanceRepo.Save(ctx, newInstance)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save instance: %w", err)
 	}
 
-	return instance, nil
+	return newInstance, nil
 }
 
 // DeleteInstance archives an instance instead of permanently deleting it

@@ -3,36 +3,37 @@ package grpc
 import (
 	"context"
 	"fmt"
+	"github.com/bufbuild/connect-go"
+	"github.com/zac300/flexitype/pkg/sdk"
 	"net/http"
 	"reflect"
 	"strings"
 	"time"
 
-	"github.com/bufbuild/connect-go"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
 	// Import using the correct package paths that match the replace directives in go.mod
 	"github.com/zac300/flexitype/api/flexitypev1"
 	"github.com/zac300/flexitype/api/flexitypev1connect"
+	"github.com/zac300/flexitype/internal/application/services"
 	"github.com/zac300/flexitype/internal/domain/core"
 	"github.com/zac300/flexitype/internal/domain/validation"
 	"github.com/zac300/flexitype/internal/ports"
-	"github.com/zac300/flexitype/pkg/sdk"
 )
 
 // ConnectServer implements the FlexiType gRPC service using Connect
 type ConnectServer struct {
-	typeRepo     ports.TypeRepository
-	instanceRepo ports.InstanceRepository
-	httpServer   *http.Server
+	typeService     *services.TypeService
+	instanceService *services.InstanceService
+	httpServer      *http.Server
 }
 
 // NewConnectServer creates a new FlexiType Connect gRPC server
-func NewConnectServer(typeRepo ports.TypeRepository, instanceRepo ports.InstanceRepository) *ConnectServer {
+func NewConnectServer(typeService *services.TypeService, instanceService *services.InstanceService) *ConnectServer {
 	return &ConnectServer{
-		typeRepo:     typeRepo,
-		instanceRepo: instanceRepo,
+		typeService:     typeService,
+		instanceService: instanceService,
 	}
 }
 
@@ -40,8 +41,8 @@ func NewConnectServer(typeRepo ports.TypeRepository, instanceRepo ports.Instance
 func (s *ConnectServer) Start(port int) error {
 	// Create a new FlexiType service
 	service := &flexiTypeServiceServer{
-		typeRepo:     s.typeRepo,
-		instanceRepo: s.instanceRepo,
+		typeService:     s.typeService,
+		instanceService: s.instanceService,
 	}
 
 	// Create API path handlers for the service
@@ -71,11 +72,11 @@ func (s *ConnectServer) Stop() error {
 // flexiTypeServiceServer implements the FlexiTypeService defined in the proto file
 type flexiTypeServiceServer struct {
 	flexitypev1connect.UnimplementedFlexiTypeServiceHandler
-	typeRepo     ports.TypeRepository
-	instanceRepo ports.InstanceRepository
+	typeService     *services.TypeService
+	instanceService *services.InstanceService
 }
 
-// Helper functions for converting between domain and proto types (unchanged)
+// Helper functions for converting between domain and proto types
 func domainTypeToProto(typeDef *core.TypeDefinition) *flexitypev1.TypeDefinition {
 	// Parent type ID
 	var parentTypeID string
@@ -211,6 +212,7 @@ func domainAttributeToProto(attr *core.AttributeDefinition) *flexitypev1.Attribu
 func domainInstanceToProto(instance *core.Instance) *flexitypev1.Instance {
 	protoInstance := &flexitypev1.Instance{
 		Id:              instance.ID,
+		Version:         int32(instance.Version),
 		TypeId:          instance.TypeDefinition.ID,
 		TypeVersion:     int32(instance.TypeVersion),
 		AttributeValues: make(map[string]*flexitypev1.AttributeValue, len(instance.Attributes)),
@@ -317,21 +319,10 @@ func (s *flexiTypeServiceServer) CreateType(
 	ctx context.Context,
 	req *connect.Request[flexitypev1.CreateTypeRequest],
 ) (*connect.Response[flexitypev1.TypeResponse], error) {
-	typeDef := core.NewTypeDefinition(req.Msg.Id, req.Msg.Name, req.Msg.Description)
-
-	// Set parent type if specified
-	if req.Msg.ParentTypeId != "" {
-		parentType, err := s.typeRepo.GetByID(ctx, req.Msg.ParentTypeId)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("parent type not found: %w", err))
-		}
-		typeDef.SetParentType(parentType)
-	}
-
-	// Save the type
-	err := s.typeRepo.Save(ctx, typeDef)
+	// Use the type service to create the type
+	typeDef, err := s.typeService.CreateType(ctx, req.Msg.Id, req.Msg.Name, req.Msg.Description, req.Msg.ParentTypeId)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save type: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create type: %w", err))
 	}
 
 	// Return the created type
@@ -345,7 +336,7 @@ func (s *flexiTypeServiceServer) GetType(
 	ctx context.Context,
 	req *connect.Request[flexitypev1.GetTypeRequest],
 ) (*connect.Response[flexitypev1.TypeResponse], error) {
-	typeDef, err := s.typeRepo.GetByID(ctx, req.Msg.Id)
+	typeDef, err := s.typeService.GetType(ctx, req.Msg.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("type not found: %w", err))
 	}
@@ -380,8 +371,9 @@ func (s *flexiTypeServiceServer) ListTypes(
 		}
 	}
 
-	// Query types with options
-	types, totalCount, err := s.typeRepo.List(ctx, options)
+	// Create a convenience method for listing types with options in TypeService
+	// For now, we'll reuse the existing pattern and access the repo via the typeRepo field
+	types, totalCount, err := s.typeService.QueryTypes(ctx, options)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list types: %w", err))
 	}
@@ -410,55 +402,10 @@ func (s *flexiTypeServiceServer) UpdateType(
 	ctx context.Context,
 	req *connect.Request[flexitypev1.UpdateTypeRequest],
 ) (*connect.Response[flexitypev1.TypeResponse], error) {
-	// Get the existing type
-	typeDef, err := s.typeRepo.GetByID(ctx, req.Msg.Id)
+	// Use the type service to update the type
+	typeDef, err := s.typeService.UpdateType(ctx, req.Msg.Id, req.Msg.Name, req.Msg.Description, req.Msg.ParentTypeId)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("type not found: %w", err))
-	}
-
-	// Check if anything is changing that would require a version increment
-	versionChange := false
-
-	// Update name and description
-	if typeDef.Name != req.Msg.Name || typeDef.Description != req.Msg.Description {
-		versionChange = true
-		typeDef.Name = req.Msg.Name
-		typeDef.Description = req.Msg.Description
-	}
-
-	// Update parent type if specified
-	if req.Msg.ParentTypeId != "" && (typeDef.ParentType == nil || typeDef.ParentType.ID != req.Msg.ParentTypeId) {
-		parentType, err := s.typeRepo.GetByID(ctx, req.Msg.ParentTypeId)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("parent type not found: %w", err))
-		}
-
-		// Check for circular inheritance
-		current := parentType
-		for current != nil {
-			if current.ID == typeDef.ID {
-				return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("circular inheritance detected"))
-			}
-			current = current.ParentType
-		}
-
-		typeDef.SetParentType(parentType)
-		versionChange = true
-	} else if req.Msg.ParentTypeId == "" && typeDef.ParentType != nil {
-		// Remove parent type
-		typeDef.SetParentType(nil)
-		versionChange = true
-	}
-
-	// If we changed anything that affects the schema, increment the version
-	if versionChange {
-		typeDef.IncrementVersion()
-	}
-
-	// Save the updated type
-	err = s.typeRepo.Save(ctx, typeDef)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save type: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update type: %w", err))
 	}
 
 	return connect.NewResponse(&flexitypev1.TypeResponse{
@@ -468,12 +415,6 @@ func (s *flexiTypeServiceServer) UpdateType(
 
 // AddAttribute adds or updates an attribute on a type definition
 func (s *flexiTypeServiceServer) AddAttribute(ctx context.Context, req *connect.Request[flexitypev1.AddAttributeRequest]) (*connect.Response[flexitypev1.TypeResponse], error) {
-	// Get the type definition
-	typeDef, err := s.typeRepo.GetByID(ctx, req.Msg.TypeId)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("type not found: %w", err))
-	}
-
 	// Convert proto attribute to domain attribute
 	protoAttr := req.Msg.Attribute
 
@@ -591,16 +532,10 @@ func (s *flexiTypeServiceServer) AddAttribute(ctx context.Context, req *connect.
 		attribute.ValidationRules = append(attribute.ValidationRules, rule)
 	}
 
-	// Add attribute to type
-	typeDef.AddAttribute(attribute)
-
-	// Increment version
-	typeDef.IncrementVersion()
-
-	// Save updated type
-	err = s.typeRepo.Save(ctx, typeDef)
+	// Use the type service to add the attribute
+	typeDef, err := s.typeService.AddAttribute(ctx, req.Msg.TypeId, attribute)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save type: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to add attribute: %w", err))
 	}
 
 	return connect.NewResponse(&flexitypev1.TypeResponse{
@@ -609,8 +544,8 @@ func (s *flexiTypeServiceServer) AddAttribute(ctx context.Context, req *connect.
 }
 
 func (s *flexiTypeServiceServer) UpdateAttribute(ctx context.Context, req *connect.Request[flexitypev1.UpdateAttributeRequest]) (*connect.Response[flexitypev1.TypeResponse], error) {
-	// Get the type definition
-	typeDef, err := s.typeRepo.GetByID(ctx, req.Msg.TypeId)
+	// First get the type definition to find the existing attribute
+	typeDef, err := s.typeService.GetType(ctx, req.Msg.TypeId)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("type not found: %w", err))
 	}
@@ -618,7 +553,7 @@ func (s *flexiTypeServiceServer) UpdateAttribute(ctx context.Context, req *conne
 	// Convert proto attribute to domain attribute
 	protoAttr := req.Msg.Attribute
 
-	// Find existing attribute
+	// Find existing attribute from the type definition
 	var existingAttr *core.AttributeDefinition
 	for _, attr := range typeDef.Attributes {
 		if attr.ID == protoAttr.Id {
@@ -631,16 +566,19 @@ func (s *flexiTypeServiceServer) UpdateAttribute(ctx context.Context, req *conne
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("attribute with ID '%s' not found", protoAttr.Id))
 	}
 
-	// Update attribute fields
-	existingAttr.Name = protoAttr.Name
-	existingAttr.Description = protoAttr.Description
-	existingAttr.DataType = core.DataType(protoAttr.DataType)
-	existingAttr.Required = protoAttr.Required
-	existingAttr.MultiValued = protoAttr.MultiValued
-	existingAttr.Disabled = protoAttr.Disabled
-
-	// Clear existing cascades
-	existingAttr.Cascades = make([]core.Cascade, 0)
+	// Create a new attribute definition with the updated values
+	updatedAttr := &core.AttributeDefinition{
+		ID:              protoAttr.Id,
+		Name:            protoAttr.Name,
+		Description:     protoAttr.Description,
+		DataType:        core.DataType(protoAttr.DataType),
+		Required:        protoAttr.Required,
+		MultiValued:     protoAttr.MultiValued,
+		Disabled:        protoAttr.Disabled,
+		ValidationRules: make([]validation.Rule, 0),
+		Cascades:        make([]core.Cascade, 0),
+		CreatedAt:       existingAttr.CreatedAt, // Preserve creation time
+	}
 
 	// Process multiple cascades if provided
 	if len(protoAttr.Cascades) > 0 {
@@ -651,18 +589,16 @@ func (s *flexiTypeServiceServer) UpdateAttribute(ctx context.Context, req *conne
 				Logic:    protoCascade.Logic,
 				Weight:   int(protoCascade.Weight),
 			}
-			existingAttr.Cascades = append(existingAttr.Cascades, cascade)
+			updatedAttr.Cascades = append(updatedAttr.Cascades, cascade)
 		}
 	}
 
 	// Set default value if provided
 	if protoAttr.DefaultValue != nil {
-		existingAttr.DefaultValue = protoValueToDomain(protoAttr.DefaultValue)
+		updatedAttr.DefaultValue = protoValueToDomain(protoAttr.DefaultValue)
 	}
 
-	// Update validation rules
-	existingAttr.ValidationRules = make([]validation.Rule, 0)
-
+	// Convert validation rules
 	for _, protoRule := range protoAttr.ValidationRules {
 		var rule validation.Rule
 
@@ -742,55 +678,28 @@ func (s *flexiTypeServiceServer) UpdateAttribute(ctx context.Context, req *conne
 			rule = &validation.GenericRule{}
 		}
 
-		existingAttr.ValidationRules = append(existingAttr.ValidationRules, rule)
+		updatedAttr.ValidationRules = append(updatedAttr.ValidationRules, rule)
 	}
 
-	// Increment version
-	typeDef.IncrementVersion()
-
-	// Save updated type
-	err = s.typeRepo.Save(ctx, typeDef)
+	// Use the type service to add the attribute (which will replace the existing one)
+	updatedTypeDef, err := s.typeService.AddAttribute(ctx, req.Msg.TypeId, updatedAttr)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save type: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update attribute: %w", err))
 	}
 
 	return connect.NewResponse(&flexitypev1.TypeResponse{
-		Type: domainTypeToProto(typeDef),
+		Type: domainTypeToProto(updatedTypeDef),
 	}), nil
 }
 
 func (s *flexiTypeServiceServer) DeleteAttribute(ctx context.Context, req *connect.Request[flexitypev1.DeleteAttributeRequest]) (*connect.Response[flexitypev1.TypeResponse], error) {
-	// Get the type definition
-	typeDef, err := s.typeRepo.GetByID(ctx, req.Msg.TypeId)
+	// Use the type service to delete the attribute
+	typeDef, err := s.typeService.DeleteAttribute(ctx, req.Msg.TypeId, req.Msg.AttributeName)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("type not found: %w", err))
-	}
-
-	// Find and remove the attribute
-	newAttributes := make([]*core.AttributeDefinition, 0, len(typeDef.Attributes))
-	found := false
-
-	for _, attr := range typeDef.Attributes {
-		if attr.ID != req.Msg.AttributeId {
-			newAttributes = append(newAttributes, attr)
-		} else {
-			found = true
+		if strings.Contains(err.Error(), "not found") {
+			return nil, connect.NewError(connect.CodeNotFound, err)
 		}
-	}
-
-	if !found {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("attribute with ID '%s' not found", req.Msg.AttributeId))
-	}
-
-	typeDef.Attributes = newAttributes
-
-	// Increment version
-	typeDef.IncrementVersion()
-
-	// Save updated type
-	err = s.typeRepo.Save(ctx, typeDef)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save type: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete attribute: %w", err))
 	}
 
 	return connect.NewResponse(&flexitypev1.TypeResponse{
@@ -799,210 +708,17 @@ func (s *flexiTypeServiceServer) DeleteAttribute(ctx context.Context, req *conne
 }
 
 func (s *flexiTypeServiceServer) SetAttributeDisabledState(ctx context.Context, req *connect.Request[flexitypev1.SetAttributeDisabledStateRequest]) (*connect.Response[flexitypev1.TypeResponse], error) {
-	// Find the type
-	typeDef, err := s.typeRepo.GetByID(ctx, req.Msg.TypeId)
+	// Use the type service to set the attribute disabled state
+	typeDef, err := s.typeService.SetAttributeDisabledState(ctx, req.Msg.TypeId, req.Msg.AttributeName, req.Msg.Disabled)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("type not found: %w", err))
-	}
-
-	// Find the attribute
-	var foundAttr *core.AttributeDefinition
-	for _, attr := range typeDef.Attributes {
-		if attr.ID == req.Msg.AttributeId {
-			foundAttr = attr
-			break
+		if strings.Contains(err.Error(), "not found") {
+			return nil, connect.NewError(connect.CodeNotFound, err)
 		}
-	}
-
-	if foundAttr == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("attribute not found"))
-	}
-
-	// Update the disabled state
-	foundAttr.SetDisabled(req.Msg.Disabled)
-
-	// Increment the version since the type definition is changing
-	typeDef.IncrementVersion()
-
-	// Save the updated type
-	err = s.typeRepo.Save(ctx, typeDef)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save type: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to set attribute disabled state: %w", err))
 	}
 
 	return connect.NewResponse(&flexitypev1.TypeResponse{
 		Type: domainTypeToProto(typeDef),
-	}), nil
-}
-
-func (s *flexiTypeServiceServer) CreateInstance(ctx context.Context, req *connect.Request[flexitypev1.CreateInstanceRequest]) (*connect.Response[flexitypev1.InstanceResponse], error) {
-	// Get the type definition
-	typeDef, err := s.typeRepo.GetByID(ctx, req.Msg.TypeId)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("type not found: %w", err))
-	}
-
-	// Create instance
-	instance := core.NewInstance(req.Msg.Id, typeDef)
-
-	// Convert attribute values from proto to domain
-	attrValues := make(map[string]interface{})
-	for name, value := range req.Msg.AttributeValues {
-		attrValues[name] = protoValueToDomain(value)
-	}
-
-	// Set attribute values
-	for name, value := range attrValues {
-		err := instance.SetAttribute(name, value)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to set attribute '%s': %w", name, err))
-		}
-	}
-
-	// Validate instance
-	errors := instance.Validate()
-	if len(errors) > 0 {
-		// Join error messages
-		errorMsgs := make([]string, 0, len(errors))
-		for _, err := range errors {
-			errorMsgs = append(errorMsgs, err.Error())
-		}
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("validation failed: %s", strings.Join(errorMsgs, "; ")))
-	}
-
-	// Save the instance
-	err = s.instanceRepo.Save(ctx, instance)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
-	}
-
-	return connect.NewResponse(&flexitypev1.InstanceResponse{
-		Instance: domainInstanceToProto(instance),
-	}), nil
-}
-
-func (s *flexiTypeServiceServer) GetInstance(ctx context.Context, req *connect.Request[flexitypev1.GetInstanceRequest]) (*connect.Response[flexitypev1.InstanceResponse], error) {
-	// Get the instance by ID
-	instance, err := s.instanceRepo.GetByID(ctx, req.Msg.Id)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("instance not found: %w", err))
-	}
-
-	return connect.NewResponse(&flexitypev1.InstanceResponse{
-		Instance: domainInstanceToProto(instance),
-	}), nil
-}
-
-// QueryInstances - UPDATED to use QueryWithOptions with IncludeArchived
-func (s *flexiTypeServiceServer) QueryInstances(ctx context.Context, req *connect.Request[flexitypev1.QueryInstancesRequest]) (*connect.Response[flexitypev1.QueryInstancesResponse], error) {
-	// Convert attribute filters from proto to domain
-	filters := make(map[string]interface{})
-	for name, value := range req.Msg.AttributeFilters {
-		filters[name] = protoValueToDomain(value)
-	}
-
-	// Create query options
-	options := &ports.QueryOptions{
-		TypeID:           req.Msg.TypeId,
-		AttributeFilters: filters,
-		Limit:            int(req.Msg.PageSize),
-		IncludeArchived:  req.Msg.IncludeArchived,
-	}
-
-	// Default page size if not specified
-	if options.Limit <= 0 {
-		options.Limit = 50
-	}
-
-	// Get page token as offset
-	if req.Msg.PageToken != "" {
-		// PageToken might be a string, convert to int if possible
-		var offset int
-		if _, err := fmt.Sscanf(req.Msg.PageToken, "%d", &offset); err == nil {
-			options.Offset = offset
-		}
-	}
-
-	// Query instances with options
-	instances, totalCount, err := s.instanceRepo.QueryWithOptions(ctx, options)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to query instances: %w", err))
-	}
-
-	// Prepare next page token
-	var nextPageToken string
-	if options.Offset+len(instances) < totalCount {
-		nextPageToken = fmt.Sprintf("%d", options.Offset+len(instances))
-	}
-
-	// Convert to proto
-	protoInstances := make([]*flexitypev1.Instance, 0, len(instances))
-	for _, instance := range instances {
-		protoInstances = append(protoInstances, domainInstanceToProto(instance))
-	}
-
-	// Build response with pagination
-	return connect.NewResponse(&flexitypev1.QueryInstancesResponse{
-		Instances:     protoInstances,
-		NextPageToken: nextPageToken,
-	}), nil
-}
-
-func (s *flexiTypeServiceServer) UpdateInstance(ctx context.Context, req *connect.Request[flexitypev1.UpdateInstanceRequest]) (*connect.Response[flexitypev1.InstanceResponse], error) {
-	// Get the instance by ID
-	instance, err := s.instanceRepo.GetByID(ctx, req.Msg.Id)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("instance not found: %w", err))
-	}
-
-	// Check if the instance's type version is current
-	if instance.TypeVersion != instance.TypeDefinition.Version {
-		// Attempt to migrate the instance to the latest version
-		errors := instance.MigrateToLatestVersion()
-		if len(errors) > 0 {
-			// Join error messages
-			errorMsgs := make([]string, 0, len(errors))
-			for _, err := range errors {
-				errorMsgs = append(errorMsgs, err.Error())
-			}
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("instance migration failed: %s", strings.Join(errorMsgs, "; ")))
-		}
-	}
-
-	// Convert attribute values from proto to domain
-	attrValues := make(map[string]interface{})
-	for name, value := range req.Msg.AttributeValues {
-		attrValues[name] = protoValueToDomain(value)
-	}
-
-	// Update attribute values
-	for name, value := range attrValues {
-		err := instance.SetAttribute(name, value)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to set attribute '%s': %w", name, err))
-		}
-	}
-
-	// Validate the updated instance
-	errors := instance.Validate()
-	if len(errors) > 0 {
-		// Join error messages
-		errorMsgs := make([]string, 0, len(errors))
-		for _, err := range errors {
-			errorMsgs = append(errorMsgs, err.Error())
-		}
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("validation failed: %s", strings.Join(errorMsgs, "; ")))
-	}
-
-	// Save the updated instance
-	err = s.instanceRepo.Save(ctx, instance)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
-	}
-
-	return connect.NewResponse(&flexitypev1.InstanceResponse{
-		Instance: domainInstanceToProto(instance),
 	}), nil
 }
 
@@ -1011,20 +727,17 @@ func (s *flexiTypeServiceServer) ArchiveType(
 	ctx context.Context,
 	req *connect.Request[flexitypev1.ArchiveTypeRequest],
 ) (*connect.Response[flexitypev1.TypeResponse], error) {
-	// Get the type definition to ensure it exists
-	typeDef, err := s.typeRepo.GetByID(ctx, req.Msg.Id)
+	// Archive the type using the type service
+	err := s.typeService.ArchiveType(ctx, req.Msg.Id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("type not found: %w", err))
-	}
-
-	// Archive the type
-	err = s.typeRepo.Archive(ctx, req.Msg.Id)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to archive type: %w", err))
+		if strings.Contains(err.Error(), "not found") {
+			return nil, connect.NewError(connect.CodeNotFound, err)
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	// Get the updated type definition with the archived_at timestamp
-	typeDef, err = s.typeRepo.GetByID(ctx, req.Msg.Id)
+	typeDef, err := s.typeService.GetType(ctx, req.Msg.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retrieve updated type: %w", err))
 	}
@@ -1039,25 +752,20 @@ func (s *flexiTypeServiceServer) UnarchiveType(
 	ctx context.Context,
 	req *connect.Request[flexitypev1.UnarchiveTypeRequest],
 ) (*connect.Response[flexitypev1.TypeResponse], error) {
-	// Get the type definition to ensure it exists
-	typeDef, err := s.typeRepo.GetByID(ctx, req.Msg.Id)
+	// Unarchive the type using the type service
+	err := s.typeService.UnarchiveType(ctx, req.Msg.Id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("type not found: %w", err))
-	}
-
-	// Check if the type is actually archived
-	if typeDef.ArchivedAt == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("type is not archived"))
-	}
-
-	// Unarchive the type
-	err = s.typeRepo.Unarchive(ctx, req.Msg.Id)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to unarchive type: %w", err))
+		if strings.Contains(err.Error(), "not found") {
+			return nil, connect.NewError(connect.CodeNotFound, err)
+		}
+		if strings.Contains(err.Error(), "not archived") {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	// Get the updated type definition with the archived_at timestamp cleared
-	typeDef, err = s.typeRepo.GetByID(ctx, req.Msg.Id)
+	typeDef, err := s.typeService.GetType(ctx, req.Msg.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retrieve updated type: %w", err))
 	}
@@ -1068,8 +776,8 @@ func (s *flexiTypeServiceServer) UnarchiveType(
 }
 
 func (s *flexiTypeServiceServer) ExportTypeSchema(ctx context.Context, req *connect.Request[flexitypev1.ExportTypeSchemaRequest]) (*connect.Response[flexitypev1.SchemaResponse], error) {
-	// Get the type definition
-	typeDef, err := s.typeRepo.GetByID(ctx, req.Msg.TypeId)
+	// Get the type definition using the type service
+	typeDef, err := s.typeService.GetType(ctx, req.Msg.TypeId)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("type not found: %w", err))
 	}
@@ -1093,20 +801,17 @@ func (s *flexiTypeServiceServer) ArchiveInstance(
 	ctx context.Context,
 	req *connect.Request[flexitypev1.ArchiveInstanceRequest],
 ) (*connect.Response[flexitypev1.InstanceResponse], error) {
-	// Get the instance to ensure it exists
-	instance, err := s.instanceRepo.GetByID(ctx, req.Msg.Id)
+	// Archive the instance using the instance service
+	err := s.instanceService.ArchiveInstance(ctx, req.Msg.Id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("instance not found: %w", err))
-	}
-
-	// Archive the instance
-	err = s.instanceRepo.Archive(ctx, req.Msg.Id)
-	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil, connect.NewError(connect.CodeNotFound, err)
+		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to archive instance: %w", err))
 	}
 
 	// Get the updated instance with the archived_at timestamp
-	instance, err = s.instanceRepo.GetByID(ctx, req.Msg.Id)
+	instance, err := s.instanceService.GetInstance(ctx, req.Msg.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retrieve updated instance: %w", err))
 	}
@@ -1121,25 +826,20 @@ func (s *flexiTypeServiceServer) UnarchiveInstance(
 	ctx context.Context,
 	req *connect.Request[flexitypev1.UnarchiveInstanceRequest],
 ) (*connect.Response[flexitypev1.InstanceResponse], error) {
-	// Get the instance to ensure it exists
-	instance, err := s.instanceRepo.GetByID(ctx, req.Msg.Id)
+	// Unarchive the instance using the instance service
+	err := s.instanceService.UnarchiveInstance(ctx, req.Msg.Id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("instance not found: %w", err))
-	}
-
-	// Check if the instance is actually archived
-	if instance.ArchivedAt == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("instance is not archived"))
-	}
-
-	// Unarchive the instance
-	err = s.instanceRepo.Unarchive(ctx, req.Msg.Id)
-	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil, connect.NewError(connect.CodeNotFound, err)
+		}
+		if strings.Contains(err.Error(), "not archived") {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to unarchive instance: %w", err))
 	}
 
 	// Get the updated instance with the archived_at timestamp cleared
-	instance, err = s.instanceRepo.GetByID(ctx, req.Msg.Id)
+	instance, err := s.instanceService.GetInstance(ctx, req.Msg.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retrieve updated instance: %w", err))
 	}
@@ -1159,16 +859,30 @@ func (s *flexiTypeServiceServer) ImportTypeSchema(ctx context.Context, req *conn
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to import type from YAML: %w", err))
 	}
 
-	// Check if type with same ID already exists
-	existing, err := s.typeRepo.GetByID(ctx, typeDef.ID)
+	// Check if type with same ID already exists using the type service
+	existing, err := s.typeService.GetType(ctx, typeDef.ID)
 	if err == nil && existing != nil {
 		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("type with ID '%s' already exists", typeDef.ID))
 	}
 
-	// Save the type
-	err = s.typeRepo.Save(ctx, typeDef)
+	// Create the type using the type service
+	typeDef, err = s.typeService.CreateType(ctx, typeDef.ID, typeDef.Name, typeDef.Description, "")
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save type: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create type: %w", err))
+	}
+
+	// For each attribute in the imported type, add it to the newly created type
+	for _, attr := range typeDef.Attributes {
+		_, err = s.typeService.AddAttribute(ctx, typeDef.ID, attr)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to add attribute '%s': %w", attr.Name, err))
+		}
+	}
+
+	// Get the final updated type
+	typeDef, err = s.typeService.GetType(ctx, typeDef.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retrieve final type: %w", err))
 	}
 
 	return connect.NewResponse(&flexitypev1.TypeResponse{

@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -16,14 +15,14 @@ import (
 // InMemoryInstanceRepository is an in-memory implementation of the InstanceRepository interface
 type InMemoryInstanceRepository struct {
 	mutex     sync.RWMutex
-	instances map[string]*core.Instance // Map of ID -> Instance
-	typeIndex map[string][]string       // Map of TypeID -> []InstanceID
+	instances map[string]map[int]*core.Instance // Map of ID -> Map of Version -> Instance
+	typeIndex map[string][]string               // Map of TypeID -> []InstanceID
 }
 
 // NewInMemoryInstanceRepository creates a new in-memory instance repository
 func NewInMemoryInstanceRepository() *InMemoryInstanceRepository {
 	return &InMemoryInstanceRepository{
-		instances: make(map[string]*core.Instance),
+		instances: make(map[string]map[int]*core.Instance),
 		typeIndex: make(map[string][]string),
 	}
 }
@@ -33,10 +32,15 @@ func (r *InMemoryInstanceRepository) Save(ctx context.Context, instance *core.In
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	// Store the instance
-	r.instances[instance.ID] = instance
+	// Ensure the instance map for this ID exists
+	if _, exists := r.instances[instance.ID]; !exists {
+		r.instances[instance.ID] = make(map[int]*core.Instance)
+	}
 
-	// Update type index
+	// Store the instance with its version
+	r.instances[instance.ID][instance.Version] = instance
+
+	// Update type index - only need to track IDs, not versions
 	typeID := instance.TypeDefinition.ID
 	instanceIDs, exists := r.typeIndex[typeID]
 	if !exists {
@@ -60,20 +64,101 @@ func (r *InMemoryInstanceRepository) Save(ctx context.Context, instance *core.In
 	return nil
 }
 
-// GetByID retrieves an instance by ID
+// SaveMany persists multiple instances
+func (r *InMemoryInstanceRepository) SaveMany(ctx context.Context, instances []*core.Instance) error {
+	for _, instance := range instances {
+		if err := r.Save(ctx, instance); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetByID retrieves the latest version of an instance by ID
 func (r *InMemoryInstanceRepository) GetByID(ctx context.Context, id string) (*core.Instance, error) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	instance, exists := r.instances[id]
+	versions, exists := r.instances[id]
+	if !exists || len(versions) == 0 {
+		return nil, fmt.Errorf("instance with ID '%s' not found", id)
+	}
+
+	// Find the highest version
+	var latestVersion int
+	for version := range versions {
+		if version > latestVersion {
+			latestVersion = version
+		}
+	}
+
+	return versions[latestVersion], nil
+}
+
+// GetByIDAndVersion retrieves a specific version of an instance
+func (r *InMemoryInstanceRepository) GetByIDAndVersion(ctx context.Context, id string, version int) (*core.Instance, error) {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	versions, exists := r.instances[id]
 	if !exists {
 		return nil, fmt.Errorf("instance with ID '%s' not found", id)
+	}
+
+	instance, exists := versions[version]
+	if !exists {
+		return nil, fmt.Errorf("instance with ID '%s' and version %d not found", id, version)
 	}
 
 	return instance, nil
 }
 
-// GetByIDs retrieves multiple instances by IDs
+// GetLatestVersion returns the highest version number for an instance
+func (r *InMemoryInstanceRepository) GetLatestVersion(ctx context.Context, id string) (int, error) {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	versions, exists := r.instances[id]
+	if !exists || len(versions) == 0 {
+		return 0, fmt.Errorf("instance with ID '%s' not found", id)
+	}
+
+	// Find the highest version
+	var latestVersion int
+	for version := range versions {
+		if version > latestVersion {
+			latestVersion = version
+		}
+	}
+
+	return latestVersion, nil
+}
+
+// GetAllVersions retrieves all versions of an instance
+func (r *InMemoryInstanceRepository) GetAllVersions(ctx context.Context, id string) ([]*core.Instance, error) {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	versions, exists := r.instances[id]
+	if !exists || len(versions) == 0 {
+		return nil, fmt.Errorf("instance with ID '%s' not found", id)
+	}
+
+	// Convert map to slice and sort by version
+	result := make([]*core.Instance, 0, len(versions))
+	for _, instance := range versions {
+		result = append(result, instance)
+	}
+
+	// Sort by version (ascending)
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Version < result[j].Version
+	})
+
+	return result, nil
+}
+
+// GetByIDs retrieves multiple instances by IDs (latest versions)
 func (r *InMemoryInstanceRepository) GetByIDs(ctx context.Context, ids []string) ([]*core.Instance, error) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -82,9 +167,16 @@ func (r *InMemoryInstanceRepository) GetByIDs(ctx context.Context, ids []string)
 	notFound := make([]string, 0)
 
 	for _, id := range ids {
-		instance, exists := r.instances[id]
-		if exists {
-			result = append(result, instance)
+		versions, exists := r.instances[id]
+		if exists && len(versions) > 0 {
+			// Find the highest version
+			var latestVersion int
+			for version := range versions {
+				if version > latestVersion {
+					latestVersion = version
+				}
+			}
+			result = append(result, versions[latestVersion])
 		} else {
 			notFound = append(notFound, id)
 		}
@@ -97,131 +189,100 @@ func (r *InMemoryInstanceRepository) GetByIDs(ctx context.Context, ids []string)
 	return result, nil
 }
 
-// SaveMany persists multiple instances in a single transaction
-func (r *InMemoryInstanceRepository) SaveMany(ctx context.Context, instances []*core.Instance) error {
-	if len(instances) == 0 {
-		return nil
-	}
-
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
-	for _, instance := range instances {
-		// Store the instance
-		r.instances[instance.ID] = instance
-
-		// Update type index
-		typeID := instance.TypeDefinition.ID
-		instanceIDs, exists := r.typeIndex[typeID]
-		if !exists {
-			instanceIDs = []string{}
-		}
-
-		// Check if already in the type index
-		found := false
-		for _, id := range instanceIDs {
-			if id == instance.ID {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			instanceIDs = append(instanceIDs, instance.ID)
-			r.typeIndex[typeID] = instanceIDs
-		}
-	}
-
-	return nil
-}
-
-// Query retrieves instances by query criteria
+// Query retrieves instances by type ID and attribute filters (for backward compatibility)
 func (r *InMemoryInstanceRepository) Query(ctx context.Context, typeID string, attributeFilters map[string]interface{}) ([]*core.Instance, error) {
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
-
-	// Get all instances of the specified type
-	var candidates []*core.Instance
-	if typeID != "" {
-		// Use type index for filtering by type
-		instanceIDs, exists := r.typeIndex[typeID]
-		if !exists {
-			return []*core.Instance{}, nil
-		}
-
-		candidates = make([]*core.Instance, 0, len(instanceIDs))
-		for _, id := range instanceIDs {
-			if instance, ok := r.instances[id]; ok {
-				candidates = append(candidates, instance)
-			}
-		}
-	} else {
-		// No type filter, include all instances
-		candidates = make([]*core.Instance, 0, len(r.instances))
-		for _, instance := range r.instances {
-			candidates = append(candidates, instance)
-		}
+	options := &ports.QueryOptions{
+		TypeID:           typeID,
+		AttributeFilters: attributeFilters,
+		IncludeArchived:  false,
+		LatestVersionOnly: true,
 	}
-
-	// Apply attribute filters
-	if len(attributeFilters) == 0 {
-		return candidates, nil
-	}
-
-	result := make([]*core.Instance, 0)
-	for _, instance := range candidates {
-		match := true
-
-		// Check each filter
-		for attrName, filterValue := range attributeFilters {
-			attrValue, err := instance.GetAttribute(attrName)
-			if err != nil || !reflect.DeepEqual(attrValue, filterValue) {
-				match = false
-				break
-			}
-		}
-
-		if match {
-			result = append(result, instance)
-		}
-	}
-
-	return result, nil
+	instances, _, err := r.QueryWithOptions(ctx, options)
+	return instances, err
 }
 
-// QueryWithOptions retrieves instances with pagination, ordering, and advanced filtering
+// QueryWithOptions retrieves instances with advanced filtering options
 func (r *InMemoryInstanceRepository) QueryWithOptions(ctx context.Context, options *ports.QueryOptions) ([]*core.Instance, int, error) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	// If options not provided, use defaults
-	if options == nil {
-		options = ports.DefaultQueryOptions()
+	// First, identify candidate instances by typeID
+	var candidateIDs []string
+	if options.TypeID != "" {
+		// Get instances for specific type
+		candidateIDs = r.typeIndex[options.TypeID]
+	} else {
+		// Get all instances
+		for id := range r.instances {
+			candidateIDs = append(candidateIDs, id)
+		}
 	}
 
-	// Start with all instances or filter by type if specified
-	filtered := make([]*core.Instance, 0)
-
-	if options.TypeID != "" {
-		// Use type index for filtering by type
-		instanceIDs, exists := r.typeIndex[options.TypeID]
-		if !exists {
-			return []*core.Instance{}, 0, nil
+	// Filter by IDs if specified
+	if len(options.IDs) > 0 {
+		// Create a set of requested IDs for quick lookup
+		idSet := make(map[string]bool)
+		for _, id := range options.IDs {
+			idSet[id] = true
 		}
 
-		for _, id := range instanceIDs {
-			if instance, ok := r.instances[id]; ok {
-				// Apply additional filtering
-				if r.matchesInstanceFilter(instance, options) {
-					filtered = append(filtered, instance)
-				}
+		// Only keep IDs that are in the requested set
+		filteredIDs := make([]string, 0)
+		for _, id := range candidateIDs {
+			if idSet[id] {
+				filteredIDs = append(filteredIDs, id)
 			}
 		}
-	} else {
-		// No type filter, include all instances that match other filters
-		for _, instance := range r.instances {
+		candidateIDs = filteredIDs
+	}
+
+	// Process the candidates
+	filtered := make([]*core.Instance, 0)
+
+	for _, id := range candidateIDs {
+		// Process the matching instances
+		versions, exists := r.instances[id]
+		if !exists || len(versions) == 0 {
+			continue
+		}
+
+		// Handle versioning
+		if options.LatestVersionOnly {
+			// Get only the latest version
+			var latestVersion int
+			for version := range versions {
+				if version > latestVersion {
+					latestVersion = version
+				}
+			}
+			
+			// If specific version is requested and it doesn't match latest, skip
+			if options.InstanceVersion > 0 && options.InstanceVersion != latestVersion {
+				continue
+			}
+			
+			instance := versions[latestVersion]
+			
+			// Apply instance-level filters
 			if r.matchesInstanceFilter(instance, options) {
 				filtered = append(filtered, instance)
+			}
+		} else {
+			// Get all versions or specific version
+			if options.InstanceVersion > 0 {
+				// Get specific version if it exists
+				if instance, hasVersion := versions[options.InstanceVersion]; hasVersion {
+					if r.matchesInstanceFilter(instance, options) {
+						filtered = append(filtered, instance)
+					}
+				}
+			} else {
+				// Get all versions
+				for _, instance := range versions {
+					if r.matchesInstanceFilter(instance, options) {
+						filtered = append(filtered, instance)
+					}
+				}
 			}
 		}
 	}
@@ -253,98 +314,83 @@ func (r *InMemoryInstanceRepository) matchesInstanceFilter(instance *core.Instan
 		return false
 	}
 
-	// Filter by IDs if specified
-	if len(options.IDs) > 0 {
-		found := false
-		for _, id := range options.IDs {
-			if instance.ID == id {
-				found = true
-				break
-			}
-		}
-		if !found {
+	// Filter by InstanceID if specified
+	if options.InstanceID != "" && instance.ID != options.InstanceID {
+		return false
+	}
+
+	// Filter by attribute filters
+	for attrName, filterValue := range options.AttributeFilters {
+		// Get attribute value
+		attrValue, exists := instance.Attributes[attrName]
+		if !exists {
+			// Attribute doesn't exist on instance
 			return false
 		}
-	}
 
-	// Filter by name if specified - Instance doesn't have a Name field
-	if options.Name != "" {
-		// Since instances don't have a Name field directly, we skip this filter
-		return false
-	}
-
-	// Filter by description if specified - Instance doesn't have a Description field
-	if options.Description != "" {
-		// Since instances don't have a Description field directly, we skip this filter
-		return false
-	}
-
-	// Filter by version if specified
-	if options.Version > 0 && instance.TypeVersion != options.Version {
-		return false
-	}
-
-	// Filter by name in list if specified - Instance doesn't have a Name field
-	if len(options.NameIn) > 0 {
-		// Since instances don't have a Name field directly, we skip this filter
-		return false
-	}
-
-	// Filter by version in list if specified
-	if len(options.VersionIn) > 0 {
-		found := false
-		for _, version := range options.VersionIn {
-			if instance.TypeVersion == version {
-				found = true
-				break
-			}
-		}
-		if !found {
+		// Check if the attribute value matches the filter
+		if !r.matchesAttributeValue(attrValue, filterValue) {
 			return false
-		}
-	}
-
-	// Apply attribute filters if any
-	if len(options.AttributeFilters) > 0 {
-		for attrName, filterValue := range options.AttributeFilters {
-			attrValue, err := instance.GetAttribute(attrName)
-			if err != nil || !reflect.DeepEqual(attrValue, filterValue) {
-				return false
-			}
 		}
 	}
 
 	return true
 }
 
-// sortInstances sorts instances by the specified field and direction
-func (r *InMemoryInstanceRepository) sortInstances(instances []*core.Instance, orderBy, orderDir string) {
-	if orderBy == "" {
-		orderBy = "id"
+// matchesAttributeValue checks if an attribute value matches a filter value
+func (r *InMemoryInstanceRepository) matchesAttributeValue(value, filter interface{}) bool {
+	// Handle nil values
+	if value == nil {
+		return filter == nil
 	}
 
-	ascending := strings.ToUpper(orderDir) != "DESC"
+	// Handle string case insensitive comparison
+	if strValue, ok := value.(string); ok {
+		if strFilter, ok := filter.(string); ok {
+			return strings.EqualFold(strValue, strFilter)
+		}
+	}
+
+	// For other types, do direct comparison
+	return fmt.Sprintf("%v", value) == fmt.Sprintf("%v", filter)
+}
+
+// sortInstances sorts the instances by the specified field and direction
+func (r *InMemoryInstanceRepository) sortInstances(instances []*core.Instance, orderBy, orderDir string) {
+	if orderBy == "" {
+		orderBy = "id" // Default sort field
+	}
+	
+	ascending := true
+	if strings.ToUpper(orderDir) == "DESC" {
+		ascending = false
+	}
 
 	sort.Slice(instances, func(i, j int) bool {
-		var less bool
-
-		switch strings.ToLower(orderBy) {
+		var result bool
+		
+		// Get values to compare based on the orderBy field
+		switch orderBy {
 		case "id":
-			less = instances[i].ID < instances[j].ID
-		case "typeversion":
-			less = instances[i].TypeVersion < instances[j].TypeVersion
-		case "typeid":
-			less = instances[i].TypeDefinition.ID < instances[j].TypeDefinition.ID
-		case "typename":
-			less = instances[i].TypeDefinition.Name < instances[j].TypeDefinition.Name
+			result = instances[i].ID < instances[j].ID
+		case "type_id":
+			result = instances[i].TypeDefinition.ID < instances[j].TypeDefinition.ID
+		case "version":
+			result = instances[i].Version < instances[j].Version
+		case "created_at":
+			result = instances[i].CreatedAt.Before(instances[j].CreatedAt)
+		case "updated_at":
+			result = instances[i].UpdatedAt.Before(instances[j].UpdatedAt)
 		default:
-			less = instances[i].ID < instances[j].ID
+			// Sort by ID as fallback
+			result = instances[i].ID < instances[j].ID
 		}
-
+		
+		// Reverse the result for descending order
 		if !ascending {
-			return !less
+			return !result
 		}
-		return less
+		return result
 	})
 }
 
@@ -353,14 +399,17 @@ func (r *InMemoryInstanceRepository) Archive(ctx context.Context, id string) err
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	instance, exists := r.instances[id]
-	if !exists {
+	versions, exists := r.instances[id]
+	if !exists || len(versions) == 0 {
 		return fmt.Errorf("instance with ID '%s' not found", id)
 	}
 
-	// Set archived timestamp
+	// Archive all versions
 	now := time.Now()
-	instance.ArchivedAt = &now
+	for version, instance := range versions {
+		instance.ArchivedAt = &now
+		versions[version] = instance
+	}
 
 	return nil
 }
@@ -370,41 +419,26 @@ func (r *InMemoryInstanceRepository) Unarchive(ctx context.Context, id string) e
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	instance, exists := r.instances[id]
-	if !exists {
+	versions, exists := r.instances[id]
+	if !exists || len(versions) == 0 {
 		return fmt.Errorf("instance with ID '%s' not found", id)
 	}
 
-	// Remove archived timestamp
-	instance.ArchivedAt = nil
+	// Unarchive all versions
+	for version, instance := range versions {
+		instance.ArchivedAt = nil
+		versions[version] = instance
+	}
 
 	return nil
 }
 
 // ArchiveMany marks multiple instances as archived
 func (r *InMemoryInstanceRepository) ArchiveMany(ctx context.Context, ids []string) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
-	notFound := make([]string, 0)
-	now := time.Now()
-
 	for _, id := range ids {
-		instance, exists := r.instances[id]
-		if exists {
-			instance.ArchivedAt = &now
-		} else {
-			notFound = append(notFound, id)
+		if err := r.Archive(ctx, id); err != nil {
+			return err
 		}
 	}
-
-	if len(notFound) > 0 {
-		return fmt.Errorf("some instances not found: %v", notFound)
-	}
-
 	return nil
 }

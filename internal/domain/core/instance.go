@@ -11,14 +11,14 @@ import (
 
 // Instance represents an instance of a type with attribute values
 type Instance struct {
-	ID             string
+	ID             string          // External ID used by consumers to identify the instance
+	Version        int             // Internal version number for the instance
 	TypeDefinition *TypeDefinition
-	TypeVersion    int // Stores the version of the type definition this instance was created with
+	TypeVersion    int             // Stores the version of the type definition this instance was created with
 	Attributes     map[string]interface{}
-	CreatedAt      time.Time  // When the instance was created
-	UpdatedAt      time.Time  // When the instance was last updated
-	ArchivedAt     *time.Time // Nullable timestamp when the instance was archived
-
+	CreatedAt      time.Time       // When the instance was created
+	UpdatedAt      time.Time       // When the instance was last updated
+	ArchivedAt     *time.Time      // Nullable timestamp when the instance was archived
 }
 
 // NewInstance creates a new instance of a type
@@ -26,6 +26,7 @@ func NewInstance(id string, typeDef *TypeDefinition) *Instance {
 	now := time.Now()
 	return &Instance{
 		ID:             id,
+		Version:        1, // Initial version is 1
 		TypeDefinition: typeDef,
 		TypeVersion:    typeDef.Version,
 		Attributes:     make(map[string]interface{}),
@@ -34,10 +35,24 @@ func NewInstance(id string, typeDef *TypeDefinition) *Instance {
 	}
 }
 
+// NewInstanceVersion creates a new version of an existing instance
+func NewInstanceVersion(existingInstance *Instance, newVersion int) *Instance {
+	now := time.Now()
+	return &Instance{
+		ID:             existingInstance.ID,         // Maintain the same ID
+		Version:        newVersion,                  // Set the new version number
+		TypeDefinition: existingInstance.TypeDefinition,
+		TypeVersion:    existingInstance.TypeVersion,
+		Attributes:     make(map[string]interface{}),
+		CreatedAt:      existingInstance.CreatedAt,  // Preserve original creation time
+		UpdatedAt:      now,
+	}
+}
+
 // SetAttribute sets an attribute value on the instance
 func (i *Instance) SetAttribute(name string, value interface{}) error {
 	// Find attribute definition
-	attrDef := i.findAttributeDefinition(name)
+	attrDef := i.FindAttributeDefinition(name)
 	if attrDef == nil {
 		return fmt.Errorf("attribute '%s' is not defined for this type", name)
 	}
@@ -114,7 +129,7 @@ func (i *Instance) GetAttribute(name string) (interface{}, error) {
 	}
 
 	// Check if it's defined but we're using default value
-	attrDef := i.findAttributeDefinition(name)
+	attrDef := i.FindAttributeDefinition(name)
 	if attrDef != nil && attrDef.DefaultValue != nil {
 		return attrDef.DefaultValue, nil
 	}
@@ -178,7 +193,7 @@ func (i *Instance) Validate() []error {
 					}
 
 					// Find the target attribute
-					targetAttrDef := i.findAttributeDefinition(targetField)
+					targetAttrDef := i.FindAttributeDefinition(targetField)
 					if targetAttrDef == nil || targetAttrDef.Disabled {
 						errors = append(errors, fmt.Errorf("validation cascade target attribute '%s' not found or disabled", targetField))
 						continue
@@ -450,7 +465,7 @@ func (i *Instance) Validate() []error {
 								attrValue := parseExpressionValue(strings.TrimSpace(kv[1]))
 
 								// Check if the target attribute is disabled
-								targetAttrDef := i.findAttributeDefinition(attrName)
+								targetAttrDef := i.FindAttributeDefinition(attrName)
 								if targetAttrDef != nil && targetAttrDef.Disabled {
 									// Skip setting disabled attributes
 									continue
@@ -507,6 +522,7 @@ func parseExpressionValue(value string) interface{} {
 
 // MigrateToLatestVersion updates the instance to use the latest type definition version
 // and validates the instance against the new type version
+// It creates a new version by copying attributes from the previous version, removing disabled ones
 func (i *Instance) MigrateToLatestVersion() []error {
 	// Check if instance is already at the latest version
 	if i.TypeVersion == i.TypeDefinition.Version {
@@ -515,6 +531,27 @@ func (i *Instance) MigrateToLatestVersion() []error {
 
 	// Store the original version for error reporting
 	oldVersion := i.TypeVersion
+
+	// Get all active attributes in the new type version
+	allAttributes := i.TypeDefinition.GetAllAttributes()
+	activeAttributeNames := make(map[string]bool)
+	for _, attr := range allAttributes {
+		if !attr.Disabled {
+			activeAttributeNames[attr.Name] = true
+		}
+	}
+
+	// Create a new attributes map, only including values for attributes that are still active
+	newAttributes := make(map[string]interface{})
+	for attrName, value := range i.Attributes {
+		if activeAttributeNames[attrName] {
+			// Only copy attributes that are still active in the new type version
+			newAttributes[attrName] = value
+		}
+	}
+	
+	// Replace the attributes with the filtered set
+	i.Attributes = newAttributes
 
 	// Update the instance type version to match the current type definition
 	i.TypeVersion = i.TypeDefinition.Version
@@ -533,8 +570,8 @@ func (i *Instance) MigrateToLatestVersion() []error {
 	return errors
 }
 
-// findAttributeDefinition finds the attribute definition for a given name
-func (i *Instance) findAttributeDefinition(name string) *AttributeDefinition {
+// FindAttributeDefinition finds the attribute definition for a given name
+func (i *Instance) FindAttributeDefinition(name string) *AttributeDefinition {
 	for _, attr := range i.TypeDefinition.GetAllAttributes() {
 		if attr.Name == name {
 			return attr

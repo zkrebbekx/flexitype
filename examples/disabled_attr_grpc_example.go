@@ -206,9 +206,9 @@ func main() {
 	fmt.Println("\n=== Step 4: Disabling the author attribute ===")
 
 	disableAttrReq := connect.NewRequest(&flexitypev1.SetAttributeDisabledStateRequest{
-		TypeId:      typeDef.Id,
-		AttributeId: "attr-002",
-		Disabled:    true,
+		TypeId:        typeDef.Id,
+		AttributeName: "author",
+		Disabled:      true,
 	})
 
 	disableAttrRes, err := client.SetAttributeDisabledState(ctx, disableAttrReq)
@@ -221,7 +221,7 @@ func main() {
 
 	// Find the author attribute and check its state
 	for _, attr := range typeDef.Attributes {
-		if attr.Id == "attr-002" {
+		if attr.Name == "author" {
 			fmt.Printf("  Attribute '%s' disabled state: %v\n", attr.Name, attr.Disabled)
 		}
 	}
@@ -387,9 +387,9 @@ func main() {
 	fmt.Println("\n=== Step 8: Re-enabling the author attribute ===")
 
 	enableAttrReq := connect.NewRequest(&flexitypev1.SetAttributeDisabledStateRequest{
-		TypeId:      typeDef.Id,
-		AttributeId: "attr-002",
-		Disabled:    false,
+		TypeId:        typeDef.Id,
+		AttributeName: "attr-002",
+		Disabled:      false,
 	})
 
 	enableAttrRes, err := client.SetAttributeDisabledState(ctx, enableAttrReq)

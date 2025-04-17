@@ -1010,10 +1010,11 @@ func (r *InstanceRepositoryImpl) Save(ctx context.Context, instance *core.Instan
 // saveAttributeValue saves a single attribute value
 func saveAttributeValue(ctx context.Context, tx *sqlx.Tx, instanceID, attrName string, value interface{}, listIndex interface{}) error {
 	// Determine value type and store in appropriate column
-	var valueType, stringValue, dateValue string
+	var valueType, stringValue string
 	var intValue *int64
 	var floatValue *float64
 	var boolValue *bool
+	var dateValue sql.NullTime
 
 	switch v := value.(type) {
 	case string:
@@ -1030,6 +1031,12 @@ func saveAttributeValue(ctx context.Context, tx *sqlx.Tx, instanceID, attrName s
 	case bool:
 		valueType = "boolean"
 		boolValue = &v
+	case time.Time:
+		valueType = "date"
+		dateValue = sql.NullTime{
+			Time:  v,
+			Valid: true,
+		}
 	default:
 		// For complex types, convert to JSON string
 		valueType = "string"

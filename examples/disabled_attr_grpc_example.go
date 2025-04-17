@@ -145,21 +145,21 @@ func main() {
 	attrValues := make(map[string]*flexitypev1.AttributeValue)
 
 	// Add title
-	attrValues["attr-001"] = &flexitypev1.AttributeValue{
+	attrValues["title"] = &flexitypev1.AttributeValue{
 		Value: &flexitypev1.AttributeValue_StringValue{
 			StringValue: "Sample Document",
 		},
 	}
 
 	// Add author
-	attrValues["attr-002"] = &flexitypev1.AttributeValue{
+	attrValues["author"] = &flexitypev1.AttributeValue{
 		Value: &flexitypev1.AttributeValue_StringValue{
 			StringValue: "John Doe",
 		},
 	}
 
 	// Add content
-	attrValues["attr-003"] = &flexitypev1.AttributeValue{
+	attrValues["content"] = &flexitypev1.AttributeValue{
 		Value: &flexitypev1.AttributeValue_StringValue{
 			StringValue: "This is a sample document content.",
 		},
@@ -230,7 +230,7 @@ func main() {
 	fmt.Println("\n=== Step 5: Trying to update instance with disabled attribute ===")
 
 	updateInstValues := make(map[string]*flexitypev1.AttributeValue)
-	updateInstValues["attr-002"] = &flexitypev1.AttributeValue{
+	updateInstValues["author"] = &flexitypev1.AttributeValue{
 		Value: &flexitypev1.AttributeValue_StringValue{
 			StringValue: "Jane Smith", // This should fail because author is disabled
 		},
@@ -252,7 +252,7 @@ func main() {
 	fmt.Println("\n=== Step 6: Updating instance with valid attribute ===")
 
 	updateValidValues := make(map[string]*flexitypev1.AttributeValue)
-	updateValidValues["attr-001"] = &flexitypev1.AttributeValue{
+	updateValidValues["title"] = &flexitypev1.AttributeValue{
 		Value: &flexitypev1.AttributeValue_StringValue{
 			StringValue: "Updated Document Title",
 		},
@@ -300,19 +300,19 @@ func main() {
 	// Try to create with the disabled attribute
 	createWithDisabledValues := make(map[string]*flexitypev1.AttributeValue)
 
-	createWithDisabledValues["attr-001"] = &flexitypev1.AttributeValue{
+	createWithDisabledValues["title"] = &flexitypev1.AttributeValue{
 		Value: &flexitypev1.AttributeValue_StringValue{
 			StringValue: "New Document",
 		},
 	}
 
-	createWithDisabledValues["attr-002"] = &flexitypev1.AttributeValue{
+	createWithDisabledValues["author"] = &flexitypev1.AttributeValue{
 		Value: &flexitypev1.AttributeValue_StringValue{
 			StringValue: "Jane Smith", // This should fail because author is disabled
 		},
 	}
 
-	createWithDisabledValues["attr-003"] = &flexitypev1.AttributeValue{
+	createWithDisabledValues["content"] = &flexitypev1.AttributeValue{
 		Value: &flexitypev1.AttributeValue_StringValue{
 			StringValue: "This is a new document content.",
 		},
@@ -334,13 +334,13 @@ func main() {
 	// Create without the disabled attribute
 	createValidValues := make(map[string]*flexitypev1.AttributeValue)
 
-	createValidValues["attr-001"] = &flexitypev1.AttributeValue{
+	createValidValues["title"] = &flexitypev1.AttributeValue{
 		Value: &flexitypev1.AttributeValue_StringValue{
 			StringValue: "New Document",
 		},
 	}
 
-	createValidValues["attr-003"] = &flexitypev1.AttributeValue{
+	createValidValues["content"] = &flexitypev1.AttributeValue{
 		Value: &flexitypev1.AttributeValue_StringValue{
 			StringValue: "This is a new document content.",
 		},
@@ -404,7 +404,7 @@ func main() {
 	fmt.Println("\n=== Step 9: Updating instance with re-enabled attribute ===")
 
 	updateReenabledValues := make(map[string]*flexitypev1.AttributeValue)
-	updateReenabledValues["attr-002"] = &flexitypev1.AttributeValue{
+	updateReenabledValues["author"] = &flexitypev1.AttributeValue{
 		Value: &flexitypev1.AttributeValue_StringValue{
 			StringValue: "Jane Smith", // This should work now
 		},

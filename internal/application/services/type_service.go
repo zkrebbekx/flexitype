@@ -68,6 +68,23 @@ func (s *TypeService) GetTypeByName(ctx context.Context, name string) (*core.Typ
 	return s.typeRepo.GetByName(ctx, name)
 }
 
+// GetTypeVersion retrieves a specific version of a type definition
+func (s *TypeService) GetTypeVersion(ctx context.Context, id string, version int) (*core.TypeDefinition, error) {
+	return s.typeRepo.GetByIDAndVersion(ctx, id, version)
+}
+
+// SaveTypeVersion manually creates a version snapshot of a type definition
+func (s *TypeService) SaveTypeVersion(ctx context.Context, id string) error {
+	// Verify the type exists
+	_, err := s.typeRepo.GetByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("type with ID '%s' not found: %w", id, err)
+	}
+	
+	// Save the version
+	return s.typeRepo.SaveVersion(ctx, id)
+}
+
 // UpdateType updates an existing type definition
 func (s *TypeService) UpdateType(ctx context.Context, id, name, description string, parentTypeID string) (*core.TypeDefinition, error) {
 	// Get the existing type
@@ -125,6 +142,15 @@ func (s *TypeService) UpdateType(ctx context.Context, id, name, description stri
 	err = s.typeRepo.Save(ctx, typeDef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save type: %w", err)
+	}
+
+	// Explicitly save a version snapshot when the version changes
+	// This ensures both repository implementations maintain versioning consistently
+	if versionChange {
+		err = s.typeRepo.SaveVersion(ctx, typeDef.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to save type version: %w", err)
+		}
 	}
 
 	return typeDef, nil
@@ -240,6 +266,12 @@ func (s *TypeService) AddAttribute(ctx context.Context, typeID string, attribute
 	if err != nil {
 		return nil, fmt.Errorf("failed to save type: %w", err)
 	}
+	
+	// Explicitly save a version snapshot
+	err = s.typeRepo.SaveVersion(ctx, typeDef.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to save type version: %w", err)
+	}
 
 	return typeDef, nil
 }
@@ -299,6 +331,12 @@ func (s *TypeService) DeleteAttribute(ctx context.Context, typeID string, attrib
 	err = s.typeRepo.Save(ctx, typeDef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save type: %w", err)
+	}
+	
+	// Explicitly save a version snapshot
+	err = s.typeRepo.SaveVersion(ctx, typeDef.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to save type version: %w", err)
 	}
 
 	return typeDef, nil
@@ -367,6 +405,12 @@ func (s *TypeService) SetAttributeDisabledState(ctx context.Context, typeID, att
 	err = s.typeRepo.Save(ctx, typeDef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save type: %w", err)
+	}
+	
+	// Explicitly save a version snapshot
+	err = s.typeRepo.SaveVersion(ctx, typeDef.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to save type version: %w", err)
 	}
 
 	return typeDef, nil

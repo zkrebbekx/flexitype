@@ -28,17 +28,6 @@ func NewInstanceRepository(repo *PostgresRepository, typeRepo *TypeRepositoryImp
 
 // Save persists an instance
 func (r *InstanceRepositoryImpl) Save(ctx context.Context, instance *core.Instance) error {
-	// Begin a transaction
-	/*tx, err := r.repo.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()*/
-
 	// Insert or update the instance
 	instanceQuery := `
 		INSERT INTO flexitype.instance (
@@ -69,33 +58,28 @@ func (r *InstanceRepositoryImpl) Save(ctx context.Context, instance *core.Instan
 		return fmt.Errorf("failed to insert instance: %w", err)
 	}
 
-	// Delete existing attribute values for this instance and version
+	// Delete existing attribute values for this instance and version before inserting new ones
 	deleteQuery := `
 		DELETE FROM flexitype.attribute_value
-		WHERE instance_id = $1
+		WHERE instance_id = $1 AND instance_version = $2
 	`
-	_, err = r.repo.db.ExecContext(ctx, deleteQuery, instance.ID)
+	_, err = r.repo.db.ExecContext(ctx, deleteQuery, instance.ID, instance.Version)
 	if err != nil {
 		return fmt.Errorf("failed to delete existing attribute values: %w", err)
 	}
 
-	// Insert attribute values
+	// Insert attribute values with the version
 	for attrName, attrValue := range instance.Attributes {
-		if err := r.saveAttributeValue(ctx, nil, instance.ID, attrName, attrValue, false, 0); err != nil {
+		if err := r.saveAttributeValue(ctx, nil, instance.ID, instance.Version, attrName, attrValue, false, 0); err != nil {
 			return fmt.Errorf("failed to save attribute value: %w", err)
 		}
 	}
-
-	// Commit the transaction
-	/*if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}*/
 
 	return nil
 }
 
 // saveAttributeValue saves a single attribute value
-func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx interface{}, instanceID, attrName string, value interface{}, isDefault bool, listIndex int) error {
+func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx interface{}, instanceID string, instanceVersion int, attrName string, value interface{}, isDefault bool, listIndex int) error {
 	// Skip nil values
 	if value == nil {
 		return nil
@@ -104,37 +88,37 @@ func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx inte
 	// Handle different types of values
 	switch v := value.(type) {
 	case string:
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, attrName, "string", v, nil, nil, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "string", v, nil, nil, nil, nil, isDefault, listIndex)
 		return err
 	case int, int8, int16, int32, int64:
 		intVal := reflect.ValueOf(v).Int()
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, attrName, "int", nil, intVal, nil, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "int", nil, intVal, nil, nil, nil, isDefault, listIndex)
 		return err
 	case float32, float64:
 		floatVal := reflect.ValueOf(v).Float()
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, attrName, "float", nil, nil, floatVal, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "float", nil, nil, floatVal, nil, nil, isDefault, listIndex)
 		return err
 	case bool:
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, attrName, "boolean", nil, nil, nil, v, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "boolean", nil, nil, nil, v, nil, isDefault, listIndex)
 		return err
 	case time.Time:
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, attrName, "date", nil, nil, nil, nil, v, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "date", nil, nil, nil, nil, v, isDefault, listIndex)
 		return err
 	case []interface{}:
 		// Handle arrays
 		for i, item := range v {
-			if err := r.saveAttributeValue(ctx, tx, instanceID, attrName, item, isDefault, i); err != nil {
+			if err := r.saveAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, item, isDefault, i); err != nil {
 				return err
 			}
 		}
 		return nil
 	case map[string]interface{}:
 		// Handle objects by creating an attribute value and then object_value entries
-		attrValueID, err := r.insertAttributeValue(ctx, tx, instanceID, attrName, "object", nil, nil, nil, nil, nil, isDefault, listIndex)
+		attrValueID, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "object", nil, nil, nil, nil, nil, isDefault, listIndex)
 		if err != nil {
 			return err
 		}
-
+		
 		// Save each property in the object
 		for propName, propValue := range v {
 			if err := r.saveObjectProperty(ctx, tx, attrValueID, propName, propValue, 0); err != nil {
@@ -145,7 +129,7 @@ func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx inte
 	default:
 		// Convert unknown types to string
 		stringVal := fmt.Sprintf("%v", v)
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, attrName, "string", stringVal, nil, nil, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "string", stringVal, nil, nil, nil, nil, isDefault, listIndex)
 		return err
 	}
 }
@@ -190,7 +174,7 @@ func (r *InstanceRepositoryImpl) saveObjectProperty(ctx context.Context, tx inte
 		if err != nil {
 			return err
 		}
-
+		
 		// Save each property in the nested object
 		for nestedPropName, nestedPropValue := range v {
 			if err := r.saveObjectProperty(ctx, tx, nestedObjID, nestedPropName, nestedPropValue, 0); err != nil {
@@ -208,24 +192,25 @@ func (r *InstanceRepositoryImpl) saveObjectProperty(ctx context.Context, tx inte
 
 // insertAttributeValue inserts a single attribute value record and returns its ID
 func (r *InstanceRepositoryImpl) insertAttributeValue(
-	ctx context.Context,
-	tx interface{},
-	instanceID,
+	ctx context.Context, 
+	tx interface{}, 
+	instanceID string,
+	instanceVersion int,
 	attrName,
-	valueType string,
-	stringValue interface{},
-	intValue interface{},
-	floatValue interface{},
-	boolValue interface{},
-	dateValue interface{},
-	isDefault bool,
+	valueType string, 
+	stringValue interface{}, 
+	intValue interface{}, 
+	floatValue interface{}, 
+	boolValue interface{}, 
+	dateValue interface{}, 
+	isDefault bool, 
 	listIndex int,
 ) (int64, error) {
 	query := `
 		INSERT INTO flexitype.attribute_value (
-			instance_id, attribute_name, value_type, string_value, int_value, float_value, boolean_value, date_value, is_default, list_index
+			instance_id, instance_version, attribute_name, value_type, string_value, int_value, float_value, boolean_value, date_value, is_default, list_index
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 		)
 		RETURNING id
 	`
@@ -233,13 +218,8 @@ func (r *InstanceRepositoryImpl) insertAttributeValue(
 	var id int64
 	var err error
 
-	// Use the correct transaction object
-	//if txObj, ok := tx.(*sqlx.Tx); ok {
-	//	err = txObj.QueryRowContext(ctx, query, instanceID, attrName, valueType, stringValue, intValue, floatValue, boolValue, dateValue, isDefault, listIndex).Scan(&id)
-	//} else {
-	// Fallback to using the database connection directly
-	err = r.repo.db.QueryRowContext(ctx, query, instanceID, attrName, valueType, stringValue, intValue, floatValue, boolValue, dateValue, isDefault, listIndex).Scan(&id)
-	//}
+	// Use the database connection directly
+	err = r.repo.db.QueryRowContext(ctx, query, instanceID, instanceVersion, attrName, valueType, stringValue, intValue, floatValue, boolValue, dateValue, isDefault, listIndex).Scan(&id)
 
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert attribute value: %w", err)
@@ -250,16 +230,16 @@ func (r *InstanceRepositoryImpl) insertAttributeValue(
 
 // insertObjectValue inserts a single object value record and returns its ID if needed for nesting
 func (r *InstanceRepositoryImpl) insertObjectValue(
-	ctx context.Context,
-	tx interface{},
-	attributeValueID int64,
+	ctx context.Context, 
+	tx interface{}, 
+	attributeValueID int64, 
 	propName,
-	valueType string,
-	stringValue interface{},
-	intValue interface{},
-	floatValue interface{},
-	boolValue interface{},
-	dateValue interface{},
+	valueType string, 
+	stringValue interface{}, 
+	intValue interface{}, 
+	floatValue interface{}, 
+	boolValue interface{}, 
+	dateValue interface{}, 
 	listIndex int,
 ) (int64, error) {
 	query := `
@@ -274,13 +254,8 @@ func (r *InstanceRepositoryImpl) insertObjectValue(
 	var id int64
 	var err error
 
-	// Use the correct transaction object
-	//if txObj, ok := tx.(*sqlx.Tx); ok {
-	//	err = txObj.QueryRowContext(ctx, query, attributeValueID, propName, valueType, stringValue, intValue, floatValue, boolValue, dateValue, listIndex).Scan(&id)
-	//} else {
-	// Fallback to using the database connection directly
+	// Use the database connection directly
 	err = r.repo.db.QueryRowContext(ctx, query, attributeValueID, propName, valueType, stringValue, intValue, floatValue, boolValue, dateValue, listIndex).Scan(&id)
-	//}
 
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert object value: %w", err)
@@ -291,17 +266,6 @@ func (r *InstanceRepositoryImpl) insertObjectValue(
 
 // SaveMany persists multiple instances in a single transaction
 func (r *InstanceRepositoryImpl) SaveMany(ctx context.Context, instances []*core.Instance) error {
-	// Begin a transaction
-	/*tx, err := r.repo.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()*/
-
 	for _, instance := range instances {
 		// Insert or update the instance
 		instanceQuery := `
@@ -336,25 +300,20 @@ func (r *InstanceRepositoryImpl) SaveMany(ctx context.Context, instances []*core
 		// Delete existing attribute values for this instance and version
 		deleteQuery := `
 			DELETE FROM flexitype.attribute_value
-			WHERE instance_id = $1
+			WHERE instance_id = $1 AND instance_version = $2
 		`
-		_, err = r.repo.db.ExecContext(ctx, deleteQuery, instance.ID)
+		_, err = r.repo.db.ExecContext(ctx, deleteQuery, instance.ID, instance.Version)
 		if err != nil {
 			return fmt.Errorf("failed to delete existing attribute values: %w", err)
 		}
 
 		// Insert attribute values
 		for attrName, attrValue := range instance.Attributes {
-			if err := r.saveAttributeValue(ctx, nil, instance.ID, attrName, attrValue, false, 0); err != nil {
+			if err := r.saveAttributeValue(ctx, nil, instance.ID, instance.Version, attrName, attrValue, false, 0); err != nil {
 				return fmt.Errorf("failed to save attribute value: %w", err)
 			}
 		}
 	}
-
-	// Commit the transaction
-	/*if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}*/
 
 	return nil
 }
@@ -384,14 +343,18 @@ func (r *InstanceRepositoryImpl) GetByID(ctx context.Context, id string) (*core.
 		return nil, fmt.Errorf("failed to get instance: %w", err)
 	}
 
-	// Get the type definition
-	typeDef, err := r.typeRepo.GetByID(ctx, instance.TypeID)
+	// Get the type definition - with specific version
+	typeDef, err := r.typeRepo.GetByIDAndVersion(ctx, instance.TypeID, instance.TypeVersion)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get type definition: %w", err)
+		// Fallback to latest type version if specific version not found
+		typeDef, err = r.typeRepo.GetByID(ctx, instance.TypeID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get type definition: %w", err)
+		}
 	}
 
 	// Get attribute values for this instance
-	attributes, err := r.getAttributeValues(ctx, instance.ID)
+	attributes, err := r.getAttributeValues(ctx, instance.ID, instance.Version)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get attribute values: %w", err)
 	}
@@ -411,16 +374,16 @@ func (r *InstanceRepositoryImpl) GetByID(ctx context.Context, id string) (*core.
 	return result, nil
 }
 
-// getAttributeValues retrieves all attribute values for an instance
-func (r *InstanceRepositoryImpl) getAttributeValues(ctx context.Context, instanceID string) (map[string]interface{}, error) {
+// getAttributeValues retrieves all attribute values for an instance version
+func (r *InstanceRepositoryImpl) getAttributeValues(ctx context.Context, instanceID string, instanceVersion int) (map[string]interface{}, error) {
 	query := `
 		SELECT id, attribute_name, value_type, string_value, int_value, float_value, boolean_value, date_value, list_index
 		FROM flexitype.attribute_value
-		WHERE instance_id = $1
+		WHERE instance_id = $1 AND instance_version = $2
 		ORDER BY attribute_name, list_index
 	`
 
-	rows, err := r.repo.db.QueryContext(ctx, query, instanceID)
+	rows, err := r.repo.db.QueryContext(ctx, query, instanceID, instanceVersion)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query attribute values: %w", err)
 	}
@@ -539,7 +502,6 @@ func (r *InstanceRepositoryImpl) getObjectValues(ctx context.Context, attributeV
 		var floatValue *float64
 		var boolValue *bool
 		var dateValue *time.Time
-		// No nested_object_id field in database table
 		var listIndex int
 
 		if err := rows.Scan(&id, &propName, &valueType, &stringValue, &intValue, &floatValue, &boolValue, &dateValue, &listIndex); err != nil {
@@ -641,14 +603,18 @@ func (r *InstanceRepositoryImpl) GetByIDAndVersion(ctx context.Context, id strin
 		return nil, fmt.Errorf("failed to get instance: %w", err)
 	}
 
-	// Get the type definition
-	typeDef, err := r.typeRepo.GetByID(ctx, instance.TypeID)
+	// Get the type definition with specific version
+	typeDef, err := r.typeRepo.GetByIDAndVersion(ctx, instance.TypeID, instance.TypeVersion)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get type definition: %w", err)
+		// Fallback to latest type version if specific version not found
+		typeDef, err = r.typeRepo.GetByID(ctx, instance.TypeID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get type definition: %w", err)
+		}
 	}
 
-	// Get attribute values for this instance
-	attributes, err := r.getAttributeValues(ctx, instance.ID)
+	// Get attribute values for this instance version
+	attributes, err := r.getAttributeValues(ctx, instance.ID, instance.Version)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get attribute values: %w", err)
 	}
@@ -716,6 +682,7 @@ func (r *InstanceRepositoryImpl) GetAllVersions(ctx context.Context, id string) 
 func (r *InstanceRepositoryImpl) scanInstances(ctx context.Context, rows *sqlx.Rows, totalCount int) ([]*core.Instance, int, error) {
 	instances := make([]*core.Instance, 0)
 	typeCache := make(map[string]*core.TypeDefinition)
+	typeVersionCache := make(map[string]map[int]*core.TypeDefinition)
 
 	for rows.Next() {
 		// Use StructScan for sqlx.Rows
@@ -733,19 +700,58 @@ func (r *InstanceRepositoryImpl) scanInstances(ctx context.Context, rows *sqlx.R
 			return nil, 0, fmt.Errorf("failed to scan instance: %w", err)
 		}
 
-		// Get the type definition from cache or fetch it
-		typeDef, ok := typeCache[instance.TypeID]
-		if !ok {
-			var err error
-			typeDef, err = r.typeRepo.GetByID(ctx, instance.TypeID)
-			if err != nil {
-				return nil, 0, fmt.Errorf("failed to get type definition: %w", err)
+		// First try to get the specific type version from cache
+		var typeDef *core.TypeDefinition
+		var ok bool
+		
+		// Check if we have versions of this type in cache
+		if versionMap, hasType := typeVersionCache[instance.TypeID]; hasType {
+			// Check if we have this specific version
+			if typeDef, ok = versionMap[instance.TypeVersion]; !ok {
+				// No specific version in cache, fetch it
+				var err error
+				typeDef, err = r.typeRepo.GetByIDAndVersion(ctx, instance.TypeID, instance.TypeVersion)
+				if err != nil {
+					// Fallback to latest version if not found
+					typeDef, ok = typeCache[instance.TypeID]
+					if !ok {
+						var err error
+						typeDef, err = r.typeRepo.GetByID(ctx, instance.TypeID)
+						if err != nil {
+							return nil, 0, fmt.Errorf("failed to get type definition: %w", err)
+						}
+						typeCache[instance.TypeID] = typeDef
+					}
+				} else {
+					// Add to version cache
+					versionMap[instance.TypeVersion] = typeDef
+				}
 			}
-			typeCache[instance.TypeID] = typeDef
+		} else {
+			// No versions of this type in cache
+			var err error
+			typeDef, err = r.typeRepo.GetByIDAndVersion(ctx, instance.TypeID, instance.TypeVersion)
+			if err != nil {
+				// Fallback to latest version
+				typeDef, ok = typeCache[instance.TypeID]
+				if !ok {
+					var err error
+					typeDef, err = r.typeRepo.GetByID(ctx, instance.TypeID)
+					if err != nil {
+						return nil, 0, fmt.Errorf("failed to get type definition: %w", err)
+					}
+					typeCache[instance.TypeID] = typeDef
+				}
+			} else {
+				// Initialize version map and cache the type version
+				typeVersionCache[instance.TypeID] = map[int]*core.TypeDefinition{
+					instance.TypeVersion: typeDef,
+				}
+			}
 		}
 
 		// Get attribute values for this instance
-		attributes, err := r.getAttributeValues(ctx, instance.ID)
+		attributes, err := r.getAttributeValues(ctx, instance.ID, instance.Version)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to get attribute values: %w", err)
 		}
@@ -935,7 +941,7 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 					argIdx += 2
 				}
 			}
-
+			
 			if len(attrConditions) > 0 {
 				attributeFilterPart += strings.Join(attrConditions, " OR ") + ")"
 				query += attributeFilterPart
@@ -1041,7 +1047,7 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 					argIdx += 2
 				}
 			}
-
+			
 			if len(attrConditions) > 0 {
 				attributeFilterPart += strings.Join(attrConditions, " OR ") + ")"
 				baseQuery += attributeFilterPart

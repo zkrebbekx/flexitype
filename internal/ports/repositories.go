@@ -84,6 +84,12 @@ type TypeRepository interface {
 
 	// ArchiveMany marks multiple type definitions as archived
 	ArchiveMany(ctx context.Context, ids []string) error
+	
+	// SaveVersion creates a snapshot of the current type definition as a version
+	SaveVersion(ctx context.Context, typeID string) error
+	
+	// GetByIDAndVersion retrieves a specific version of a type definition
+	GetByIDAndVersion(ctx context.Context, id string, version int) (*core.TypeDefinition, error)
 }
 
 // InstanceRepository defines the interface for instance storage

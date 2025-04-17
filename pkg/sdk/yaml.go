@@ -187,6 +187,10 @@ func ExportTypeToYAML(typeDef *core.TypeDefinition) (*TypeDefinitionYAML, error)
 			case *validation.CustomRule:
 				yamlRule.Type = "custom"
 				yamlRule.Parameters["description"] = r.Description
+				
+			case *validation.GenericRule:
+				yamlRule.Type = "generic"
+				// Generic rule doesn't have any parameters
 
 			default:
 				return nil, fmt.Errorf("unsupported validation rule type: %T", rule)
@@ -315,6 +319,9 @@ func ImportTypeFromYAML(yamlDef *TypeDefinitionYAML) (*core.TypeDefinition, erro
 				}
 
 				rule = rangeRule
+				
+			case "generic":
+				rule = &validation.GenericRule{}
 
 			default:
 				return nil, fmt.Errorf("unsupported validation rule type: %s", yamlRule.Type)

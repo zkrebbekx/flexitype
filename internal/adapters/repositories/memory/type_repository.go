@@ -14,16 +14,18 @@ import (
 
 // InMemoryTypeRepository is an in-memory implementation of the TypeRepository interface
 type InMemoryTypeRepository struct {
-	mutex     sync.RWMutex
-	types     map[string]*core.TypeDefinition // Map of ID -> TypeDefinition
-	nameIndex map[string]string               // Map of Name -> ID for lookups
+	mutex           sync.RWMutex
+	types           map[string]*core.TypeDefinition // Map of ID -> TypeDefinition
+	nameIndex       map[string]string               // Map of Name -> ID for lookups
+	versionedTypes  map[string]map[int]*core.TypeDefinition // Map of ID -> Map of Version -> TypeDefinition
 }
 
 // NewInMemoryTypeRepository creates a new in-memory type repository
 func NewInMemoryTypeRepository() *InMemoryTypeRepository {
 	return &InMemoryTypeRepository{
-		types:     make(map[string]*core.TypeDefinition),
-		nameIndex: make(map[string]string),
+		types:          make(map[string]*core.TypeDefinition),
+		nameIndex:      make(map[string]string),
+		versionedTypes: make(map[string]map[int]*core.TypeDefinition),
 	}
 }
 
@@ -40,8 +42,87 @@ func (r *InMemoryTypeRepository) Save(ctx context.Context, typeDef *core.TypeDef
 	// Store the type
 	r.types[typeDef.ID] = typeDef
 	r.nameIndex[typeDef.Name] = typeDef.ID
+	
+	// Save a version snapshot
+	if err := r.saveVersionInternal(typeDef); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+// saveVersionInternal is a helper method that saves a version snapshot
+// without acquiring the mutex (which should be held by the caller)
+func (r *InMemoryTypeRepository) saveVersionInternal(typeDef *core.TypeDefinition) error {
+	// Initialize version map if needed
+	if _, exists := r.versionedTypes[typeDef.ID]; !exists {
+		r.versionedTypes[typeDef.ID] = make(map[int]*core.TypeDefinition)
+	}
+	
+	// Create a deep copy of the type definition for storing as a version
+	versionCopy := r.deepCopyTypeDef(typeDef)
+	
+	// Store the version
+	r.versionedTypes[typeDef.ID][typeDef.Version] = versionCopy
+	
+	return nil
+}
+
+// deepCopyTypeDef creates a deep copy of a type definition
+func (r *InMemoryTypeRepository) deepCopyTypeDef(typeDef *core.TypeDefinition) *core.TypeDefinition {
+	// Create a new type definition with the same basic properties
+	copy := core.NewTypeDefinition(typeDef.ID, typeDef.Name, typeDef.Description)
+	copy.Version = typeDef.Version
+	copy.CreatedAt = typeDef.CreatedAt
+	copy.UpdatedAt = typeDef.UpdatedAt
+	
+	// Copy archived status if present
+	if typeDef.ArchivedAt != nil {
+		archivedTime := *typeDef.ArchivedAt
+		copy.ArchivedAt = &archivedTime
+	}
+	
+	// Copy parent type reference (but don't deep copy the parent)
+	copy.ParentType = typeDef.ParentType
+	
+	// Copy each attribute (deep copy)
+	for _, attr := range typeDef.Attributes {
+		// Create a new attribute with same properties
+		newAttr := core.NewAttributeDefinition(
+			attr.ID,
+			attr.Name,
+			attr.Description,
+			attr.DataType,
+			attr.Required,
+		)
+		
+		// Copy other properties
+		newAttr.SetMultiValued(attr.MultiValued)
+		newAttr.SetDisabled(attr.Disabled)
+		if attr.DefaultValue != nil {
+			newAttr.SetDefaultValue(attr.DefaultValue)
+		}
+		
+		// Copy validation rules and cascades
+		for _, rule := range attr.ValidationRules {
+			newAttr.AddValidationRule(rule)
+		}
+		
+		for _, cascade := range attr.Cascades {
+			newAttr.AddCascade(
+				cascade.ID,
+				cascade.Enabled,
+				cascade.Behavior,
+				cascade.Logic,
+				cascade.Weight,
+			)
+		}
+		
+		// Add to type
+		copy.AddAttribute(newAttr)
+	}
+	
+	return copy
 }
 
 // GetByID retrieves a type definition by ID
@@ -297,4 +378,44 @@ func (r *InMemoryTypeRepository) ArchiveMany(ctx context.Context, ids []string) 
 	}
 
 	return nil
+}
+
+// SaveVersion creates a snapshot of the current type definition version
+func (r *InMemoryTypeRepository) SaveVersion(ctx context.Context, typeID string) error {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	// Get the type definition
+	typeDef, exists := r.types[typeID]
+	if !exists {
+		return fmt.Errorf("type with ID '%s' not found", typeID)
+	}
+
+	// Save the version
+	return r.saveVersionInternal(typeDef)
+}
+
+// GetByIDAndVersion retrieves a specific version of a type definition
+func (r *InMemoryTypeRepository) GetByIDAndVersion(ctx context.Context, id string, version int) (*core.TypeDefinition, error) {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	// Check if the type exists
+	if _, exists := r.types[id]; !exists {
+		return nil, fmt.Errorf("type with ID '%s' not found", id)
+	}
+
+	// Check if we have versions stored
+	versions, exists := r.versionedTypes[id]
+	if !exists {
+		return nil, fmt.Errorf("no versions found for type '%s'", id)
+	}
+
+	// Get the specific version
+	typeDef, exists := versions[version]
+	if !exists {
+		return nil, fmt.Errorf("version %d not found for type '%s'", version, id)
+	}
+
+	return typeDef, nil
 }

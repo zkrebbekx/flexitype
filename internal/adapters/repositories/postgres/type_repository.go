@@ -27,6 +27,332 @@ func NewTypeRepository(repo *PostgresRepository) *TypeRepositoryImpl {
 	}
 }
 
+// SaveVersion saves a snapshot of the type definition with its current version
+func (r *TypeRepositoryImpl) SaveVersion(ctx context.Context, typeID string) error {
+	// Begin transaction
+	/*tx, err := r.repo.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	// Ensure transaction is rolled back on error
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()*/
+
+	// Get current version of the type
+	var version int
+	err := r.repo.db.GetContext(ctx, &version,
+		"SELECT version FROM flexitype.type_definition WHERE id = $1",
+		typeID)
+	if err != nil {
+		return fmt.Errorf("failed to get type version: %w", err)
+	}
+
+	// Save type definition version
+	_, err = r.repo.db.ExecContext(ctx, `
+		INSERT INTO flexitype.type_definition_version (
+			type_id, version, name, description, parent_type_id, created_at, archived_at
+		)
+		SELECT 
+			id, version, name, description, parent_type_id, created_at, archived_at
+		FROM 
+			flexitype.type_definition
+		WHERE 
+			id = $1
+		ON CONFLICT (type_id, version) DO NOTHING`,
+		typeID)
+	if err != nil {
+		return fmt.Errorf("failed to save type definition version: %w", err)
+	}
+
+	// Save attribute definitions
+	_, err = r.repo.db.ExecContext(ctx, `
+		INSERT INTO flexitype.attribute_definition_version (
+			type_id, type_version, attribute_name, description, data_type, 
+			required, default_value, multi_valued, disabled, created_at
+		)
+		SELECT 
+			type_id, $2, name, description, data_type,
+			required, default_value, multi_valued, disabled, created_at
+		FROM 
+			flexitype.attribute_definition
+		WHERE 
+			type_id = $1
+		ON CONFLICT (type_id, type_version, attribute_name) DO NOTHING`,
+		typeID, version)
+	if err != nil {
+		return fmt.Errorf("failed to save attribute definitions: %w", err)
+	}
+
+	// Save validation rules
+	_, err = r.repo.db.ExecContext(ctx, `
+		INSERT INTO flexitype.validation_rule_version (
+			type_id, type_version, attribute_name, rule_type, 
+			parameters, sort_order, created_at
+		)
+		SELECT 
+			ad.type_id, $2, ad.name, vr.rule_type,
+			vr.parameters, 
+			ROW_NUMBER() OVER (PARTITION BY vr.attribute_id, vr.rule_type ORDER BY vr.id) - 1,
+			vr.created_at
+		FROM 
+			flexitype.validation_rule vr
+		JOIN 
+			flexitype.attribute_definition ad ON vr.attribute_id = ad.id
+		WHERE 
+			ad.type_id = $1
+		ON CONFLICT (type_id, type_version, attribute_name, rule_type, sort_order) DO NOTHING`,
+		typeID, version)
+	if err != nil {
+		return fmt.Errorf("failed to save validation rules: %w", err)
+	}
+
+	// Save cascades
+	_, err = r.repo.db.ExecContext(ctx, `
+		INSERT INTO flexitype.attribute_cascade_version (
+			type_id, type_version, attribute_name, cascade_id,
+			behavior, logic, weight, validation_action,
+			validation_target_field, validation_values,
+			validation_string_value, validation_numeric_value, created_at
+		)
+		SELECT 
+			ad.type_id, $2, ad.name, ac.cascade_id,
+			ac.behavior, ac.logic, ac.weight, ac.validation_action,
+			ac.validation_target_field, ac.validation_values,
+			ac.validation_string_value, ac.validation_numeric_value, ac.created_at
+		FROM 
+			flexitype.attribute_cascade ac
+		JOIN 
+			flexitype.attribute_definition ad ON ac.attribute_id = ad.id
+		WHERE 
+			ad.type_id = $1
+		ON CONFLICT (type_id, type_version, attribute_name, cascade_id) DO NOTHING`,
+		typeID, version)
+	if err != nil {
+		return fmt.Errorf("failed to save cascades: %w", err)
+	}
+
+	// Commit the transaction
+	/*err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}*/
+
+	return nil
+}
+
+// GetByIDAndVersion retrieves a specific version of a type definition
+func (r *TypeRepositoryImpl) GetByIDAndVersion(ctx context.Context, id string, version int) (*core.TypeDefinition, error) {
+	// Begin transaction
+	/*tx, err := r.repo.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()*/
+
+	// Get type definition from version table
+	var record struct {
+		TypeID      string         `db:"type_id"`
+		Version     int            `db:"version"`
+		Name        string         `db:"name"`
+		Description string         `db:"description"`
+		ParentID    sql.NullString `db:"parent_type_id"`
+		CreatedAt   time.Time      `db:"created_at"`
+		ArchivedAt  sql.NullTime   `db:"archived_at"`
+	}
+
+	err := r.repo.db.GetContext(ctx, &record,
+		`SELECT type_id, version, name, description, parent_type_id, created_at, archived_at 
+		 FROM flexitype.type_definition_version 
+		 WHERE type_id = $1 AND version = $2`,
+		id, version)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("type version '%s:%d' not found", id, version)
+		}
+		return nil, fmt.Errorf("failed to get type definition version: %w", err)
+	}
+
+	// Create type definition
+	typeDef := core.NewTypeDefinition(record.TypeID, record.Name, record.Description)
+	typeDef.Version = record.Version
+	typeDef.CreatedAt = record.CreatedAt
+
+	// Set archived status if present
+	if record.ArchivedAt.Valid {
+		archivedTime := record.ArchivedAt.Time
+		typeDef.ArchivedAt = &archivedTime
+	}
+
+	// Load parent type if present
+	if record.ParentID.Valid {
+		// For parent types, always use the latest version by default
+		parentType, err := r.GetByID(ctx, record.ParentID.String)
+		if err != nil {
+			// Log the error but continue - parent might be missing
+			fmt.Printf("Warning: failed to load parent type %s: %v\n", record.ParentID.String, err)
+		} else {
+			typeDef.SetParentType(parentType)
+		}
+	}
+
+	// Get versioned attributes
+	var attributes []struct {
+		AttributeName string `db:"attribute_name"`
+		Description   string `db:"description"`
+		DataType      string `db:"data_type"`
+		Required      bool   `db:"required"`
+		DefaultValue  string `db:"default_value"`
+		MultiValued   bool   `db:"multi_valued"`
+		Disabled      bool   `db:"disabled"`
+	}
+
+	err = r.repo.db.SelectContext(ctx, &attributes,
+		`SELECT attribute_name, description, data_type, required, default_value, 
+		 multi_valued, disabled
+		 FROM flexitype.attribute_definition_version 
+		 WHERE type_id = $1 AND type_version = $2`,
+		id, version)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get versioned attributes: %w", err)
+	}
+
+	// Process attributes
+	for _, attrRecord := range attributes {
+		// Generate a stable attribute ID
+		attrID := fmt.Sprintf("%s:%s:%d", id, attrRecord.AttributeName, version)
+
+		// Create attribute
+		attr := core.NewAttributeDefinition(
+			attrID,
+			attrRecord.AttributeName,
+			attrRecord.Description,
+			core.DataType(attrRecord.DataType),
+			attrRecord.Required,
+		)
+
+		// Set other properties
+		if attrRecord.DefaultValue != "" {
+			attr.SetDefaultValue(attrRecord.DefaultValue)
+		}
+
+		attr.SetMultiValued(attrRecord.MultiValued)
+		attr.SetDisabled(attrRecord.Disabled)
+
+		// Get versioned cascades
+		var cascades []struct {
+			CascadeID             string          `db:"cascade_id"`
+			Behavior              string          `db:"behavior"`
+			Logic                 string          `db:"logic"`
+			Weight                int             `db:"weight"`
+			ValidationAction      sql.NullString  `db:"validation_action"`
+			ValidationTargetField sql.NullString  `db:"validation_target_field"`
+			ValidationValues      []byte          `db:"validation_values"`
+			ValidationStringValue sql.NullString  `db:"validation_string_value"`
+			ValidationNumericVal  sql.NullFloat64 `db:"validation_numeric_value"`
+		}
+
+		err = r.repo.db.SelectContext(ctx, &cascades,
+			`SELECT cascade_id, behavior, logic, weight,
+			 validation_action, validation_target_field, validation_values,
+			 validation_string_value, validation_numeric_value
+			 FROM flexitype.attribute_cascade_version
+			 WHERE type_id = $1 AND type_version = $2 AND attribute_name = $3`,
+			id, version, attrRecord.AttributeName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get versioned cascades: %w", err)
+		}
+
+		// Process cascades
+		for _, cascadeRecord := range cascades {
+			// Add the cascade
+			attr.AddCascade(
+				cascadeRecord.CascadeID,
+				true, // Always enabled in historical versions
+				core.CascadeBehavior(cascadeRecord.Behavior),
+				cascadeRecord.Logic,
+				cascadeRecord.Weight,
+			)
+
+			// Get a reference to the cascade we just added
+			if len(attr.Cascades) == 0 {
+				continue // Safeguard against empty cascade list
+			}
+			cascadeIndex := len(attr.Cascades) - 1
+			cascade := &attr.Cascades[cascadeIndex]
+
+			// Add validation configuration if present
+			if cascadeRecord.ValidationAction.Valid {
+				// Create validation config
+				validationConfig := &core.CascadeValidationConfig{
+					Action: core.CascadeValidationAction(cascadeRecord.ValidationAction.String),
+				}
+
+				// Set target field if present
+				if cascadeRecord.ValidationTargetField.Valid {
+					validationConfig.TargetField = cascadeRecord.ValidationTargetField.String
+				}
+
+				// Parse values from JSON if present
+				if len(cascadeRecord.ValidationValues) > 0 {
+					var values []interface{}
+					if err := json.Unmarshal(cascadeRecord.ValidationValues, &values); err != nil {
+						return nil, fmt.Errorf("failed to unmarshal validation values: %w", err)
+					}
+					validationConfig.Values = values
+				}
+
+				// Set string value if present
+				if cascadeRecord.ValidationStringValue.Valid {
+					validationConfig.StringValue = cascadeRecord.ValidationStringValue.String
+				}
+
+				// Set numeric value if present
+				if cascadeRecord.ValidationNumericVal.Valid {
+					validationConfig.NumericValue = cascadeRecord.ValidationNumericVal.Float64
+				}
+
+				// Set validation config on cascade
+				cascade.ValidationConfig = validationConfig
+			}
+		}
+
+		// Get versioned validation rules
+		var rules []struct {
+			RuleType   string `db:"rule_type"`
+			Parameters string `db:"parameters"`
+		}
+
+		err = r.repo.db.SelectContext(ctx, &rules,
+			`SELECT rule_type, parameters
+			 FROM flexitype.validation_rule_version
+			 WHERE type_id = $1 AND type_version = $2 AND attribute_name = $3`,
+			id, version, attrRecord.AttributeName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get versioned validation rules: %w", err)
+		}
+
+		// Process validation rules
+		for _, ruleRecord := range rules {
+			// Create rule based on type
+			rule, err := createValidationRule(ruleRecord.RuleType, ruleRecord.Parameters)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create validation rule: %w", err)
+			}
+
+			attr.AddValidationRule(rule)
+		}
+
+		// Add attribute to type
+		typeDef.AddAttribute(attr)
+	}
+
+	return typeDef, nil
+}
+
 // typeRecord is the database representation of a type definition
 type typeRecord struct {
 	ID          string         `db:"id"`
@@ -42,7 +368,7 @@ type typeRecord struct {
 // Save persists a type definition
 func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinition) error {
 	// Begin transaction
-	tx, err := r.repo.db.BeginTxx(ctx, nil)
+	/*tx, err := r.repo.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -53,7 +379,7 @@ func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinit
 		if txErr != nil {
 			tx.Rollback()
 		}
-	}()
+	}()*/
 
 	// Get parent ID if present
 	var parentID sql.NullString
@@ -66,7 +392,7 @@ func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinit
 
 	// Check if the type already exists
 	var exists bool
-	err = tx.GetContext(ctx, &exists,
+	err := r.repo.db.GetContext(ctx, &exists,
 		"SELECT EXISTS(SELECT 1 FROM flexitype.type_definition WHERE id = $1)",
 		typeDef.ID)
 	if err != nil {
@@ -75,7 +401,7 @@ func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinit
 
 	if exists {
 		// Update existing type
-		_, err = tx.ExecContext(ctx,
+		_, err = r.repo.db.ExecContext(ctx,
 			`UPDATE flexitype.type_definition 
              SET name = $1, description = $2, parent_type_id = $3, version = $4, updated_at = CURRENT_TIMESTAMP
              WHERE id = $5`,
@@ -86,7 +412,7 @@ func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinit
 
 		// Delete existing attributes and cascades for this type
 		// First, delete cascades associated with attributes for this type
-		_, err = tx.ExecContext(ctx,
+		_, err = r.repo.db.ExecContext(ctx,
 			`DELETE FROM flexitype.attribute_cascade 
 			 WHERE attribute_id IN (
 				SELECT id FROM flexitype.attribute_definition WHERE type_id = $1
@@ -97,7 +423,7 @@ func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinit
 		}
 
 		// Then delete attributes
-		_, err = tx.ExecContext(ctx,
+		_, err = r.repo.db.ExecContext(ctx,
 			"DELETE FROM flexitype.attribute_definition WHERE type_id = $1",
 			typeDef.ID)
 		if err != nil {
@@ -105,7 +431,7 @@ func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinit
 		}
 	} else {
 		// Insert new type
-		_, err = tx.ExecContext(ctx,
+		_, err = r.repo.db.ExecContext(ctx,
 			`INSERT INTO flexitype.type_definition (id, name, description, parent_type_id, version, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 			typeDef.ID, typeDef.Name, typeDef.Description, parentID, typeDef.Version)
@@ -117,7 +443,7 @@ func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinit
 	// Insert attributes
 	for _, attr := range typeDef.Attributes {
 		// Save attribute
-		_, err = tx.ExecContext(ctx,
+		_, err = r.repo.db.ExecContext(ctx,
 			`INSERT INTO flexitype.attribute_definition (
                 id, type_id, name, description, data_type, required, 
                 default_value, multi_valued, disabled
@@ -175,7 +501,7 @@ func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinit
 				}
 			}
 
-			_, err = tx.ExecContext(ctx,
+			_, err = r.repo.db.ExecContext(ctx,
 				`INSERT INTO flexitype.attribute_cascade (
 					attribute_id, cascade_id, enabled, behavior, logic, weight,
 					validation_action, validation_target_field, validation_values,
@@ -197,7 +523,7 @@ func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinit
 				return fmt.Errorf("failed to marshal validation rule: %w", err)
 			}
 
-			_, err = tx.ExecContext(ctx,
+			_, err = r.repo.db.ExecContext(ctx,
 				`INSERT INTO flexitype.validation_rule (attribute_id, rule_type, parameters)
                  VALUES ($1, $2, $3)`,
 				attr.ID, ruleType, string(ruleParams))
@@ -208,9 +534,9 @@ func (r *TypeRepositoryImpl) Save(ctx context.Context, typeDef *core.TypeDefinit
 	}
 
 	// Commit transaction
-	if err = tx.Commit(); err != nil {
+	/*if err = tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
+	}*/
 
 	return nil
 }
@@ -275,15 +601,15 @@ func createValidationRule(ruleType, parameters string) (validation.Rule, error) 
 // GetByID retrieves a type definition by ID
 func (r *TypeRepositoryImpl) GetByID(ctx context.Context, id string) (*core.TypeDefinition, error) {
 	// Begin transaction
-	tx, err := r.repo.db.BeginTxx(ctx, nil)
+	/*tx, err := r.repo.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback()*/
 
 	// Get type definition (including archived)
 	var record typeRecord
-	err = tx.GetContext(ctx, &record,
+	err := r.repo.db.GetContext(ctx, &record,
 		`SELECT id, name, description, parent_type_id, version, created_at, updated_at, archived_at 
          FROM flexitype.type_definition 
          WHERE id = $1`,
@@ -320,7 +646,7 @@ func (r *TypeRepositoryImpl) GetByID(ctx context.Context, id string) (*core.Type
 
 	// Get attributes
 	var attributes []*attributeRecord
-	err = tx.SelectContext(ctx, &attributes,
+	err = r.repo.db.SelectContext(ctx, &attributes,
 		`SELECT id, name, description, data_type, required, default_value, 
 		 multi_valued, disabled
 		 FROM flexitype.attribute_definition 
@@ -351,7 +677,7 @@ func (r *TypeRepositoryImpl) GetByID(ctx context.Context, id string) (*core.Type
 
 		// Get cascades
 		var cascades []*cascadeRecord
-		err = tx.SelectContext(ctx, &cascades,
+		err = r.repo.db.SelectContext(ctx, &cascades,
 			`SELECT id, attribute_id, cascade_id, enabled, behavior, logic, weight,
 			 validation_action, validation_target_field, validation_values,
 			 validation_string_value, validation_numeric_value
@@ -418,7 +744,7 @@ func (r *TypeRepositoryImpl) GetByID(ctx context.Context, id string) (*core.Type
 
 		// Get validation rules
 		var rules []*validationRuleRecord
-		err = tx.SelectContext(ctx, &rules,
+		err = r.repo.db.SelectContext(ctx, &rules,
 			`SELECT rule_type, parameters
 			 FROM flexitype.validation_rule
 			 WHERE attribute_id = $1`,

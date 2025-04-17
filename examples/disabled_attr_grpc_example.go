@@ -388,7 +388,7 @@ func main() {
 
 	enableAttrReq := connect.NewRequest(&flexitypev1.SetAttributeDisabledStateRequest{
 		TypeId:        typeDef.Id,
-		AttributeName: "attr-002",
+		AttributeName: "author",
 		Disabled:      false,
 	})
 

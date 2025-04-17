@@ -56,7 +56,7 @@ func main() {
 	instanceService := services.NewInstanceService(typeRepo, instanceRepo)
 
 	// Determine gRPC server port
-	port := 50051
+	port := 8080
 	if portStr := os.Getenv("PORT"); portStr != "" {
 		if p, err := strconv.Atoi(portStr); err == nil {
 			port = p

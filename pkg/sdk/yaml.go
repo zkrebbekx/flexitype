@@ -45,7 +45,6 @@ func (y *YAMLHelper) ImportTypeFromYAML(yamlContent string) (*core.TypeDefinitio
 
 // TypeDefinitionYAML represents a type definition in YAML format
 type TypeDefinitionYAML struct {
-	ID          string          `yaml:"id"`
 	Name        string          `yaml:"name"`
 	Description string          `yaml:"description"`
 	Version     int             `yaml:"version"`
@@ -74,7 +73,6 @@ type CascadeYAML struct {
 
 // AttributeYAML represents an attribute definition in YAML format
 type AttributeYAML struct {
-	ID              string               `yaml:"id"`
 	Name            string               `yaml:"name"`
 	Description     string               `yaml:"description"`
 	DataType        string               `yaml:"dataType"`
@@ -96,11 +94,10 @@ type ValidationRuleYAML struct {
 func ExportTypeToYAML(typeDef *core.TypeDefinition) (*TypeDefinitionYAML, error) {
 	parentTypeID := ""
 	if typeDef.ParentType != nil {
-		parentTypeID = typeDef.ParentType.ID
+		parentTypeID = typeDef.ParentType.Name
 	}
 
 	yamlDef := &TypeDefinitionYAML{
-		ID:          typeDef.ID,
 		Name:        typeDef.Name,
 		Description: typeDef.Description,
 		Version:     typeDef.Version,
@@ -111,7 +108,6 @@ func ExportTypeToYAML(typeDef *core.TypeDefinition) (*TypeDefinitionYAML, error)
 	// Convert attributes
 	for _, attr := range typeDef.Attributes {
 		yamlAttr := AttributeYAML{
-			ID:              attr.ID,
 			Name:            attr.Name,
 			Description:     attr.Description,
 			DataType:        string(attr.DataType),
@@ -187,7 +183,7 @@ func ExportTypeToYAML(typeDef *core.TypeDefinition) (*TypeDefinitionYAML, error)
 			case *validation.CustomRule:
 				yamlRule.Type = "custom"
 				yamlRule.Parameters["description"] = r.Description
-				
+
 			case *validation.GenericRule:
 				yamlRule.Type = "generic"
 				// Generic rule doesn't have any parameters
@@ -208,7 +204,7 @@ func ExportTypeToYAML(typeDef *core.TypeDefinition) (*TypeDefinitionYAML, error)
 // ImportTypeFromYAML imports a type definition from YAML format
 // Note: This does not set the parent type relationship - that needs to be done separately
 func ImportTypeFromYAML(yamlDef *TypeDefinitionYAML) (*core.TypeDefinition, error) {
-	typeDef := core.NewTypeDefinition(yamlDef.ID, yamlDef.Name, yamlDef.Description)
+	typeDef := core.NewTypeDefinition(yamlDef.Name, yamlDef.Description)
 	// Set the correct version from the YAML
 	typeDef.Version = yamlDef.Version
 
@@ -219,7 +215,6 @@ func ImportTypeFromYAML(yamlDef *TypeDefinitionYAML) (*core.TypeDefinition, erro
 
 		// Create attribute
 		attr := core.NewAttributeDefinition(
-			yamlAttr.ID,
 			yamlAttr.Name,
 			yamlAttr.Description,
 			dataType,
@@ -319,7 +314,7 @@ func ImportTypeFromYAML(yamlDef *TypeDefinitionYAML) (*core.TypeDefinition, erro
 				}
 
 				rule = rangeRule
-				
+
 			case "generic":
 				rule = &validation.GenericRule{}
 

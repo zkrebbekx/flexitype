@@ -24,19 +24,11 @@ func NewTypeService(typeRepo ports.TypeRepository, instanceRepo ports.InstanceRe
 }
 
 // SaveType creates or updates a type definition based on whether it already exists
-func (s *TypeService) SaveType(ctx context.Context, id, name, description string, parentTypeID string) (*core.TypeDefinition, error) {
-	// Check for existing type with same ID
-	existing, err := s.typeRepo.GetByID(ctx, id)
+func (s *TypeService) SaveType(ctx context.Context, name, description string, parentTypeName string) (*core.TypeDefinition, error) {
+	// Check for existing type with same name
+	existing, err := s.typeRepo.GetByName(ctx, name)
 	if err == nil && existing != nil {
 		// Type exists - perform update
-
-		// Check for name collision if name is changing
-		if existing.Name != name {
-			nameCheck, err := s.typeRepo.GetByName(ctx, name)
-			if err == nil && nameCheck != nil && nameCheck.ID != id {
-				return nil, fmt.Errorf("type with name '%s' already exists", name)
-			}
-		}
 
 		// Check if anything is changing that would require a version increment
 		versionChange := false
@@ -51,8 +43,8 @@ func (s *TypeService) SaveType(ctx context.Context, id, name, description string
 		existing.Description = description
 
 		// Update parent type if specified
-		if parentTypeID != "" && (existing.ParentType == nil || existing.ParentType.ID != parentTypeID) {
-			parentType, err := s.typeRepo.GetByID(ctx, parentTypeID)
+		if parentTypeName != "" && (existing.ParentType == nil || existing.ParentType.Name != parentTypeName) {
+			parentType, err := s.typeRepo.GetByName(ctx, parentTypeName)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get parent type: %w", err)
 			}
@@ -60,7 +52,7 @@ func (s *TypeService) SaveType(ctx context.Context, id, name, description string
 			// Check for circular inheritance
 			current := parentType
 			for current != nil {
-				if current.ID == id {
+				if strings.ToLower(current.Name) == strings.ToLower(name) {
 					return nil, fmt.Errorf("circular inheritance detected")
 				}
 				current = current.ParentType
@@ -68,7 +60,7 @@ func (s *TypeService) SaveType(ctx context.Context, id, name, description string
 
 			existing.SetParentType(parentType)
 			versionChange = true
-		} else if parentTypeID == "" && existing.ParentType != nil {
+		} else if parentTypeName == "" && existing.ParentType != nil {
 			// Remove parent type
 			existing.SetParentType(nil)
 			versionChange = true
@@ -96,11 +88,11 @@ func (s *TypeService) SaveType(ctx context.Context, id, name, description string
 		}
 
 		// Create the type
-		typeDef := core.NewTypeDefinition(id, name, description)
+		typeDef := core.NewTypeDefinition(name, description)
 
 		// Set parent type if specified
-		if parentTypeID != "" {
-			parentType, err := s.typeRepo.GetByID(ctx, parentTypeID)
+		if parentTypeName != "" {
+			parentType, err := s.typeRepo.GetByName(ctx, parentTypeName)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get parent type: %w", err)
 			}
@@ -118,9 +110,9 @@ func (s *TypeService) SaveType(ctx context.Context, id, name, description string
 	}
 }
 
-// GetType retrieves a type definition by ID
-func (s *TypeService) GetType(ctx context.Context, id string) (*core.TypeDefinition, error) {
-	return s.typeRepo.GetByID(ctx, id)
+// GetType retrieves a type definition by name
+func (s *TypeService) GetType(ctx context.Context, name string) (*core.TypeDefinition, error) {
+	return s.typeRepo.GetByName(ctx, name)
 }
 
 // GetTypeByName retrieves a type definition by name
@@ -129,15 +121,15 @@ func (s *TypeService) GetTypeByName(ctx context.Context, name string) (*core.Typ
 }
 
 // GetTypeVersion retrieves a specific version of a type definition
-func (s *TypeService) GetTypeVersion(ctx context.Context, id string, version int) (*core.TypeDefinition, error) {
-	return s.typeRepo.GetByIDAndVersion(ctx, id, version)
+func (s *TypeService) GetTypeVersion(ctx context.Context, name string, version int) (*core.TypeDefinition, error) {
+	return s.typeRepo.GetByNameAndVersion(ctx, name, version)
 }
 
 // ArchiveType archives a type definition
-func (s *TypeService) ArchiveType(ctx context.Context, id string) error {
+func (s *TypeService) ArchiveType(ctx context.Context, name string) error {
 	// Same validation as DeleteType
 	options := &ports.QueryOptions{
-		TypeID:          id,
+		TypeName:        name,
 		IncludeArchived: false,
 	}
 	instances, _, err := s.instanceRepo.QueryWithOptions(ctx, options)
@@ -158,36 +150,36 @@ func (s *TypeService) ArchiveType(ctx context.Context, id string) error {
 	}
 
 	for _, typeDef := range allTypes {
-		if typeDef.ParentType != nil && typeDef.ParentType.ID == id {
+		if typeDef.ParentType != nil && typeDef.ParentType.Name == name {
 			return fmt.Errorf("cannot archive type that is a parent of other types")
 		}
 	}
 
-	return s.typeRepo.Archive(ctx, id)
+	return s.typeRepo.Archive(ctx, name)
 }
 
 // UnarchiveType restores a previously archived type definition
-func (s *TypeService) UnarchiveType(ctx context.Context, id string) error {
+func (s *TypeService) UnarchiveType(ctx context.Context, name string) error {
 	// Check if the type exists
-	typeDef, err := s.typeRepo.GetByID(ctx, id)
+	typeDef, err := s.typeRepo.GetByName(ctx, name)
 	if err != nil {
-		return fmt.Errorf("type with ID '%s' not found", id)
+		return fmt.Errorf("type with name '%s' not found", name)
 	}
 
 	// Check if it's actually archived
 	if typeDef.ArchivedAt == nil {
-		return fmt.Errorf("type with ID '%s' is not archived", id)
+		return fmt.Errorf("type with name '%s' is not archived", name)
 	}
 
-	return s.typeRepo.Unarchive(ctx, id)
+	return s.typeRepo.Unarchive(ctx, name)
 }
 
 // AddAttribute adds or updates an attribute on a type definition
-func (s *TypeService) AddAttribute(ctx context.Context, typeID string, attribute *core.AttributeDefinition) (*core.TypeDefinition, error) {
+func (s *TypeService) AddAttribute(ctx context.Context, typeName string, attribute *core.AttributeDefinition) (*core.TypeDefinition, error) {
 	// Get the type
-	typeDef, err := s.typeRepo.GetByID(ctx, typeID)
+	typeDef, err := s.typeRepo.GetByName(ctx, typeName)
 	if err != nil {
-		return nil, fmt.Errorf("type with ID '%s' not found", typeID)
+		return nil, fmt.Errorf("type with name '%s' not found", typeName)
 	}
 
 	// Add the attribute
@@ -216,11 +208,11 @@ func (s *TypeService) AddAttribute(ctx context.Context, typeID string, attribute
 }
 
 // DeleteAttribute removes an attribute from a type definition
-func (s *TypeService) DeleteAttribute(ctx context.Context, typeID string, attributeName string) (*core.TypeDefinition, error) {
+func (s *TypeService) DeleteAttribute(ctx context.Context, typeName string, attributeName string) (*core.TypeDefinition, error) {
 	// Get the type
-	typeDef, err := s.typeRepo.GetByID(ctx, typeID)
+	typeDef, err := s.typeRepo.GetByName(ctx, typeName)
 	if err != nil {
-		return nil, fmt.Errorf("type with ID '%s' not found", typeID)
+		return nil, fmt.Errorf("type with name '%s' not found", typeName)
 	}
 
 	// Find the attribute to be deleted by name
@@ -287,11 +279,11 @@ func (s *TypeService) QueryTypes(ctx context.Context, options *ports.QueryOption
 }
 
 // SetAttributeDisabledState enables or disables an attribute on a type definition
-func (s *TypeService) SetAttributeDisabledState(ctx context.Context, typeID, attributeName string, disabled bool) (*core.TypeDefinition, error) {
+func (s *TypeService) SetAttributeDisabledState(ctx context.Context, typeName, attributeName string, disabled bool) (*core.TypeDefinition, error) {
 	// Get the type
-	typeDef, err := s.typeRepo.GetByID(ctx, typeID)
+	typeDef, err := s.typeRepo.GetByName(ctx, typeName)
 	if err != nil {
-		return nil, fmt.Errorf("type with ID '%s' not found", typeID)
+		return nil, fmt.Errorf("type with name '%s' not found", typeName)
 	}
 
 	// Find the attribute by name
@@ -304,7 +296,7 @@ func (s *TypeService) SetAttributeDisabledState(ctx context.Context, typeID, att
 	}
 
 	if foundAttr == nil {
-		return nil, fmt.Errorf("attribute with name '%s' not found in type '%s'", attributeName, typeID)
+		return nil, fmt.Errorf("attribute with name '%s' not found in type '%s'", attributeName, typeName)
 	}
 
 	// If the disabled state is already what we want, no need to update

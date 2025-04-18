@@ -23,14 +23,14 @@ func NewInstanceService(typeRepo ports.TypeRepository, instanceRepo ports.Instan
 }
 
 // SaveInstance creates or updates an instance based on whether it already exists
-func (s *InstanceService) SaveInstance(ctx context.Context, id string, typeID string, attributes map[string]interface{}) (*core.Instance, error) {
+func (s *InstanceService) SaveInstance(ctx context.Context, id string, typeName string, attributes map[string]interface{}) (*core.Instance, error) {
 	// Check if the instance already exists
 	existing, err := s.instanceRepo.GetByID(ctx, id)
 	if err == nil && existing != nil {
 		// Instance exists - perform update
 
 		// Get the latest type definition to ensure we're using the latest version
-		latestTypeDef, err := s.typeRepo.GetByID(ctx, existing.TypeDefinition.ID)
+		latestTypeDef, err := s.typeRepo.GetByName(ctx, existing.TypeDefinition.Name)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get latest type definition: %w", err)
 		}
@@ -51,12 +51,12 @@ func (s *InstanceService) SaveInstance(ctx context.Context, id string, typeID st
 		}
 
 		// Copy all attributes from the previous version
-		for attrID, value := range existing.Attributes {
+		for attrName, value := range existing.Attributes {
 			// Check if the attribute is still active in the new type version
-			attrDef := newInstance.FindAttributeDefinition(attrID)
+			attrDef := newInstance.FindAttributeDefinition(attrName)
 			if attrDef != nil && !attrDef.Disabled {
 				// Only copy attributes that are still active
-				newInstance.Attributes[attrDef.ID] = value
+				newInstance.Attributes[attrDef.Name] = value
 			}
 		}
 
@@ -66,7 +66,7 @@ func (s *InstanceService) SaveInstance(ctx context.Context, id string, typeID st
 			if attrDef == nil {
 				return nil, fmt.Errorf("attribute '%s' not found in type definition", name)
 			}
-			err := newInstance.SetAttribute(attrDef.ID, value)
+			err := newInstance.SetAttribute(attrDef.Name, value)
 			if err != nil {
 				return nil, fmt.Errorf("failed to set attribute '%s': %w", name, err)
 			}
@@ -89,9 +89,9 @@ func (s *InstanceService) SaveInstance(ctx context.Context, id string, typeID st
 		// Instance doesn't exist - create a new one
 
 		// Get the type definition
-		typeDef, err := s.typeRepo.GetByID(ctx, typeID)
+		typeDef, err := s.typeRepo.GetByName(ctx, typeName)
 		if err != nil {
-			return nil, fmt.Errorf("type with ID '%s' not found: %w", typeID, err)
+			return nil, fmt.Errorf("type with name '%s' not found: %w", typeName, err)
 		}
 
 		// Create the instance

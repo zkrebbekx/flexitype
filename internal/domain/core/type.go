@@ -8,8 +8,7 @@ import (
 
 // TypeDefinition represents a dynamic type definition
 type TypeDefinition struct {
-	ID          string
-	Name        string
+	Name        string // Name is now the primary identifier
 	Description string
 	Version     int
 	Attributes  []*AttributeDefinition
@@ -17,14 +16,13 @@ type TypeDefinition struct {
 	CreatedAt   time.Time  // When the type was created
 	UpdatedAt   time.Time  // When the type was last updated
 	ArchivedAt  *time.Time // Nullable timestamp when the type was archived
-
 }
 
 // NewTypeDefinition creates a new type definition
-func NewTypeDefinition(id, name, description string) *TypeDefinition {
+// The id parameter is kept for backward compatibility but is no longer used
+func NewTypeDefinition(name, description string) *TypeDefinition {
 	now := time.Now()
 	return &TypeDefinition{
-		ID:          id,
 		Name:        name,
 		Description: description,
 		Version:     1,
@@ -147,11 +145,11 @@ func (t *TypeDefinition) GetAttributeByName(name string) *AttributeDefinition {
 func (t *TypeDefinition) ValidateCascades() []error {
 	// Create a new cascade validator
 	validator := validation.NewCascadeValidator()
-	
+
 	// Register all attributes and their enabled status
 	for _, attr := range t.Attributes {
 		validator.RegisterAttribute(attr.Name, !attr.Disabled)
-		
+
 		// Register all cascade logic for the validator to analyze
 		for _, cascade := range attr.Cascades {
 			if cascade.Enabled {
@@ -159,7 +157,7 @@ func (t *TypeDefinition) ValidateCascades() []error {
 			}
 		}
 	}
-	
+
 	// Validate cascades
 	return validator.Validate()
 }

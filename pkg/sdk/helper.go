@@ -22,9 +22,8 @@ const (
 )
 
 // NewAttribute creates a new attribute definition with a more friendly API
-func NewAttribute(id, name, description string, dataType DataType, required bool) *core.AttributeDefinition {
+func NewAttribute(name, description string, dataType DataType, required bool) *core.AttributeDefinition {
 	return core.NewAttributeDefinition(
-		id,
 		name,
 		description,
 		dataType,

@@ -51,7 +51,6 @@ func main() {
 	fmt.Println("=== Step 1: Creating a type definition ===")
 
 	createTypeReq := connect.NewRequest(&flexitypev1.SaveTypeRequest{
-		Id:          "doc-type-001",
 		Name:        "Document",
 		Description: "A document type with attributes",
 	})
@@ -69,9 +68,8 @@ func main() {
 
 	// Add title attribute
 	titleAttrReq := connect.NewRequest(&flexitypev1.AddAttributeRequest{
-		TypeId: typeDef.Id,
+		TypeName: typeDef.Name,
 		Attribute: &flexitypev1.AttributeDefinition{
-			Id:          "attr-001",
 			Name:        "title",
 			Description: "Document title",
 			DataType:    sdk.DataTypeString,
@@ -92,9 +90,8 @@ func main() {
 
 	// Add author attribute
 	authorAttrReq := connect.NewRequest(&flexitypev1.AddAttributeRequest{
-		TypeId: typeDef.Id,
+		TypeName: typeDef.Name,
 		Attribute: &flexitypev1.AttributeDefinition{
-			Id:          "attr-002",
 			Name:        "author",
 			Description: "Document author",
 			DataType:    sdk.DataTypeString,
@@ -109,9 +106,8 @@ func main() {
 
 	// Add content attribute
 	contentAttrReq := connect.NewRequest(&flexitypev1.AddAttributeRequest{
-		TypeId: typeDef.Id,
+		TypeName: typeDef.Name,
 		Attribute: &flexitypev1.AttributeDefinition{
-			Id:          "attr-003",
 			Name:        "content",
 			Description: "Document content",
 			DataType:    sdk.DataTypeString,
@@ -135,7 +131,7 @@ func main() {
 
 	fmt.Printf("Added attributes to type (now v%d):\n", typeDef.Version)
 	for _, attr := range typeDef.Attributes {
-		fmt.Printf("  - %s (%s)\n", attr.Name, attr.Id)
+		fmt.Printf("  - %s\n", attr.Name)
 	}
 
 	// Step 3: Create an instance of the type
@@ -167,7 +163,7 @@ func main() {
 
 	createInstanceReq := connect.NewRequest(&flexitypev1.SaveInstanceRequest{
 		Id:              "doc-001",
-		TypeId:          typeDef.Id,
+		TypeName:        typeDef.Name,
 		AttributeValues: attrValues,
 	})
 
@@ -206,7 +202,7 @@ func main() {
 	fmt.Println("\n=== Step 4: Disabling the author attribute ===")
 
 	disableAttrReq := connect.NewRequest(&flexitypev1.SetAttributeDisabledStateRequest{
-		TypeId:        typeDef.Id,
+		TypeName:      typeDef.Name,
 		AttributeName: "author",
 		Disabled:      true,
 	})
@@ -236,12 +232,12 @@ func main() {
 		},
 	}
 
-	updateInstReq := connect.NewRequest(&flexitypev1.UpdateInstanceRequest{
+	saveInstReq := connect.NewRequest(&flexitypev1.SaveInstanceRequest{
 		Id:              instance.Id,
 		AttributeValues: updateInstValues,
 	})
 
-	_, err = client.UpdateInstance(ctx, updateInstReq)
+	_, err = client.SaveInstance(ctx, saveInstReq)
 	if err != nil {
 		fmt.Printf("Got expected error: %v\n", err)
 	} else {
@@ -258,12 +254,12 @@ func main() {
 		},
 	}
 
-	updateValidReq := connect.NewRequest(&flexitypev1.UpdateInstanceRequest{
+	updateValidReq := connect.NewRequest(&flexitypev1.SaveInstanceRequest{
 		Id:              instance.Id,
 		AttributeValues: updateValidValues,
 	})
 
-	updateValidRes, err := client.UpdateInstance(ctx, updateValidReq)
+	updateValidRes, err := client.SaveInstance(ctx, updateValidReq)
 	if err != nil {
 		log.Fatalf("Failed to update instance: %v", err)
 	}
@@ -320,7 +316,7 @@ func main() {
 
 	createWithDisabledReq := connect.NewRequest(&flexitypev1.SaveInstanceRequest{
 		Id:              "doc-002",
-		TypeId:          typeDef.Id,
+		TypeName:        typeDef.Name,
 		AttributeValues: createWithDisabledValues,
 	})
 
@@ -348,7 +344,7 @@ func main() {
 
 	createValidReq := connect.NewRequest(&flexitypev1.SaveInstanceRequest{
 		Id:              "doc-002",
-		TypeId:          typeDef.Id,
+		TypeName:        typeDef.Name,
 		AttributeValues: createValidValues,
 	})
 
@@ -387,7 +383,7 @@ func main() {
 	fmt.Println("\n=== Step 8: Re-enabling the author attribute ===")
 
 	enableAttrReq := connect.NewRequest(&flexitypev1.SetAttributeDisabledStateRequest{
-		TypeId:        typeDef.Id,
+		TypeName:      typeDef.Name,
 		AttributeName: "author",
 		Disabled:      false,
 	})
@@ -410,12 +406,12 @@ func main() {
 		},
 	}
 
-	updateReenabledReq := connect.NewRequest(&flexitypev1.UpdateInstanceRequest{
+	updateReenabledReq := connect.NewRequest(&flexitypev1.SaveInstanceRequest{
 		Id:              newInstance.Id,
 		AttributeValues: updateReenabledValues,
 	})
 
-	updateReenabledRes, err := client.UpdateInstance(ctx, updateReenabledReq)
+	updateReenabledRes, err := client.SaveInstance(ctx, updateReenabledReq)
 	if err != nil {
 		log.Fatalf("Failed to update instance: %v", err)
 	}
@@ -450,7 +446,7 @@ func main() {
 	fmt.Println("\n=== Step 10: Exporting type schema to YAML via gRPC ===")
 
 	exportReq := connect.NewRequest(&flexitypev1.ExportTypeSchemaRequest{
-		TypeId: typeDef.Id,
+		TypeName: typeDef.Name,
 	})
 
 	exportRes, err := client.ExportTypeSchema(ctx, exportReq)

@@ -24,33 +24,33 @@ func main() {
 	fmt.Println("=== Step 1: Creating a type definition with multiple attributes ===")
 
 	// Create a document type
-	docType, err := client.SaveType(ctx, "doc-001", "Document", "Base document type")
+	docType, err := client.SaveType(ctx, "Document", "Base document type")
 	if err != nil {
 		log.Fatalf("Failed to create document type: %v", err)
 	}
 
 	// Add attributes
-	titleAttr := sdk.NewAttribute("attr-001", "title", "Document title", sdk.StringType, true)
+	titleAttr := sdk.NewAttribute("title", "Document title", sdk.StringType, true)
 	titleAttr.AddValidationRule(&sdk.RequiredRule{})
 
-	contentAttr := sdk.NewAttribute("attr-002", "content", "Document content", sdk.StringType, true)
+	contentAttr := sdk.NewAttribute("content", "Document content", sdk.StringType, true)
 	contentAttr.AddValidationRule(&sdk.RequiredRule{})
 
-	authorAttr := sdk.NewAttribute("attr-003", "author", "Document author", sdk.StringType, false)
+	authorAttr := sdk.NewAttribute("author", "Document author", sdk.StringType, false)
 
 	// Version-control attributes
-	versionAttr := sdk.NewAttribute("attr-004", "version", "Document version", sdk.StringType, true)
+	versionAttr := sdk.NewAttribute("version", "Document version", sdk.StringType, true)
 	versionAttr.SetDefaultValue("1.0")
 
-	lastModifiedAttr := sdk.NewAttribute("attr-005", "lastModified", "Last modified date", sdk.StringType, true)
+	lastModifiedAttr := sdk.NewAttribute("lastModified", "Last modified date", sdk.StringType, true)
 	lastModifiedAttr.SetDefaultValue("2023-01-01")
 
 	// Add all attributes to the type
-	client.AddAttribute(ctx, docType.ID, titleAttr)
-	client.AddAttribute(ctx, docType.ID, contentAttr)
-	client.AddAttribute(ctx, docType.ID, authorAttr)
-	client.AddAttribute(ctx, docType.ID, versionAttr)
-	client.AddAttribute(ctx, docType.ID, lastModifiedAttr)
+	client.AddAttribute(ctx, docType.Name, titleAttr)
+	client.AddAttribute(ctx, docType.Name, contentAttr)
+	client.AddAttribute(ctx, docType.Name, authorAttr)
+	client.AddAttribute(ctx, docType.Name, versionAttr)
+	client.AddAttribute(ctx, docType.Name, lastModifiedAttr)
 
 	// Save the type
 	err = typeRepo.Save(ctx, docType)
@@ -93,7 +93,7 @@ func main() {
 	}
 
 	// Disable the author attribute
-	updatedType, err := client.SetAttributeDisabledState(ctx, docType.ID, "attr-003", true)
+	updatedType, err := client.SetAttributeDisabledState(ctx, docType.Name, authorAttr.Name, true)
 	if err != nil {
 		log.Fatalf("Failed to disable attribute: %v", err)
 	}
@@ -161,7 +161,7 @@ func main() {
 	fmt.Println("\n=== Step 6: Re-enabling the 'author' attribute in a new type version ===")
 
 	// Re-enable the author attribute
-	updatedType, err = client.SetAttributeDisabledState(ctx, docType.ID, "attr-003", false)
+	updatedType, err = client.SetAttributeDisabledState(ctx, docType.Name, authorAttr.Name, false)
 	if err != nil {
 		log.Fatalf("Failed to re-enable attribute: %v", err)
 	}

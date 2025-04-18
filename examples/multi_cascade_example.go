@@ -25,13 +25,13 @@ func main() {
 	fmt.Println("=== Step 1: Creating base type with multiple cascades ===")
 
 	// Create a purchase order type
-	poType, err := client.SaveType(ctx, "po-001", "PurchaseOrder", "Purchase order record")
+	poType, err := client.SaveType(ctx, "PurchaseOrder", "Purchase order record")
 	if err != nil {
 		log.Fatalf("Failed to create purchase order type: %v", err)
 	}
 
 	// Add basic attributes
-	poNumberAttr := sdk.NewAttribute("attr-001", "poNumber", "Purchase order number", sdk.StringType, true)
+	poNumberAttr := sdk.NewAttribute("poNumber", "Purchase order number", sdk.StringType, true)
 	poNumberAttr.AddValidationRule(&sdk.RequiredRule{})
 
 	patternRule, err := sdk.NewPatternRule("PO-[0-9]{6}")
@@ -40,10 +40,10 @@ func main() {
 	}
 	poNumberAttr.AddValidationRule(patternRule)
 
-	vendorAttr := sdk.NewAttribute("attr-002", "vendor", "Vendor name", sdk.StringType, true)
+	vendorAttr := sdk.NewAttribute("vendor", "Vendor name", sdk.StringType, true)
 	vendorAttr.AddValidationRule(&sdk.RequiredRule{})
 
-	amountAttr := sdk.NewAttribute("attr-003", "amount", "Purchase order amount", sdk.FloatType, true)
+	amountAttr := sdk.NewAttribute("amount", "Purchase order amount", sdk.FloatType, true)
 	amountAttr.AddValidationRule(&sdk.RequiredRule{})
 
 	minValue := sdk.Float64Ptr(0.01)
@@ -51,7 +51,7 @@ func main() {
 	amountAttr.AddValidationRule(rangeRule)
 
 	// Add signature required attribute with multiple cascades of different weights
-	signatureAttr := sdk.NewAttribute("attr-004", "signatureRequired", "Requires manager signature", sdk.BooleanType, false)
+	signatureAttr := sdk.NewAttribute("signatureRequired", "Requires manager signature", sdk.BooleanType, false)
 	signatureAttr.SetDefaultValue(false)
 
 	// First cascade: Basic amount threshold with low weight (150)
@@ -64,7 +64,7 @@ func main() {
 	signatureAttr.AddCascade("international-vendor", true, core.CascadeInherit, "vendor == \"International\" => signatureRequired = true", 500)
 
 	// Add status attribute with cascade
-	statusAttr := sdk.NewAttribute("attr-005", "status", "Purchase order status", sdk.StringType, true)
+	statusAttr := sdk.NewAttribute("status", "Purchase order status", sdk.StringType, true)
 	statusAttr.SetDefaultValue("Draft")
 
 	// Create a validation rule for allowed status values
@@ -72,16 +72,16 @@ func main() {
 	statusAttr.AddValidationRule(statusRule)
 
 	// Add reason attribute that is conditionally required based on status
-	reasonAttr := sdk.NewAttribute("attr-006", "rejectionReason", "Reason for rejection", sdk.StringType, false)
+	reasonAttr := sdk.NewAttribute("rejectionReason", "Reason for rejection", sdk.StringType, false)
 	reasonAttr.AddCascade("rejection-reason", true, core.CascadeInherit, "status == \"Rejected\" && isEmpty(rejectionReason) => rejectionReason = \"Please provide a reason\"", 200)
 
 	// Add all attributes to the type
-	client.AddAttribute(ctx, poType.ID, poNumberAttr)
-	client.AddAttribute(ctx, poType.ID, vendorAttr)
-	client.AddAttribute(ctx, poType.ID, amountAttr)
-	client.AddAttribute(ctx, poType.ID, signatureAttr)
-	client.AddAttribute(ctx, poType.ID, statusAttr)
-	client.AddAttribute(ctx, poType.ID, reasonAttr)
+	client.AddAttribute(ctx, poType.Name, poNumberAttr)
+	client.AddAttribute(ctx, poType.Name, vendorAttr)
+	client.AddAttribute(ctx, poType.Name, amountAttr)
+	client.AddAttribute(ctx, poType.Name, signatureAttr)
+	client.AddAttribute(ctx, poType.Name, statusAttr)
+	client.AddAttribute(ctx, poType.Name, reasonAttr)
 
 	// Save the type
 	err = typeRepo.Save(ctx, poType)
@@ -104,7 +104,7 @@ func main() {
 	fmt.Println("\n=== Step 2: Creating child type with overridden cascades ===")
 
 	// Create a special purchase order type with different approval rules
-	specialPoType, err := client.SaveType(ctx, "po-002", "SpecialPurchaseOrder", "Special purchase order with different rules")
+	specialPoType, err := client.SaveType(ctx, "SpecialPurchaseOrder", "Special purchase order with different rules")
 	if err != nil {
 		log.Fatalf("Failed to create special purchase order type: %v", err)
 	}
@@ -113,7 +113,7 @@ func main() {
 	specialPoType.SetParentType(poType)
 
 	// Override the signature attribute with different logic and weights
-	specialSignatureAttr := sdk.NewAttribute("attr-004", "signatureRequired", "Requires manager signature", sdk.BooleanType, false)
+	specialSignatureAttr := sdk.NewAttribute("signatureRequired", "Requires manager signature", sdk.BooleanType, false)
 	specialSignatureAttr.SetDefaultValue(false)
 
 	// Add two cascades with different weights
@@ -121,12 +121,12 @@ func main() {
 	specialSignatureAttr.AddCascade("vendor-signature-for-5000-or-above", true, core.CascadeOverride, "isNotEmpty(vendorApprovalRequired) && vendorApprovalRequired == true && amount > 2000 => signatureRequired = true", 400)
 
 	// Add vendor approval attribute (unique to this type)
-	vendorApprovalAttr := sdk.NewAttribute("attr-007", "vendorApprovalRequired", "Requires vendor pre-approval", sdk.BooleanType, true)
+	vendorApprovalAttr := sdk.NewAttribute("vendorApprovalRequired", "Requires vendor pre-approval", sdk.BooleanType, true)
 	vendorApprovalAttr.SetDefaultValue(false)
 
 	// Add to type
-	client.AddAttribute(ctx, specialPoType.ID, specialSignatureAttr)
-	client.AddAttribute(ctx, specialPoType.ID, vendorApprovalAttr)
+	client.AddAttribute(ctx, specialPoType.Name, specialSignatureAttr)
+	client.AddAttribute(ctx, specialPoType.Name, vendorApprovalAttr)
 
 	// Save the type
 	err = typeRepo.Save(ctx, specialPoType)

@@ -391,7 +391,7 @@ func (i *Instance) Validate() []error {
 			// No dynamic rules, use original validation
 			if attrDef.Required {
 				// Check if attribute is set
-				value, exists := i.Attributes[attrDef.ID]
+				value, exists := i.Attributes[attrDef.Name]
 				if !exists && attrDef.DefaultValue == nil {
 					errors = append(errors, fmt.Errorf("required attribute '%s' is missing", attrDef.Name))
 					continue
@@ -571,9 +571,9 @@ func (i *Instance) MigrateToLatestVersion() []error {
 }
 
 // FindAttributeDefinition finds the attribute definition for a given name
-func (i *Instance) FindAttributeDefinition(idOrName string) *AttributeDefinition {
+func (i *Instance) FindAttributeDefinition(name string) *AttributeDefinition {
 	for _, attr := range i.TypeDefinition.GetAllAttributes() {
-		if attr.ID == idOrName || attr.Name == idOrName {
+		if attr.Name == name {
 			return attr
 		}
 	}

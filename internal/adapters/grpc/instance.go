@@ -63,7 +63,7 @@ func (s *flexiTypeServiceServer) SaveInstance(ctx context.Context, req *connect.
 	}
 
 	// Use the instance service to create the instance
-	instance, err := s.instanceService.SaveInstance(ctx, req.Msg.Id, req.Msg.TypeId, attrValues)
+	instance, err := s.instanceService.SaveInstance(ctx, req.Msg.Id, req.Msg.TypeName, attrValues)
 	if err != nil {
 		// Check error type to determine appropriate error code
 		if strings.Contains(err.Error(), "validation failed") {
@@ -90,7 +90,7 @@ func (s *flexiTypeServiceServer) QueryInstances(ctx context.Context, req *connec
 
 	// Create query options
 	options := &ports.QueryOptions{
-		TypeID:            req.Msg.TypeId,
+		TypeName:          req.Msg.TypeName,
 		AttributeFilters:  filters,
 		Limit:             int(req.Msg.PageSize),
 		IncludeArchived:   req.Msg.IncludeArchived,

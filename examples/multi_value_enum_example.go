@@ -25,16 +25,16 @@ func main() {
 	fmt.Println("=== Step 1: Creating product type with multi-valued enum attributes ===")
 
 	// Create a product type
-	productType, err := client.SaveType(ctx, "product-001", "Product", "Product item with categories and tags")
+	productType, err := client.SaveType(ctx, "Product", "Product item with categories and tags")
 	if err != nil {
 		log.Fatalf("Failed to create product type: %v", err)
 	}
 
 	// Add basic attributes
-	nameAttr := sdk.NewAttribute("attr-001", "name", "Product name", sdk.StringType, true)
+	nameAttr := sdk.NewAttribute("name", "Product name", sdk.StringType, true)
 	nameAttr.AddValidationRule(&sdk.RequiredRule{})
 
-	priceAttr := sdk.NewAttribute("attr-002", "price", "Product price", sdk.FloatType, true)
+	priceAttr := sdk.NewAttribute("price", "Product price", sdk.FloatType, true)
 	priceAttr.AddValidationRule(&sdk.RequiredRule{})
 
 	minValue := sdk.Float64Ptr(0.01)
@@ -42,7 +42,7 @@ func main() {
 	priceAttr.AddValidationRule(rangeRule)
 
 	// Add multi-valued category attribute with enum validation
-	categoryAttr := sdk.NewAttribute("attr-003", "categories", "Product categories", sdk.StringType, true)
+	categoryAttr := sdk.NewAttribute("categories", "Product categories", sdk.StringType, true)
 	categoryAttr.SetMultiValued(true) // Allow multiple values
 
 	// Create a validation rule for allowed category values
@@ -54,7 +54,7 @@ func main() {
 	categoryAttr.AddValidationRule(categoryRule)
 
 	// Add multi-valued tags with enum validation and default values
-	tagsAttr := sdk.NewAttribute("attr-004", "tags", "Product tags", sdk.StringType, false)
+	tagsAttr := sdk.NewAttribute("tags", "Product tags", sdk.StringType, false)
 	tagsAttr.SetMultiValued(true) // Allow multiple values
 
 	// Create a validation rule for allowed tag values
@@ -74,16 +74,16 @@ func main() {
 	tagsAttr.AddCascade("clearance-stock", true, core.CascadeInherit, "stockQuantity < 10 && stockQuantity > 0 => tags = \"Clearance\"", 500)
 
 	// Add stock quantity attribute
-	stockAttr := sdk.NewAttribute("attr-005", "stockQuantity", "Number of items in stock", sdk.IntType, true)
+	stockAttr := sdk.NewAttribute("stockQuantity", "Number of items in stock", sdk.IntType, true)
 	stockAttr.AddValidationRule(&sdk.RequiredRule{})
 	stockAttr.SetDefaultValue(0)
 
 	// Add all attributes to the type
-	client.AddAttribute(ctx, productType.ID, nameAttr)
-	client.AddAttribute(ctx, productType.ID, priceAttr)
-	client.AddAttribute(ctx, productType.ID, categoryAttr)
-	client.AddAttribute(ctx, productType.ID, tagsAttr)
-	client.AddAttribute(ctx, productType.ID, stockAttr)
+	client.AddAttribute(ctx, productType.Name, nameAttr)
+	client.AddAttribute(ctx, productType.Name, priceAttr)
+	client.AddAttribute(ctx, productType.Name, categoryAttr)
+	client.AddAttribute(ctx, productType.Name, tagsAttr)
+	client.AddAttribute(ctx, productType.Name, stockAttr)
 
 	// Save the type
 	err = typeRepo.Save(ctx, productType)
@@ -109,7 +109,7 @@ func main() {
 	fmt.Println("\n=== Step 2: Creating specialized product type ===")
 
 	// Create a specialized product type
-	electronicsType, err := client.SaveType(ctx, "product-002", "ElectronicsProduct", "Electronics product with specialized attributes")
+	electronicsType, err := client.SaveType(ctx, "ElectronicsProduct", "Electronics product with specialized attributes")
 	if err != nil {
 		log.Fatalf("Failed to create electronics type: %v", err)
 	}
@@ -118,15 +118,15 @@ func main() {
 	electronicsType.SetParentType(productType)
 
 	// Add specialized attributes
-	warrantyAttr := sdk.NewAttribute("attr-006", "warrantyMonths", "Warranty period in months", sdk.IntType, true)
+	warrantyAttr := sdk.NewAttribute("warrantyMonths", "Warranty period in months", sdk.IntType, true)
 	warrantyAttr.SetDefaultValue(12)
 
 	// Add specialized multi-valued attribute for technical specifications
-	specsAttr := sdk.NewAttribute("attr-007", "specifications", "Technical specifications", sdk.StringType, false)
+	specsAttr := sdk.NewAttribute("specifications", "Technical specifications", sdk.StringType, false)
 	specsAttr.SetMultiValued(true)
 
 	// Add condition to set "Premium" tag if warranty is more than 24 months
-	tagsOverrideAttr := sdk.NewAttribute("attr-004", "tags", "Product tags", sdk.StringType, false)
+	tagsOverrideAttr := sdk.NewAttribute("tags", "Product tags", sdk.StringType, false)
 	tagsOverrideAttr.SetMultiValued(true)
 	tagsOverrideAttr.AddValidationRule(tagsRule) // Reuse the same enum rule
 
@@ -134,9 +134,9 @@ func main() {
 	tagsOverrideAttr.AddCascade("2-year-waranty-premium", true, core.CascadeInherit, "warrantyMonths > 24 => tags = \"Premium\"", 600)
 
 	// Add to type
-	client.AddAttribute(ctx, electronicsType.ID, warrantyAttr)
-	client.AddAttribute(ctx, electronicsType.ID, specsAttr)
-	client.AddAttribute(ctx, electronicsType.ID, tagsOverrideAttr)
+	client.AddAttribute(ctx, electronicsType.Name, warrantyAttr)
+	client.AddAttribute(ctx, electronicsType.Name, specsAttr)
+	client.AddAttribute(ctx, electronicsType.Name, tagsOverrideAttr)
 
 	// Save the type
 	err = typeRepo.Save(ctx, electronicsType)

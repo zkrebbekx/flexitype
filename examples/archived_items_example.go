@@ -28,7 +28,7 @@ func main() {
 
 	// Step 1: Create a type definition
 	fmt.Println("=== Step 1: Creating a type definition ===")
-	productType, err := typeService.SaveType(ctx, "product-type-001", "Product", "A product type", "")
+	productType, err := typeService.SaveType(ctx, "Product", "A product type", "")
 	if err != nil {
 		log.Fatalf("Failed to create type: %v", err)
 	}
@@ -39,30 +39,30 @@ func main() {
 	fmt.Println("\n=== Step 2: Adding attributes to the type ===")
 
 	// Add name attribute
-	nameAttr := sdk.NewAttribute("attr-001", "name", "Product name", sdk.StringType, true)
+	nameAttr := sdk.NewAttribute("name", "Product name", sdk.StringType, true)
 	nameAttr.AddValidationRule(&sdk.RequiredRule{})
 
 	// Add price attribute
-	priceAttr := sdk.NewAttribute("attr-002", "price", "Product price", sdk.FloatType, true)
+	priceAttr := sdk.NewAttribute("price", "Product price", sdk.FloatType, true)
 
 	// Use the NewRangeRule helper function instead of struct literal
 	minPrice := sdk.Float64Ptr(0.01)
 	priceAttr.AddValidationRule(sdk.NewRangeRule(minPrice, nil))
 
 	// Add attributes to the type
-	productType, err = typeService.AddAttribute(ctx, productType.ID, nameAttr)
+	productType, err = typeService.AddAttribute(ctx, productType.Name, nameAttr)
 	if err != nil {
 		log.Fatalf("Failed to add name attribute: %v", err)
 	}
 
-	productType, err = typeService.AddAttribute(ctx, productType.ID, priceAttr)
+	productType, err = typeService.AddAttribute(ctx, productType.Name, priceAttr)
 	if err != nil {
 		log.Fatalf("Failed to add price attribute: %v", err)
 	}
 
 	fmt.Printf("Added attributes to type (now v%d):\n", productType.Version)
 	for _, attr := range productType.Attributes {
-		fmt.Printf("  - %s (%s)\n", attr.Name, attr.ID)
+		fmt.Printf("  - %s (%s)\n", attr.Name, attr.Name)
 	}
 
 	// Step 3: Create multiple instances of the type
@@ -86,7 +86,7 @@ func main() {
 			"price": p.price,
 		}
 
-		instance, err := instanceService.SaveInstance(ctx, p.id, productType.ID, attrs)
+		instance, err := instanceService.SaveInstance(ctx, p.id, productType.Name, attrs)
 		if err != nil {
 			log.Fatalf("Failed to create product instance: %v", err)
 		}
@@ -99,7 +99,7 @@ func main() {
 	fmt.Println("\n=== Step 4: Listing all active instances ===")
 
 	options := &ports.QueryOptions{
-		TypeID:          productType.ID,
+		TypeName:        productType.Name,
 		IncludeArchived: false,
 	}
 
@@ -148,7 +148,7 @@ func main() {
 	fmt.Println("\n=== Step 7: Listing all instances (including archived) ===")
 
 	includeArchivedOptions := &ports.QueryOptions{
-		TypeID:          productType.ID,
+		TypeName:        productType.Name,
 		IncludeArchived: true,
 	}
 
@@ -201,7 +201,7 @@ func main() {
 	fmt.Println("\n=== Step 10: Archiving a type ===")
 
 	// Create a temporary type that we'll archive
-	tempType, err := typeService.SaveType(ctx, "temp-type-001", "TemporaryType", "A type that will be archived", "")
+	tempType, err := typeService.SaveType(ctx, "TemporaryType", "A type that will be archived", "")
 	if err != nil {
 		log.Fatalf("Failed to create temporary type: %v", err)
 	}
@@ -209,12 +209,12 @@ func main() {
 	fmt.Printf("Created temporary type: %s (v%d)\n", tempType.Name, tempType.Version)
 
 	// Archive the type
-	err = typeService.ArchiveType(ctx, tempType.ID)
+	err = typeService.ArchiveType(ctx, tempType.Name)
 	if err != nil {
 		log.Fatalf("Failed to archive type: %v", err)
 	}
 
-	fmt.Printf("Archived type: %s\n", tempType.ID)
+	fmt.Printf("Archived type: %s\n", tempType.Name)
 
 	// List all types including archived
 	allTypesOptions := &ports.QueryOptions{
@@ -233,7 +233,7 @@ func main() {
 			status = fmt.Sprintf("Archived at %s", t.ArchivedAt.Format("2006-01-02 15:04:05"))
 		}
 
-		fmt.Printf("  - %s: %s [%s]\n", t.ID, t.Name, status)
+		fmt.Printf("  - %s [%s]\n", t.Name, status)
 	}
 
 	// List only active types
@@ -248,6 +248,6 @@ func main() {
 
 	fmt.Printf("Found %d active types\n", activeTypeCount)
 	for _, t := range activeTypes {
-		fmt.Printf("  - %s: %s\n", t.ID, t.Name)
+		fmt.Printf("  - %s\n", t.Name)
 	}
 }

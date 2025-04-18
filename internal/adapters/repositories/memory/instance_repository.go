@@ -41,8 +41,8 @@ func (r *InMemoryInstanceRepository) Save(ctx context.Context, instance *core.In
 	r.instances[instance.ID][instance.Version] = instance
 
 	// Update type index - only need to track IDs, not versions
-	typeID := instance.TypeDefinition.ID
-	instanceIDs, exists := r.typeIndex[typeID]
+	typeName := instance.TypeDefinition.Name
+	instanceIDs, exists := r.typeIndex[typeName]
 	if !exists {
 		instanceIDs = []string{}
 	}
@@ -58,7 +58,7 @@ func (r *InMemoryInstanceRepository) Save(ctx context.Context, instance *core.In
 
 	if !found {
 		instanceIDs = append(instanceIDs, instance.ID)
-		r.typeIndex[typeID] = instanceIDs
+		r.typeIndex[typeName] = instanceIDs
 	}
 
 	return nil
@@ -189,12 +189,12 @@ func (r *InMemoryInstanceRepository) GetByIDs(ctx context.Context, ids []string)
 	return result, nil
 }
 
-// Query retrieves instances by type ID and attribute filters (for backward compatibility)
-func (r *InMemoryInstanceRepository) Query(ctx context.Context, typeID string, attributeFilters map[string]interface{}) ([]*core.Instance, error) {
+// Query retrieves instances by type name and attribute filters (for backward compatibility)
+func (r *InMemoryInstanceRepository) Query(ctx context.Context, typeName string, attributeFilters map[string]interface{}) ([]*core.Instance, error) {
 	options := &ports.QueryOptions{
-		TypeID:           typeID,
-		AttributeFilters: attributeFilters,
-		IncludeArchived:  false,
+		TypeName:          typeName,
+		AttributeFilters:  attributeFilters,
+		IncludeArchived:   false,
 		LatestVersionOnly: true,
 	}
 	instances, _, err := r.QueryWithOptions(ctx, options)
@@ -208,9 +208,9 @@ func (r *InMemoryInstanceRepository) QueryWithOptions(ctx context.Context, optio
 
 	// First, identify candidate instances by typeID
 	var candidateIDs []string
-	if options.TypeID != "" {
+	if options.TypeName != "" {
 		// Get instances for specific type
-		candidateIDs = r.typeIndex[options.TypeID]
+		candidateIDs = r.typeIndex[options.TypeName]
 	} else {
 		// Get all instances
 		for id := range r.instances {
@@ -219,10 +219,10 @@ func (r *InMemoryInstanceRepository) QueryWithOptions(ctx context.Context, optio
 	}
 
 	// Filter by IDs if specified
-	if len(options.IDs) > 0 {
+	if len(options.Names) > 0 {
 		// Create a set of requested IDs for quick lookup
 		idSet := make(map[string]bool)
-		for _, id := range options.IDs {
+		for _, id := range options.Names {
 			idSet[id] = true
 		}
 
@@ -255,14 +255,14 @@ func (r *InMemoryInstanceRepository) QueryWithOptions(ctx context.Context, optio
 					latestVersion = version
 				}
 			}
-			
+
 			// If specific version is requested and it doesn't match latest, skip
 			if options.InstanceVersion > 0 && options.InstanceVersion != latestVersion {
 				continue
 			}
-			
+
 			instance := versions[latestVersion]
-			
+
 			// Apply instance-level filters
 			if r.matchesInstanceFilter(instance, options) {
 				filtered = append(filtered, instance)
@@ -360,7 +360,7 @@ func (r *InMemoryInstanceRepository) sortInstances(instances []*core.Instance, o
 	if orderBy == "" {
 		orderBy = "id" // Default sort field
 	}
-	
+
 	ascending := true
 	if strings.ToUpper(orderDir) == "DESC" {
 		ascending = false
@@ -368,13 +368,13 @@ func (r *InMemoryInstanceRepository) sortInstances(instances []*core.Instance, o
 
 	sort.Slice(instances, func(i, j int) bool {
 		var result bool
-		
+
 		// Get values to compare based on the orderBy field
 		switch orderBy {
 		case "id":
 			result = instances[i].ID < instances[j].ID
-		case "type_id":
-			result = instances[i].TypeDefinition.ID < instances[j].TypeDefinition.ID
+		case "type_name":
+			result = instances[i].TypeDefinition.Name < instances[j].TypeDefinition.Name
 		case "version":
 			result = instances[i].Version < instances[j].Version
 		case "created_at":
@@ -385,7 +385,7 @@ func (r *InMemoryInstanceRepository) sortInstances(instances []*core.Instance, o
 			// Sort by ID as fallback
 			result = instances[i].ID < instances[j].ID
 		}
-		
+
 		// Reverse the result for descending order
 		if !ascending {
 			return !result

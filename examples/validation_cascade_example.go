@@ -25,54 +25,54 @@ func main() {
 	fmt.Println("=== Step 1: Creating product type with dynamic validation ===")
 
 	// Create a product type
-	productType, err := client.SaveType(ctx, "product-001", "Product", "Product record")
+	productType, err := client.SaveType(ctx, "Product", "Product record")
 	if err != nil {
 		log.Fatalf("Failed to create product type: %v", err)
 	}
 
 	// Add category attribute with enum values
-	categoryAttr := sdk.NewAttribute("attr-001", "category", "Product category", sdk.StringType, true)
+	categoryAttr := sdk.NewAttribute("category", "Product category", sdk.StringType, true)
 	categoryAttr.AddValidationRule(&sdk.RequiredRule{})
 	categoryRule := sdk.NewEnumRule([]interface{}{"Electronics", "Clothing", "Furniture", "Appliance", "Other"})
 	categoryAttr.AddValidationRule(categoryRule)
 
 	// Add subcategory attribute with dynamic enum values based on category
-	subcategoryAttr := sdk.NewAttribute("attr-002", "subcategory", "Product subcategory", sdk.StringType, false)
+	subcategoryAttr := sdk.NewAttribute("subcategory", "Product subcategory", sdk.StringType, false)
 
 	// Add price attribute
-	priceAttr := sdk.NewAttribute("attr-003", "price", "Product price", sdk.FloatType, true)
+	priceAttr := sdk.NewAttribute("price", "Product price", sdk.FloatType, true)
 	priceAttr.AddValidationRule(&sdk.RequiredRule{})
 	min := sdk.Float64Ptr(0.01)
 	priceAttr.AddValidationRule(sdk.NewRangeRule(min, nil))
 
 	// Add signature attribute that's required only for expensive items
-	signatureAttr := sdk.NewAttribute("attr-004", "managerSignature", "Manager signature", sdk.StringType, false)
+	signatureAttr := sdk.NewAttribute("managerSignature", "Manager signature", sdk.StringType, false)
 
 	// Add shipping fee attribute with dynamic min/max based on price
-	shippingAttr := sdk.NewAttribute("attr-005", "shippingFee", "Shipping fee", sdk.FloatType, false)
+	shippingAttr := sdk.NewAttribute("shippingFee", "Shipping fee", sdk.FloatType, false)
 
 	// Add all attributes
-	err = client.AddAttribute(ctx, productType.ID, categoryAttr)
+	err = client.AddAttribute(ctx, productType.Name, categoryAttr)
 	if err != nil {
 		log.Fatalf("Failed to add category attribute: %v", err)
 	}
 
-	err = client.AddAttribute(ctx, productType.ID, subcategoryAttr)
+	err = client.AddAttribute(ctx, productType.Name, subcategoryAttr)
 	if err != nil {
 		log.Fatalf("Failed to add subcategory attribute: %v", err)
 	}
 
-	err = client.AddAttribute(ctx, productType.ID, priceAttr)
+	err = client.AddAttribute(ctx, productType.Name, priceAttr)
 	if err != nil {
 		log.Fatalf("Failed to add price attribute: %v", err)
 	}
 
-	err = client.AddAttribute(ctx, productType.ID, signatureAttr)
+	err = client.AddAttribute(ctx, productType.Name, signatureAttr)
 	if err != nil {
 		log.Fatalf("Failed to add signature attribute: %v", err)
 	}
 
-	err = client.AddAttribute(ctx, productType.ID, shippingAttr)
+	err = client.AddAttribute(ctx, productType.Name, shippingAttr)
 	if err != nil {
 		log.Fatalf("Failed to add shipping attribute: %v", err)
 	}

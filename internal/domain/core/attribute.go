@@ -72,8 +72,7 @@ type Cascade struct {
 
 // AttributeDefinition represents a dynamic attribute that can be assigned to a type
 type AttributeDefinition struct {
-	ID              string        // Internal ID, used for database storage
-	Name            string        // Name is the primary key for accessing attributes within a type context
+	Name            string // Name is the primary identifier for this attribute
 	Description     string
 	DataType        DataType
 	Required        bool
@@ -87,10 +86,10 @@ type AttributeDefinition struct {
 }
 
 // NewAttributeDefinition creates a new attribute definition
-func NewAttributeDefinition(id, name, description string, dataType DataType, required bool) *AttributeDefinition {
+// The id parameter is kept for backward compatibility but is no longer used
+func NewAttributeDefinition(name, description string, dataType DataType, required bool) *AttributeDefinition {
 	now := time.Now()
 	return &AttributeDefinition{
-		ID:              id,
 		Name:            name,
 		Description:     description,
 		DataType:        dataType,

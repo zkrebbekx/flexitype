@@ -78,9 +78,6 @@ const (
 	// FlexiTypeServiceQueryInstancesProcedure is the fully-qualified name of the FlexiTypeService's
 	// QueryInstances RPC.
 	FlexiTypeServiceQueryInstancesProcedure = "/flexitype.v1.FlexiTypeService/QueryInstances"
-	// FlexiTypeServiceUpdateInstanceProcedure is the fully-qualified name of the FlexiTypeService's
-	// UpdateInstance RPC.
-	FlexiTypeServiceUpdateInstanceProcedure = "/flexitype.v1.FlexiTypeService/UpdateInstance"
 	// FlexiTypeServiceArchiveInstanceProcedure is the fully-qualified name of the FlexiTypeService's
 	// ArchiveInstance RPC.
 	FlexiTypeServiceArchiveInstanceProcedure = "/flexitype.v1.FlexiTypeService/ArchiveInstance"
@@ -115,7 +112,6 @@ type FlexiTypeServiceClient interface {
 	GetInstanceVersion(context.Context, *connect_go.Request[flexitypev1.GetInstanceVersionRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	GetAllInstanceVersions(context.Context, *connect_go.Request[flexitypev1.GetAllInstanceVersionsRequest]) (*connect_go.Response[flexitypev1.InstanceVersionsResponse], error)
 	QueryInstances(context.Context, *connect_go.Request[flexitypev1.QueryInstancesRequest]) (*connect_go.Response[flexitypev1.QueryInstancesResponse], error)
-	UpdateInstance(context.Context, *connect_go.Request[flexitypev1.UpdateInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	ArchiveInstance(context.Context, *connect_go.Request[flexitypev1.ArchiveInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	UnarchiveInstance(context.Context, *connect_go.Request[flexitypev1.UnarchiveInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	// Schema operations
@@ -208,11 +204,6 @@ func NewFlexiTypeServiceClient(httpClient connect_go.HTTPClient, baseURL string,
 			baseURL+FlexiTypeServiceQueryInstancesProcedure,
 			opts...,
 		),
-		updateInstance: connect_go.NewClient[flexitypev1.UpdateInstanceRequest, flexitypev1.InstanceResponse](
-			httpClient,
-			baseURL+FlexiTypeServiceUpdateInstanceProcedure,
-			opts...,
-		),
 		archiveInstance: connect_go.NewClient[flexitypev1.ArchiveInstanceRequest, flexitypev1.InstanceResponse](
 			httpClient,
 			baseURL+FlexiTypeServiceArchiveInstanceProcedure,
@@ -253,7 +244,6 @@ type flexiTypeServiceClient struct {
 	getInstanceVersion        *connect_go.Client[flexitypev1.GetInstanceVersionRequest, flexitypev1.InstanceResponse]
 	getAllInstanceVersions    *connect_go.Client[flexitypev1.GetAllInstanceVersionsRequest, flexitypev1.InstanceVersionsResponse]
 	queryInstances            *connect_go.Client[flexitypev1.QueryInstancesRequest, flexitypev1.QueryInstancesResponse]
-	updateInstance            *connect_go.Client[flexitypev1.UpdateInstanceRequest, flexitypev1.InstanceResponse]
 	archiveInstance           *connect_go.Client[flexitypev1.ArchiveInstanceRequest, flexitypev1.InstanceResponse]
 	unarchiveInstance         *connect_go.Client[flexitypev1.UnarchiveInstanceRequest, flexitypev1.InstanceResponse]
 	exportTypeSchema          *connect_go.Client[flexitypev1.ExportTypeSchemaRequest, flexitypev1.SchemaResponse]
@@ -335,11 +325,6 @@ func (c *flexiTypeServiceClient) QueryInstances(ctx context.Context, req *connec
 	return c.queryInstances.CallUnary(ctx, req)
 }
 
-// UpdateInstance calls flexitype.v1.FlexiTypeService.UpdateInstance.
-func (c *flexiTypeServiceClient) UpdateInstance(ctx context.Context, req *connect_go.Request[flexitypev1.UpdateInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error) {
-	return c.updateInstance.CallUnary(ctx, req)
-}
-
 // ArchiveInstance calls flexitype.v1.FlexiTypeService.ArchiveInstance.
 func (c *flexiTypeServiceClient) ArchiveInstance(ctx context.Context, req *connect_go.Request[flexitypev1.ArchiveInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error) {
 	return c.archiveInstance.CallUnary(ctx, req)
@@ -380,7 +365,6 @@ type FlexiTypeServiceHandler interface {
 	GetInstanceVersion(context.Context, *connect_go.Request[flexitypev1.GetInstanceVersionRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	GetAllInstanceVersions(context.Context, *connect_go.Request[flexitypev1.GetAllInstanceVersionsRequest]) (*connect_go.Response[flexitypev1.InstanceVersionsResponse], error)
 	QueryInstances(context.Context, *connect_go.Request[flexitypev1.QueryInstancesRequest]) (*connect_go.Response[flexitypev1.QueryInstancesResponse], error)
-	UpdateInstance(context.Context, *connect_go.Request[flexitypev1.UpdateInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	ArchiveInstance(context.Context, *connect_go.Request[flexitypev1.ArchiveInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	UnarchiveInstance(context.Context, *connect_go.Request[flexitypev1.UnarchiveInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	// Schema operations
@@ -469,11 +453,6 @@ func NewFlexiTypeServiceHandler(svc FlexiTypeServiceHandler, opts ...connect_go.
 		svc.QueryInstances,
 		opts...,
 	)
-	flexiTypeServiceUpdateInstanceHandler := connect_go.NewUnaryHandler(
-		FlexiTypeServiceUpdateInstanceProcedure,
-		svc.UpdateInstance,
-		opts...,
-	)
 	flexiTypeServiceArchiveInstanceHandler := connect_go.NewUnaryHandler(
 		FlexiTypeServiceArchiveInstanceProcedure,
 		svc.ArchiveInstance,
@@ -526,8 +505,6 @@ func NewFlexiTypeServiceHandler(svc FlexiTypeServiceHandler, opts ...connect_go.
 			flexiTypeServiceGetAllInstanceVersionsHandler.ServeHTTP(w, r)
 		case FlexiTypeServiceQueryInstancesProcedure:
 			flexiTypeServiceQueryInstancesHandler.ServeHTTP(w, r)
-		case FlexiTypeServiceUpdateInstanceProcedure:
-			flexiTypeServiceUpdateInstanceHandler.ServeHTTP(w, r)
 		case FlexiTypeServiceArchiveInstanceProcedure:
 			flexiTypeServiceArchiveInstanceHandler.ServeHTTP(w, r)
 		case FlexiTypeServiceUnarchiveInstanceProcedure:
@@ -603,10 +580,6 @@ func (UnimplementedFlexiTypeServiceHandler) GetAllInstanceVersions(context.Conte
 
 func (UnimplementedFlexiTypeServiceHandler) QueryInstances(context.Context, *connect_go.Request[flexitypev1.QueryInstancesRequest]) (*connect_go.Response[flexitypev1.QueryInstancesResponse], error) {
 	return nil, connect_go.NewError(connect_go.CodeUnimplemented, errors.New("flexitype.v1.FlexiTypeService.QueryInstances is not implemented"))
-}
-
-func (UnimplementedFlexiTypeServiceHandler) UpdateInstance(context.Context, *connect_go.Request[flexitypev1.UpdateInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error) {
-	return nil, connect_go.NewError(connect_go.CodeUnimplemented, errors.New("flexitype.v1.FlexiTypeService.UpdateInstance is not implemented"))
 }
 
 func (UnimplementedFlexiTypeServiceHandler) ArchiveInstance(context.Context, *connect_go.Request[flexitypev1.ArchiveInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error) {

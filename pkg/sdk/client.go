@@ -37,8 +37,8 @@ func NewClient(typeRepo ports.TypeRepository, instanceRepo ports.InstanceReposit
 }
 
 // SaveType creates a new type definition
-func (c *Client) SaveType(ctx context.Context, id, name, description string) (*core.TypeDefinition, error) {
-	typeDef := core.NewTypeDefinition(id, name, description)
+func (c *Client) SaveType(ctx context.Context, name, description string) (*core.TypeDefinition, error) {
+	typeDef := core.NewTypeDefinition(name, description)
 	err := c.typeRepo.Save(ctx, typeDef)
 	if err != nil {
 		return nil, err
@@ -48,13 +48,13 @@ func (c *Client) SaveType(ctx context.Context, id, name, description string) (*c
 }
 
 // GetType retrieves a type definition by ID
-func (c *Client) GetType(ctx context.Context, id string) (*core.TypeDefinition, error) {
-	return c.typeRepo.GetByID(ctx, id)
+func (c *Client) GetType(ctx context.Context, name string) (*core.TypeDefinition, error) {
+	return c.typeRepo.GetByName(ctx, name)
 }
 
 // AddAttribute adds an attribute to a type definition
-func (c *Client) AddAttribute(ctx context.Context, typeID string, attr *core.AttributeDefinition) error {
-	typeDef, err := c.typeRepo.GetByID(ctx, typeID)
+func (c *Client) AddAttribute(ctx context.Context, typeName string, attr *core.AttributeDefinition) error {
+	typeDef, err := c.typeRepo.GetByName(ctx, typeName)
 	if err != nil {
 		return err
 	}
@@ -110,29 +110,29 @@ func (c *Client) GetInstance(ctx context.Context, id string) (*core.Instance, er
 }
 
 // QueryInstances queries instances by type and attribute filters
-func (c *Client) QueryInstances(ctx context.Context, typeID string, attributeFilters map[string]interface{}) ([]*core.Instance, error) {
-	return c.instanceRepo.Query(ctx, typeID, attributeFilters)
+func (c *Client) QueryInstances(ctx context.Context, typeName string, attributeFilters map[string]interface{}) ([]*core.Instance, error) {
+	return c.instanceRepo.Query(ctx, typeName, attributeFilters)
 }
 
 // SetAttributeDisabledState enables or disables an attribute on a type definition
-func (c *Client) SetAttributeDisabledState(ctx context.Context, typeID, attributeID string, disabled bool) (*core.TypeDefinition, error) {
+func (c *Client) SetAttributeDisabledState(ctx context.Context, typeName, attributeName string, disabled bool) (*core.TypeDefinition, error) {
 	// Get the type
-	typeDef, err := c.typeRepo.GetByID(ctx, typeID)
+	typeDef, err := c.typeRepo.GetByName(ctx, typeName)
 	if err != nil {
-		return nil, fmt.Errorf("type with ID '%s' not found: %w", typeID, err)
+		return nil, fmt.Errorf("type with ID '%s' not found: %w", typeName, err)
 	}
 
 	// Find the attribute
 	var foundAttr *core.AttributeDefinition
 	for _, attr := range typeDef.Attributes {
-		if attr.ID == attributeID {
+		if attr.Name == attributeName {
 			foundAttr = attr
 			break
 		}
 	}
 
 	if foundAttr == nil {
-		return nil, fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeID, typeID)
+		return nil, fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeName, typeName)
 	}
 
 	// If the disabled state is already what we want, no need to update
@@ -172,24 +172,24 @@ func (c *Client) SetAttributeDisabledState(ctx context.Context, typeID, attribut
 }
 
 // AddCascadeToAttribute adds a cascade with specified parameters to an attribute
-func (c *Client) AddCascadeToAttribute(ctx context.Context, typeID, attributeID string, enabled bool, behavior core.CascadeBehavior, logic string, weight int) (*core.TypeDefinition, error) {
+func (c *Client) AddCascadeToAttribute(ctx context.Context, typeName, attributeName string, enabled bool, behavior core.CascadeBehavior, logic string, weight int) (*core.TypeDefinition, error) {
 	// Get the type
-	typeDef, err := c.typeRepo.GetByID(ctx, typeID)
+	typeDef, err := c.typeRepo.GetByName(ctx, typeName)
 	if err != nil {
-		return nil, fmt.Errorf("type with ID '%s' not found: %w", typeID, err)
+		return nil, fmt.Errorf("type with ID '%s' not found: %w", typeName, err)
 	}
 
 	// Find the attribute
 	var foundAttr *core.AttributeDefinition
 	for _, attr := range typeDef.Attributes {
-		if attr.ID == attributeID {
+		if attr.Name == attributeName {
 			foundAttr = attr
 			break
 		}
 	}
 
 	if foundAttr == nil {
-		return nil, fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeID, typeID)
+		return nil, fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeName, typeName)
 	}
 
 	// Add the cascade using logic as the ID for simplicity
@@ -208,26 +208,26 @@ func (c *Client) AddCascadeToAttribute(ctx context.Context, typeID, attributeID 
 }
 
 // AddValidationCascade adds a cascade that modifies validation rules based on conditions
-func (c *Client) AddValidationCascade(ctx context.Context, typeID, attributeID, cascadeID string, enabled bool,
+func (c *Client) AddValidationCascade(ctx context.Context, typeName, attributeName, cascadeID string, enabled bool,
 	behavior core.CascadeBehavior, logic string, weight int, config *core.CascadeValidationConfig) (*core.TypeDefinition, error) {
 
 	// Get the type
-	typeDef, err := c.typeRepo.GetByID(ctx, typeID)
+	typeDef, err := c.typeRepo.GetByName(ctx, typeName)
 	if err != nil {
-		return nil, fmt.Errorf("type with ID '%s' not found: %w", typeID, err)
+		return nil, fmt.Errorf("type with ID '%s' not found: %w", typeName, err)
 	}
 
 	// Find the attribute
 	var foundAttr *core.AttributeDefinition
 	for _, attr := range typeDef.Attributes {
-		if attr.ID == attributeID {
+		if attr.Name == attributeName {
 			foundAttr = attr
 			break
 		}
 	}
 
 	if foundAttr == nil {
-		return nil, fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeID, typeID)
+		return nil, fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeName, typeName)
 	}
 
 	// Add the validation cascade
@@ -246,7 +246,7 @@ func (c *Client) AddValidationCascade(ctx context.Context, typeID, attributeID, 
 }
 
 // AddRequirementCascade adds a cascade that makes a field required/optional based on conditions
-func (c *Client) AddRequirementCascade(ctx context.Context, typeID, attributeID, cascadeID string,
+func (c *Client) AddRequirementCascade(ctx context.Context, typeName, attributeName, cascadeID string,
 	enabled bool, logic string, weight int, targetField string, makeRequired bool) (*core.TypeDefinition, error) {
 
 	action := core.ActionMakeOptional
@@ -259,12 +259,12 @@ func (c *Client) AddRequirementCascade(ctx context.Context, typeID, attributeID,
 		TargetField: targetField,
 	}
 
-	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled,
+	return c.AddValidationCascade(ctx, typeName, attributeName, cascadeID, enabled,
 		core.CascadeRequirement, logic, weight, cfg)
 }
 
 // AddEnumValuesCascade adds a cascade that modifies enum values based on conditions
-func (c *Client) AddEnumValuesCascade(ctx context.Context, typeID, attributeID, cascadeID string,
+func (c *Client) AddEnumValuesCascade(ctx context.Context, typeName, attributeName, cascadeID string,
 	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction,
 	values []interface{}) (*core.TypeDefinition, error) {
 
@@ -274,12 +274,12 @@ func (c *Client) AddEnumValuesCascade(ctx context.Context, typeID, attributeID, 
 		Values:      values,
 	}
 
-	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled,
+	return c.AddValidationCascade(ctx, typeName, attributeName, cascadeID, enabled,
 		core.CascadeEnumValues, logic, weight, cfg)
 }
 
 // AddNumericConstraintCascade adds a cascade that sets min/max values for numeric fields
-func (c *Client) AddNumericConstraintCascade(ctx context.Context, typeID, attributeID, cascadeID string,
+func (c *Client) AddNumericConstraintCascade(ctx context.Context, typeName, attributeName, cascadeID string,
 	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction,
 	value float64) (*core.TypeDefinition, error) {
 
@@ -289,12 +289,12 @@ func (c *Client) AddNumericConstraintCascade(ctx context.Context, typeID, attrib
 		NumericValue: value,
 	}
 
-	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled,
+	return c.AddValidationCascade(ctx, typeName, attributeName, cascadeID, enabled,
 		core.CascadeValidation, logic, weight, cfg)
 }
 
 // AddStringConstraintCascade adds a cascade that sets string constraints (min/max length, pattern)
-func (c *Client) AddStringConstraintCascade(ctx context.Context, typeID, attributeID, cascadeID string,
+func (c *Client) AddStringConstraintCascade(ctx context.Context, typeName, attributeName, cascadeID string,
 	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction,
 	value interface{}) (*core.TypeDefinition, error) {
 
@@ -323,12 +323,12 @@ func (c *Client) AddStringConstraintCascade(ctx context.Context, typeID, attribu
 		return nil, fmt.Errorf("unsupported string constraint action: %s", action)
 	}
 
-	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled,
+	return c.AddValidationCascade(ctx, typeName, attributeName, cascadeID, enabled,
 		core.CascadeValidation, logic, weight, cfg)
 }
 
 // AddDefaultValueCascade adds a cascade that sets a default value based on conditions
-func (c *Client) AddDefaultValueCascade(ctx context.Context, typeID, attributeID, cascadeID string,
+func (c *Client) AddDefaultValueCascade(ctx context.Context, typeName, attributeName, cascadeID string,
 	enabled bool, logic string, weight int, targetField string,
 	defaultValue interface{}) (*core.TypeDefinition, error) {
 
@@ -338,29 +338,29 @@ func (c *Client) AddDefaultValueCascade(ctx context.Context, typeID, attributeID
 		Values:      []interface{}{defaultValue},
 	}
 
-	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled,
+	return c.AddValidationCascade(ctx, typeName, attributeName, cascadeID, enabled,
 		core.CascadeDefaultValue, logic, weight, cfg)
 }
 
 // RemoveCascadeFromAttribute removes a cascade with the specified logic from an attribute
-func (c *Client) RemoveCascadeFromAttribute(ctx context.Context, typeID, attributeID, logic string) (*core.TypeDefinition, error) {
+func (c *Client) RemoveCascadeFromAttribute(ctx context.Context, typeName, attributeName, logic string) (*core.TypeDefinition, error) {
 	// Get the type
-	typeDef, err := c.typeRepo.GetByID(ctx, typeID)
+	typeDef, err := c.typeRepo.GetByName(ctx, typeName)
 	if err != nil {
-		return nil, fmt.Errorf("type with ID '%s' not found: %w", typeID, err)
+		return nil, fmt.Errorf("type with ID '%s' not found: %w", typeName, err)
 	}
 
 	// Find the attribute
 	var foundAttr *core.AttributeDefinition
 	for _, attr := range typeDef.Attributes {
-		if attr.ID == attributeID {
+		if attr.Name == attributeName {
 			foundAttr = attr
 			break
 		}
 	}
 
 	if foundAttr == nil {
-		return nil, fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeID, typeID)
+		return nil, fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeName, typeName)
 	}
 
 	// Remove the cascade
@@ -387,7 +387,7 @@ func (c *Client) UpdateInstance(ctx context.Context, id string, attributes map[s
 	}
 
 	// Get the latest type definition
-	latestTypeDef, err := c.typeRepo.GetByID(ctx, instance.TypeDefinition.ID)
+	latestTypeDef, err := c.typeRepo.GetByName(ctx, instance.TypeDefinition.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get latest type definition: %w", err)
 	}
@@ -429,24 +429,24 @@ func (c *Client) UpdateInstance(ctx context.Context, id string, attributes map[s
 }
 
 // DeleteAttribute removes an attribute from a type definition
-func (c *Client) DeleteAttribute(ctx context.Context, typeID string, attributeID string) error {
+func (c *Client) DeleteAttribute(ctx context.Context, typeName string, attributeName string) error {
 	// Get the type
-	typeDef, err := c.typeRepo.GetByID(ctx, typeID)
+	typeDef, err := c.typeRepo.GetByName(ctx, typeName)
 	if err != nil {
-		return fmt.Errorf("type with ID '%s' not found: %w", typeID, err)
+		return fmt.Errorf("type with ID '%s' not found: %w", typeName, err)
 	}
 
 	// Find the attribute to be deleted
 	var attributeToDelete *core.AttributeDefinition
 	for _, attr := range typeDef.Attributes {
-		if attr.ID == attributeID {
+		if attr.Name == attributeName {
 			attributeToDelete = attr
 			break
 		}
 	}
 
 	if attributeToDelete == nil {
-		return fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeID, typeID)
+		return fmt.Errorf("attribute with ID '%s' not found in type '%s'", attributeName, typeName)
 	}
 
 	// Before removing, check if any other attributes reference this one in their cascades
@@ -469,7 +469,7 @@ func (c *Client) DeleteAttribute(ctx context.Context, typeID string, attributeID
 	// Now actually remove the attribute
 	newAttributes := make([]*core.AttributeDefinition, 0, len(typeDef.Attributes))
 	for _, attr := range typeDef.Attributes {
-		if attr.ID != attributeID {
+		if attr.Name != attributeName {
 			newAttributes = append(newAttributes, attr)
 		}
 	}

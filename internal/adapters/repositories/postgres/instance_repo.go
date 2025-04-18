@@ -31,12 +31,12 @@ func (r *InstanceRepositoryImpl) Save(ctx context.Context, instance *core.Instan
 	// Insert or update the instance
 	instanceQuery := `
 		INSERT INTO flexitype.instance (
-			id, version, type_id, type_version, created_at, updated_at, archived_at
+			id, version, type_name, type_version, created_at, updated_at, archived_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7
 		)
 		ON CONFLICT (id, version) DO UPDATE SET
-			type_id = $3,
+			type_name = $3,
 			type_version = $4,
 			updated_at = $6,
 			archived_at = $7
@@ -47,7 +47,7 @@ func (r *InstanceRepositoryImpl) Save(ctx context.Context, instance *core.Instan
 		instanceQuery,
 		instance.ID,
 		instance.Version,
-		instance.TypeDefinition.ID,
+		instance.TypeDefinition.Name,
 		instance.TypeVersion,
 		instance.CreatedAt,
 		instance.UpdatedAt,
@@ -79,7 +79,7 @@ func (r *InstanceRepositoryImpl) Save(ctx context.Context, instance *core.Instan
 }
 
 // saveAttributeValue saves a single attribute value
-func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx interface{}, instanceID string, instanceVersion int, attrID string, value interface{}, isDefault bool, listIndex int) error {
+func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx interface{}, instanceID string, instanceVersion int, attrName string, value interface{}, isDefault bool, listIndex int) error {
 	// Skip nil values
 	if value == nil {
 		return nil
@@ -88,33 +88,33 @@ func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx inte
 	// Handle different types of values
 	switch v := value.(type) {
 	case string:
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "string", v, nil, nil, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "string", v, nil, nil, nil, nil, isDefault, listIndex)
 		return err
 	case int, int8, int16, int32, int64:
 		intVal := reflect.ValueOf(v).Int()
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "int", nil, intVal, nil, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "int", nil, intVal, nil, nil, nil, isDefault, listIndex)
 		return err
 	case float32, float64:
 		floatVal := reflect.ValueOf(v).Float()
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "float", nil, nil, floatVal, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "float", nil, nil, floatVal, nil, nil, isDefault, listIndex)
 		return err
 	case bool:
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "boolean", nil, nil, nil, v, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "boolean", nil, nil, nil, v, nil, isDefault, listIndex)
 		return err
 	case time.Time:
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "date", nil, nil, nil, nil, v, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "date", nil, nil, nil, nil, v, isDefault, listIndex)
 		return err
 	case []interface{}:
 		// Handle arrays
 		for i, item := range v {
-			if err := r.saveAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, item, isDefault, i); err != nil {
+			if err := r.saveAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, item, isDefault, i); err != nil {
 				return err
 			}
 		}
 		return nil
 	case map[string]interface{}:
 		// Handle objects by creating an attribute value and then object_value entries
-		attrValueID, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "object", nil, nil, nil, nil, nil, isDefault, listIndex)
+		attrValueID, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "object", nil, nil, nil, nil, nil, isDefault, listIndex)
 		if err != nil {
 			return err
 		}
@@ -129,7 +129,7 @@ func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx inte
 	default:
 		// Convert unknown types to string
 		stringVal := fmt.Sprintf("%v", v)
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "string", stringVal, nil, nil, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "string", stringVal, nil, nil, nil, nil, isDefault, listIndex)
 		return err
 	}
 }
@@ -196,7 +196,7 @@ func (r *InstanceRepositoryImpl) insertAttributeValue(
 	tx interface{},
 	instanceID string,
 	instanceVersion int,
-	attrID,
+	attrName,
 	valueType string,
 	stringValue interface{},
 	intValue interface{},
@@ -208,7 +208,7 @@ func (r *InstanceRepositoryImpl) insertAttributeValue(
 ) (int64, error) {
 	query := `
 		INSERT INTO flexitype.attribute_value (
-			instance_id, instance_version, attribute_id, value_type, string_value, int_value, float_value, boolean_value, date_value, is_default, list_index
+			instance_id, instance_version, attribute_name, value_type, string_value, int_value, float_value, boolean_value, date_value, is_default, list_index
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 		)
@@ -219,7 +219,7 @@ func (r *InstanceRepositoryImpl) insertAttributeValue(
 	var err error
 
 	// Use the database connection directly
-	err = r.repo.db.QueryRowContext(ctx, query, instanceID, instanceVersion, attrID, valueType, stringValue, intValue, floatValue, boolValue, dateValue, isDefault, listIndex).Scan(&id)
+	err = r.repo.db.QueryRowContext(ctx, query, instanceID, instanceVersion, attrName, valueType, stringValue, intValue, floatValue, boolValue, dateValue, isDefault, listIndex).Scan(&id)
 
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert attribute value: %w", err)
@@ -270,12 +270,12 @@ func (r *InstanceRepositoryImpl) SaveMany(ctx context.Context, instances []*core
 		// Insert or update the instance
 		instanceQuery := `
 			INSERT INTO flexitype.instance (
-				id, version, type_id, type_version, created_at, updated_at, archived_at
+				id, version, type_name, type_version, created_at, updated_at, archived_at
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7
 			)
 			ON CONFLICT (id, version) DO UPDATE SET
-				type_id = $3,
+				type_name = $3,
 				type_version = $4,
 				updated_at = $6,
 				archived_at = $7
@@ -286,7 +286,7 @@ func (r *InstanceRepositoryImpl) SaveMany(ctx context.Context, instances []*core
 			instanceQuery,
 			instance.ID,
 			instance.Version,
-			instance.TypeDefinition.ID,
+			instance.TypeDefinition.Name,
 			instance.TypeVersion,
 			instance.CreatedAt,
 			instance.UpdatedAt,
@@ -321,7 +321,7 @@ func (r *InstanceRepositoryImpl) SaveMany(ctx context.Context, instances []*core
 // GetByID retrieves the latest instance by ID
 func (r *InstanceRepositoryImpl) GetByID(ctx context.Context, id string) (*core.Instance, error) {
 	query := `
-		SELECT id, version, type_id, type_version, created_at, updated_at, archived_at
+		SELECT id, version, type_name, type_version, created_at, updated_at, archived_at
 		FROM flexitype.instance
 		WHERE id = $1
 		ORDER BY version DESC
@@ -331,7 +331,7 @@ func (r *InstanceRepositoryImpl) GetByID(ctx context.Context, id string) (*core.
 	var instance struct {
 		ID          string     `db:"id"`
 		Version     int        `db:"version"`
-		TypeID      string     `db:"type_id"`
+		TypeName    string     `db:"type_name"`
 		TypeVersion int        `db:"type_version"`
 		CreatedAt   time.Time  `db:"created_at"`
 		UpdatedAt   time.Time  `db:"updated_at"`
@@ -344,10 +344,10 @@ func (r *InstanceRepositoryImpl) GetByID(ctx context.Context, id string) (*core.
 	}
 
 	// Get the type definition - with specific version
-	typeDef, err := r.typeRepo.GetByIDAndVersion(ctx, instance.TypeID, instance.TypeVersion)
+	typeDef, err := r.typeRepo.GetByNameAndVersion(ctx, instance.TypeName, instance.TypeVersion)
 	if err != nil {
 		// Fallback to latest type version if specific version not found
-		typeDef, err = r.typeRepo.GetByID(ctx, instance.TypeID)
+		typeDef, err = r.typeRepo.GetByName(ctx, instance.TypeName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get type definition: %w", err)
 		}
@@ -374,13 +374,72 @@ func (r *InstanceRepositoryImpl) GetByID(ctx context.Context, id string) (*core.
 	return result, nil
 }
 
+// GetByIDs retrieves multiple instances by IDs
+func (r *InstanceRepositoryImpl) GetByIDs(ctx context.Context, ids []string) ([]*core.Instance, error) {
+	if len(ids) == 0 {
+		return []*core.Instance{}, nil
+	}
+
+	// Create a placeholder for each ID
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+
+	// Build the query to get the latest version of each instance
+	query := fmt.Sprintf(`
+		WITH latest_versions AS (
+			SELECT id, MAX(version) as max_version
+			FROM flexitype.instance
+			WHERE id IN (%s)
+			GROUP BY id
+		)
+		SELECT i.id, i.version, i.type_name, i.type_version, i.created_at, i.updated_at, i.archived_at
+		FROM flexitype.instance i
+		JOIN latest_versions lv ON i.id = lv.id AND i.version = lv.max_version
+	`, strings.Join(placeholders, ","))
+
+	rows, err := r.repo.db.QueryxContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query instances: %w", err)
+	}
+	defer rows.Close()
+
+	// We can reuse our scanInstances method for consistent scanning logic
+	instances, _, err := r.scanInstances(ctx, rows, len(ids))
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if all requested IDs were found
+	foundIDs := make(map[string]bool)
+	for _, instance := range instances {
+		foundIDs[instance.ID] = true
+	}
+
+	// Check if all requested IDs were found
+	if len(foundIDs) != len(ids) {
+		missingIDs := make([]string, 0)
+		for _, id := range ids {
+			if !foundIDs[id] {
+				missingIDs = append(missingIDs, id)
+			}
+		}
+		return instances, fmt.Errorf("some instances not found: %v", missingIDs)
+	}
+
+	return instances, nil
+}
+
 // getAttributeValues retrieves all attribute values for an instance version
 func (r *InstanceRepositoryImpl) getAttributeValues(ctx context.Context, instanceID string, instanceVersion int) (map[string]interface{}, error) {
 	query := `
-		SELECT id, attribute_id, value_type, string_value, int_value, float_value, boolean_value, date_value, list_index
+		SELECT id, attribute_name, value_type, string_value, int_value, float_value, boolean_value, date_value, list_index
 		FROM flexitype.attribute_value
 		WHERE instance_id = $1 AND instance_version = $2
-		ORDER BY attribute_id, list_index
+		ORDER BY attribute_name, list_index
 	`
 
 	rows, err := r.repo.db.QueryContext(ctx, query, instanceID, instanceVersion)
@@ -583,7 +642,7 @@ func (r *InstanceRepositoryImpl) getObjectValues(ctx context.Context, attributeV
 // GetByIDAndVersion retrieves a specific version of an instance
 func (r *InstanceRepositoryImpl) GetByIDAndVersion(ctx context.Context, id string, version int) (*core.Instance, error) {
 	query := `
-		SELECT id, version, type_id, type_version, created_at, updated_at, archived_at
+		SELECT id, version, type_name, type_version, created_at, updated_at, archived_at
 		FROM flexitype.instance
 		WHERE id = $1 AND version = $2
 	`
@@ -591,7 +650,7 @@ func (r *InstanceRepositoryImpl) GetByIDAndVersion(ctx context.Context, id strin
 	var instance struct {
 		ID          string     `db:"id"`
 		Version     int        `db:"version"`
-		TypeID      string     `db:"type_id"`
+		TypeName    string     `db:"type_name"`
 		TypeVersion int        `db:"type_version"`
 		CreatedAt   time.Time  `db:"created_at"`
 		UpdatedAt   time.Time  `db:"updated_at"`
@@ -604,10 +663,10 @@ func (r *InstanceRepositoryImpl) GetByIDAndVersion(ctx context.Context, id strin
 	}
 
 	// Get the type definition with specific version
-	typeDef, err := r.typeRepo.GetByIDAndVersion(ctx, instance.TypeID, instance.TypeVersion)
+	typeDef, err := r.typeRepo.GetByNameAndVersion(ctx, instance.TypeName, instance.TypeVersion)
 	if err != nil {
 		// Fallback to latest type version if specific version not found
-		typeDef, err = r.typeRepo.GetByID(ctx, instance.TypeID)
+		typeDef, err = r.typeRepo.GetByName(ctx, instance.TypeName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get type definition: %w", err)
 		}
@@ -654,7 +713,7 @@ func (r *InstanceRepositoryImpl) GetLatestVersion(ctx context.Context, id string
 // GetAllVersions retrieves all versions of an instance
 func (r *InstanceRepositoryImpl) GetAllVersions(ctx context.Context, id string) ([]*core.Instance, error) {
 	query := `
-		SELECT id, version, type_id, type_version, created_at, updated_at, archived_at
+		SELECT id, version, type_name, type_version, created_at, updated_at, archived_at
 		FROM flexitype.instance
 		WHERE id = $1
 		ORDER BY version ASC
@@ -689,7 +748,7 @@ func (r *InstanceRepositoryImpl) scanInstances(ctx context.Context, rows *sqlx.R
 		var instance struct {
 			ID          string     `db:"id"`
 			Version     int        `db:"version"`
-			TypeID      string     `db:"type_id"`
+			TypeName    string     `db:"type_name"`
 			TypeVersion int        `db:"type_version"`
 			CreatedAt   time.Time  `db:"created_at"`
 			UpdatedAt   time.Time  `db:"updated_at"`
@@ -705,22 +764,22 @@ func (r *InstanceRepositoryImpl) scanInstances(ctx context.Context, rows *sqlx.R
 		var ok bool
 
 		// Check if we have versions of this type in cache
-		if versionMap, hasType := typeVersionCache[instance.TypeID]; hasType {
+		if versionMap, hasType := typeVersionCache[instance.TypeName]; hasType {
 			// Check if we have this specific version
 			if typeDef, ok = versionMap[instance.TypeVersion]; !ok {
 				// No specific version in cache, fetch it
 				var err error
-				typeDef, err = r.typeRepo.GetByIDAndVersion(ctx, instance.TypeID, instance.TypeVersion)
+				typeDef, err = r.typeRepo.GetByNameAndVersion(ctx, instance.TypeName, instance.TypeVersion)
 				if err != nil {
 					// Fallback to latest version if not found
-					typeDef, ok = typeCache[instance.TypeID]
+					typeDef, ok = typeCache[instance.TypeName]
 					if !ok {
 						var err error
-						typeDef, err = r.typeRepo.GetByID(ctx, instance.TypeID)
+						typeDef, err = r.typeRepo.GetByName(ctx, instance.TypeName)
 						if err != nil {
 							return nil, 0, fmt.Errorf("failed to get type definition: %w", err)
 						}
-						typeCache[instance.TypeID] = typeDef
+						typeCache[instance.TypeName] = typeDef
 					}
 				} else {
 					// Add to version cache
@@ -730,21 +789,21 @@ func (r *InstanceRepositoryImpl) scanInstances(ctx context.Context, rows *sqlx.R
 		} else {
 			// No versions of this type in cache
 			var err error
-			typeDef, err = r.typeRepo.GetByIDAndVersion(ctx, instance.TypeID, instance.TypeVersion)
+			typeDef, err = r.typeRepo.GetByNameAndVersion(ctx, instance.TypeName, instance.TypeVersion)
 			if err != nil {
 				// Fallback to latest version
-				typeDef, ok = typeCache[instance.TypeID]
+				typeDef, ok = typeCache[instance.TypeName]
 				if !ok {
 					var err error
-					typeDef, err = r.typeRepo.GetByID(ctx, instance.TypeID)
+					typeDef, err = r.typeRepo.GetByName(ctx, instance.TypeName)
 					if err != nil {
 						return nil, 0, fmt.Errorf("failed to get type definition: %w", err)
 					}
-					typeCache[instance.TypeID] = typeDef
+					typeCache[instance.TypeName] = typeDef
 				}
 			} else {
 				// Initialize version map and cache the type version
-				typeVersionCache[instance.TypeID] = map[int]*core.TypeDefinition{
+				typeVersionCache[instance.TypeName] = map[int]*core.TypeDefinition{
 					instance.TypeVersion: typeDef,
 				}
 			}
@@ -840,15 +899,15 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 	argIdx := 1
 
 	baseQuery := `
-		SELECT id, version, type_id, type_version, created_at, updated_at, archived_at
+		SELECT id, version, type_name, type_version, created_at, updated_at, archived_at
 		FROM flexitype.instance
 		WHERE 1=1
 	`
 
 	// Filter by type ID if specified
-	if options.TypeID != "" {
-		whereConditions = append(whereConditions, fmt.Sprintf("type_id = $%d", argIdx))
-		queryArgs = append(queryArgs, options.TypeID)
+	if options.TypeName != "" {
+		whereConditions = append(whereConditions, fmt.Sprintf("type_name = $%d", argIdx))
+		queryArgs = append(queryArgs, options.TypeName)
 		argIdx++
 	}
 
@@ -881,12 +940,12 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 		query := fmt.Sprintf(`
 			WITH ranked AS (
 				SELECT
-					id, version, type_id, type_version, created_at, updated_at, archived_at,
+					id, version, type_name, type_version, created_at, updated_at, archived_at,
 					ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
 				FROM flexitype.instance
 				WHERE %s
 			)
-			SELECT id, version, type_id, type_version, created_at, updated_at, archived_at
+			SELECT id, version, type_name, type_version, created_at, updated_at, archived_at
 			FROM ranked
 			WHERE rn = 1
 		`, strings.Join(whereConditions, " AND "))
@@ -916,27 +975,27 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 			for attrID, attrValue := range options.AttributeFilters {
 				switch v := attrValue.(type) {
 				case string:
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND string_value = $%d)", argIdx, argIdx+1))
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND string_value = $%d)", argIdx, argIdx+1))
 					queryArgs = append(queryArgs, attrID, v)
 					argIdx += 2
 				case int, int8, int16, int32, int64:
 					intVal := reflect.ValueOf(v).Int()
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND int_value = $%d)", argIdx, argIdx+1))
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND int_value = $%d)", argIdx, argIdx+1))
 					queryArgs = append(queryArgs, attrID, intVal)
 					argIdx += 2
 				case float32, float64:
 					floatVal := reflect.ValueOf(v).Float()
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND float_value = $%d)", argIdx, argIdx+1))
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND float_value = $%d)", argIdx, argIdx+1))
 					queryArgs = append(queryArgs, attrID, floatVal)
 					argIdx += 2
 				case bool:
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND boolean_value = $%d)", argIdx, argIdx+1))
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND boolean_value = $%d)", argIdx, argIdx+1))
 					queryArgs = append(queryArgs, attrID, v)
 					argIdx += 2
 				default:
 					// Convert to string for other types
 					stringVal := fmt.Sprintf("%v", v)
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND string_value = $%d)", argIdx, argIdx+1))
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND string_value = $%d)", argIdx, argIdx+1))
 					queryArgs = append(queryArgs, attrID, stringVal)
 					argIdx += 2
 				}
@@ -955,8 +1014,8 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 			switch options.OrderBy {
 			case "id":
 				orderBy = "id"
-			case "type_id":
-				orderBy = "type_id"
+			case "type_name":
+				orderBy = "type_name"
 			case "version":
 				orderBy = "version"
 			case "created_at":
@@ -1002,7 +1061,7 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 
 		// Count total instances
 		countQuery := baseQuery
-		countQuery = strings.Replace(countQuery, "SELECT id, version, type_id, type_version, created_at, updated_at, archived_at", "SELECT COUNT(*)", 1)
+		countQuery = strings.Replace(countQuery, "SELECT id, version, type_name, type_version, created_at, updated_at, archived_at", "SELECT COUNT(*)", 1)
 
 		var totalCount int
 		err := r.repo.db.QueryRowContext(ctx, countQuery, queryArgs...).Scan(&totalCount)
@@ -1022,27 +1081,27 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 			for attrID, attrValue := range options.AttributeFilters {
 				switch v := attrValue.(type) {
 				case string:
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND string_value = $%d)", argIdx, argIdx+1))
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND string_value = $%d)", argIdx, argIdx+1))
 					queryArgs = append(queryArgs, attrID, v)
 					argIdx += 2
 				case int, int8, int16, int32, int64:
 					intVal := reflect.ValueOf(v).Int()
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND int_value = $%d)", argIdx, argIdx+1))
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND int_value = $%d)", argIdx, argIdx+1))
 					queryArgs = append(queryArgs, attrID, intVal)
 					argIdx += 2
 				case float32, float64:
 					floatVal := reflect.ValueOf(v).Float()
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND float_value = $%d)", argIdx, argIdx+1))
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND float_value = $%d)", argIdx, argIdx+1))
 					queryArgs = append(queryArgs, attrID, floatVal)
 					argIdx += 2
 				case bool:
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND boolean_value = $%d)", argIdx, argIdx+1))
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND boolean_value = $%d)", argIdx, argIdx+1))
 					queryArgs = append(queryArgs, attrID, v)
 					argIdx += 2
 				default:
 					// Convert to string for other types
 					stringVal := fmt.Sprintf("%v", v)
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND string_value = $%d)", argIdx, argIdx+1))
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND string_value = $%d)", argIdx, argIdx+1))
 					queryArgs = append(queryArgs, attrID, stringVal)
 					argIdx += 2
 				}
@@ -1061,8 +1120,8 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 			switch options.OrderBy {
 			case "id":
 				orderBy = "id"
-			case "type_id":
-				orderBy = "type_id"
+			case "type_name":
+				orderBy = "type_name"
 			case "version":
 				orderBy = "version"
 			case "created_at":
@@ -1103,69 +1162,10 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 	}
 }
 
-// GetByIDs retrieves multiple instances by IDs
-func (r *InstanceRepositoryImpl) GetByIDs(ctx context.Context, ids []string) ([]*core.Instance, error) {
-	if len(ids) == 0 {
-		return []*core.Instance{}, nil
-	}
-
-	// Create a placeholder for each ID
-	placeholders := make([]string, len(ids))
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = id
-	}
-
-	// Build the query to get the latest version of each instance
-	query := fmt.Sprintf(`
-		WITH latest_versions AS (
-			SELECT id, MAX(version) as max_version
-			FROM flexitype.instance
-			WHERE id IN (%s)
-			GROUP BY id
-		)
-		SELECT i.id, i.version, i.type_id, i.type_version, i.created_at, i.updated_at, i.archived_at
-		FROM flexitype.instance i
-		JOIN latest_versions lv ON i.id = lv.id AND i.version = lv.max_version
-	`, strings.Join(placeholders, ","))
-
-	rows, err := r.repo.db.QueryxContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query instances: %w", err)
-	}
-	defer rows.Close()
-
-	// We can reuse our scanInstances method for consistent scanning logic
-	instances, _, err := r.scanInstances(ctx, rows, len(ids))
-	if err != nil {
-		return nil, err
-	}
-
-	// Check if all requested IDs were found
-	foundIDs := make(map[string]bool)
-	for _, instance := range instances {
-		foundIDs[instance.ID] = true
-	}
-
-	// Check if all requested IDs were found
-	if len(foundIDs) != len(ids) {
-		missingIDs := make([]string, 0)
-		for _, id := range ids {
-			if !foundIDs[id] {
-				missingIDs = append(missingIDs, id)
-			}
-		}
-		return instances, fmt.Errorf("some instances not found: %v", missingIDs)
-	}
-
-	return instances, nil
-}
-
 // Query retrieves instances by type ID and attribute filters
-func (r *InstanceRepositoryImpl) Query(ctx context.Context, typeID string, attributeFilters map[string]interface{}) ([]*core.Instance, error) {
+func (r *InstanceRepositoryImpl) Query(ctx context.Context, typeName string, attributeFilters map[string]interface{}) ([]*core.Instance, error) {
 	options := &ports.QueryOptions{
-		TypeID:            typeID,
+		TypeName:          typeName,
 		AttributeFilters:  attributeFilters,
 		IncludeArchived:   false, // By default, exclude archived instances
 		LatestVersionOnly: true,  // By default, only return latest versions

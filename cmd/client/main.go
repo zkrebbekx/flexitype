@@ -40,14 +40,14 @@ func main() {
 		}
 
 		// Create a new type
-		req := &flexitypev1.CreateTypeRequest{
+		req := &flexitypev1.SaveTypeRequest{
 			Id:           *typeID,
 			Name:         *name,
 			Description:  *description,
 			ParentTypeId: *parentID,
 		}
 
-		res, err := client.CreateType(ctx, connect.NewRequest(req))
+		res, err := client.SaveType(ctx, connect.NewRequest(req))
 		if err != nil {
 			log.Fatalf("Failed to create type: %v", err)
 		}

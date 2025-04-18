@@ -11,14 +11,14 @@ import (
 
 // Instance represents an instance of a type with attribute values
 type Instance struct {
-	ID             string          // External ID used by consumers to identify the instance
-	Version        int             // Internal version number for the instance
+	ID             string // External ID used by consumers to identify the instance
+	Version        int    // Internal version number for the instance
 	TypeDefinition *TypeDefinition
-	TypeVersion    int             // Stores the version of the type definition this instance was created with
+	TypeVersion    int // Stores the version of the type definition this instance was created with
 	Attributes     map[string]interface{}
-	CreatedAt      time.Time       // When the instance was created
-	UpdatedAt      time.Time       // When the instance was last updated
-	ArchivedAt     *time.Time      // Nullable timestamp when the instance was archived
+	CreatedAt      time.Time  // When the instance was created
+	UpdatedAt      time.Time  // When the instance was last updated
+	ArchivedAt     *time.Time // Nullable timestamp when the instance was archived
 }
 
 // NewInstance creates a new instance of a type
@@ -39,12 +39,12 @@ func NewInstance(id string, typeDef *TypeDefinition) *Instance {
 func NewInstanceVersion(existingInstance *Instance, newVersion int) *Instance {
 	now := time.Now()
 	return &Instance{
-		ID:             existingInstance.ID,         // Maintain the same ID
-		Version:        newVersion,                  // Set the new version number
+		ID:             existingInstance.ID, // Maintain the same ID
+		Version:        newVersion,          // Set the new version number
 		TypeDefinition: existingInstance.TypeDefinition,
 		TypeVersion:    existingInstance.TypeVersion,
 		Attributes:     make(map[string]interface{}),
-		CreatedAt:      existingInstance.CreatedAt,  // Preserve original creation time
+		CreatedAt:      existingInstance.CreatedAt, // Preserve original creation time
 		UpdatedAt:      now,
 	}
 }
@@ -391,7 +391,7 @@ func (i *Instance) Validate() []error {
 			// No dynamic rules, use original validation
 			if attrDef.Required {
 				// Check if attribute is set
-				value, exists := i.Attributes[attrDef.Name]
+				value, exists := i.Attributes[attrDef.ID]
 				if !exists && attrDef.DefaultValue == nil {
 					errors = append(errors, fmt.Errorf("required attribute '%s' is missing", attrDef.Name))
 					continue
@@ -549,7 +549,7 @@ func (i *Instance) MigrateToLatestVersion() []error {
 			newAttributes[attrName] = value
 		}
 	}
-	
+
 	// Replace the attributes with the filtered set
 	i.Attributes = newAttributes
 
@@ -571,9 +571,9 @@ func (i *Instance) MigrateToLatestVersion() []error {
 }
 
 // FindAttributeDefinition finds the attribute definition for a given name
-func (i *Instance) FindAttributeDefinition(name string) *AttributeDefinition {
+func (i *Instance) FindAttributeDefinition(idOrName string) *AttributeDefinition {
 	for _, attr := range i.TypeDefinition.GetAllAttributes() {
-		if attr.Name == name {
+		if attr.ID == idOrName || attr.Name == idOrName {
 			return attr
 		}
 	}

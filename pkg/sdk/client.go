@@ -36,8 +36,8 @@ func NewClient(typeRepo ports.TypeRepository, instanceRepo ports.InstanceReposit
 	}
 }
 
-// CreateType creates a new type definition
-func (c *Client) CreateType(ctx context.Context, id, name, description string) (*core.TypeDefinition, error) {
+// SaveType creates a new type definition
+func (c *Client) SaveType(ctx context.Context, id, name, description string) (*core.TypeDefinition, error) {
 	typeDef := core.NewTypeDefinition(id, name, description)
 	err := c.typeRepo.Save(ctx, typeDef)
 	if err != nil {
@@ -60,7 +60,7 @@ func (c *Client) AddAttribute(ctx context.Context, typeID string, attr *core.Att
 	}
 
 	typeDef.AddAttribute(attr)
-	
+
 	// Validate cascades to ensure they reference existing attributes and have no circular dependencies
 	if errors := typeDef.ValidateCascades(); len(errors) > 0 {
 		// Combine all validation errors into a single message
@@ -70,15 +70,15 @@ func (c *Client) AddAttribute(ctx context.Context, typeID string, attr *core.Att
 		}
 		return fmt.Errorf("cascade validation failed: %s", errorMsgs)
 	}
-	
+
 	// Increment the version since the type definition is changing
 	typeDef.IncrementVersion()
-	
+
 	return c.typeRepo.Save(ctx, typeDef)
 }
 
-// CreateInstance creates a new instance of a type
-func (c *Client) CreateInstance(ctx context.Context, id string, typeDef *core.TypeDefinition, attributes map[string]interface{}) (*core.Instance, error) {
+// SaveInstance creates a new instance of a type
+func (c *Client) SaveInstance(ctx context.Context, id string, typeDef *core.TypeDefinition, attributes map[string]interface{}) (*core.Instance, error) {
 	instance := core.NewInstance(id, typeDef)
 
 	// Set all provided attributes
@@ -149,7 +149,7 @@ func (c *Client) SetAttributeDisabledState(ctx context.Context, typeID, attribut
 		if errors := typeDef.ValidateCascades(); len(errors) > 0 {
 			// Revert the change since validation failed
 			foundAttr.SetDisabled(!disabled)
-			
+
 			// Combine validation errors
 			errorMsgs := make([]string, 0, len(errors))
 			for _, err := range errors {
@@ -208,9 +208,9 @@ func (c *Client) AddCascadeToAttribute(ctx context.Context, typeID, attributeID 
 }
 
 // AddValidationCascade adds a cascade that modifies validation rules based on conditions
-func (c *Client) AddValidationCascade(ctx context.Context, typeID, attributeID, cascadeID string, enabled bool, 
+func (c *Client) AddValidationCascade(ctx context.Context, typeID, attributeID, cascadeID string, enabled bool,
 	behavior core.CascadeBehavior, logic string, weight int, config *core.CascadeValidationConfig) (*core.TypeDefinition, error) {
-	
+
 	// Get the type
 	typeDef, err := c.typeRepo.GetByID(ctx, typeID)
 	if err != nil {
@@ -246,63 +246,63 @@ func (c *Client) AddValidationCascade(ctx context.Context, typeID, attributeID, 
 }
 
 // AddRequirementCascade adds a cascade that makes a field required/optional based on conditions
-func (c *Client) AddRequirementCascade(ctx context.Context, typeID, attributeID, cascadeID string, 
+func (c *Client) AddRequirementCascade(ctx context.Context, typeID, attributeID, cascadeID string,
 	enabled bool, logic string, weight int, targetField string, makeRequired bool) (*core.TypeDefinition, error) {
-	
+
 	action := core.ActionMakeOptional
 	if makeRequired {
 		action = core.ActionMakeRequired
 	}
-	
+
 	cfg := &core.CascadeValidationConfig{
 		Action:      action,
 		TargetField: targetField,
 	}
-	
-	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled, 
+
+	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled,
 		core.CascadeRequirement, logic, weight, cfg)
 }
 
 // AddEnumValuesCascade adds a cascade that modifies enum values based on conditions
-func (c *Client) AddEnumValuesCascade(ctx context.Context, typeID, attributeID, cascadeID string, 
-	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction, 
+func (c *Client) AddEnumValuesCascade(ctx context.Context, typeID, attributeID, cascadeID string,
+	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction,
 	values []interface{}) (*core.TypeDefinition, error) {
-	
+
 	cfg := &core.CascadeValidationConfig{
 		Action:      action,
 		TargetField: targetField,
 		Values:      values,
 	}
-	
-	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled, 
+
+	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled,
 		core.CascadeEnumValues, logic, weight, cfg)
 }
 
 // AddNumericConstraintCascade adds a cascade that sets min/max values for numeric fields
-func (c *Client) AddNumericConstraintCascade(ctx context.Context, typeID, attributeID, cascadeID string, 
-	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction, 
+func (c *Client) AddNumericConstraintCascade(ctx context.Context, typeID, attributeID, cascadeID string,
+	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction,
 	value float64) (*core.TypeDefinition, error) {
-	
+
 	cfg := &core.CascadeValidationConfig{
 		Action:       action,
 		TargetField:  targetField,
 		NumericValue: value,
 	}
-	
-	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled, 
+
+	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled,
 		core.CascadeValidation, logic, weight, cfg)
 }
 
 // AddStringConstraintCascade adds a cascade that sets string constraints (min/max length, pattern)
-func (c *Client) AddStringConstraintCascade(ctx context.Context, typeID, attributeID, cascadeID string, 
-	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction, 
+func (c *Client) AddStringConstraintCascade(ctx context.Context, typeID, attributeID, cascadeID string,
+	enabled bool, logic string, weight int, targetField string, action core.CascadeValidationAction,
 	value interface{}) (*core.TypeDefinition, error) {
-	
+
 	cfg := &core.CascadeValidationConfig{
 		Action:      action,
 		TargetField: targetField,
 	}
-	
+
 	// Handle different actions
 	switch action {
 	case core.ActionSetMinLength, core.ActionSetMaxLength:
@@ -322,23 +322,23 @@ func (c *Client) AddStringConstraintCascade(ctx context.Context, typeID, attribu
 	default:
 		return nil, fmt.Errorf("unsupported string constraint action: %s", action)
 	}
-	
-	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled, 
+
+	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled,
 		core.CascadeValidation, logic, weight, cfg)
 }
 
 // AddDefaultValueCascade adds a cascade that sets a default value based on conditions
-func (c *Client) AddDefaultValueCascade(ctx context.Context, typeID, attributeID, cascadeID string, 
-	enabled bool, logic string, weight int, targetField string, 
+func (c *Client) AddDefaultValueCascade(ctx context.Context, typeID, attributeID, cascadeID string,
+	enabled bool, logic string, weight int, targetField string,
 	defaultValue interface{}) (*core.TypeDefinition, error) {
-	
+
 	cfg := &core.CascadeValidationConfig{
 		Action:      core.ActionSetDefaultValue,
 		TargetField: targetField,
 		Values:      []interface{}{defaultValue},
 	}
-	
-	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled, 
+
+	return c.AddValidationCascade(ctx, typeID, attributeID, cascadeID, enabled,
 		core.CascadeDefaultValue, logic, weight, cfg)
 }
 
@@ -452,12 +452,12 @@ func (c *Client) DeleteAttribute(ctx context.Context, typeID string, attributeID
 	// Before removing, check if any other attributes reference this one in their cascades
 	// Temporarily disable the attribute (to simulate removal for validation)
 	attributeToDelete.SetDisabled(true)
-	
+
 	// Validate cascades to ensure they don't reference this soon-to-be-deleted attribute
 	if errors := typeDef.ValidateCascades(); len(errors) > 0 {
-		// Revert the temporary change 
+		// Revert the temporary change
 		attributeToDelete.SetDisabled(false)
-		
+
 		// Combine all validation errors into a single message
 		errorMsgs := make([]string, 0, len(errors))
 		for _, err := range errors {

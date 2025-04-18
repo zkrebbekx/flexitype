@@ -50,13 +50,13 @@ func main() {
 	// Step 1: Create a type definition
 	fmt.Println("=== Step 1: Creating a type definition ===")
 
-	createTypeReq := connect.NewRequest(&flexitypev1.CreateTypeRequest{
+	createTypeReq := connect.NewRequest(&flexitypev1.SaveTypeRequest{
 		Id:          "doc-type-001",
 		Name:        "Document",
 		Description: "A document type with attributes",
 	})
 
-	createTypeRes, err := client.CreateType(ctx, createTypeReq)
+	createTypeRes, err := client.SaveType(ctx, createTypeReq)
 	if err != nil {
 		log.Fatalf("Failed to create type: %v", err)
 	}
@@ -165,13 +165,13 @@ func main() {
 		},
 	}
 
-	createInstanceReq := connect.NewRequest(&flexitypev1.CreateInstanceRequest{
+	createInstanceReq := connect.NewRequest(&flexitypev1.SaveInstanceRequest{
 		Id:              "doc-001",
 		TypeId:          typeDef.Id,
 		AttributeValues: attrValues,
 	})
 
-	createInstanceRes, err := client.CreateInstance(ctx, createInstanceReq)
+	createInstanceRes, err := client.SaveInstance(ctx, createInstanceReq)
 	if err != nil {
 		log.Fatalf("Failed to create instance: %v", err)
 	}
@@ -318,13 +318,13 @@ func main() {
 		},
 	}
 
-	createWithDisabledReq := connect.NewRequest(&flexitypev1.CreateInstanceRequest{
+	createWithDisabledReq := connect.NewRequest(&flexitypev1.SaveInstanceRequest{
 		Id:              "doc-002",
 		TypeId:          typeDef.Id,
 		AttributeValues: createWithDisabledValues,
 	})
 
-	_, err = client.CreateInstance(ctx, createWithDisabledReq)
+	_, err = client.SaveInstance(ctx, createWithDisabledReq)
 	if err != nil {
 		fmt.Printf("Got expected error: %v\n", err)
 	} else {
@@ -346,13 +346,13 @@ func main() {
 		},
 	}
 
-	createValidReq := connect.NewRequest(&flexitypev1.CreateInstanceRequest{
+	createValidReq := connect.NewRequest(&flexitypev1.SaveInstanceRequest{
 		Id:              "doc-002",
 		TypeId:          typeDef.Id,
 		AttributeValues: createValidValues,
 	})
 
-	createValidRes, err := client.CreateInstance(ctx, createValidReq)
+	createValidRes, err := client.SaveInstance(ctx, createValidReq)
 	if err != nil {
 		log.Fatalf("Failed to create instance: %v", err)
 	}

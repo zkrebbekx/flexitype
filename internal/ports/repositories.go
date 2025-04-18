@@ -25,7 +25,7 @@ type QueryOptions struct {
 	Name        string
 	Description string
 	Version     int
-	
+
 	// Instance field filters
 	InstanceID      string
 	InstanceVersion int
@@ -40,7 +40,7 @@ type QueryOptions struct {
 
 	// Include archived items in results (defaults to false)
 	IncludeArchived bool
-	
+
 	// Whether to get the latest version only (defaults to true)
 	LatestVersionOnly bool
 }
@@ -48,20 +48,20 @@ type QueryOptions struct {
 // DefaultQueryOptions returns default query options
 func DefaultQueryOptions() *QueryOptions {
 	return &QueryOptions{
-		Offset:           0,
-		Limit:            100,
-		OrderBy:          "id",
-		OrderDir:         "ASC",
-		IDs:              []string{},
-		AttributeFilters: make(map[string]interface{}),
-		IncludeArchived:  false, // By default, don't include archived items
-		LatestVersionOnly: true, // By default, get only the latest version
+		Offset:            0,
+		Limit:             100,
+		OrderBy:           "id",
+		OrderDir:          "ASC",
+		IDs:               []string{},
+		AttributeFilters:  make(map[string]interface{}),
+		IncludeArchived:   false, // By default, don't include archived items
+		LatestVersionOnly: true,  // By default, get only the latest version
 	}
 }
 
 // TypeRepository defines the interface for type definition storage
 type TypeRepository interface {
-	// Save persists a type definition
+	// Save persists a type definition version
 	Save(ctx context.Context, typeDef *core.TypeDefinition) error
 
 	// GetByID retrieves a type definition by ID
@@ -84,17 +84,14 @@ type TypeRepository interface {
 
 	// ArchiveMany marks multiple type definitions as archived
 	ArchiveMany(ctx context.Context, ids []string) error
-	
-	// SaveVersion creates a snapshot of the current type definition as a version
-	SaveVersion(ctx context.Context, typeID string) error
-	
+
 	// GetByIDAndVersion retrieves a specific version of a type definition
 	GetByIDAndVersion(ctx context.Context, id string, version int) (*core.TypeDefinition, error)
 }
 
 // InstanceRepository defines the interface for instance storage
 type InstanceRepository interface {
-	// Save persists an instance
+	// Save persists an instance version
 	Save(ctx context.Context, instance *core.Instance) error
 
 	// SaveMany persists multiple instances in a single transaction
@@ -102,13 +99,13 @@ type InstanceRepository interface {
 
 	// GetByID retrieves the latest instance version by ID
 	GetByID(ctx context.Context, id string) (*core.Instance, error)
-	
+
 	// GetByIDAndVersion retrieves a specific instance version by ID and version
 	GetByIDAndVersion(ctx context.Context, id string, version int) (*core.Instance, error)
-	
+
 	// GetLatestVersion returns the highest version number for the given instance ID
 	GetLatestVersion(ctx context.Context, id string) (int, error)
-	
+
 	// GetAllVersions retrieves all versions of an instance by ID
 	GetAllVersions(ctx context.Context, id string) ([]*core.Instance, error)
 

@@ -25,7 +25,7 @@ func main() {
 	fmt.Println("=== Step 1: Creating base type with multiple cascades ===")
 
 	// Create a purchase order type
-	poType, err := client.CreateType(ctx, "po-001", "PurchaseOrder", "Purchase order record")
+	poType, err := client.SaveType(ctx, "po-001", "PurchaseOrder", "Purchase order record")
 	if err != nil {
 		log.Fatalf("Failed to create purchase order type: %v", err)
 	}
@@ -104,7 +104,7 @@ func main() {
 	fmt.Println("\n=== Step 2: Creating child type with overridden cascades ===")
 
 	// Create a special purchase order type with different approval rules
-	specialPoType, err := client.CreateType(ctx, "po-002", "SpecialPurchaseOrder", "Special purchase order with different rules")
+	specialPoType, err := client.SaveType(ctx, "po-002", "SpecialPurchaseOrder", "Special purchase order with different rules")
 	if err != nil {
 		log.Fatalf("Failed to create special purchase order type: %v", err)
 	}
@@ -159,7 +159,7 @@ func main() {
 		"status":   "Approved",
 	}
 
-	internationalPo, err := client.CreateInstance(ctx, "po-inst-001", poType, internationalPoAttrs)
+	internationalPo, err := client.SaveInstance(ctx, "po-inst-001", poType, internationalPoAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create international purchase order: %v", err)
 	}
@@ -177,7 +177,7 @@ func main() {
 		"status":   "Approved",
 	}
 
-	highRiskPo, err := client.CreateInstance(ctx, "po-inst-002", poType, highRiskPoAttrs)
+	highRiskPo, err := client.SaveInstance(ctx, "po-inst-002", poType, highRiskPoAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create high risk purchase order: %v", err)
 	}
@@ -195,7 +195,7 @@ func main() {
 		"status":   "Approved",
 	}
 
-	largePo, err := client.CreateInstance(ctx, "po-inst-003", poType, largePoAttrs)
+	largePo, err := client.SaveInstance(ctx, "po-inst-003", poType, largePoAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create large purchase order: %v", err)
 	}
@@ -214,7 +214,7 @@ func main() {
 		"vendorApprovalRequired": true,
 	}
 
-	specialPo, err := client.CreateInstance(ctx, "po-inst-004", specialPoType, specialPoAttrs)
+	specialPo, err := client.SaveInstance(ctx, "po-inst-004", specialPoType, specialPoAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create special purchase order: %v", err)
 	}
@@ -234,7 +234,7 @@ func main() {
 	}
 
 	// Note that in the special type, the HighRisk cascade is overridden and no longer applies
-	smallHighRiskSpecialPo, err := client.CreateInstance(ctx, "po-inst-005", specialPoType, smallHighRiskSpecialPoAttrs)
+	smallHighRiskSpecialPo, err := client.SaveInstance(ctx, "po-inst-005", specialPoType, smallHighRiskSpecialPoAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create small high risk special purchase order: %v", err)
 	}

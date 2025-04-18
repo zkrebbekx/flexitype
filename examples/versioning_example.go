@@ -3,17 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-	"time"
-
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/zac300/flexitype/internal/adapters/repositories/postgres"
 	"github.com/zac300/flexitype/internal/domain/core"
 	"github.com/zac300/flexitype/internal/domain/validation"
+	"log"
 )
 
-// This example demonstrates the comprehensive versioning capabilities 
+// This example demonstrates the comprehensive versioning capabilities
 // for both type definitions and instances
 func main() {
 	// Connect to PostgreSQL
@@ -24,10 +22,13 @@ func main() {
 	defer db.Close()
 
 	// Create PostgreSQL repository
-	repo := postgres.NewPostgresRepository(db)
+	repo, err := postgres.NewPostgresRepository(db)
+	if err != nil {
+		log.Fatalf("Failed to create repository: %v", err)
+	}
 	typeRepo := postgres.NewTypeRepository(repo)
 	instanceRepo := postgres.NewInstanceRepository(repo, typeRepo)
-	
+
 	ctx := context.Background()
 
 	// Clean up from previous runs
@@ -36,7 +37,7 @@ func main() {
 	// Part 1: Create a type definition (Version 1)
 	fmt.Println("=== Part 1: Creating Type Definition (Version 1) ===")
 	productType := createProductTypeV1()
-	
+
 	if err := typeRepo.Save(ctx, productType); err != nil {
 		log.Fatalf("Failed to save type definition: %v", err)
 	}
@@ -45,7 +46,7 @@ func main() {
 	// Part 2: Create instances of the type (Version 1)
 	fmt.Println("\n=== Part 2: Creating Instances (Version 1) ===")
 	instances := createInstancesV1(productType)
-	
+
 	for _, instance := range instances {
 		if err := instanceRepo.Save(ctx, instance); err != nil {
 			log.Fatalf("Failed to save instance: %v", err)
@@ -69,7 +70,7 @@ func main() {
 	// Part 6: Verify versioned attribute values
 	fmt.Println("\n=== Part 6: Verifying Attribute Values Across Versions ===")
 	verifyAttributeValues(ctx, instanceRepo, instances[0].ID)
-	
+
 	fmt.Println("\nVersioning example completed successfully!")
 }
 
@@ -82,7 +83,7 @@ func cleanupPreviousRun(ctx context.Context, db *sqlx.DB) {
 	db.ExecContext(ctx, "DELETE FROM flexitype.validation_rule WHERE attribute_id LIKE 'product-type:%'")
 	db.ExecContext(ctx, "DELETE FROM flexitype.attribute_definition WHERE type_id = 'product-type'")
 	db.ExecContext(ctx, "DELETE FROM flexitype.type_definition WHERE id = 'product-type'")
-	
+
 	// Also clean up versioned tables
 	db.ExecContext(ctx, "DELETE FROM flexitype.attribute_cascade_version WHERE type_id = 'product-type'")
 	db.ExecContext(ctx, "DELETE FROM flexitype.validation_rule_version WHERE type_id = 'product-type'")
@@ -128,7 +129,7 @@ func createProductTypeV1() *core.TypeDefinition {
 		false, // optional
 	)
 	productType.AddAttribute(descAttr)
-	
+
 	// Add category attribute
 	categoryAttr := core.NewAttributeDefinition(
 		"product-type:category:1",
@@ -175,10 +176,10 @@ func evolveTypeToV2(ctx context.Context, typeRepo *postgres.TypeRepositoryImpl, 
 	if err != nil {
 		log.Fatalf("Failed to get latest type: %v", err)
 	}
-	
+
 	// Increment the version
 	latestType.IncrementVersion()
-	
+
 	// Add new in_stock attribute
 	inStockAttr := core.NewAttributeDefinition(
 		fmt.Sprintf("%s:in_stock:%d", latestType.ID, latestType.Version),
@@ -188,7 +189,7 @@ func evolveTypeToV2(ctx context.Context, typeRepo *postgres.TypeRepositoryImpl, 
 		true, // required
 	)
 	latestType.AddAttribute(inStockAttr)
-	
+
 	// Modify existing category attribute by adding new value
 	categoryAttr := latestType.GetAttributeByName("category")
 	if categoryAttr != nil {
@@ -201,7 +202,7 @@ func evolveTypeToV2(ctx context.Context, typeRepo *postgres.TypeRepositoryImpl, 
 			}
 		}
 	}
-	
+
 	// Add tags as a multi-valued attribute
 	tagsAttr := core.NewAttributeDefinition(
 		fmt.Sprintf("%s:tags:%d", latestType.ID, latestType.Version),
@@ -212,12 +213,12 @@ func evolveTypeToV2(ctx context.Context, typeRepo *postgres.TypeRepositoryImpl, 
 	)
 	tagsAttr.SetMultiValued(true)
 	latestType.AddAttribute(tagsAttr)
-	
+
 	// Save the updated type definition
 	if err := typeRepo.Save(ctx, latestType); err != nil {
 		log.Fatalf("Failed to save updated type: %v", err)
 	}
-	
+
 	return latestType
 }
 
@@ -229,34 +230,34 @@ func updateInstancesToV2(ctx context.Context, instanceRepo *postgres.InstanceRep
 		if err != nil {
 			log.Fatalf("Failed to get latest instance: %v", err)
 		}
-		
+
 		// Create a new version
 		newVersion := latestInstance.Version + 1
 		instanceV2 := core.NewInstanceVersion(latestInstance, newVersion)
-		
+
 		// Update type and type version
 		instanceV2.TypeDefinition = updatedType
 		instanceV2.TypeVersion = updatedType.Version
-		
+
 		// Copy existing attributes
 		for name, value := range latestInstance.Attributes {
 			instanceV2.Attributes[name] = value
 		}
-		
+
 		// Set new attributes for v2
 		instanceV2.SetAttribute("in_stock", true)
-		
+
 		if instanceV2.ID == "test-product-1" {
 			instanceV2.SetAttribute("tags", []interface{}{"premium", "5G", "Android"})
 		} else if instanceV2.ID == "test-product-2" {
 			instanceV2.SetAttribute("tags", []interface{}{"cotton", "medium", "casual"})
 		}
-		
+
 		// Save the new instance version
 		if err := instanceRepo.Save(ctx, instanceV2); err != nil {
 			log.Fatalf("Failed to save instance v2: %v", err)
 		}
-		
+
 		fmt.Printf("Created instance v2: %s (version %d)\n", instanceV2.ID, instanceV2.Version)
 	}
 }
@@ -268,31 +269,31 @@ func retrieveAndVerifyVersions(ctx context.Context, typeRepo *postgres.TypeRepos
 	if err != nil {
 		log.Fatalf("Failed to get type v1: %v", err)
 	}
-	fmt.Printf("Retrieved type v1: %s (version %d) with %d attributes\n", 
+	fmt.Printf("Retrieved type v1: %s (version %d) with %d attributes\n",
 		typeV1.ID, typeV1.Version, len(typeV1.Attributes))
-	
+
 	typeV2, err := typeRepo.GetByIDAndVersion(ctx, typeID, 2)
 	if err != nil {
 		log.Fatalf("Failed to get type v2: %v", err)
 	}
-	fmt.Printf("Retrieved type v2: %s (version %d) with %d attributes\n", 
+	fmt.Printf("Retrieved type v2: %s (version %d) with %d attributes\n",
 		typeV2.ID, typeV2.Version, len(typeV2.Attributes))
-	
+
 	// Verify instance versions
 	instanceV1, err := instanceRepo.GetByIDAndVersion(ctx, "test-product-1", 1)
 	if err != nil {
 		log.Fatalf("Failed to get instance v1: %v", err)
 	}
-	fmt.Printf("Retrieved instance v1: %s (version %d, type version %d)\n", 
+	fmt.Printf("Retrieved instance v1: %s (version %d, type version %d)\n",
 		instanceV1.ID, instanceV1.Version, instanceV1.TypeVersion)
-	
+
 	instanceV2, err := instanceRepo.GetByIDAndVersion(ctx, "test-product-1", 2)
 	if err != nil {
 		log.Fatalf("Failed to get instance v2: %v", err)
 	}
-	fmt.Printf("Retrieved instance v2: %s (version %d, type version %d)\n", 
+	fmt.Printf("Retrieved instance v2: %s (version %d, type version %d)\n",
 		instanceV2.ID, instanceV2.Version, instanceV2.TypeVersion)
-	
+
 	// Get all versions of an instance
 	allVersions, err := instanceRepo.GetAllVersions(ctx, "test-product-1")
 	if err != nil {
@@ -303,36 +304,36 @@ func retrieveAndVerifyVersions(ctx context.Context, typeRepo *postgres.TypeRepos
 
 // verifyAttributeValues checks that attribute values are stored and retrieved correctly across versions
 func verifyAttributeValues(ctx context.Context, instanceRepo *postgres.InstanceRepositoryImpl, instanceID string) {
-	// Retrieve instance v1 
+	// Retrieve instance v1
 	instanceV1, err := instanceRepo.GetByIDAndVersion(ctx, instanceID, 1)
 	if err != nil {
 		log.Fatalf("Failed to get instance v1: %v", err)
 	}
-	
+
 	// Print attribute values for v1
 	fmt.Println("Instance v1 attributes:")
 	for name, value := range instanceV1.Attributes {
 		fmt.Printf("  %s: %v\n", name, value)
 	}
-	
+
 	// Retrieve instance v2
 	instanceV2, err := instanceRepo.GetByIDAndVersion(ctx, instanceID, 2)
 	if err != nil {
 		log.Fatalf("Failed to get instance v2: %v", err)
 	}
-	
+
 	// Print attribute values for v2
 	fmt.Println("Instance v2 attributes:")
 	for name, value := range instanceV2.Attributes {
 		fmt.Printf("  %s: %v\n", name, value)
 	}
-	
+
 	// Verify v2 has new attributes that v1 doesn't have
 	_, hasInStockV1 := instanceV1.Attributes["in_stock"]
 	_, hasInStockV2 := instanceV2.Attributes["in_stock"]
 	_, hasTagsV1 := instanceV1.Attributes["tags"]
 	_, hasTagsV2 := instanceV2.Attributes["tags"]
-	
+
 	fmt.Printf("Attribute 'in_stock' exists in v1: %v, in v2: %v\n", hasInStockV1, hasInStockV2)
 	fmt.Printf("Attribute 'tags' exists in v1: %v, in v2: %v\n", hasTagsV1, hasTagsV2)
 }

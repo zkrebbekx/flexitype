@@ -263,13 +263,13 @@ func protoValueToDomain(value *flexitypev1.AttributeValue) interface{} {
 
 // The following methods have been updated to use the new repository interfaces with QueryOptions
 
-// CreateType creates a new type definition
-func (s *flexiTypeServiceServer) CreateType(
+// SaveType creates or updates a new type definition
+func (s *flexiTypeServiceServer) SaveType(
 	ctx context.Context,
-	req *connect.Request[flexitypev1.CreateTypeRequest],
+	req *connect.Request[flexitypev1.SaveTypeRequest],
 ) (*connect.Response[flexitypev1.TypeResponse], error) {
 	// Use the type service to create the type
-	typeDef, err := s.typeService.CreateType(ctx, req.Msg.Id, req.Msg.Name, req.Msg.Description, req.Msg.ParentTypeId)
+	typeDef, err := s.typeService.SaveType(ctx, req.Msg.Id, req.Msg.Name, req.Msg.Description, req.Msg.ParentTypeId)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create type: %w", err))
 	}
@@ -344,22 +344,6 @@ func (s *flexiTypeServiceServer) ListTypes(
 	}
 
 	return connect.NewResponse(response), nil
-}
-
-// UpdateType updates an existing type definition
-func (s *flexiTypeServiceServer) UpdateType(
-	ctx context.Context,
-	req *connect.Request[flexitypev1.UpdateTypeRequest],
-) (*connect.Response[flexitypev1.TypeResponse], error) {
-	// Use the type service to update the type
-	typeDef, err := s.typeService.UpdateType(ctx, req.Msg.Id, req.Msg.Name, req.Msg.Description, req.Msg.ParentTypeId)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update type: %w", err))
-	}
-
-	return connect.NewResponse(&flexitypev1.TypeResponse{
-		Type: domainTypeToProto(typeDef),
-	}), nil
 }
 
 // AddAttribute adds or updates an attribute on a type definition
@@ -815,7 +799,7 @@ func (s *flexiTypeServiceServer) ImportTypeSchema(ctx context.Context, req *conn
 	}
 
 	// Create the type using the type service
-	typeDef, err = s.typeService.CreateType(ctx, typeDef.ID, typeDef.Name, typeDef.Description, "")
+	typeDef, err = s.typeService.SaveType(ctx, typeDef.ID, typeDef.Name, typeDef.Description, "")
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create type: %w", err))
 	}

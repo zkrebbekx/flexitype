@@ -25,7 +25,7 @@ func main() {
 	fmt.Println("=== Step 1: Creating product type with dynamic validation ===")
 
 	// Create a product type
-	productType, err := client.CreateType(ctx, "product-001", "Product", "Product record")
+	productType, err := client.SaveType(ctx, "product-001", "Product", "Product record")
 	if err != nil {
 		log.Fatalf("Failed to create product type: %v", err)
 	}
@@ -38,7 +38,7 @@ func main() {
 
 	// Add subcategory attribute with dynamic enum values based on category
 	subcategoryAttr := sdk.NewAttribute("attr-002", "subcategory", "Product subcategory", sdk.StringType, false)
-	
+
 	// Add price attribute
 	priceAttr := sdk.NewAttribute("attr-003", "price", "Product price", sdk.FloatType, true)
 	priceAttr.AddValidationRule(&sdk.RequiredRule{})
@@ -56,22 +56,22 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to add category attribute: %v", err)
 	}
-	
+
 	err = client.AddAttribute(ctx, productType.ID, subcategoryAttr)
 	if err != nil {
 		log.Fatalf("Failed to add subcategory attribute: %v", err)
 	}
-	
+
 	err = client.AddAttribute(ctx, productType.ID, priceAttr)
 	if err != nil {
 		log.Fatalf("Failed to add price attribute: %v", err)
 	}
-	
+
 	err = client.AddAttribute(ctx, productType.ID, signatureAttr)
 	if err != nil {
 		log.Fatalf("Failed to add signature attribute: %v", err)
 	}
-	
+
 	err = client.AddAttribute(ctx, productType.ID, shippingAttr)
 	if err != nil {
 		log.Fatalf("Failed to add shipping attribute: %v", err)
@@ -83,10 +83,10 @@ func main() {
 	// 1. Define dynamic subcategory values for Electronics
 	electronicsRule := &core.CascadeValidationConfig{
 		Action:      core.ActionSetEnumValues,
-		TargetField: "subcategory", 
+		TargetField: "subcategory",
 		Values:      []interface{}{"Smartphone", "Laptop", "TV", "Camera", "Audio"},
 	}
-	
+
 	// Create a helper function to evaluate attribute equality
 	checkElectronics := func(instance *core.Instance) (bool, error) {
 		value, err := instance.GetAttribute("category")
@@ -95,24 +95,24 @@ func main() {
 		}
 		return value == "Electronics", nil
 	}
-	
+
 	electronicsExpr := core.NewCustomExpression(checkElectronics)
 	categoryAttr.AddValidationCascadeWithCustomExpr(
-		"electronics-subcategories", 
+		"electronics-subcategories",
 		true,
 		core.CascadeEnumValues,
 		electronicsExpr,
-		500, 
+		500,
 		electronicsRule,
 	)
 
 	// 2. Define dynamic subcategory values for Appliance
 	applianceRule := &core.CascadeValidationConfig{
 		Action:      core.ActionSetEnumValues,
-		TargetField: "subcategory", 
+		TargetField: "subcategory",
 		Values:      []interface{}{"Refrigerator", "Microwave", "Dishwasher", "Washing Machine"},
 	}
-	
+
 	// Create a helper function to evaluate attribute equality
 	checkAppliance := func(instance *core.Instance) (bool, error) {
 		value, err := instance.GetAttribute("category")
@@ -121,24 +121,24 @@ func main() {
 		}
 		return value == "Appliance", nil
 	}
-	
+
 	applianceExpr := core.NewCustomExpression(checkAppliance)
 	categoryAttr.AddValidationCascadeWithCustomExpr(
-		"appliance-subcategories", 
+		"appliance-subcategories",
 		true,
 		core.CascadeEnumValues,
 		applianceExpr,
-		500, 
+		500,
 		applianceRule,
 	)
 
 	// 3. Define dynamic subcategory values for Furniture
 	furnitureRule := &core.CascadeValidationConfig{
 		Action:      core.ActionSetEnumValues,
-		TargetField: "subcategory", 
+		TargetField: "subcategory",
 		Values:      []interface{}{"Chair", "Table", "Sofa", "Bed", "Cabinet"},
 	}
-	
+
 	// Create a helper function to evaluate attribute equality
 	checkFurniture := func(instance *core.Instance) (bool, error) {
 		value, err := instance.GetAttribute("category")
@@ -147,14 +147,14 @@ func main() {
 		}
 		return value == "Furniture", nil
 	}
-	
+
 	furnitureExpr := core.NewCustomExpression(checkFurniture)
 	categoryAttr.AddValidationCascadeWithCustomExpr(
-		"furniture-subcategories", 
+		"furniture-subcategories",
 		true,
 		core.CascadeEnumValues,
 		furnitureExpr,
-		500, 
+		500,
 		furnitureRule,
 	)
 
@@ -163,29 +163,29 @@ func main() {
 		Action:      core.ActionMakeRequired,
 		TargetField: "managerSignature",
 	}
-	
+
 	// Create a helper function to evaluate price comparison
 	checkExpensive := func(instance *core.Instance) (bool, error) {
 		priceValue, err := instance.GetAttribute("price")
 		if err != nil {
 			return false, fmt.Errorf("failed to get price attribute: %w", err)
 		}
-		
+
 		price, ok := priceValue.(float64)
 		if !ok {
 			return false, fmt.Errorf("price is not a float64")
 		}
-		
+
 		return price > 500, nil
 	}
-	
+
 	expensiveExpr := core.NewCustomExpression(checkExpensive)
 	priceAttr.AddValidationCascadeWithCustomExpr(
-		"expensive-signature", 
+		"expensive-signature",
 		true,
 		core.CascadeRequirement,
 		expensiveExpr,
-		400, 
+		400,
 		signatureRule,
 	)
 
@@ -195,29 +195,29 @@ func main() {
 		TargetField:  "shippingFee",
 		NumericValue: 10.0,
 	}
-	
+
 	// Create a helper function to evaluate price comparison for low price items
 	checkLowPrice := func(instance *core.Instance) (bool, error) {
 		priceValue, err := instance.GetAttribute("price")
 		if err != nil {
 			return false, fmt.Errorf("failed to get price attribute: %w", err)
 		}
-		
+
 		price, ok := priceValue.(float64)
 		if !ok {
 			return false, fmt.Errorf("price is not a float64")
 		}
-		
+
 		return price < 50, nil
 	}
-	
+
 	lowPriceExpr := core.NewCustomExpression(checkLowPrice)
 	priceAttr.AddValidationCascadeWithCustomExpr(
-		"low-price-shipping", 
+		"low-price-shipping",
 		true,
 		core.CascadeValidation,
 		lowPriceExpr,
-		300, 
+		300,
 		lowPriceShippingRule,
 	)
 
@@ -227,29 +227,29 @@ func main() {
 		TargetField:  "shippingFee",
 		NumericValue: 0.0,
 	}
-	
+
 	// Create a helper function to evaluate price comparison for free shipping
 	checkFreeShipping := func(instance *core.Instance) (bool, error) {
 		priceValue, err := instance.GetAttribute("price")
 		if err != nil {
 			return false, fmt.Errorf("failed to get price attribute: %w", err)
 		}
-		
+
 		price, ok := priceValue.(float64)
 		if !ok {
 			return false, fmt.Errorf("price is not a float64")
 		}
-		
+
 		return price >= 200, nil
 	}
-	
+
 	freeShippingExpr := core.NewCustomExpression(checkFreeShipping)
 	priceAttr.AddValidationCascadeWithCustomExpr(
-		"free-shipping", 
+		"free-shipping",
 		true,
 		core.CascadeValidation,
 		freeShippingExpr,
-		500, 
+		500,
 		freeShippingRule,
 	)
 
@@ -266,13 +266,13 @@ func main() {
 
 	// Test 1: Electronics product with appropriate subcategory
 	electronicsAttrs := map[string]interface{}{
-		"category":    "Electronics",
-		"subcategory": "Laptop",
-		"price":       799.99,
+		"category":         "Electronics",
+		"subcategory":      "Laptop",
+		"price":            799.99,
 		"managerSignature": "John Doe", // Required because price > 500
 	}
 
-	electronicsProd, err := client.CreateInstance(ctx, "prod-001", productType, electronicsAttrs)
+	electronicsProd, err := client.SaveInstance(ctx, "prod-001", productType, electronicsAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create electronics product: %v", err)
 	}
@@ -290,7 +290,7 @@ func main() {
 		"price":       499.99,
 	}
 
-	_, err = client.CreateInstance(ctx, "prod-002", productType, invalidElectronicsAttrs)
+	_, err = client.SaveInstance(ctx, "prod-002", productType, invalidElectronicsAttrs)
 	if err != nil {
 		fmt.Printf("Expected validation error: %v\n", err)
 	} else {
@@ -305,7 +305,7 @@ func main() {
 		// Missing managerSignature which should be required for price > 500
 	}
 
-	_, err = client.CreateInstance(ctx, "prod-003", productType, expensiveNoSignatureAttrs)
+	_, err = client.SaveInstance(ctx, "prod-003", productType, expensiveNoSignatureAttrs)
 	if err != nil {
 		fmt.Printf("Expected validation error: %v\n", err)
 	} else {
@@ -321,7 +321,7 @@ func main() {
 		"shippingFee":      15.99, // This should fail because price >= 200 means free shipping (max 0)
 	}
 
-	_, err = client.CreateInstance(ctx, "prod-004", productType, expensiveAttrs)
+	_, err = client.SaveInstance(ctx, "prod-004", productType, expensiveAttrs)
 	if err != nil {
 		fmt.Printf("Expected validation error: %v\n", err)
 	} else {
@@ -330,13 +330,13 @@ func main() {
 
 	// Test 5: Create valid Appliance product
 	applianceAttrs := map[string]interface{}{
-		"category":         "Appliance",
-		"subcategory":      "Microwave",
-		"price":            149.99,
-		"shippingFee":      9.99, // Valid shipping fee for this price range
+		"category":    "Appliance",
+		"subcategory": "Microwave",
+		"price":       149.99,
+		"shippingFee": 9.99, // Valid shipping fee for this price range
 	}
 
-	applianceProd, err := client.CreateInstance(ctx, "prod-005", productType, applianceAttrs)
+	applianceProd, err := client.SaveInstance(ctx, "prod-005", productType, applianceAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create appliance product: %v", err)
 	}

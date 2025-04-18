@@ -28,7 +28,7 @@ func main() {
 
 	// Step 1: Create a type definition
 	fmt.Println("=== Step 1: Creating a type definition ===")
-	productType, err := typeService.CreateType(ctx, "product-type-001", "Product", "A product type", "")
+	productType, err := typeService.SaveType(ctx, "product-type-001", "Product", "A product type", "")
 	if err != nil {
 		log.Fatalf("Failed to create type: %v", err)
 	}
@@ -86,7 +86,7 @@ func main() {
 			"price": p.price,
 		}
 
-		instance, err := instanceService.CreateInstance(ctx, p.id, productType.ID, attrs)
+		instance, err := instanceService.SaveInstance(ctx, p.id, productType.ID, attrs)
 		if err != nil {
 			log.Fatalf("Failed to create product instance: %v", err)
 		}
@@ -201,7 +201,7 @@ func main() {
 	fmt.Println("\n=== Step 10: Archiving a type ===")
 
 	// Create a temporary type that we'll archive
-	tempType, err := typeService.CreateType(ctx, "temp-type-001", "TemporaryType", "A type that will be archived", "")
+	tempType, err := typeService.SaveType(ctx, "temp-type-001", "TemporaryType", "A type that will be archived", "")
 	if err != nil {
 		log.Fatalf("Failed to create temporary type: %v", err)
 	}

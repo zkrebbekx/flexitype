@@ -69,8 +69,8 @@ func (r *InstanceRepositoryImpl) Save(ctx context.Context, instance *core.Instan
 	}
 
 	// Insert attribute values with the version
-	for attrName, attrValue := range instance.Attributes {
-		if err := r.saveAttributeValue(ctx, nil, instance.ID, instance.Version, attrName, attrValue, false, 0); err != nil {
+	for attrID, attrValue := range instance.Attributes {
+		if err := r.saveAttributeValue(ctx, nil, instance.ID, instance.Version, attrID, attrValue, false, 0); err != nil {
 			return fmt.Errorf("failed to save attribute value: %w", err)
 		}
 	}
@@ -79,7 +79,7 @@ func (r *InstanceRepositoryImpl) Save(ctx context.Context, instance *core.Instan
 }
 
 // saveAttributeValue saves a single attribute value
-func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx interface{}, instanceID string, instanceVersion int, attrName string, value interface{}, isDefault bool, listIndex int) error {
+func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx interface{}, instanceID string, instanceVersion int, attrID string, value interface{}, isDefault bool, listIndex int) error {
 	// Skip nil values
 	if value == nil {
 		return nil
@@ -88,37 +88,37 @@ func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx inte
 	// Handle different types of values
 	switch v := value.(type) {
 	case string:
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "string", v, nil, nil, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "string", v, nil, nil, nil, nil, isDefault, listIndex)
 		return err
 	case int, int8, int16, int32, int64:
 		intVal := reflect.ValueOf(v).Int()
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "int", nil, intVal, nil, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "int", nil, intVal, nil, nil, nil, isDefault, listIndex)
 		return err
 	case float32, float64:
 		floatVal := reflect.ValueOf(v).Float()
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "float", nil, nil, floatVal, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "float", nil, nil, floatVal, nil, nil, isDefault, listIndex)
 		return err
 	case bool:
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "boolean", nil, nil, nil, v, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "boolean", nil, nil, nil, v, nil, isDefault, listIndex)
 		return err
 	case time.Time:
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "date", nil, nil, nil, nil, v, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "date", nil, nil, nil, nil, v, isDefault, listIndex)
 		return err
 	case []interface{}:
 		// Handle arrays
 		for i, item := range v {
-			if err := r.saveAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, item, isDefault, i); err != nil {
+			if err := r.saveAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, item, isDefault, i); err != nil {
 				return err
 			}
 		}
 		return nil
 	case map[string]interface{}:
 		// Handle objects by creating an attribute value and then object_value entries
-		attrValueID, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "object", nil, nil, nil, nil, nil, isDefault, listIndex)
+		attrValueID, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "object", nil, nil, nil, nil, nil, isDefault, listIndex)
 		if err != nil {
 			return err
 		}
-		
+
 		// Save each property in the object
 		for propName, propValue := range v {
 			if err := r.saveObjectProperty(ctx, tx, attrValueID, propName, propValue, 0); err != nil {
@@ -129,7 +129,7 @@ func (r *InstanceRepositoryImpl) saveAttributeValue(ctx context.Context, tx inte
 	default:
 		// Convert unknown types to string
 		stringVal := fmt.Sprintf("%v", v)
-		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrName, "string", stringVal, nil, nil, nil, nil, isDefault, listIndex)
+		_, err := r.insertAttributeValue(ctx, tx, instanceID, instanceVersion, attrID, "string", stringVal, nil, nil, nil, nil, isDefault, listIndex)
 		return err
 	}
 }
@@ -174,7 +174,7 @@ func (r *InstanceRepositoryImpl) saveObjectProperty(ctx context.Context, tx inte
 		if err != nil {
 			return err
 		}
-		
+
 		// Save each property in the nested object
 		for nestedPropName, nestedPropValue := range v {
 			if err := r.saveObjectProperty(ctx, tx, nestedObjID, nestedPropName, nestedPropValue, 0); err != nil {
@@ -192,23 +192,23 @@ func (r *InstanceRepositoryImpl) saveObjectProperty(ctx context.Context, tx inte
 
 // insertAttributeValue inserts a single attribute value record and returns its ID
 func (r *InstanceRepositoryImpl) insertAttributeValue(
-	ctx context.Context, 
-	tx interface{}, 
+	ctx context.Context,
+	tx interface{},
 	instanceID string,
 	instanceVersion int,
-	attrName,
-	valueType string, 
-	stringValue interface{}, 
-	intValue interface{}, 
-	floatValue interface{}, 
-	boolValue interface{}, 
-	dateValue interface{}, 
-	isDefault bool, 
+	attrID,
+	valueType string,
+	stringValue interface{},
+	intValue interface{},
+	floatValue interface{},
+	boolValue interface{},
+	dateValue interface{},
+	isDefault bool,
 	listIndex int,
 ) (int64, error) {
 	query := `
 		INSERT INTO flexitype.attribute_value (
-			instance_id, instance_version, attribute_name, value_type, string_value, int_value, float_value, boolean_value, date_value, is_default, list_index
+			instance_id, instance_version, attribute_id, value_type, string_value, int_value, float_value, boolean_value, date_value, is_default, list_index
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 		)
@@ -219,7 +219,7 @@ func (r *InstanceRepositoryImpl) insertAttributeValue(
 	var err error
 
 	// Use the database connection directly
-	err = r.repo.db.QueryRowContext(ctx, query, instanceID, instanceVersion, attrName, valueType, stringValue, intValue, floatValue, boolValue, dateValue, isDefault, listIndex).Scan(&id)
+	err = r.repo.db.QueryRowContext(ctx, query, instanceID, instanceVersion, attrID, valueType, stringValue, intValue, floatValue, boolValue, dateValue, isDefault, listIndex).Scan(&id)
 
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert attribute value: %w", err)
@@ -230,16 +230,16 @@ func (r *InstanceRepositoryImpl) insertAttributeValue(
 
 // insertObjectValue inserts a single object value record and returns its ID if needed for nesting
 func (r *InstanceRepositoryImpl) insertObjectValue(
-	ctx context.Context, 
-	tx interface{}, 
-	attributeValueID int64, 
+	ctx context.Context,
+	tx interface{},
+	attributeValueID int64,
 	propName,
-	valueType string, 
-	stringValue interface{}, 
-	intValue interface{}, 
-	floatValue interface{}, 
-	boolValue interface{}, 
-	dateValue interface{}, 
+	valueType string,
+	stringValue interface{},
+	intValue interface{},
+	floatValue interface{},
+	boolValue interface{},
+	dateValue interface{},
 	listIndex int,
 ) (int64, error) {
 	query := `
@@ -308,8 +308,8 @@ func (r *InstanceRepositoryImpl) SaveMany(ctx context.Context, instances []*core
 		}
 
 		// Insert attribute values
-		for attrName, attrValue := range instance.Attributes {
-			if err := r.saveAttributeValue(ctx, nil, instance.ID, instance.Version, attrName, attrValue, false, 0); err != nil {
+		for attrID, attrValue := range instance.Attributes {
+			if err := r.saveAttributeValue(ctx, nil, instance.ID, instance.Version, attrID, attrValue, false, 0); err != nil {
 				return fmt.Errorf("failed to save attribute value: %w", err)
 			}
 		}
@@ -377,10 +377,10 @@ func (r *InstanceRepositoryImpl) GetByID(ctx context.Context, id string) (*core.
 // getAttributeValues retrieves all attribute values for an instance version
 func (r *InstanceRepositoryImpl) getAttributeValues(ctx context.Context, instanceID string, instanceVersion int) (map[string]interface{}, error) {
 	query := `
-		SELECT id, attribute_name, value_type, string_value, int_value, float_value, boolean_value, date_value, list_index
+		SELECT id, attribute_id, value_type, string_value, int_value, float_value, boolean_value, date_value, list_index
 		FROM flexitype.attribute_value
 		WHERE instance_id = $1 AND instance_version = $2
-		ORDER BY attribute_name, list_index
+		ORDER BY attribute_id, list_index
 	`
 
 	rows, err := r.repo.db.QueryContext(ctx, query, instanceID, instanceVersion)
@@ -394,7 +394,7 @@ func (r *InstanceRepositoryImpl) getAttributeValues(ctx context.Context, instanc
 
 	for rows.Next() {
 		var id int64
-		var attrName, valueType string
+		var attrID, valueType string
 		var stringValue *string
 		var intValue *int64
 		var floatValue *float64
@@ -402,7 +402,7 @@ func (r *InstanceRepositoryImpl) getAttributeValues(ctx context.Context, instanc
 		var dateValue *time.Time
 		var listIndex int
 
-		if err := rows.Scan(&id, &attrName, &valueType, &stringValue, &intValue, &floatValue, &boolValue, &dateValue, &listIndex); err != nil {
+		if err := rows.Scan(&id, &attrID, &valueType, &stringValue, &intValue, &floatValue, &boolValue, &dateValue, &listIndex); err != nil {
 			return nil, fmt.Errorf("failed to scan attribute value: %w", err)
 		}
 
@@ -441,25 +441,25 @@ func (r *InstanceRepositoryImpl) getAttributeValues(ctx context.Context, instanc
 		// If list index is > 0, it's part of an array
 		if listIndex > 0 {
 			// Initialize the array if needed
-			if _, ok := attributeArrays[attrName]; !ok {
-				attributeArrays[attrName] = make([]interface{}, 0)
+			if _, ok := attributeArrays[attrID]; !ok {
+				attributeArrays[attrID] = make([]interface{}, 0)
 			}
 
 			// Extend the array if needed
-			arr := attributeArrays[attrName]
+			arr := attributeArrays[attrID]
 			for len(arr) <= listIndex {
 				arr = append(arr, nil)
 			}
 			arr[listIndex] = value
-			attributeArrays[attrName] = arr
+			attributeArrays[attrID] = arr
 		} else if listIndex == 0 {
 			// Check if this attribute is already registered as an array
-			if arr, ok := attributeArrays[attrName]; ok {
+			if arr, ok := attributeArrays[attrID]; ok {
 				arr[0] = value
-				attributeArrays[attrName] = arr
+				attributeArrays[attrID] = arr
 			} else {
 				// Otherwise, set it as a regular value
-				attributes[attrName] = value
+				attributes[attrID] = value
 			}
 		}
 	}
@@ -469,8 +469,8 @@ func (r *InstanceRepositoryImpl) getAttributeValues(ctx context.Context, instanc
 	}
 
 	// Merge arrays into attributes
-	for attrName, arr := range attributeArrays {
-		attributes[attrName] = arr
+	for attrID, arr := range attributeArrays {
+		attributes[attrID] = arr
 	}
 
 	return attributes, nil
@@ -703,7 +703,7 @@ func (r *InstanceRepositoryImpl) scanInstances(ctx context.Context, rows *sqlx.R
 		// First try to get the specific type version from cache
 		var typeDef *core.TypeDefinition
 		var ok bool
-		
+
 		// Check if we have versions of this type in cache
 		if versionMap, hasType := typeVersionCache[instance.TypeID]; hasType {
 			// Check if we have this specific version
@@ -913,35 +913,35 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 					WHERE 
 			`
 			attrConditions := make([]string, 0)
-			for attrName, attrValue := range options.AttributeFilters {
+			for attrID, attrValue := range options.AttributeFilters {
 				switch v := attrValue.(type) {
 				case string:
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND string_value = $%d)", argIdx, argIdx+1))
-					queryArgs = append(queryArgs, attrName, v)
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND string_value = $%d)", argIdx, argIdx+1))
+					queryArgs = append(queryArgs, attrID, v)
 					argIdx += 2
 				case int, int8, int16, int32, int64:
 					intVal := reflect.ValueOf(v).Int()
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND int_value = $%d)", argIdx, argIdx+1))
-					queryArgs = append(queryArgs, attrName, intVal)
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND int_value = $%d)", argIdx, argIdx+1))
+					queryArgs = append(queryArgs, attrID, intVal)
 					argIdx += 2
 				case float32, float64:
 					floatVal := reflect.ValueOf(v).Float()
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND float_value = $%d)", argIdx, argIdx+1))
-					queryArgs = append(queryArgs, attrName, floatVal)
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND float_value = $%d)", argIdx, argIdx+1))
+					queryArgs = append(queryArgs, attrID, floatVal)
 					argIdx += 2
 				case bool:
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND boolean_value = $%d)", argIdx, argIdx+1))
-					queryArgs = append(queryArgs, attrName, v)
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND boolean_value = $%d)", argIdx, argIdx+1))
+					queryArgs = append(queryArgs, attrID, v)
 					argIdx += 2
 				default:
 					// Convert to string for other types
 					stringVal := fmt.Sprintf("%v", v)
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND string_value = $%d)", argIdx, argIdx+1))
-					queryArgs = append(queryArgs, attrName, stringVal)
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND string_value = $%d)", argIdx, argIdx+1))
+					queryArgs = append(queryArgs, attrID, stringVal)
 					argIdx += 2
 				}
 			}
-			
+
 			if len(attrConditions) > 0 {
 				attributeFilterPart += strings.Join(attrConditions, " OR ") + ")"
 				query += attributeFilterPart
@@ -1019,35 +1019,35 @@ func (r *InstanceRepositoryImpl) QueryWithOptions(ctx context.Context, options *
 					WHERE 
 			`
 			attrConditions := make([]string, 0)
-			for attrName, attrValue := range options.AttributeFilters {
+			for attrID, attrValue := range options.AttributeFilters {
 				switch v := attrValue.(type) {
 				case string:
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND string_value = $%d)", argIdx, argIdx+1))
-					queryArgs = append(queryArgs, attrName, v)
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND string_value = $%d)", argIdx, argIdx+1))
+					queryArgs = append(queryArgs, attrID, v)
 					argIdx += 2
 				case int, int8, int16, int32, int64:
 					intVal := reflect.ValueOf(v).Int()
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND int_value = $%d)", argIdx, argIdx+1))
-					queryArgs = append(queryArgs, attrName, intVal)
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND int_value = $%d)", argIdx, argIdx+1))
+					queryArgs = append(queryArgs, attrID, intVal)
 					argIdx += 2
 				case float32, float64:
 					floatVal := reflect.ValueOf(v).Float()
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND float_value = $%d)", argIdx, argIdx+1))
-					queryArgs = append(queryArgs, attrName, floatVal)
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND float_value = $%d)", argIdx, argIdx+1))
+					queryArgs = append(queryArgs, attrID, floatVal)
 					argIdx += 2
 				case bool:
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND boolean_value = $%d)", argIdx, argIdx+1))
-					queryArgs = append(queryArgs, attrName, v)
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND boolean_value = $%d)", argIdx, argIdx+1))
+					queryArgs = append(queryArgs, attrID, v)
 					argIdx += 2
 				default:
 					// Convert to string for other types
 					stringVal := fmt.Sprintf("%v", v)
-					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_name = $%d AND string_value = $%d)", argIdx, argIdx+1))
-					queryArgs = append(queryArgs, attrName, stringVal)
+					attrConditions = append(attrConditions, fmt.Sprintf("(attribute_id = $%d AND string_value = $%d)", argIdx, argIdx+1))
+					queryArgs = append(queryArgs, attrID, stringVal)
 					argIdx += 2
 				}
 			}
-			
+
 			if len(attrConditions) > 0 {
 				attributeFilterPart += strings.Join(attrConditions, " OR ") + ")"
 				baseQuery += attributeFilterPart

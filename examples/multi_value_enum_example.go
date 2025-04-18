@@ -25,7 +25,7 @@ func main() {
 	fmt.Println("=== Step 1: Creating product type with multi-valued enum attributes ===")
 
 	// Create a product type
-	productType, err := client.CreateType(ctx, "product-001", "Product", "Product item with categories and tags")
+	productType, err := client.SaveType(ctx, "product-001", "Product", "Product item with categories and tags")
 	if err != nil {
 		log.Fatalf("Failed to create product type: %v", err)
 	}
@@ -109,7 +109,7 @@ func main() {
 	fmt.Println("\n=== Step 2: Creating specialized product type ===")
 
 	// Create a specialized product type
-	electronicsType, err := client.CreateType(ctx, "product-002", "ElectronicsProduct", "Electronics product with specialized attributes")
+	electronicsType, err := client.SaveType(ctx, "product-002", "ElectronicsProduct", "Electronics product with specialized attributes")
 	if err != nil {
 		log.Fatalf("Failed to create electronics type: %v", err)
 	}
@@ -172,7 +172,7 @@ func main() {
 		"stockQuantity": 100,
 	}
 
-	standardProduct, err := client.CreateInstance(ctx, "product-inst-001", productType, standardProductAttrs)
+	standardProduct, err := client.SaveInstance(ctx, "product-inst-001", productType, standardProductAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create standard product: %v", err)
 	}
@@ -189,7 +189,7 @@ func main() {
 		"stockQuantity": 75,
 	}
 
-	premiumProduct, err := client.CreateInstance(ctx, "product-inst-002", productType, premiumProductAttrs)
+	premiumProduct, err := client.SaveInstance(ctx, "product-inst-002", productType, premiumProductAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create premium product: %v", err)
 	}
@@ -206,7 +206,7 @@ func main() {
 		"stockQuantity": 35,
 	}
 
-	limitedProduct, err := client.CreateInstance(ctx, "product-inst-003", productType, limitedProductAttrs)
+	limitedProduct, err := client.SaveInstance(ctx, "product-inst-003", productType, limitedProductAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create limited product: %v", err)
 	}
@@ -223,7 +223,7 @@ func main() {
 		"stockQuantity": 5,
 	}
 
-	clearanceProduct, err := client.CreateInstance(ctx, "product-inst-004", productType, clearanceProductAttrs)
+	clearanceProduct, err := client.SaveInstance(ctx, "product-inst-004", productType, clearanceProductAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create clearance product: %v", err)
 	}
@@ -242,7 +242,7 @@ func main() {
 		"specifications": []interface{}{"16GB RAM", "1TB SSD", "Intel i7", "14-inch Display"},
 	}
 
-	laptopProduct, err := client.CreateInstance(ctx, "product-inst-005", electronicsType, laptopProductAttrs)
+	laptopProduct, err := client.SaveInstance(ctx, "product-inst-005", electronicsType, laptopProductAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create laptop product: %v", err)
 	}
@@ -261,7 +261,7 @@ func main() {
 		"specifications": []interface{}{"6GB RAM", "128GB Storage", "6.5-inch OLED", "48MP Camera"},
 	}
 
-	phoneProduct, err := client.CreateInstance(ctx, "product-inst-006", electronicsType, phoneProductAttrs)
+	phoneProduct, err := client.SaveInstance(ctx, "product-inst-006", electronicsType, phoneProductAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create phone product: %v", err)
 	}

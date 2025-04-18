@@ -7,7 +7,7 @@ option go_package = "github.com/zac300/flexitype/api/flexitypev1;flexitypev1";
 // FlexiTypeService provides API for managing dynamic types and instances
 service FlexiTypeService {
   // Type operations
-  rpc CreateType(CreateTypeRequest) returns (TypeResponse);
+  rpc SaveType(SaveTypeRequest) returns (TypeResponse);
   rpc GetType(GetTypeRequest) returns (TypeResponse);
   rpc ListTypes(ListTypesRequest) returns (ListTypesResponse);
   rpc UpdateType(UpdateTypeRequest) returns (TypeResponse);
@@ -21,7 +21,7 @@ service FlexiTypeService {
   rpc SetAttributeDisabledState(SetAttributeDisabledStateRequest) returns (TypeResponse);
   
   // Instance operations
-  rpc CreateInstance(CreateInstanceRequest) returns (InstanceResponse);
+  rpc SaveInstance(SaveInstanceRequest) returns (InstanceResponse);
   rpc GetInstance(GetInstanceRequest) returns (InstanceResponse);                 // Gets latest version
   rpc GetInstanceVersion(GetInstanceVersionRequest) returns (InstanceResponse);   // Gets specific version
   rpc GetAllInstanceVersions(GetAllInstanceVersionsRequest) returns (InstanceVersionsResponse); // Gets all versions
@@ -36,7 +36,7 @@ service FlexiTypeService {
 }
 
 // Type-related messages
-message CreateTypeRequest {
+message SaveTypeRequest {
   string id = 1;
   string name = 2;
   string description = 3;
@@ -80,31 +80,38 @@ message TypeResponse {
 
 // Attribute-related messages
 message AddAttributeRequest {
-  string type_id = 1;
-  AttributeDefinition attribute = 2;
+  string type_id = 1; // Type ID or name must be provided
+  string type_name = 2;
+  AttributeDefinition attribute = 3;
 }
 
 message UpdateAttributeRequest {
-  string type_id = 1;
-  AttributeDefinition attribute = 2;
+  string type_id = 1; // Type ID or name must be provided
+  string type_name = 2;
+  AttributeDefinition attribute = 3;
 }
 
 message DeleteAttributeRequest {
-  string type_id = 1;
-  string attribute_name = 2;  // Changed from attribute_id to attribute_name
+  string type_id = 1; // Type ID or name must be provided
+  string type_name = 2;
+  string attribute_id = 3; // Attribute ID or name must be provided
+  string attribute_name = 4;
 }
 
 message SetAttributeDisabledStateRequest {
   string type_id = 1;
-  string attribute_name = 2;  // Changed from attribute_id to attribute_name
-  bool disabled = 3;
+  string type_name = 2;
+  string attribute_id = 3; // Attribute ID or name must be provided
+  string attribute_name = 4;
+  bool disabled = 5;
 }
 
 // Instance-related messages
-message CreateInstanceRequest {
+message SaveInstanceRequest {
   string id = 1;
   string type_id = 2;
-  map<string, AttributeValue> attribute_values = 3;
+  string type_name = 3;
+  map<string, AttributeValue> attribute_values = 4; // Key can be attribute ID or name
 }
 
 message GetInstanceRequest {

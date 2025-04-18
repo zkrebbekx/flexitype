@@ -22,7 +22,7 @@ const (
 )
 
 // Type-related messages
-type CreateTypeRequest struct {
+type SaveTypeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
@@ -32,20 +32,20 @@ type CreateTypeRequest struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CreateTypeRequest) Reset() {
-	*x = CreateTypeRequest{}
+func (x *SaveTypeRequest) Reset() {
+	*x = SaveTypeRequest{}
 	mi := &file_flexitype_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CreateTypeRequest) String() string {
+func (x *SaveTypeRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CreateTypeRequest) ProtoMessage() {}
+func (*SaveTypeRequest) ProtoMessage() {}
 
-func (x *CreateTypeRequest) ProtoReflect() protoreflect.Message {
+func (x *SaveTypeRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_flexitype_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -57,33 +57,33 @@ func (x *CreateTypeRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CreateTypeRequest.ProtoReflect.Descriptor instead.
-func (*CreateTypeRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use SaveTypeRequest.ProtoReflect.Descriptor instead.
+func (*SaveTypeRequest) Descriptor() ([]byte, []int) {
 	return file_flexitype_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *CreateTypeRequest) GetId() string {
+func (x *SaveTypeRequest) GetId() string {
 	if x != nil {
 		return x.Id
 	}
 	return ""
 }
 
-func (x *CreateTypeRequest) GetName() string {
+func (x *SaveTypeRequest) GetName() string {
 	if x != nil {
 		return x.Name
 	}
 	return ""
 }
 
-func (x *CreateTypeRequest) GetDescription() string {
+func (x *SaveTypeRequest) GetDescription() string {
 	if x != nil {
 		return x.Description
 	}
 	return ""
 }
 
-func (x *CreateTypeRequest) GetParentTypeId() string {
+func (x *SaveTypeRequest) GetParentTypeId() string {
 	if x != nil {
 		return x.ParentTypeId
 	}
@@ -450,8 +450,9 @@ func (x *TypeResponse) GetType() *TypeDefinition {
 // Attribute-related messages
 type AddAttributeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	TypeId        string                 `protobuf:"bytes,1,opt,name=type_id,json=typeId,proto3" json:"type_id,omitempty"`
-	Attribute     *AttributeDefinition   `protobuf:"bytes,2,opt,name=attribute,proto3" json:"attribute,omitempty"`
+	TypeId        string                 `protobuf:"bytes,1,opt,name=type_id,json=typeId,proto3" json:"type_id,omitempty"` // Type ID or name must be provided
+	TypeName      string                 `protobuf:"bytes,2,opt,name=type_name,json=typeName,proto3" json:"type_name,omitempty"`
+	Attribute     *AttributeDefinition   `protobuf:"bytes,3,opt,name=attribute,proto3" json:"attribute,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -493,6 +494,13 @@ func (x *AddAttributeRequest) GetTypeId() string {
 	return ""
 }
 
+func (x *AddAttributeRequest) GetTypeName() string {
+	if x != nil {
+		return x.TypeName
+	}
+	return ""
+}
+
 func (x *AddAttributeRequest) GetAttribute() *AttributeDefinition {
 	if x != nil {
 		return x.Attribute
@@ -502,8 +510,9 @@ func (x *AddAttributeRequest) GetAttribute() *AttributeDefinition {
 
 type UpdateAttributeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	TypeId        string                 `protobuf:"bytes,1,opt,name=type_id,json=typeId,proto3" json:"type_id,omitempty"`
-	Attribute     *AttributeDefinition   `protobuf:"bytes,2,opt,name=attribute,proto3" json:"attribute,omitempty"`
+	TypeId        string                 `protobuf:"bytes,1,opt,name=type_id,json=typeId,proto3" json:"type_id,omitempty"` // Type ID or name must be provided
+	TypeName      string                 `protobuf:"bytes,2,opt,name=type_name,json=typeName,proto3" json:"type_name,omitempty"`
+	Attribute     *AttributeDefinition   `protobuf:"bytes,3,opt,name=attribute,proto3" json:"attribute,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -545,6 +554,13 @@ func (x *UpdateAttributeRequest) GetTypeId() string {
 	return ""
 }
 
+func (x *UpdateAttributeRequest) GetTypeName() string {
+	if x != nil {
+		return x.TypeName
+	}
+	return ""
+}
+
 func (x *UpdateAttributeRequest) GetAttribute() *AttributeDefinition {
 	if x != nil {
 		return x.Attribute
@@ -554,8 +570,10 @@ func (x *UpdateAttributeRequest) GetAttribute() *AttributeDefinition {
 
 type DeleteAttributeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	TypeId        string                 `protobuf:"bytes,1,opt,name=type_id,json=typeId,proto3" json:"type_id,omitempty"`
-	AttributeName string                 `protobuf:"bytes,2,opt,name=attribute_name,json=attributeName,proto3" json:"attribute_name,omitempty"` // Changed from attribute_id to attribute_name
+	TypeId        string                 `protobuf:"bytes,1,opt,name=type_id,json=typeId,proto3" json:"type_id,omitempty"` // Type ID or name must be provided
+	TypeName      string                 `protobuf:"bytes,2,opt,name=type_name,json=typeName,proto3" json:"type_name,omitempty"`
+	AttributeId   string                 `protobuf:"bytes,3,opt,name=attribute_id,json=attributeId,proto3" json:"attribute_id,omitempty"` // Attribute ID or name must be provided
+	AttributeName string                 `protobuf:"bytes,4,opt,name=attribute_name,json=attributeName,proto3" json:"attribute_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -597,6 +615,20 @@ func (x *DeleteAttributeRequest) GetTypeId() string {
 	return ""
 }
 
+func (x *DeleteAttributeRequest) GetTypeName() string {
+	if x != nil {
+		return x.TypeName
+	}
+	return ""
+}
+
+func (x *DeleteAttributeRequest) GetAttributeId() string {
+	if x != nil {
+		return x.AttributeId
+	}
+	return ""
+}
+
 func (x *DeleteAttributeRequest) GetAttributeName() string {
 	if x != nil {
 		return x.AttributeName
@@ -607,8 +639,10 @@ func (x *DeleteAttributeRequest) GetAttributeName() string {
 type SetAttributeDisabledStateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TypeId        string                 `protobuf:"bytes,1,opt,name=type_id,json=typeId,proto3" json:"type_id,omitempty"`
-	AttributeName string                 `protobuf:"bytes,2,opt,name=attribute_name,json=attributeName,proto3" json:"attribute_name,omitempty"` // Changed from attribute_id to attribute_name
-	Disabled      bool                   `protobuf:"varint,3,opt,name=disabled,proto3" json:"disabled,omitempty"`
+	TypeName      string                 `protobuf:"bytes,2,opt,name=type_name,json=typeName,proto3" json:"type_name,omitempty"`
+	AttributeId   string                 `protobuf:"bytes,3,opt,name=attribute_id,json=attributeId,proto3" json:"attribute_id,omitempty"` // Attribute ID or name must be provided
+	AttributeName string                 `protobuf:"bytes,4,opt,name=attribute_name,json=attributeName,proto3" json:"attribute_name,omitempty"`
+	Disabled      bool                   `protobuf:"varint,5,opt,name=disabled,proto3" json:"disabled,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -650,6 +684,20 @@ func (x *SetAttributeDisabledStateRequest) GetTypeId() string {
 	return ""
 }
 
+func (x *SetAttributeDisabledStateRequest) GetTypeName() string {
+	if x != nil {
+		return x.TypeName
+	}
+	return ""
+}
+
+func (x *SetAttributeDisabledStateRequest) GetAttributeId() string {
+	if x != nil {
+		return x.AttributeId
+	}
+	return ""
+}
+
 func (x *SetAttributeDisabledStateRequest) GetAttributeName() string {
 	if x != nil {
 		return x.AttributeName
@@ -665,29 +713,30 @@ func (x *SetAttributeDisabledStateRequest) GetDisabled() bool {
 }
 
 // Instance-related messages
-type CreateInstanceRequest struct {
+type SaveInstanceRequest struct {
 	state           protoimpl.MessageState     `protogen:"open.v1"`
 	Id              string                     `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	TypeId          string                     `protobuf:"bytes,2,opt,name=type_id,json=typeId,proto3" json:"type_id,omitempty"`
-	AttributeValues map[string]*AttributeValue `protobuf:"bytes,3,rep,name=attribute_values,json=attributeValues,proto3" json:"attribute_values,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	TypeName        string                     `protobuf:"bytes,3,opt,name=type_name,json=typeName,proto3" json:"type_name,omitempty"`
+	AttributeValues map[string]*AttributeValue `protobuf:"bytes,4,rep,name=attribute_values,json=attributeValues,proto3" json:"attribute_values,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Key can be attribute ID or name
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
 
-func (x *CreateInstanceRequest) Reset() {
-	*x = CreateInstanceRequest{}
+func (x *SaveInstanceRequest) Reset() {
+	*x = SaveInstanceRequest{}
 	mi := &file_flexitype_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CreateInstanceRequest) String() string {
+func (x *SaveInstanceRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CreateInstanceRequest) ProtoMessage() {}
+func (*SaveInstanceRequest) ProtoMessage() {}
 
-func (x *CreateInstanceRequest) ProtoReflect() protoreflect.Message {
+func (x *SaveInstanceRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_flexitype_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -699,26 +748,33 @@ func (x *CreateInstanceRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CreateInstanceRequest.ProtoReflect.Descriptor instead.
-func (*CreateInstanceRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use SaveInstanceRequest.ProtoReflect.Descriptor instead.
+func (*SaveInstanceRequest) Descriptor() ([]byte, []int) {
 	return file_flexitype_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *CreateInstanceRequest) GetId() string {
+func (x *SaveInstanceRequest) GetId() string {
 	if x != nil {
 		return x.Id
 	}
 	return ""
 }
 
-func (x *CreateInstanceRequest) GetTypeId() string {
+func (x *SaveInstanceRequest) GetTypeId() string {
 	if x != nil {
 		return x.TypeId
 	}
 	return ""
 }
 
-func (x *CreateInstanceRequest) GetAttributeValues() map[string]*AttributeValue {
+func (x *SaveInstanceRequest) GetTypeName() string {
+	if x != nil {
+		return x.TypeName
+	}
+	return ""
+}
+
+func (x *SaveInstanceRequest) GetAttributeValues() map[string]*AttributeValue {
 	if x != nil {
 		return x.AttributeValues
 	}
@@ -2220,8 +2276,8 @@ var File_flexitype_proto protoreflect.FileDescriptor
 
 const file_flexitype_proto_rawDesc = "" +
 	"\n" +
-	"\x0fflexitype.proto\x12\fflexitype.v1\"\x7f\n" +
-	"\x11CreateTypeRequest\x12\x0e\n" +
+	"\x0fflexitype.proto\x12\fflexitype.v1\"}\n" +
+	"\x0fSaveTypeRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12$\n" +
@@ -2246,24 +2302,31 @@ const file_flexitype_proto_rawDesc = "" +
 	"\x14UnarchiveTypeRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"@\n" +
 	"\fTypeResponse\x120\n" +
-	"\x04type\x18\x01 \x01(\v2\x1c.flexitype.v1.TypeDefinitionR\x04type\"o\n" +
+	"\x04type\x18\x01 \x01(\v2\x1c.flexitype.v1.TypeDefinitionR\x04type\"\x8c\x01\n" +
 	"\x13AddAttributeRequest\x12\x17\n" +
-	"\atype_id\x18\x01 \x01(\tR\x06typeId\x12?\n" +
-	"\tattribute\x18\x02 \x01(\v2!.flexitype.v1.AttributeDefinitionR\tattribute\"r\n" +
+	"\atype_id\x18\x01 \x01(\tR\x06typeId\x12\x1b\n" +
+	"\ttype_name\x18\x02 \x01(\tR\btypeName\x12?\n" +
+	"\tattribute\x18\x03 \x01(\v2!.flexitype.v1.AttributeDefinitionR\tattribute\"\x8f\x01\n" +
 	"\x16UpdateAttributeRequest\x12\x17\n" +
-	"\atype_id\x18\x01 \x01(\tR\x06typeId\x12?\n" +
-	"\tattribute\x18\x02 \x01(\v2!.flexitype.v1.AttributeDefinitionR\tattribute\"X\n" +
+	"\atype_id\x18\x01 \x01(\tR\x06typeId\x12\x1b\n" +
+	"\ttype_name\x18\x02 \x01(\tR\btypeName\x12?\n" +
+	"\tattribute\x18\x03 \x01(\v2!.flexitype.v1.AttributeDefinitionR\tattribute\"\x98\x01\n" +
 	"\x16DeleteAttributeRequest\x12\x17\n" +
-	"\atype_id\x18\x01 \x01(\tR\x06typeId\x12%\n" +
-	"\x0eattribute_name\x18\x02 \x01(\tR\rattributeName\"~\n" +
+	"\atype_id\x18\x01 \x01(\tR\x06typeId\x12\x1b\n" +
+	"\ttype_name\x18\x02 \x01(\tR\btypeName\x12!\n" +
+	"\fattribute_id\x18\x03 \x01(\tR\vattributeId\x12%\n" +
+	"\x0eattribute_name\x18\x04 \x01(\tR\rattributeName\"\xbe\x01\n" +
 	" SetAttributeDisabledStateRequest\x12\x17\n" +
-	"\atype_id\x18\x01 \x01(\tR\x06typeId\x12%\n" +
-	"\x0eattribute_name\x18\x02 \x01(\tR\rattributeName\x12\x1a\n" +
-	"\bdisabled\x18\x03 \x01(\bR\bdisabled\"\x87\x02\n" +
-	"\x15CreateInstanceRequest\x12\x0e\n" +
+	"\atype_id\x18\x01 \x01(\tR\x06typeId\x12\x1b\n" +
+	"\ttype_name\x18\x02 \x01(\tR\btypeName\x12!\n" +
+	"\fattribute_id\x18\x03 \x01(\tR\vattributeId\x12%\n" +
+	"\x0eattribute_name\x18\x04 \x01(\tR\rattributeName\x12\x1a\n" +
+	"\bdisabled\x18\x05 \x01(\bR\bdisabled\"\xa0\x02\n" +
+	"\x13SaveInstanceRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
-	"\atype_id\x18\x02 \x01(\tR\x06typeId\x12c\n" +
-	"\x10attribute_values\x18\x03 \x03(\v28.flexitype.v1.CreateInstanceRequest.AttributeValuesEntryR\x0fattributeValues\x1a`\n" +
+	"\atype_id\x18\x02 \x01(\tR\x06typeId\x12\x1b\n" +
+	"\ttype_name\x18\x03 \x01(\tR\btypeName\x12a\n" +
+	"\x10attribute_values\x18\x04 \x03(\v26.flexitype.v1.SaveInstanceRequest.AttributeValuesEntryR\x0fattributeValues\x1a`\n" +
 	"\x14AttributeValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x122\n" +
 	"\x05value\x18\x02 \x01(\v2\x1c.flexitype.v1.AttributeValueR\x05value:\x028\x01\"$\n" +
@@ -2397,10 +2460,9 @@ const file_flexitype_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2\x1c.flexitype.v1.AttributeValueR\x05value:\x028\x01\"B\n" +
 	"\n" +
 	"ArrayValue\x124\n" +
-	"\x06values\x18\x01 \x03(\v2\x1c.flexitype.v1.AttributeValueR\x06values2\xcb\r\n" +
-	"\x10FlexiTypeService\x12I\n" +
-	"\n" +
-	"CreateType\x12\x1f.flexitype.v1.CreateTypeRequest\x1a\x1a.flexitype.v1.TypeResponse\x12C\n" +
+	"\x06values\x18\x01 \x03(\v2\x1c.flexitype.v1.AttributeValueR\x06values2\xc3\r\n" +
+	"\x10FlexiTypeService\x12E\n" +
+	"\bSaveType\x12\x1d.flexitype.v1.SaveTypeRequest\x1a\x1a.flexitype.v1.TypeResponse\x12C\n" +
 	"\aGetType\x12\x1c.flexitype.v1.GetTypeRequest\x1a\x1a.flexitype.v1.TypeResponse\x12L\n" +
 	"\tListTypes\x12\x1e.flexitype.v1.ListTypesRequest\x1a\x1f.flexitype.v1.ListTypesResponse\x12I\n" +
 	"\n" +
@@ -2410,8 +2472,8 @@ const file_flexitype_proto_rawDesc = "" +
 	"\fAddAttribute\x12!.flexitype.v1.AddAttributeRequest\x1a\x1a.flexitype.v1.TypeResponse\x12S\n" +
 	"\x0fUpdateAttribute\x12$.flexitype.v1.UpdateAttributeRequest\x1a\x1a.flexitype.v1.TypeResponse\x12S\n" +
 	"\x0fDeleteAttribute\x12$.flexitype.v1.DeleteAttributeRequest\x1a\x1a.flexitype.v1.TypeResponse\x12g\n" +
-	"\x19SetAttributeDisabledState\x12..flexitype.v1.SetAttributeDisabledStateRequest\x1a\x1a.flexitype.v1.TypeResponse\x12U\n" +
-	"\x0eCreateInstance\x12#.flexitype.v1.CreateInstanceRequest\x1a\x1e.flexitype.v1.InstanceResponse\x12O\n" +
+	"\x19SetAttributeDisabledState\x12..flexitype.v1.SetAttributeDisabledStateRequest\x1a\x1a.flexitype.v1.TypeResponse\x12Q\n" +
+	"\fSaveInstance\x12!.flexitype.v1.SaveInstanceRequest\x1a\x1e.flexitype.v1.InstanceResponse\x12O\n" +
 	"\vGetInstance\x12 .flexitype.v1.GetInstanceRequest\x1a\x1e.flexitype.v1.InstanceResponse\x12]\n" +
 	"\x12GetInstanceVersion\x12'.flexitype.v1.GetInstanceVersionRequest\x1a\x1e.flexitype.v1.InstanceResponse\x12m\n" +
 	"\x16GetAllInstanceVersions\x12+.flexitype.v1.GetAllInstanceVersionsRequest\x1a&.flexitype.v1.InstanceVersionsResponse\x12[\n" +
@@ -2436,7 +2498,7 @@ func file_flexitype_proto_rawDescGZIP() []byte {
 
 var file_flexitype_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
 var file_flexitype_proto_goTypes = []any{
-	(*CreateTypeRequest)(nil),                // 0: flexitype.v1.CreateTypeRequest
+	(*SaveTypeRequest)(nil),                  // 0: flexitype.v1.SaveTypeRequest
 	(*GetTypeRequest)(nil),                   // 1: flexitype.v1.GetTypeRequest
 	(*ListTypesRequest)(nil),                 // 2: flexitype.v1.ListTypesRequest
 	(*ListTypesResponse)(nil),                // 3: flexitype.v1.ListTypesResponse
@@ -2448,7 +2510,7 @@ var file_flexitype_proto_goTypes = []any{
 	(*UpdateAttributeRequest)(nil),           // 9: flexitype.v1.UpdateAttributeRequest
 	(*DeleteAttributeRequest)(nil),           // 10: flexitype.v1.DeleteAttributeRequest
 	(*SetAttributeDisabledStateRequest)(nil), // 11: flexitype.v1.SetAttributeDisabledStateRequest
-	(*CreateInstanceRequest)(nil),            // 12: flexitype.v1.CreateInstanceRequest
+	(*SaveInstanceRequest)(nil),              // 12: flexitype.v1.SaveInstanceRequest
 	(*GetInstanceRequest)(nil),               // 13: flexitype.v1.GetInstanceRequest
 	(*GetInstanceVersionRequest)(nil),        // 14: flexitype.v1.GetInstanceVersionRequest
 	(*GetAllInstanceVersionsRequest)(nil),    // 15: flexitype.v1.GetAllInstanceVersionsRequest
@@ -2472,7 +2534,7 @@ var file_flexitype_proto_goTypes = []any{
 	(*AttributeValue)(nil),                   // 33: flexitype.v1.AttributeValue
 	(*ObjectValue)(nil),                      // 34: flexitype.v1.ObjectValue
 	(*ArrayValue)(nil),                       // 35: flexitype.v1.ArrayValue
-	nil,                                      // 36: flexitype.v1.CreateInstanceRequest.AttributeValuesEntry
+	nil,                                      // 36: flexitype.v1.SaveInstanceRequest.AttributeValuesEntry
 	nil,                                      // 37: flexitype.v1.QueryInstancesRequest.AttributeFiltersEntry
 	nil,                                      // 38: flexitype.v1.UpdateInstanceRequest.AttributeValuesEntry
 	nil,                                      // 39: flexitype.v1.ValidationRule.ParametersEntry
@@ -2484,7 +2546,7 @@ var file_flexitype_proto_depIdxs = []int32{
 	26, // 1: flexitype.v1.TypeResponse.type:type_name -> flexitype.v1.TypeDefinition
 	27, // 2: flexitype.v1.AddAttributeRequest.attribute:type_name -> flexitype.v1.AttributeDefinition
 	27, // 3: flexitype.v1.UpdateAttributeRequest.attribute:type_name -> flexitype.v1.AttributeDefinition
-	36, // 4: flexitype.v1.CreateInstanceRequest.attribute_values:type_name -> flexitype.v1.CreateInstanceRequest.AttributeValuesEntry
+	36, // 4: flexitype.v1.SaveInstanceRequest.attribute_values:type_name -> flexitype.v1.SaveInstanceRequest.AttributeValuesEntry
 	37, // 5: flexitype.v1.QueryInstancesRequest.attribute_filters:type_name -> flexitype.v1.QueryInstancesRequest.AttributeFiltersEntry
 	32, // 6: flexitype.v1.QueryInstancesResponse.instances:type_name -> flexitype.v1.Instance
 	38, // 7: flexitype.v1.UpdateInstanceRequest.attribute_values:type_name -> flexitype.v1.UpdateInstanceRequest.AttributeValuesEntry
@@ -2502,13 +2564,13 @@ var file_flexitype_proto_depIdxs = []int32{
 	35, // 19: flexitype.v1.AttributeValue.array_value:type_name -> flexitype.v1.ArrayValue
 	41, // 20: flexitype.v1.ObjectValue.fields:type_name -> flexitype.v1.ObjectValue.FieldsEntry
 	33, // 21: flexitype.v1.ArrayValue.values:type_name -> flexitype.v1.AttributeValue
-	33, // 22: flexitype.v1.CreateInstanceRequest.AttributeValuesEntry.value:type_name -> flexitype.v1.AttributeValue
+	33, // 22: flexitype.v1.SaveInstanceRequest.AttributeValuesEntry.value:type_name -> flexitype.v1.AttributeValue
 	33, // 23: flexitype.v1.QueryInstancesRequest.AttributeFiltersEntry.value:type_name -> flexitype.v1.AttributeValue
 	33, // 24: flexitype.v1.UpdateInstanceRequest.AttributeValuesEntry.value:type_name -> flexitype.v1.AttributeValue
 	33, // 25: flexitype.v1.ValidationRule.ParametersEntry.value:type_name -> flexitype.v1.AttributeValue
 	33, // 26: flexitype.v1.Instance.AttributeValuesEntry.value:type_name -> flexitype.v1.AttributeValue
 	33, // 27: flexitype.v1.ObjectValue.FieldsEntry.value:type_name -> flexitype.v1.AttributeValue
-	0,  // 28: flexitype.v1.FlexiTypeService.CreateType:input_type -> flexitype.v1.CreateTypeRequest
+	0,  // 28: flexitype.v1.FlexiTypeService.SaveType:input_type -> flexitype.v1.SaveTypeRequest
 	1,  // 29: flexitype.v1.FlexiTypeService.GetType:input_type -> flexitype.v1.GetTypeRequest
 	2,  // 30: flexitype.v1.FlexiTypeService.ListTypes:input_type -> flexitype.v1.ListTypesRequest
 	4,  // 31: flexitype.v1.FlexiTypeService.UpdateType:input_type -> flexitype.v1.UpdateTypeRequest
@@ -2518,7 +2580,7 @@ var file_flexitype_proto_depIdxs = []int32{
 	9,  // 35: flexitype.v1.FlexiTypeService.UpdateAttribute:input_type -> flexitype.v1.UpdateAttributeRequest
 	10, // 36: flexitype.v1.FlexiTypeService.DeleteAttribute:input_type -> flexitype.v1.DeleteAttributeRequest
 	11, // 37: flexitype.v1.FlexiTypeService.SetAttributeDisabledState:input_type -> flexitype.v1.SetAttributeDisabledStateRequest
-	12, // 38: flexitype.v1.FlexiTypeService.CreateInstance:input_type -> flexitype.v1.CreateInstanceRequest
+	12, // 38: flexitype.v1.FlexiTypeService.SaveInstance:input_type -> flexitype.v1.SaveInstanceRequest
 	13, // 39: flexitype.v1.FlexiTypeService.GetInstance:input_type -> flexitype.v1.GetInstanceRequest
 	14, // 40: flexitype.v1.FlexiTypeService.GetInstanceVersion:input_type -> flexitype.v1.GetInstanceVersionRequest
 	15, // 41: flexitype.v1.FlexiTypeService.GetAllInstanceVersions:input_type -> flexitype.v1.GetAllInstanceVersionsRequest
@@ -2528,7 +2590,7 @@ var file_flexitype_proto_depIdxs = []int32{
 	20, // 45: flexitype.v1.FlexiTypeService.UnarchiveInstance:input_type -> flexitype.v1.UnarchiveInstanceRequest
 	23, // 46: flexitype.v1.FlexiTypeService.ExportTypeSchema:input_type -> flexitype.v1.ExportTypeSchemaRequest
 	24, // 47: flexitype.v1.FlexiTypeService.ImportTypeSchema:input_type -> flexitype.v1.ImportTypeSchemaRequest
-	7,  // 48: flexitype.v1.FlexiTypeService.CreateType:output_type -> flexitype.v1.TypeResponse
+	7,  // 48: flexitype.v1.FlexiTypeService.SaveType:output_type -> flexitype.v1.TypeResponse
 	7,  // 49: flexitype.v1.FlexiTypeService.GetType:output_type -> flexitype.v1.TypeResponse
 	3,  // 50: flexitype.v1.FlexiTypeService.ListTypes:output_type -> flexitype.v1.ListTypesResponse
 	7,  // 51: flexitype.v1.FlexiTypeService.UpdateType:output_type -> flexitype.v1.TypeResponse
@@ -2538,7 +2600,7 @@ var file_flexitype_proto_depIdxs = []int32{
 	7,  // 55: flexitype.v1.FlexiTypeService.UpdateAttribute:output_type -> flexitype.v1.TypeResponse
 	7,  // 56: flexitype.v1.FlexiTypeService.DeleteAttribute:output_type -> flexitype.v1.TypeResponse
 	7,  // 57: flexitype.v1.FlexiTypeService.SetAttributeDisabledState:output_type -> flexitype.v1.TypeResponse
-	21, // 58: flexitype.v1.FlexiTypeService.CreateInstance:output_type -> flexitype.v1.InstanceResponse
+	21, // 58: flexitype.v1.FlexiTypeService.SaveInstance:output_type -> flexitype.v1.InstanceResponse
 	21, // 59: flexitype.v1.FlexiTypeService.GetInstance:output_type -> flexitype.v1.InstanceResponse
 	21, // 60: flexitype.v1.FlexiTypeService.GetInstanceVersion:output_type -> flexitype.v1.InstanceResponse
 	22, // 61: flexitype.v1.FlexiTypeService.GetAllInstanceVersions:output_type -> flexitype.v1.InstanceVersionsResponse

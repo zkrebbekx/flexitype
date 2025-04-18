@@ -24,7 +24,7 @@ func main() {
 	fmt.Println("=== Step 1: Creating a type definition with multiple attributes ===")
 
 	// Create a document type
-	docType, err := client.CreateType(ctx, "doc-001", "Document", "Base document type")
+	docType, err := client.SaveType(ctx, "doc-001", "Document", "Base document type")
 	if err != nil {
 		log.Fatalf("Failed to create document type: %v", err)
 	}
@@ -72,7 +72,7 @@ func main() {
 		"lastModified": "2023-01-01",
 	}
 
-	doc, err := client.CreateInstance(ctx, "doc-inst-001", docType, docAttrs)
+	doc, err := client.SaveInstance(ctx, "doc-inst-001", docType, docAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create document instance: %v", err)
 	}
@@ -132,7 +132,7 @@ func main() {
 		"lastModified": "2023-01-02",
 	}
 
-	_, err = client.CreateInstance(ctx, "doc-inst-002", updatedType, newDocAttrs)
+	_, err = client.SaveInstance(ctx, "doc-inst-002", updatedType, newDocAttrs)
 	if err != nil {
 		fmt.Printf("Expected error: %v\n", err)
 	} else {
@@ -147,7 +147,7 @@ func main() {
 		"lastModified": "2023-01-02",
 	}
 
-	newDoc, err := client.CreateInstance(ctx, "doc-inst-002", updatedType, newDocAttrs)
+	newDoc, err := client.SaveInstance(ctx, "doc-inst-002", updatedType, newDocAttrs)
 	if err != nil {
 		log.Fatalf("Failed to create new document instance: %v", err)
 	}

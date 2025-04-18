@@ -55,7 +55,7 @@ func (s *flexiTypeServiceServer) GetAllInstanceVersions(ctx context.Context, req
 	}), nil
 }
 
-func (s *flexiTypeServiceServer) CreateInstance(ctx context.Context, req *connect.Request[flexitypev1.CreateInstanceRequest]) (*connect.Response[flexitypev1.InstanceResponse], error) {
+func (s *flexiTypeServiceServer) SaveInstance(ctx context.Context, req *connect.Request[flexitypev1.SaveInstanceRequest]) (*connect.Response[flexitypev1.InstanceResponse], error) {
 	// Convert attribute values from proto to domain
 	attrValues := make(map[string]interface{})
 	for name, value := range req.Msg.AttributeValues {
@@ -63,7 +63,7 @@ func (s *flexiTypeServiceServer) CreateInstance(ctx context.Context, req *connec
 	}
 
 	// Use the instance service to create the instance
-	instance, err := s.instanceService.CreateInstance(ctx, req.Msg.Id, req.Msg.TypeId, attrValues)
+	instance, err := s.instanceService.SaveInstance(ctx, req.Msg.Id, req.Msg.TypeId, attrValues)
 	if err != nil {
 		// Check error type to determine appropriate error code
 		if strings.Contains(err.Error(), "validation failed") {
@@ -77,32 +77,6 @@ func (s *flexiTypeServiceServer) CreateInstance(ctx context.Context, req *connec
 
 	return connect.NewResponse(&flexitypev1.InstanceResponse{
 		Instance: domainInstanceToProto(instance),
-	}), nil
-}
-
-// UpdateInstance handles updating an instance by creating a new version
-func (s *flexiTypeServiceServer) UpdateInstance(ctx context.Context, req *connect.Request[flexitypev1.UpdateInstanceRequest]) (*connect.Response[flexitypev1.InstanceResponse], error) {
-	// Convert attribute values from proto to domain
-	attrValues := make(map[string]interface{})
-	for name, value := range req.Msg.AttributeValues {
-		attrValues[name] = protoValueToDomain(value)
-	}
-
-	// Use the instance service to update the instance
-	newInstance, err := s.instanceService.UpdateInstance(ctx, req.Msg.Id, attrValues)
-	if err != nil {
-		// Check error type to determine appropriate error code
-		if strings.Contains(err.Error(), "validation failed") {
-			return nil, connect.NewError(connect.CodeInvalidArgument, err)
-		}
-		if strings.Contains(err.Error(), "not found") {
-			return nil, connect.NewError(connect.CodeNotFound, err)
-		}
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	return connect.NewResponse(&flexitypev1.InstanceResponse{
-		Instance: domainInstanceToProto(newInstance),
 	}), nil
 }
 

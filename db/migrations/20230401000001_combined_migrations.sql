@@ -72,8 +72,7 @@ CREATE TABLE flexitype.instance (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     archived_at TIMESTAMP WITH TIME ZONE DEFAULT NULL,
-    PRIMARY KEY (id, version),
-    FOREIGN KEY (type_id) REFERENCES flexitype.type_definition(id)
+    PRIMARY KEY (id, version) --TODO foreign key to type_definition_version
 );
 
 -- Create indexes for instance
@@ -87,7 +86,7 @@ CREATE INDEX idx_instance_id_version ON flexitype.instance(id, version DESC);
 CREATE TABLE flexitype.attribute_value (
     id serial NOT NULL,
     instance_id varchar(255) NOT NULL,
-    attribute_name varchar(255) NOT NULL, -- Using name instead of ID for easier querying and to handle inherited attributes
+    attribute_id varchar(255) NOT NULL,
     value_type varchar(50) NOT NULL, -- string, int, float, boolean, date, etc.
     string_value text,
     int_value bigint,
@@ -99,13 +98,13 @@ CREATE TABLE flexitype.attribute_value (
     created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    CONSTRAINT uq_attr_value_instance_name_idx UNIQUE (instance_id, attribute_name, list_index)
+    CONSTRAINT uq_attr_value_instance_name_idx UNIQUE (instance_id, attribute_id, list_index)
 );
 
 -- Create indexes for attribute_value
 CREATE INDEX idx_attribute_value_instance ON flexitype.attribute_value(instance_id);
-CREATE INDEX idx_attribute_value_name ON flexitype.attribute_value(attribute_name);
-CREATE INDEX idx_attribute_value_query ON flexitype.attribute_value(attribute_name, value_type);
+CREATE INDEX idx_attribute_value_id ON flexitype.attribute_value(attribute_id);
+CREATE INDEX idx_attribute_value_query ON flexitype.attribute_value(attribute_id, value_type);
 
 -- Create object_value table
 CREATE TABLE flexitype.object_value (

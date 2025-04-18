@@ -23,39 +23,99 @@ func NewTypeService(typeRepo ports.TypeRepository, instanceRepo ports.InstanceRe
 	}
 }
 
-// CreateType creates a new type definition
-func (s *TypeService) CreateType(ctx context.Context, id, name, description string, parentTypeID string) (*core.TypeDefinition, error) {
-	// Check for existing type with same ID or name
+// SaveType creates or updates a type definition based on whether it already exists
+func (s *TypeService) SaveType(ctx context.Context, id, name, description string, parentTypeID string) (*core.TypeDefinition, error) {
+	// Check for existing type with same ID
 	existing, err := s.typeRepo.GetByID(ctx, id)
 	if err == nil && existing != nil {
-		return nil, fmt.Errorf("type with ID '%s' already exists", id)
-	}
+		// Type exists - perform update
 
-	existing, err = s.typeRepo.GetByName(ctx, name)
-	if err == nil && existing != nil {
-		return nil, fmt.Errorf("type with name '%s' already exists", name)
-	}
-
-	// Create the type
-	typeDef := core.NewTypeDefinition(id, name, description)
-
-	// Set parent type if specified
-	if parentTypeID != "" {
-		parentType, err := s.typeRepo.GetByID(ctx, parentTypeID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get parent type: %w", err)
+		// Check for name collision if name is changing
+		if existing.Name != name {
+			nameCheck, err := s.typeRepo.GetByName(ctx, name)
+			if err == nil && nameCheck != nil && nameCheck.ID != id {
+				return nil, fmt.Errorf("type with name '%s' already exists", name)
+			}
 		}
 
-		typeDef.SetParentType(parentType)
-	}
+		// Check if anything is changing that would require a version increment
+		versionChange := false
 
-	// Save the type
-	err = s.typeRepo.Save(ctx, typeDef)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save type: %w", err)
-	}
+		// Check if name is changing
+		if existing.Name != name {
+			versionChange = true
+		}
 
-	return typeDef, nil
+		// Update the type
+		existing.Name = name
+		existing.Description = description
+
+		// Update parent type if specified
+		if parentTypeID != "" && (existing.ParentType == nil || existing.ParentType.ID != parentTypeID) {
+			parentType, err := s.typeRepo.GetByID(ctx, parentTypeID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get parent type: %w", err)
+			}
+
+			// Check for circular inheritance
+			current := parentType
+			for current != nil {
+				if current.ID == id {
+					return nil, fmt.Errorf("circular inheritance detected")
+				}
+				current = current.ParentType
+			}
+
+			existing.SetParentType(parentType)
+			versionChange = true
+		} else if parentTypeID == "" && existing.ParentType != nil {
+			// Remove parent type
+			existing.SetParentType(nil)
+			versionChange = true
+		}
+
+		// If we changed anything that affects the schema, increment the version
+		if versionChange {
+			existing.IncrementVersion()
+		}
+
+		// Save the updated type
+		err = s.typeRepo.Save(ctx, existing)
+		if err != nil {
+			return nil, fmt.Errorf("failed to save type: %w", err)
+		}
+
+		return existing, nil
+	} else {
+		// Type doesn't exist - create a new one
+
+		// Check for existing type with same name
+		nameCheck, err := s.typeRepo.GetByName(ctx, name)
+		if err == nil && nameCheck != nil {
+			return nil, fmt.Errorf("type with name '%s' already exists", name)
+		}
+
+		// Create the type
+		typeDef := core.NewTypeDefinition(id, name, description)
+
+		// Set parent type if specified
+		if parentTypeID != "" {
+			parentType, err := s.typeRepo.GetByID(ctx, parentTypeID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get parent type: %w", err)
+			}
+
+			typeDef.SetParentType(parentType)
+		}
+
+		// Save the type
+		err = s.typeRepo.Save(ctx, typeDef)
+		if err != nil {
+			return nil, fmt.Errorf("failed to save type: %w", err)
+		}
+
+		return typeDef, nil
+	}
 }
 
 // GetType retrieves a type definition by ID
@@ -71,121 +131,6 @@ func (s *TypeService) GetTypeByName(ctx context.Context, name string) (*core.Typ
 // GetTypeVersion retrieves a specific version of a type definition
 func (s *TypeService) GetTypeVersion(ctx context.Context, id string, version int) (*core.TypeDefinition, error) {
 	return s.typeRepo.GetByIDAndVersion(ctx, id, version)
-}
-
-// SaveTypeVersion manually creates a version snapshot of a type definition
-func (s *TypeService) SaveTypeVersion(ctx context.Context, id string) error {
-	// Verify the type exists
-	_, err := s.typeRepo.GetByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("type with ID '%s' not found: %w", id, err)
-	}
-	
-	// Save the version
-	return s.typeRepo.SaveVersion(ctx, id)
-}
-
-// UpdateType updates an existing type definition
-func (s *TypeService) UpdateType(ctx context.Context, id, name, description string, parentTypeID string) (*core.TypeDefinition, error) {
-	// Get the existing type
-	typeDef, err := s.typeRepo.GetByID(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("type with ID '%s' not found", id)
-	}
-
-	// Check if anything is changing that would require a version increment
-	versionChange := false
-
-	// Check for name collision if name is changing
-	if typeDef.Name != name {
-		existing, err := s.typeRepo.GetByName(ctx, name)
-		if err == nil && existing != nil && existing.ID != id {
-			return nil, fmt.Errorf("type with name '%s' already exists", name)
-		}
-		versionChange = true
-	}
-
-	// Update the type
-	typeDef.Name = name
-	typeDef.Description = description
-
-	// Update parent type if specified
-	if parentTypeID != "" && (typeDef.ParentType == nil || typeDef.ParentType.ID != parentTypeID) {
-		parentType, err := s.typeRepo.GetByID(ctx, parentTypeID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get parent type: %w", err)
-		}
-
-		// Check for circular inheritance
-		current := parentType
-		for current != nil {
-			if current.ID == id {
-				return nil, fmt.Errorf("circular inheritance detected")
-			}
-			current = current.ParentType
-		}
-
-		typeDef.SetParentType(parentType)
-		versionChange = true
-	} else if parentTypeID == "" && typeDef.ParentType != nil {
-		// Remove parent type
-		typeDef.SetParentType(nil)
-		versionChange = true
-	}
-
-	// If we changed anything that affects the schema, increment the version
-	if versionChange {
-		typeDef.IncrementVersion()
-	}
-
-	// Save the updated type
-	err = s.typeRepo.Save(ctx, typeDef)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save type: %w", err)
-	}
-
-	// Explicitly save a version snapshot when the version changes
-	// This ensures both repository implementations maintain versioning consistently
-	if versionChange {
-		err = s.typeRepo.SaveVersion(ctx, typeDef.ID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to save type version: %w", err)
-		}
-	}
-
-	return typeDef, nil
-}
-
-// DeleteType archives a type definition (doesn't permanently delete it)
-func (s *TypeService) DeleteType(ctx context.Context, id string) error {
-	// Check if there are active instances of this type
-	options := &ports.QueryOptions{
-		TypeID:          id,
-		IncludeArchived: false, // Only check non-archived instances
-	}
-	instances, _, err := s.instanceRepo.QueryWithOptions(ctx, options)
-	if err != nil {
-		return fmt.Errorf("failed to check for instances: %w", err)
-	}
-
-	if len(instances) > 0 {
-		return fmt.Errorf("cannot delete type with existing instances")
-	}
-
-	// Check if this type is a parent of other types
-	allTypes, _, err := s.typeRepo.List(ctx, ports.DefaultQueryOptions())
-	if err != nil {
-		return fmt.Errorf("failed to list types: %w", err)
-	}
-
-	for _, typeDef := range allTypes {
-		if typeDef.ParentType != nil && typeDef.ParentType.ID == id {
-			return fmt.Errorf("cannot delete type that is a parent of other types")
-		}
-	}
-
-	// Archive the type instead of deleting it
-	return s.typeRepo.Archive(ctx, id)
 }
 
 // ArchiveType archives a type definition
@@ -266,12 +211,6 @@ func (s *TypeService) AddAttribute(ctx context.Context, typeID string, attribute
 	if err != nil {
 		return nil, fmt.Errorf("failed to save type: %w", err)
 	}
-	
-	// Explicitly save a version snapshot
-	err = s.typeRepo.SaveVersion(ctx, typeDef.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save type version: %w", err)
-	}
 
 	return typeDef, nil
 }
@@ -300,12 +239,12 @@ func (s *TypeService) DeleteAttribute(ctx context.Context, typeID string, attrib
 	// Before removing, check if any other attributes reference this one in their cascades
 	// Temporarily disable the attribute (to simulate removal for validation)
 	attributeToDelete.SetDisabled(true)
-	
+
 	// Validate cascades to ensure they don't reference this soon-to-be-deleted attribute
 	if errors := typeDef.ValidateCascades(); len(errors) > 0 {
-		// Revert the temporary change 
+		// Revert the temporary change
 		attributeToDelete.SetDisabled(false)
-		
+
 		// Combine all validation errors into a single message
 		errorMessages := make([]string, 0, len(errors))
 		for _, err := range errors {
@@ -331,12 +270,6 @@ func (s *TypeService) DeleteAttribute(ctx context.Context, typeID string, attrib
 	err = s.typeRepo.Save(ctx, typeDef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save type: %w", err)
-	}
-	
-	// Explicitly save a version snapshot
-	err = s.typeRepo.SaveVersion(ctx, typeDef.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save type version: %w", err)
 	}
 
 	return typeDef, nil
@@ -388,7 +321,7 @@ func (s *TypeService) SetAttributeDisabledState(ctx context.Context, typeID, att
 		if errors := typeDef.ValidateCascades(); len(errors) > 0 {
 			// Revert the change since validation failed
 			foundAttr.SetDisabled(!disabled)
-			
+
 			// Combine all validation errors into a single message
 			errorMessages := make([]string, 0, len(errors))
 			for _, err := range errors {
@@ -405,12 +338,6 @@ func (s *TypeService) SetAttributeDisabledState(ctx context.Context, typeID, att
 	err = s.typeRepo.Save(ctx, typeDef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save type: %w", err)
-	}
-	
-	// Explicitly save a version snapshot
-	err = s.typeRepo.SaveVersion(ctx, typeDef.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save type version: %w", err)
 	}
 
 	return typeDef, nil

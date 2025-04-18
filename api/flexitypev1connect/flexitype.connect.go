@@ -33,9 +33,9 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// FlexiTypeServiceCreateTypeProcedure is the fully-qualified name of the FlexiTypeService's
-	// CreateType RPC.
-	FlexiTypeServiceCreateTypeProcedure = "/flexitype.v1.FlexiTypeService/CreateType"
+	// FlexiTypeServiceSaveTypeProcedure is the fully-qualified name of the FlexiTypeService's SaveType
+	// RPC.
+	FlexiTypeServiceSaveTypeProcedure = "/flexitype.v1.FlexiTypeService/SaveType"
 	// FlexiTypeServiceGetTypeProcedure is the fully-qualified name of the FlexiTypeService's GetType
 	// RPC.
 	FlexiTypeServiceGetTypeProcedure = "/flexitype.v1.FlexiTypeService/GetType"
@@ -63,9 +63,9 @@ const (
 	// FlexiTypeServiceSetAttributeDisabledStateProcedure is the fully-qualified name of the
 	// FlexiTypeService's SetAttributeDisabledState RPC.
 	FlexiTypeServiceSetAttributeDisabledStateProcedure = "/flexitype.v1.FlexiTypeService/SetAttributeDisabledState"
-	// FlexiTypeServiceCreateInstanceProcedure is the fully-qualified name of the FlexiTypeService's
-	// CreateInstance RPC.
-	FlexiTypeServiceCreateInstanceProcedure = "/flexitype.v1.FlexiTypeService/CreateInstance"
+	// FlexiTypeServiceSaveInstanceProcedure is the fully-qualified name of the FlexiTypeService's
+	// SaveInstance RPC.
+	FlexiTypeServiceSaveInstanceProcedure = "/flexitype.v1.FlexiTypeService/SaveInstance"
 	// FlexiTypeServiceGetInstanceProcedure is the fully-qualified name of the FlexiTypeService's
 	// GetInstance RPC.
 	FlexiTypeServiceGetInstanceProcedure = "/flexitype.v1.FlexiTypeService/GetInstance"
@@ -98,7 +98,7 @@ const (
 // FlexiTypeServiceClient is a client for the flexitype.v1.FlexiTypeService service.
 type FlexiTypeServiceClient interface {
 	// Type operations
-	CreateType(context.Context, *connect_go.Request[flexitypev1.CreateTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
+	SaveType(context.Context, *connect_go.Request[flexitypev1.SaveTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
 	GetType(context.Context, *connect_go.Request[flexitypev1.GetTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
 	ListTypes(context.Context, *connect_go.Request[flexitypev1.ListTypesRequest]) (*connect_go.Response[flexitypev1.ListTypesResponse], error)
 	UpdateType(context.Context, *connect_go.Request[flexitypev1.UpdateTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
@@ -110,7 +110,7 @@ type FlexiTypeServiceClient interface {
 	DeleteAttribute(context.Context, *connect_go.Request[flexitypev1.DeleteAttributeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
 	SetAttributeDisabledState(context.Context, *connect_go.Request[flexitypev1.SetAttributeDisabledStateRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
 	// Instance operations
-	CreateInstance(context.Context, *connect_go.Request[flexitypev1.CreateInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
+	SaveInstance(context.Context, *connect_go.Request[flexitypev1.SaveInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	GetInstance(context.Context, *connect_go.Request[flexitypev1.GetInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	GetInstanceVersion(context.Context, *connect_go.Request[flexitypev1.GetInstanceVersionRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	GetAllInstanceVersions(context.Context, *connect_go.Request[flexitypev1.GetAllInstanceVersionsRequest]) (*connect_go.Response[flexitypev1.InstanceVersionsResponse], error)
@@ -133,9 +133,9 @@ type FlexiTypeServiceClient interface {
 func NewFlexiTypeServiceClient(httpClient connect_go.HTTPClient, baseURL string, opts ...connect_go.ClientOption) FlexiTypeServiceClient {
 	baseURL = strings.TrimRight(baseURL, "/")
 	return &flexiTypeServiceClient{
-		createType: connect_go.NewClient[flexitypev1.CreateTypeRequest, flexitypev1.TypeResponse](
+		saveType: connect_go.NewClient[flexitypev1.SaveTypeRequest, flexitypev1.TypeResponse](
 			httpClient,
-			baseURL+FlexiTypeServiceCreateTypeProcedure,
+			baseURL+FlexiTypeServiceSaveTypeProcedure,
 			opts...,
 		),
 		getType: connect_go.NewClient[flexitypev1.GetTypeRequest, flexitypev1.TypeResponse](
@@ -183,9 +183,9 @@ func NewFlexiTypeServiceClient(httpClient connect_go.HTTPClient, baseURL string,
 			baseURL+FlexiTypeServiceSetAttributeDisabledStateProcedure,
 			opts...,
 		),
-		createInstance: connect_go.NewClient[flexitypev1.CreateInstanceRequest, flexitypev1.InstanceResponse](
+		saveInstance: connect_go.NewClient[flexitypev1.SaveInstanceRequest, flexitypev1.InstanceResponse](
 			httpClient,
-			baseURL+FlexiTypeServiceCreateInstanceProcedure,
+			baseURL+FlexiTypeServiceSaveInstanceProcedure,
 			opts...,
 		),
 		getInstance: connect_go.NewClient[flexitypev1.GetInstanceRequest, flexitypev1.InstanceResponse](
@@ -238,7 +238,7 @@ func NewFlexiTypeServiceClient(httpClient connect_go.HTTPClient, baseURL string,
 
 // flexiTypeServiceClient implements FlexiTypeServiceClient.
 type flexiTypeServiceClient struct {
-	createType                *connect_go.Client[flexitypev1.CreateTypeRequest, flexitypev1.TypeResponse]
+	saveType                  *connect_go.Client[flexitypev1.SaveTypeRequest, flexitypev1.TypeResponse]
 	getType                   *connect_go.Client[flexitypev1.GetTypeRequest, flexitypev1.TypeResponse]
 	listTypes                 *connect_go.Client[flexitypev1.ListTypesRequest, flexitypev1.ListTypesResponse]
 	updateType                *connect_go.Client[flexitypev1.UpdateTypeRequest, flexitypev1.TypeResponse]
@@ -248,7 +248,7 @@ type flexiTypeServiceClient struct {
 	updateAttribute           *connect_go.Client[flexitypev1.UpdateAttributeRequest, flexitypev1.TypeResponse]
 	deleteAttribute           *connect_go.Client[flexitypev1.DeleteAttributeRequest, flexitypev1.TypeResponse]
 	setAttributeDisabledState *connect_go.Client[flexitypev1.SetAttributeDisabledStateRequest, flexitypev1.TypeResponse]
-	createInstance            *connect_go.Client[flexitypev1.CreateInstanceRequest, flexitypev1.InstanceResponse]
+	saveInstance              *connect_go.Client[flexitypev1.SaveInstanceRequest, flexitypev1.InstanceResponse]
 	getInstance               *connect_go.Client[flexitypev1.GetInstanceRequest, flexitypev1.InstanceResponse]
 	getInstanceVersion        *connect_go.Client[flexitypev1.GetInstanceVersionRequest, flexitypev1.InstanceResponse]
 	getAllInstanceVersions    *connect_go.Client[flexitypev1.GetAllInstanceVersionsRequest, flexitypev1.InstanceVersionsResponse]
@@ -260,9 +260,9 @@ type flexiTypeServiceClient struct {
 	importTypeSchema          *connect_go.Client[flexitypev1.ImportTypeSchemaRequest, flexitypev1.TypeResponse]
 }
 
-// CreateType calls flexitype.v1.FlexiTypeService.CreateType.
-func (c *flexiTypeServiceClient) CreateType(ctx context.Context, req *connect_go.Request[flexitypev1.CreateTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error) {
-	return c.createType.CallUnary(ctx, req)
+// SaveType calls flexitype.v1.FlexiTypeService.SaveType.
+func (c *flexiTypeServiceClient) SaveType(ctx context.Context, req *connect_go.Request[flexitypev1.SaveTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error) {
+	return c.saveType.CallUnary(ctx, req)
 }
 
 // GetType calls flexitype.v1.FlexiTypeService.GetType.
@@ -310,9 +310,9 @@ func (c *flexiTypeServiceClient) SetAttributeDisabledState(ctx context.Context, 
 	return c.setAttributeDisabledState.CallUnary(ctx, req)
 }
 
-// CreateInstance calls flexitype.v1.FlexiTypeService.CreateInstance.
-func (c *flexiTypeServiceClient) CreateInstance(ctx context.Context, req *connect_go.Request[flexitypev1.CreateInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error) {
-	return c.createInstance.CallUnary(ctx, req)
+// SaveInstance calls flexitype.v1.FlexiTypeService.SaveInstance.
+func (c *flexiTypeServiceClient) SaveInstance(ctx context.Context, req *connect_go.Request[flexitypev1.SaveInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error) {
+	return c.saveInstance.CallUnary(ctx, req)
 }
 
 // GetInstance calls flexitype.v1.FlexiTypeService.GetInstance.
@@ -363,7 +363,7 @@ func (c *flexiTypeServiceClient) ImportTypeSchema(ctx context.Context, req *conn
 // FlexiTypeServiceHandler is an implementation of the flexitype.v1.FlexiTypeService service.
 type FlexiTypeServiceHandler interface {
 	// Type operations
-	CreateType(context.Context, *connect_go.Request[flexitypev1.CreateTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
+	SaveType(context.Context, *connect_go.Request[flexitypev1.SaveTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
 	GetType(context.Context, *connect_go.Request[flexitypev1.GetTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
 	ListTypes(context.Context, *connect_go.Request[flexitypev1.ListTypesRequest]) (*connect_go.Response[flexitypev1.ListTypesResponse], error)
 	UpdateType(context.Context, *connect_go.Request[flexitypev1.UpdateTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
@@ -375,7 +375,7 @@ type FlexiTypeServiceHandler interface {
 	DeleteAttribute(context.Context, *connect_go.Request[flexitypev1.DeleteAttributeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
 	SetAttributeDisabledState(context.Context, *connect_go.Request[flexitypev1.SetAttributeDisabledStateRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error)
 	// Instance operations
-	CreateInstance(context.Context, *connect_go.Request[flexitypev1.CreateInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
+	SaveInstance(context.Context, *connect_go.Request[flexitypev1.SaveInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	GetInstance(context.Context, *connect_go.Request[flexitypev1.GetInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	GetInstanceVersion(context.Context, *connect_go.Request[flexitypev1.GetInstanceVersionRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error)
 	GetAllInstanceVersions(context.Context, *connect_go.Request[flexitypev1.GetAllInstanceVersionsRequest]) (*connect_go.Response[flexitypev1.InstanceVersionsResponse], error)
@@ -394,9 +394,9 @@ type FlexiTypeServiceHandler interface {
 // By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
 // and JSON codecs. They also support gzip compression.
 func NewFlexiTypeServiceHandler(svc FlexiTypeServiceHandler, opts ...connect_go.HandlerOption) (string, http.Handler) {
-	flexiTypeServiceCreateTypeHandler := connect_go.NewUnaryHandler(
-		FlexiTypeServiceCreateTypeProcedure,
-		svc.CreateType,
+	flexiTypeServiceSaveTypeHandler := connect_go.NewUnaryHandler(
+		FlexiTypeServiceSaveTypeProcedure,
+		svc.SaveType,
 		opts...,
 	)
 	flexiTypeServiceGetTypeHandler := connect_go.NewUnaryHandler(
@@ -444,9 +444,9 @@ func NewFlexiTypeServiceHandler(svc FlexiTypeServiceHandler, opts ...connect_go.
 		svc.SetAttributeDisabledState,
 		opts...,
 	)
-	flexiTypeServiceCreateInstanceHandler := connect_go.NewUnaryHandler(
-		FlexiTypeServiceCreateInstanceProcedure,
-		svc.CreateInstance,
+	flexiTypeServiceSaveInstanceHandler := connect_go.NewUnaryHandler(
+		FlexiTypeServiceSaveInstanceProcedure,
+		svc.SaveInstance,
 		opts...,
 	)
 	flexiTypeServiceGetInstanceHandler := connect_go.NewUnaryHandler(
@@ -496,8 +496,8 @@ func NewFlexiTypeServiceHandler(svc FlexiTypeServiceHandler, opts ...connect_go.
 	)
 	return "/flexitype.v1.FlexiTypeService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case FlexiTypeServiceCreateTypeProcedure:
-			flexiTypeServiceCreateTypeHandler.ServeHTTP(w, r)
+		case FlexiTypeServiceSaveTypeProcedure:
+			flexiTypeServiceSaveTypeHandler.ServeHTTP(w, r)
 		case FlexiTypeServiceGetTypeProcedure:
 			flexiTypeServiceGetTypeHandler.ServeHTTP(w, r)
 		case FlexiTypeServiceListTypesProcedure:
@@ -516,8 +516,8 @@ func NewFlexiTypeServiceHandler(svc FlexiTypeServiceHandler, opts ...connect_go.
 			flexiTypeServiceDeleteAttributeHandler.ServeHTTP(w, r)
 		case FlexiTypeServiceSetAttributeDisabledStateProcedure:
 			flexiTypeServiceSetAttributeDisabledStateHandler.ServeHTTP(w, r)
-		case FlexiTypeServiceCreateInstanceProcedure:
-			flexiTypeServiceCreateInstanceHandler.ServeHTTP(w, r)
+		case FlexiTypeServiceSaveInstanceProcedure:
+			flexiTypeServiceSaveInstanceHandler.ServeHTTP(w, r)
 		case FlexiTypeServiceGetInstanceProcedure:
 			flexiTypeServiceGetInstanceHandler.ServeHTTP(w, r)
 		case FlexiTypeServiceGetInstanceVersionProcedure:
@@ -545,8 +545,8 @@ func NewFlexiTypeServiceHandler(svc FlexiTypeServiceHandler, opts ...connect_go.
 // UnimplementedFlexiTypeServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedFlexiTypeServiceHandler struct{}
 
-func (UnimplementedFlexiTypeServiceHandler) CreateType(context.Context, *connect_go.Request[flexitypev1.CreateTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error) {
-	return nil, connect_go.NewError(connect_go.CodeUnimplemented, errors.New("flexitype.v1.FlexiTypeService.CreateType is not implemented"))
+func (UnimplementedFlexiTypeServiceHandler) SaveType(context.Context, *connect_go.Request[flexitypev1.SaveTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error) {
+	return nil, connect_go.NewError(connect_go.CodeUnimplemented, errors.New("flexitype.v1.FlexiTypeService.SaveType is not implemented"))
 }
 
 func (UnimplementedFlexiTypeServiceHandler) GetType(context.Context, *connect_go.Request[flexitypev1.GetTypeRequest]) (*connect_go.Response[flexitypev1.TypeResponse], error) {
@@ -585,8 +585,8 @@ func (UnimplementedFlexiTypeServiceHandler) SetAttributeDisabledState(context.Co
 	return nil, connect_go.NewError(connect_go.CodeUnimplemented, errors.New("flexitype.v1.FlexiTypeService.SetAttributeDisabledState is not implemented"))
 }
 
-func (UnimplementedFlexiTypeServiceHandler) CreateInstance(context.Context, *connect_go.Request[flexitypev1.CreateInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error) {
-	return nil, connect_go.NewError(connect_go.CodeUnimplemented, errors.New("flexitype.v1.FlexiTypeService.CreateInstance is not implemented"))
+func (UnimplementedFlexiTypeServiceHandler) SaveInstance(context.Context, *connect_go.Request[flexitypev1.SaveInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error) {
+	return nil, connect_go.NewError(connect_go.CodeUnimplemented, errors.New("flexitype.v1.FlexiTypeService.SaveInstance is not implemented"))
 }
 
 func (UnimplementedFlexiTypeServiceHandler) GetInstance(context.Context, *connect_go.Request[flexitypev1.GetInstanceRequest]) (*connect_go.Response[flexitypev1.InstanceResponse], error) {

@@ -8,6 +8,9 @@ import Toasts from '@/components/ui/Toasts.vue'
 
 const { theme, toggle } = useTheme()
 
+// Playground builds run the service in-browser; data resets on reload.
+const isPlayground = import.meta.env.VITE_WASM === '1'
+
 const features = useQuery({
   queryKey: ['features'],
   queryFn: () => fetch('/api/v1/features').then((r) => r.json() as Promise<{ search: boolean; activity: boolean }>),
@@ -38,6 +41,12 @@ const health = useQuery({
       <div class="flex items-center gap-2 px-4 py-4">
         <span class="grid h-7 w-7 place-items-center rounded-md bg-(--accent) text-[15px] font-bold text-white">◳</span>
         <span class="text-[15px] font-semibold tracking-tight">flexitype</span>
+        <span
+          v-if="isPlayground"
+          class="rounded-full bg-(--accent-soft) px-1.5 py-0.5 text-[10px] font-semibold text-(--accent)"
+          title="The full service runs in your browser via WebAssembly. Data resets on reload."
+          >demo</span
+        >
       </div>
 
       <nav class="flex flex-1 flex-col gap-0.5 px-2">

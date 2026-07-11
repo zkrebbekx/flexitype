@@ -4,3 +4,6 @@
 web/node_modules/
 web/dist/*
 !web/dist/index.html
+# Playground build artifacts (built by the pages workflow)
+web/public/flexitype.wasm
+web/public/wasm_exec.js

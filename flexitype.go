@@ -16,6 +16,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/search"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/infrastructure/memory"
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	httpapi "github.com/zkrebbekx/flexitype/internal/interfaces/http"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -148,6 +149,42 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	}
 }
 
+// NewInMemory wires flexitype over the in-memory store: no database, no
+// migrations. Same usecases, same API, same hooks — it powers the browser
+// playground and makes a zero-dependency test double for embedding
+// consumers. Data lives for the process only; WithOutbox is ignored
+// (direct dispatch is already synchronous and in-process).
+func NewInMemory(opts ...Option) *Service {
+	o := &options{dispatcher: events.NewDispatcher()}
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	store := memory.NewStore()
+	newRepos := func() application.Repositories { return store.Repositories() }
+
+	var indexer *search.Indexer
+	if o.searchIndex {
+		indexer = search.NewIndexer(newRepos, store.SearchStore())
+		o.dispatcher.Register(indexer, events.WithEventTypes(search.EventTypes()...))
+	}
+
+	transactor := store.Transactor()
+	return &Service{
+		transactor: transactor,
+		dispatcher: o.dispatcher,
+		factory: application.NewFactory(application.FactoryConfig{
+			Transactor:      transactor,
+			NewRepositories: newRepos,
+			Dispatcher:      o.dispatcher,
+			ActivityLog:     store.ActivityLog(),
+			OnRollback:      o.onRollback,
+			Features:        o.features,
+		}),
+		indexer: indexer,
+	}
+}
+
 // RunOutboxRelay drains the event outbox until ctx ends. No-op without
 // WithOutbox. Run it as a goroutine next to the server.
 func (s *Service) RunOutboxRelay(ctx context.Context) {
@@ -167,8 +204,12 @@ func (s *Service) ReindexSearch(ctx context.Context, tenant valueobjects.TenantI
 }
 
 // Migrate applies flexitype's embedded schema migrations. Safe to call on
-// every startup; concurrent callers serialize on an advisory lock.
+// every startup; concurrent callers serialize on an advisory lock. No-op
+// for in-memory services.
 func (s *Service) Migrate(ctx context.Context) error {
+	if s.pool == nil {
+		return nil
+	}
 	return postgres.Migrate(ctx, s.transactor)
 }
 

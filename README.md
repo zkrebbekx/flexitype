@@ -11,6 +11,11 @@ Runs two ways from one codebase:
 - **Standalone service** — a single binary with a versioned REST API,
   service-account auth, OpenTelemetry and health endpoints
 
+**[▶ Try the playground](https://zkrebbekx.github.io/flexitype/)** — the full
+service (usecases, REST API, FQL search, search index) compiled to
+WebAssembly, running the admin console entirely in your browser. No backend;
+data resets on reload.
+
 ## Features
 
 - **Soft types**: `TypeDefinition` → `AttributeDefinition` → `AttributeValue`,
@@ -134,6 +139,11 @@ product, _ := interactors.TypeDefinitions().Create(ctx, typedef.CreateInput{
     DisplayName:  "Product",
 })
 ```
+
+For tests and prototypes, `flexitype.NewInMemory(...)` takes the same
+options and runs the identical usecases over an in-process store — no
+database, no migrations. It powers the browser playground and makes a
+zero-dependency test double for embedding consumers.
 
 Consumers on other stacks integrate via the standalone service's REST API and
 webhooks; every subscriber sees the same envelope:

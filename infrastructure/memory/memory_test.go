@@ -1,0 +1,287 @@
+package memory_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	. "github.com/smartystreets/goconvey/convey"
+
+	"github.com/zkrebbekx/flexitype"
+	"github.com/zkrebbekx/flexitype/application"
+	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
+	appquery "github.com/zkrebbekx/flexitype/application/query"
+	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
+	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
+	appvalue "github.com/zkrebbekx/flexitype/application/value"
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
+	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/infrastructure/memory"
+	"github.com/zkrebbekx/flexitype/pkg/db"
+)
+
+// harness spins one in-memory service and provides schema shorthand.
+type harness struct {
+	svc *flexitype.Service
+	ctx context.Context
+}
+
+func newHarness() *harness {
+	return &harness{
+		svc: flexitype.NewInMemory(flexitype.WithSearchIndex()),
+		ctx: context.Background(),
+	}
+}
+
+func (h *harness) interactors() *application.Interactors {
+	return h.svc.Interactors(h.ctx)
+}
+
+func (h *harness) createType(name, extendsID string) string {
+	snap, err := h.interactors().TypeDefinitions().Create(h.ctx, apptypedef.CreateInput{
+		InternalName: name,
+		DisplayName:  name,
+		ExtendsID:    extendsID,
+	})
+	So(err, ShouldBeNil)
+	return snap.ID.String()
+}
+
+func (h *harness) createAttr(typeID, name, dataType string) string {
+	snap, err := h.interactors().Attributes().Create(h.ctx, appattribute.CreateInput{
+		TypeDefinitionID: typeID,
+		InternalName:     name,
+		DisplayName:      name,
+		DataType:         dataType,
+	})
+	So(err, ShouldBeNil)
+	return snap.ID.String()
+}
+
+func (h *harness) setValue(attrID, entityID, typeID string, value any) {
+	raw, err := json.Marshal(value)
+	So(err, ShouldBeNil)
+	_, err = h.interactors().Values().Set(h.ctx, appvalue.SetInput{
+		AttributeDefinitionID: attrID,
+		EntityID:              entityID,
+		TypeDefinitionID:      typeID,
+		Value:                 raw,
+	})
+	So(err, ShouldBeNil)
+}
+
+func (h *harness) query(rootType, fqlText string) *appquery.ExecuteOutput {
+	out, err := h.interactors().Query().Execute(h.ctx, appquery.ExecuteInput{
+		Type:  rootType,
+		Query: fqlText,
+	})
+	So(err, ShouldBeNil)
+	return out
+}
+
+func entityIDs(out *appquery.ExecuteOutput) []string {
+	ids := make([]string, 0, len(out.Items))
+	for _, item := range out.Items {
+		ids = append(ids, item.EntityID)
+	}
+	return ids
+}
+
+func TestInMemoryService(t *testing.T) {
+	Convey("Given an in-memory flexitype service with the search index enabled", t, func() {
+		h := newHarness()
+
+		Convey("When a type with attributes is created and values are set", func() {
+			productID := h.createType("product", "")
+			nameAttr := h.createAttr(productID, "name", "string")
+			priceAttr := h.createAttr(productID, "price", "decimal")
+
+			h.setValue(nameAttr, "sku-1", productID, "Trail Bike")
+			h.setValue(priceAttr, "sku-1", productID, "1499.00")
+			h.setValue(nameAttr, "sku-2", productID, "City Bike")
+			h.setValue(priceAttr, "sku-2", productID, "799.00")
+
+			Convey("Then the type is retrievable by ID and internal name", func() {
+				got, err := h.interactors().TypeDefinitions().Get(h.ctx, productID)
+				So(err, ShouldBeNil)
+				So(got.InternalName, ShouldEqual, "product")
+			})
+
+			Convey("Then entities list with value counts, newest first", func() {
+				out, err := h.interactors().Values().ListEntities(h.ctx, productID, false, db.PageArgs{})
+				So(err, ShouldBeNil)
+				So(out.Items, ShouldHaveLength, 2)
+				So(out.Items[0].ValueCount, ShouldEqual, 2)
+			})
+
+			Convey("Then FQL compares decimals numerically", func() {
+				out := h.query("product", `price > 1000`)
+				So(entityIDs(out), ShouldResemble, []string{"sku-1"})
+			})
+
+			Convey("Then FQL string predicates and in() work", func() {
+				So(entityIDs(h.query("product", `icontains(name, "trail")`)), ShouldResemble, []string{"sku-1"})
+				out := h.query("product", `name in ("Trail Bike", "City Bike")`)
+				So(out.Items, ShouldHaveLength, 2)
+			})
+
+			Convey("Then FQL matches() hits the search projection", func() {
+				out := h.query("product", `matches("trail bike")`)
+				So(entityIDs(out), ShouldResemble, []string{"sku-1"})
+				So(h.query("product", `matches("gravel")`).Items, ShouldBeEmpty)
+			})
+
+			Convey("Then the activity log recorded the changes", func() {
+				out, err := h.interactors().Activity().List(h.ctx, application.ActivityListInput{})
+				So(err, ShouldBeNil)
+				So(out.PageInfo.TotalCount, ShouldBeGreaterThanOrEqualTo, 6)
+			})
+		})
+
+		Convey("When a subtype extends a parent type", func() {
+			vehicleID := h.createType("vehicle", "")
+			wheelsAttr := h.createAttr(vehicleID, "wheels", "integer")
+			bikeID := h.createType("bike", vehicleID)
+
+			h.setValue(wheelsAttr, "v-1", vehicleID, 4)
+			h.setValue(wheelsAttr, "b-1", bikeID, 2)
+
+			Convey("Then querying the root type spans the hierarchy", func() {
+				out := h.query("vehicle", `wheels >= 2`)
+				So(out.Items, ShouldHaveLength, 2)
+			})
+
+			Convey("Then type = narrows to one declared type", func() {
+				out := h.query("vehicle", `type = bike`)
+				So(entityIDs(out), ShouldResemble, []string{"b-1"})
+			})
+		})
+
+		Convey("When two types are linked through a relationship", func() {
+			productID := h.createType("product", "")
+			supplierID := h.createType("supplier", "")
+			nameAttr := h.createAttr(productID, "name", "string")
+			regionAttr := h.createAttr(supplierID, "region", "string")
+
+			rels := h.interactors().Relationships()
+			def, err := rels.CreateDefinition(h.ctx, apprelationship.CreateDefinitionInput{
+				InternalName: "supplied_by",
+				DisplayName:  "Supplied by",
+				ParentTypeID: productID,
+				ChildTypeID:  supplierID,
+			})
+			So(err, ShouldBeNil)
+
+			h.setValue(nameAttr, "sku-1", productID, "Trail Bike")
+			h.setValue(regionAttr, "acme", supplierID, "EU")
+			_, err = rels.Link(h.ctx, apprelationship.LinkInput{
+				DefinitionID: def.ID.String(),
+				ParentEntity: "sku-1",
+				ChildEntity:  "acme",
+			})
+			So(err, ShouldBeNil)
+
+			Convey("Then FQL traversals cross the relationship", func() {
+				out := h.query("product", `child(supplied_by) { region = "EU" }`)
+				So(entityIDs(out), ShouldResemble, []string{"sku-1"})
+				So(h.query("product", `child(supplied_by) { region = "US" }`).Items, ShouldBeEmpty)
+			})
+		})
+
+		Convey("When a write fails validation", func() {
+			productID := h.createType("product", "")
+
+			Convey("Then a duplicate internal name conflicts and nothing is written", func() {
+				_, err := h.interactors().TypeDefinitions().Create(h.ctx, apptypedef.CreateInput{
+					InternalName: "product",
+					DisplayName:  "Product again",
+				})
+				So(domainerrors.IsConflict(err), ShouldBeTrue)
+
+				out, err := h.interactors().TypeDefinitions().List(h.ctx, apptypedef.ListInput{})
+				So(err, ShouldBeNil)
+				So(out.Items, ShouldHaveLength, 1)
+				So(out.Items[0].ID.String(), ShouldEqual, productID)
+			})
+		})
+	})
+}
+
+func TestMemoryTransactor(t *testing.T) {
+	Convey("Given the in-memory transactor", t, func() {
+		store := memory.NewStore()
+		ctx := context.Background()
+
+		Convey("When a transaction commits", func() {
+			tx, err := store.Transactor().Begin(ctx)
+			So(err, ShouldBeNil)
+
+			var order []string
+			tx.OnPreCommit(func(context.Context) error { order = append(order, "pre"); return nil })
+			tx.OnPostCommit(func(context.Context) error { order = append(order, "post"); return nil })
+			tx.OnRollback(func(context.Context) error { order = append(order, "rollback"); return nil })
+
+			So(tx.Commit(ctx), ShouldBeNil)
+
+			Convey("Then pre-commit runs before post-commit and rollback never fires", func() {
+				So(order, ShouldResemble, []string{"pre", "post"})
+			})
+		})
+
+		Convey("When a pre-commit hook fails", func() {
+			tx, err := store.Transactor().Begin(ctx)
+			So(err, ShouldBeNil)
+
+			var order []string
+			tx.OnPreCommit(func(context.Context) error { return errors.New("audit write failed") })
+			tx.OnPostCommit(func(context.Context) error { order = append(order, "post"); return nil })
+			tx.OnRollback(func(context.Context) error { order = append(order, "rollback"); return nil })
+
+			err = tx.Commit(ctx)
+
+			Convey("Then commit fails, rollback hooks fire and post-commit never runs", func() {
+				So(err, ShouldNotBeNil)
+				So(order, ShouldResemble, []string{"rollback"})
+			})
+		})
+
+		Convey("When transactions nest", func() {
+			tx, err := store.Transactor().Begin(ctx)
+			So(err, ShouldBeNil)
+			inner, err := tx.Begin(ctx)
+			So(err, ShouldBeNil)
+
+			fired := false
+			tx.OnPostCommit(func(context.Context) error { fired = true; return nil })
+
+			Convey("Then hooks fire only at the outermost commit", func() {
+				So(inner.Commit(ctx), ShouldBeNil)
+				So(fired, ShouldBeFalse)
+				So(tx.Commit(ctx), ShouldBeNil)
+				So(fired, ShouldBeTrue)
+			})
+		})
+
+		Convey("When SQL is attempted against the memory store", func() {
+			var dest []int
+			err := store.Transactor().SelectContext(ctx, &dest, "SELECT 1")
+
+			Convey("Then it is rejected explicitly", func() {
+				So(err, ShouldNotBeNil)
+			})
+		})
+
+		Convey("When an empty store is listed", func() {
+			repos := store.Repositories()
+			_, total, err := repos.TypeDefinitions.List(ctx,
+				domaintypedef.Filter{TenantID: valueobjects.DefaultTenant}, db.Page{Limit: 10})
+			So(err, ShouldBeNil)
+
+			Convey("Then it reports zero without error", func() {
+				So(total, ShouldEqual, 0)
+			})
+		})
+	})
+}

@@ -42,6 +42,18 @@ Runs two ways from one codebase:
   full attribute machinery applies to links), definition inheritance, and
   per-link version binding — track the latest parent/child type version or
   pin a specific one
+- **FQL, a schema-aware query language**: query entities by attribute
+  values and across relationships — `category = "bike" and (min(price) >=
+  500 or "sale" in tags) and child(supplied_by) { link.lead_time_days <=
+  14 }`. Comparisons, `in`, `range`, `has`, `length`, `min`/`max`/`count`,
+  case-insensitive string matching, `and`/`or`/`not` with parentheses,
+  `type isa` hierarchy matching. Names bind against the (inherited) schema
+  with positioned errors; archived types, attributes and entities are
+  invisible. See `docs/design/query-language.md`.
+- **Feature toggles**: search and activity history switch off per
+  deployment (`FLEXITYPE_FEATURE_SEARCH`, `FLEXITYPE_FEATURE_ACTIVITY`, or
+  `flexitype.WithoutSearch()` / `WithoutActivityLog()` when embedding);
+  the console adapts automatically.
 - **Admin console**: a built-in Vue 3 UI at `/` for modelling types,
   attributes, dependencies and relationships, browsing entities with
   dependency-aware value editing, and auditing every change with
@@ -180,6 +192,8 @@ GET|POST   /api/v1/values                      GET|DELETE /api/v1/values/{id}
 GET        /api/v1/entities/{typeDef}/{entity}/values
 GET        /api/v1/entities/{typeDef}/{entity}/attributes/{attr}/effective-schema
 GET|POST   /api/v1/dependencies                PATCH|DELETE /api/v1/dependencies/{id}
+GET        /api/v1/features
+GET        /api/v1/query?type=&q=              POST /api/v1/query/validate
 GET|POST   /api/v1/relationship-definitions    PATCH /api/v1/relationship-definitions/{id}
 POST       /api/v1/relationship-definitions/{id}/archive|restore
 GET        /api/v1/relationship-definitions/{id}/attribute-sets

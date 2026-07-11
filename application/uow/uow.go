@@ -87,7 +87,7 @@ func (u *unitOfWork) Execute(ctx context.Context, fn func(tx db.Transactor, c *C
 	// Pre-commit: persist the activity log in the same transaction, so an
 	// audit row exists if and only if the change committed.
 	tx.OnPreCommit(func(ctx context.Context) error {
-		if len(collector.changes) == 0 {
+		if u.log == nil || len(collector.changes) == 0 {
 			return nil
 		}
 		entries := make([]activity.Entry, 0, len(collector.changes))

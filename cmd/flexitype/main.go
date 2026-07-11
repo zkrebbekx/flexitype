@@ -72,6 +72,14 @@ func run(log *logger.Logger) error {
 	opts = append(opts, flexitype.WithRollbackObserver(func(_ context.Context, err error) {
 		log.Warn().Err(err).Msg("unit of work rolled back")
 	}))
+	if !cfg.EnableSearch {
+		opts = append(opts, flexitype.WithoutSearch())
+		log.Info().Msg("search feature disabled")
+	}
+	if !cfg.EnableActivity {
+		opts = append(opts, flexitype.WithoutActivityLog())
+		log.Info().Msg("activity history disabled")
+	}
 
 	svc := flexitype.New(pool, opts...)
 

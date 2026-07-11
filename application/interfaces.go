@@ -7,9 +7,12 @@ package application
 import (
 	"context"
 
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+
 	"github.com/zkrebbekx/flexitype/application/activity"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
+	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -32,6 +35,7 @@ type Repositories struct {
 	Dependencies            dependencyRepository
 	RelationshipDefinitions relationshipDefinitionRepository
 	Relationships           relationshipRepository
+	Query                   appquery.Repository
 }
 
 // Narrow aliases keep the struct readable without re-importing domain
@@ -76,8 +80,13 @@ type Interactors struct {
 	values        *appvalue.Interactor
 	deps          *appdependency.Interactor
 	relationships *apprelationship.Interactor
+	query         *appquery.Interactor
 	activity      *ActivityInteractor
+	features      Features
 }
+
+// Features reports the deployment's enabled capabilities.
+func (i *Interactors) Features() Features { return i.features }
 
 // TypeDefinitions returns the type-definition usecases.
 func (i *Interactors) TypeDefinitions() *apptypedef.Interactor { return i.typeDefs }
@@ -93,6 +102,9 @@ func (i *Interactors) Dependencies() *appdependency.Interactor { return i.deps }
 
 // Relationships returns the relationship usecases.
 func (i *Interactors) Relationships() *apprelationship.Interactor { return i.relationships }
+
+// Query returns the FQL usecases.
+func (i *Interactors) Query() *appquery.Interactor { return i.query }
 
 // Activity returns the audit-log read usecases.
 func (i *Interactors) Activity() *ActivityInteractor { return i.activity }
@@ -118,6 +130,9 @@ type ActivityListOutput struct {
 
 // List returns a filtered, paginated slice of the activity log.
 func (a *ActivityInteractor) List(ctx context.Context, in ActivityListInput) (*ActivityListOutput, error) {
+	if a.log == nil {
+		return nil, domainerrors.NewValidation("the activity log is disabled in this deployment")
+	}
 	page, err := in.Page.Resolve()
 	if err != nil {
 		return nil, err

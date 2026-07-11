@@ -99,6 +99,10 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Delete("/{id}", s.unlinkRelationship)
 		})
 
+		api.Get("/features", s.features)
+		api.Get("/query", s.runQuery)
+		api.Post("/query/validate", s.validateQuery)
+
 		api.Get("/activity", s.listActivity)
 	})
 

@@ -11,6 +11,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
+	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
@@ -638,9 +639,71 @@ func (s *server) listEntityRelationships(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"items": links})
 }
 
+// --- features --------------------------------------------------------------------
+
+func (s *server) features(w http.ResponseWriter, r *http.Request) {
+	f := application.FromContext(r.Context()).Features()
+	writeJSON(w, http.StatusOK, map[string]bool{
+		"search":   !f.DisableSearch,
+		"activity": !f.DisableActivity,
+	})
+}
+
+func (s *server) featureDisabled(w http.ResponseWriter, feature string) {
+	var body errorBody
+	body.Error.Code = "FEATURE_DISABLED"
+	body.Error.Message = "the " + feature + " feature is disabled in this deployment"
+	writeJSON(w, http.StatusNotImplemented, body)
+}
+
+// --- query ---------------------------------------------------------------------
+
+func (s *server) runQuery(w http.ResponseWriter, r *http.Request) {
+	if application.FromContext(r.Context()).Features().DisableSearch {
+		s.featureDisabled(w, "search")
+		return
+	}
+	out, err := application.FromContext(r.Context()).Query().Execute(r.Context(), appquery.ExecuteInput{
+		Type:  r.URL.Query().Get("type"),
+		Query: r.URL.Query().Get("q"),
+		Page:  pageArgs(r),
+	})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, listResponse{Items: out.Items, PageInfo: out.PageInfo})
+}
+
+type validateQueryRequest struct {
+	Type  string `json:"type"`
+	Query string `json:"q"`
+}
+
+func (s *server) validateQuery(w http.ResponseWriter, r *http.Request) {
+	if application.FromContext(r.Context()).Features().DisableSearch {
+		s.featureDisabled(w, "search")
+		return
+	}
+	var req validateQueryRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	if err := application.FromContext(r.Context()).Query().Validate(r.Context(), req.Type, req.Query); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"valid": true})
+}
+
 // --- activity ----------------------------------------------------------------
 
 func (s *server) listActivity(w http.ResponseWriter, r *http.Request) {
+	if application.FromContext(r.Context()).Features().DisableActivity {
+		s.featureDisabled(w, "activity history")
+		return
+	}
 	out, err := application.FromContext(r.Context()).Activity().List(r.Context(), application.ActivityListInput{
 		Entity:   r.URL.Query().Get("entity"),
 		EntityID: r.URL.Query().Get("entity_id"),

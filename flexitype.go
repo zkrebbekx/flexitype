@@ -32,6 +32,7 @@ type Service struct {
 type options struct {
 	dispatcher *events.Dispatcher
 	onRollback func(ctx context.Context, err error)
+	features   application.Features
 }
 
 // Option customises an embedded Service.
@@ -64,6 +65,17 @@ func WithRollbackObserver(fn func(ctx context.Context, err error)) Option {
 	return func(o *options) { o.onRollback = fn }
 }
 
+// WithoutSearch disables the FQL query surface for this deployment.
+func WithoutSearch() Option {
+	return func(o *options) { o.features.DisableSearch = true }
+}
+
+// WithoutActivityLog disables the audit log entirely: no pre-commit
+// writes, no read API.
+func WithoutActivityLog() Option {
+	return func(o *options) { o.features.DisableActivity = true }
+}
+
 // New wires an embedded flexitype over your connection pool. The pool is
 // shared, never owned: closing it remains your call.
 func New(pool *sqlx.DB, opts ...Option) *Service {
@@ -79,6 +91,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		Dispatcher:      o.dispatcher,
 		ActivityLog:     postgres.NewActivityLog(pool),
 		OnRollback:      o.onRollback,
+		Features:        o.features,
 	})
 
 	return &Service{

@@ -10,10 +10,11 @@ import (
 // DefinitionFilter narrows definition List queries.
 type DefinitionFilter struct {
 	TenantID valueobjects.TenantID
-	// TypeDefinitionID matches definitions where the type is parent or
-	// child.
-	TypeDefinitionID valueobjects.TypeDefinitionID
-	IncludeArchived  bool
+	// TypeDefinitionIDs matches definitions whose parent or child side is
+	// any of the given types (callers pass a type plus its ancestors so
+	// inherited relationship types surface on subtypes).
+	TypeDefinitionIDs []valueobjects.TypeDefinitionID
+	IncludeArchived   bool
 }
 
 // DefinitionRepository is the persistence port for relationship

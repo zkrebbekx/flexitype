@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -20,16 +22,17 @@ import (
 
 // Interactor implements the dependency usecases.
 type Interactor struct {
-	uow    uow.UnitOfWork
-	attrs  domainattribute.Repository
-	values domainvalue.Repository
-	deps   domaindependency.Repository
-	now    func() time.Time
+	uow      uow.UnitOfWork
+	typeDefs domaintypedef.Repository
+	attrs    domainattribute.Repository
+	values   domainvalue.Repository
+	deps     domaindependency.Repository
+	now      func() time.Time
 }
 
 // NewInteractor wires the dependency usecases.
-func NewInteractor(u uow.UnitOfWork, attrs domainattribute.Repository, values domainvalue.Repository, deps domaindependency.Repository) *Interactor {
-	return &Interactor{uow: u, attrs: attrs, values: values, deps: deps, now: time.Now}
+func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, deps domaindependency.Repository) *Interactor {
+	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, deps: deps, now: time.Now}
 }
 
 // CreateInput holds data for creating a dependency. Conditions and Effect
@@ -69,6 +72,12 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domaindepende
 		}
 		target, err := attrs.GetForUpdate(ctx, targetID)
 		if err != nil {
+			return err
+		}
+
+		// Both attributes must live on one hierarchy chain so every entity
+		// holding the target also holds (or inherits) the source.
+		if err := i.checkSameChain(ctx, tx, source, target); err != nil {
 			return err
 		}
 
@@ -336,6 +345,38 @@ func (i *Interactor) EffectiveSchema(ctx context.Context, rawAttrID, rawEntityID
 		Restricted:            schema.Restricted,
 		AllowedValues:         schema.AllowedValues,
 	}, nil
+}
+
+// checkSameChain verifies the two attributes' declaring types share one
+// extends chain (equal, or one an ancestor of the other).
+func (i *Interactor) checkSameChain(ctx context.Context, tx db.Transactor, source, target *domainattribute.Definition) error {
+	if source.TypeDefinitionID().Equals(target.TypeDefinitionID()) {
+		return nil
+	}
+	typeDefs := i.typeDefs.WithTx(tx)
+
+	sourceType, err := typeDefs.Get(ctx, source.TypeDefinitionID())
+	if err != nil {
+		return err
+	}
+	ok, err := apptypedef.IsAncestorOrSelf(ctx, typeDefs, sourceType, target.TypeDefinitionID())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		targetType, terr := typeDefs.Get(ctx, target.TypeDefinitionID())
+		if terr != nil {
+			return terr
+		}
+		if ok, err = apptypedef.IsAncestorOrSelf(ctx, typeDefs, targetType, source.TypeDefinitionID()); err != nil {
+			return err
+		}
+	}
+	if !ok {
+		return domainerrors.NewValidation(
+			"source and target attributes must belong to the same type hierarchy")
+	}
+	return nil
 }
 
 // decodeRule parses raw condition and effect JSON.

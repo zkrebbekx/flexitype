@@ -19,7 +19,7 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
-const typeDefColumns = `id, tenant_id, kind, internal_name, display_name, description, version, created_at, updated_at, archived_at`
+const typeDefColumns = `id, tenant_id, kind, internal_name, display_name, description, extends_id, version, created_at, updated_at, archived_at`
 
 type typeDefRow struct {
 	ID           ulid.ID      `db:"id"`
@@ -28,6 +28,7 @@ type typeDefRow struct {
 	InternalName string       `db:"internal_name"`
 	DisplayName  string       `db:"display_name"`
 	Description  string       `db:"description"`
+	ExtendsID    ulid.ID      `db:"extends_id"`
 	Version      int          `db:"version"`
 	CreatedAt    time.Time    `db:"created_at"`
 	UpdatedAt    time.Time    `db:"updated_at"`
@@ -35,6 +36,11 @@ type typeDefRow struct {
 }
 
 func (r typeDefRow) snapshot() domaintypedef.Snapshot {
+	var extends *valueobjects.TypeDefinitionID
+	if !r.ExtendsID.IsZero() {
+		id := valueobjects.TypeDefinitionID{ID: r.ExtendsID}
+		extends = &id
+	}
 	return domaintypedef.Snapshot{
 		ID:           valueobjects.TypeDefinitionID{ID: r.ID},
 		TenantID:     valueobjects.TenantID(r.TenantID),
@@ -42,6 +48,7 @@ func (r typeDefRow) snapshot() domaintypedef.Snapshot {
 		InternalName: r.InternalName,
 		DisplayName:  r.DisplayName,
 		Description:  r.Description,
+		ExtendsID:    extends,
 		Version:      r.Version,
 		CreatedAt:    r.CreatedAt,
 		UpdatedAt:    r.UpdatedAt,
@@ -101,11 +108,12 @@ func (f typeDefListFilter) arm(key string) (string, []any) {
 }
 
 type typeDefinitionRepository struct {
-	q      db.QueryExecer
-	inTx   bool
-	byID   *dataloader.Loader[string, domaintypedef.Snapshot]
-	byName *dataloader.Loader[nameKey, domaintypedef.Snapshot]
-	byList *dataloader.Loader[string, pagedResult[domaintypedef.Snapshot]]
+	q          db.QueryExecer
+	inTx       bool
+	byID       *dataloader.Loader[string, domaintypedef.Snapshot]
+	byName     *dataloader.Loader[nameKey, domaintypedef.Snapshot]
+	byList     *dataloader.Loader[string, pagedResult[domaintypedef.Snapshot]]
+	byChildren *dataloader.Loader[string, []domaintypedef.Snapshot]
 }
 
 // NewTypeDefinitionRepository builds a dataloader-backed repository over
@@ -115,6 +123,7 @@ func NewTypeDefinitionRepository(q db.QueryExecer) domaintypedef.Repository {
 	r.byID = newLoader(r.batchByID)
 	r.byName = newLoader(r.batchByName)
 	r.byList = newLoader(r.batchList)
+	r.byChildren = newLoader(r.batchChildren)
 	return r
 }
 
@@ -187,6 +196,46 @@ func (r *typeDefinitionRepository) batchList(ctx context.Context, keys []string)
 		pr.Items = append(pr.Items, row.snapshot())
 		pr.Total = row.TotalCount
 		out[row.LoaderKey] = pr
+	}
+	return out, nil
+}
+
+// batchChildren collapses direct-subtype loads into one ANY() query.
+func (r *typeDefinitionRepository) batchChildren(ctx context.Context, parents []string) (map[string][]domaintypedef.Snapshot, error) {
+	var rows []typeDefRow
+	query := bind(`SELECT ` + typeDefColumns + ` FROM flexitype_type_definition
+	 WHERE extends_id = ANY(?) AND archived_at IS NULL
+	 ORDER BY internal_name`)
+	if err := r.q.SelectContext(ctx, &rows, query, pq.Array(parents)); err != nil {
+		return nil, fmt.Errorf("batch type definition children: %w", err)
+	}
+	out := make(map[string][]domaintypedef.Snapshot, len(parents))
+	for _, row := range rows {
+		out[row.ExtendsID.String()] = append(out[row.ExtendsID.String()], row.snapshot())
+	}
+	return out, nil
+}
+
+// ListChildren loads the direct subtypes of a type.
+func (r *typeDefinitionRepository) ListChildren(ctx context.Context, parentID valueobjects.TypeDefinitionID) ([]*domaintypedef.TypeDefinition, error) {
+	var snaps []domaintypedef.Snapshot
+	if r.inTx {
+		fetched, err := r.batchChildren(ctx, []string{parentID.String()})
+		if err != nil {
+			return nil, err
+		}
+		snaps = fetched[parentID.String()]
+	} else {
+		var err error
+		snaps, err = load(ctx, r.byChildren, parentID.String())
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	out := make([]*domaintypedef.TypeDefinition, 0, len(snaps))
+	for _, snap := range snaps {
+		out = append(out, domaintypedef.Rehydrate(snap))
 	}
 	return out, nil
 }
@@ -284,12 +333,20 @@ func (r *typeDefinitionRepository) List(ctx context.Context, filter domaintypede
 	return out, result.Total, nil
 }
 
+// extendsParam maps an optional parent pointer to its driver argument.
+func extendsParam(id *valueobjects.TypeDefinitionID) any {
+	if id == nil {
+		return nil
+	}
+	return id.String()
+}
+
 func (r *typeDefinitionRepository) Save(ctx context.Context, t *domaintypedef.TypeDefinition) error {
 	s := t.Snapshot()
 	_, err := r.q.ExecContext(ctx, bind(
 		`INSERT INTO flexitype_type_definition
-		   (id, tenant_id, kind, internal_name, display_name, description, version, created_at, updated_at, archived_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   (id, tenant_id, kind, internal_name, display_name, description, extends_id, version, created_at, updated_at, archived_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   display_name = EXCLUDED.display_name,
 		   description  = EXCLUDED.description,
@@ -297,7 +354,8 @@ func (r *typeDefinitionRepository) Save(ctx context.Context, t *domaintypedef.Ty
 		   updated_at   = EXCLUDED.updated_at,
 		   archived_at  = EXCLUDED.archived_at`),
 		s.ID.String(), s.TenantID.String(), string(s.Kind), s.InternalName, s.DisplayName,
-		s.Description, s.Version, s.CreatedAt, s.UpdatedAt, nullableTime(s.ArchivedAt),
+		s.Description, extendsParam(s.ExtendsID), s.Version, s.CreatedAt, s.UpdatedAt,
+		nullableTime(s.ArchivedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("save type definition: %w", err)

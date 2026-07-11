@@ -15,6 +15,7 @@ import (
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -79,6 +80,48 @@ func (f *fakeTransactor) InTransaction(ctx context.Context, fn func(tx db.Transa
 func (f *fakeTransactor) OnPreCommit(h db.Hook)  { f.pre = append(f.pre, h) }
 func (f *fakeTransactor) OnPostCommit(h db.Hook) { f.post = append(f.post, h) }
 func (f *fakeTransactor) OnRollback(h db.Hook)   { f.rollback = append(f.rollback, h) }
+
+// fakeTypeDefRepo is an in-memory typedef.Repository for hierarchy walks.
+type fakeTypeDefRepo struct {
+	types map[string]domaintypedef.Snapshot
+}
+
+func (r *fakeTypeDefRepo) WithTx(db.QueryExecer) domaintypedef.Repository { return r }
+
+func (r *fakeTypeDefRepo) Get(_ context.Context, id valueobjects.TypeDefinitionID) (*domaintypedef.TypeDefinition, error) {
+	snap, ok := r.types[id.String()]
+	if !ok {
+		return nil, domainerrors.NewNotFound(domaintypedef.AggregateType, id.String())
+	}
+	return domaintypedef.Rehydrate(snap), nil
+}
+
+func (r *fakeTypeDefRepo) GetForUpdate(ctx context.Context, id valueobjects.TypeDefinitionID) (*domaintypedef.TypeDefinition, error) {
+	return r.Get(ctx, id)
+}
+
+func (r *fakeTypeDefRepo) GetByInternalName(context.Context, valueobjects.TenantID, string) (*domaintypedef.TypeDefinition, error) {
+	return nil, domainerrors.NewNotFound(domaintypedef.AggregateType, "unused")
+}
+
+func (r *fakeTypeDefRepo) List(context.Context, domaintypedef.Filter, db.Page) ([]*domaintypedef.TypeDefinition, int, error) {
+	return nil, 0, nil
+}
+
+func (r *fakeTypeDefRepo) ListChildren(_ context.Context, parentID valueobjects.TypeDefinitionID) ([]*domaintypedef.TypeDefinition, error) {
+	var out []*domaintypedef.TypeDefinition
+	for _, snap := range r.types {
+		if snap.ExtendsID != nil && snap.ExtendsID.Equals(parentID) {
+			out = append(out, domaintypedef.Rehydrate(snap))
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeTypeDefRepo) Save(_ context.Context, t *domaintypedef.TypeDefinition) error {
+	r.types[t.ID().String()] = t.Snapshot()
+	return nil
+}
 
 type fakeAttrRepo struct {
 	defs map[string]*domainattribute.Definition
@@ -183,7 +226,7 @@ func (r *fakeValueRepo) List(context.Context, domainvalue.Filter, db.Page) ([]*d
 	return nil, 0, nil
 }
 
-func (r *fakeValueRepo) ListEntities(context.Context, valueobjects.TenantID, valueobjects.TypeDefinitionID, db.Page) ([]domainvalue.EntitySummary, int, error) {
+func (r *fakeValueRepo) ListEntities(context.Context, valueobjects.TenantID, []valueobjects.TypeDefinitionID, db.Page) ([]domainvalue.EntitySummary, int, error) {
 	return nil, 0, nil
 }
 
@@ -263,6 +306,7 @@ func enumOf(members ...string) domainattribute.Constraints {
 func TestSetValueUsecase(t *testing.T) {
 	Convey("Given the value usecases over in-memory repositories", t, func() {
 		typeDef := valueobjects.NewTypeDefinitionID()
+		typeDefs := &fakeTypeDefRepo{types: map[string]domaintypedef.Snapshot{}}
 		attrs := &fakeAttrRepo{defs: map[string]*domainattribute.Definition{}}
 		values := &fakeValueRepo{values: map[string]domainvalue.Snapshot{}}
 		deps := &fakeDepRepo{}
@@ -276,7 +320,7 @@ func TestSetValueUsecase(t *testing.T) {
 		})
 
 		unit := uow.New(&fakeTransactor{}, dispatcher, log)
-		interactor := NewInteractor(unit, attrs, values, deps)
+		interactor := NewInteractor(unit, typeDefs, attrs, values, deps)
 		ctx := context.Background()
 
 		serial := mustAttr(domainattribute.NewInput{

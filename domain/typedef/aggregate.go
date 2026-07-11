@@ -36,35 +36,64 @@ type TypeDefinition struct {
 	internalName string
 	displayName  string
 	description  string
+	extendsID    *valueobjects.TypeDefinitionID
 	version      int
 	createdAt    time.Time
 	updatedAt    time.Time
 	archivedAt   *time.Time
 }
 
+// NewInput carries construction parameters for a TypeDefinition. Extends,
+// when set, makes the new type a subtype inheriting the parent's whole
+// effective schema; the pointer is immutable after creation (see
+// docs/design/type-inheritance.md).
+type NewInput struct {
+	TenantID     valueobjects.TenantID
+	InternalName string
+	DisplayName  string
+	Description  string
+	Extends      *TypeDefinition
+}
+
 // New creates a TypeDefinition, returning the aggregate and the events it
 // emitted.
-func New(tenant valueobjects.TenantID, internalName, displayName, description string, now time.Time) (*TypeDefinition, []events.Event, error) {
-	if tenant.IsZero() {
-		tenant = valueobjects.DefaultTenant
+func New(in NewInput, now time.Time) (*TypeDefinition, []events.Event, error) {
+	if in.TenantID.IsZero() {
+		in.TenantID = valueobjects.DefaultTenant
 	}
-	if !internalNamePattern.MatchString(internalName) {
+	if !internalNamePattern.MatchString(in.InternalName) {
 		return nil, nil, domainerrors.NewValidation(
 			"internal name must be snake_case, start with a letter and be 2-63 characters",
-			"internal_name", internalName,
+			"internal_name", in.InternalName,
 		)
 	}
-	if displayName == "" {
+	if in.DisplayName == "" {
 		return nil, nil, domainerrors.NewValidation("display name is required")
+	}
+
+	var extendsID *valueobjects.TypeDefinitionID
+	if in.Extends != nil {
+		if in.Extends.Kind() != KindEntity {
+			return nil, nil, domainerrors.NewValidation("only entity types can be extended")
+		}
+		if in.Extends.TenantID() != in.TenantID {
+			return nil, nil, domainerrors.NewValidation("a type can only extend a type in the same tenant")
+		}
+		if in.Extends.IsArchived() {
+			return nil, nil, domainerrors.NewValidation("cannot extend an archived type")
+		}
+		id := in.Extends.ID()
+		extendsID = &id
 	}
 
 	t := &TypeDefinition{
 		id:           valueobjects.NewTypeDefinitionID(),
-		tenantID:     tenant,
+		tenantID:     in.TenantID,
 		kind:         KindEntity,
-		internalName: internalName,
-		displayName:  displayName,
-		description:  description,
+		internalName: in.InternalName,
+		displayName:  in.DisplayName,
+		description:  in.Description,
+		extendsID:    extendsID,
 		version:      1,
 		createdAt:    now,
 		updatedAt:    now,
@@ -74,6 +103,7 @@ func New(tenant valueobjects.TenantID, internalName, displayName, description st
 		TenantID:         t.tenantID,
 		InternalName:     t.internalName,
 		DisplayName:      t.displayName,
+		ExtendsID:        extendsID,
 		OccurredAt:       now,
 	}}, nil
 }
@@ -139,7 +169,7 @@ func (t *TypeDefinition) Restore(now time.Time) ([]events.Event, error) {
 // definition owns for its attributes. It never appears in entity-type
 // listings.
 func NewAttributeSet(tenant valueobjects.TenantID, internalName, displayName string, now time.Time) (*TypeDefinition, []events.Event, error) {
-	t, evts, err := New(tenant, internalName, displayName, "", now)
+	t, evts, err := New(NewInput{TenantID: tenant, InternalName: internalName, DisplayName: displayName}, now)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -153,6 +183,9 @@ func (t *TypeDefinition) ID() valueobjects.TypeDefinitionID { return t.id }
 // Kind returns whether this is an entity type or a relationship attribute
 // set.
 func (t *TypeDefinition) Kind() Kind { return t.kind }
+
+// ExtendsID returns the parent type when this is a subtype, or nil.
+func (t *TypeDefinition) ExtendsID() *valueobjects.TypeDefinitionID { return t.extendsID }
 
 // TenantID returns the owning tenant.
 func (t *TypeDefinition) TenantID() valueobjects.TenantID { return t.tenantID }
@@ -184,16 +217,17 @@ func (t *TypeDefinition) IsArchived() bool { return t.archivedAt != nil }
 // Snapshot is the exported, JSON-friendly projection of a TypeDefinition,
 // used for persistence, activity-log descriptors and API mapping.
 type Snapshot struct {
-	ID           valueobjects.TypeDefinitionID `json:"id"`
-	TenantID     valueobjects.TenantID         `json:"tenant_id"`
-	Kind         Kind                          `json:"kind"`
-	InternalName string                        `json:"internal_name"`
-	DisplayName  string                        `json:"display_name"`
-	Description  string                        `json:"description,omitempty"`
-	Version      int                           `json:"version"`
-	CreatedAt    time.Time                     `json:"created_at"`
-	UpdatedAt    time.Time                     `json:"updated_at"`
-	ArchivedAt   *time.Time                    `json:"archived_at,omitempty"`
+	ID           valueobjects.TypeDefinitionID  `json:"id"`
+	TenantID     valueobjects.TenantID          `json:"tenant_id"`
+	Kind         Kind                           `json:"kind"`
+	InternalName string                         `json:"internal_name"`
+	DisplayName  string                         `json:"display_name"`
+	Description  string                         `json:"description,omitempty"`
+	ExtendsID    *valueobjects.TypeDefinitionID `json:"extends_id,omitempty"`
+	Version      int                            `json:"version"`
+	CreatedAt    time.Time                      `json:"created_at"`
+	UpdatedAt    time.Time                      `json:"updated_at"`
+	ArchivedAt   *time.Time                     `json:"archived_at,omitempty"`
 }
 
 // Snapshot projects the aggregate's current state.
@@ -205,6 +239,7 @@ func (t *TypeDefinition) Snapshot() Snapshot {
 		InternalName: t.internalName,
 		DisplayName:  t.displayName,
 		Description:  t.description,
+		ExtendsID:    t.extendsID,
 		Version:      t.version,
 		CreatedAt:    t.createdAt,
 		UpdatedAt:    t.updatedAt,
@@ -225,6 +260,7 @@ func Rehydrate(s Snapshot) *TypeDefinition {
 		kind:         kind,
 		internalName: s.InternalName,
 		displayName:  s.DisplayName,
+		extendsID:    s.ExtendsID,
 		description:  s.Description,
 		version:      s.Version,
 		createdAt:    s.CreatedAt,

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domainrelationship "github.com/zkrebbekx/flexitype/domain/relationship"
@@ -298,8 +299,22 @@ func (i *Interactor) ListDefinitions(ctx context.Context, in DefinitionListInput
 		IncludeArchived: in.IncludeArchived,
 	}
 	if in.TypeDefinitionID != "" {
-		if filter.TypeDefinitionID, err = valueobjects.ParseTypeDefinitionID(in.TypeDefinitionID); err != nil {
-			return nil, domainerrors.NewValidation(err.Error())
+		typeID, perr := valueobjects.ParseTypeDefinitionID(in.TypeDefinitionID)
+		if perr != nil {
+			return nil, domainerrors.NewValidation(perr.Error())
+		}
+		// Endpoints are polymorphic: a subtype participates in every
+		// relationship its ancestors do, so match the whole chain.
+		t, terr := i.typeDefs.Get(ctx, typeID)
+		if terr != nil {
+			return nil, terr
+		}
+		chain, terr := apptypedef.Chain(ctx, i.typeDefs, t)
+		if terr != nil {
+			return nil, terr
+		}
+		for _, link := range chain {
+			filter.TypeDefinitionIDs = append(filter.TypeDefinitionIDs, link.ID())
 		}
 	}
 

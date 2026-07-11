@@ -80,10 +80,10 @@ func (f *factory) New(context.Context) *Interactors {
 	unit := uow.New(f.cfg.Transactor, f.cfg.Dispatcher, f.cfg.ActivityLog, opts...)
 
 	return &Interactors{
-		typeDefs:      apptypedef.NewInteractor(unit, repos.TypeDefinitions),
+		typeDefs:      apptypedef.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
 		attrs:         appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
-		values:        appvalue.NewInteractor(unit, repos.Attributes, repos.Values, repos.Dependencies),
-		deps:          appdependency.NewInteractor(unit, repos.Attributes, repos.Values, repos.Dependencies),
+		values:        appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
+		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
 		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),
 		activity:      &ActivityInteractor{log: f.cfg.ActivityLog},
 	}

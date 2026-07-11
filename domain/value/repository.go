@@ -28,9 +28,12 @@ type Filter struct {
 // EntitySummary is one row of the entity browser: a distinct entity with
 // its live value count and most recent change.
 type EntitySummary struct {
-	EntityID      valueobjects.EntityID
-	ValueCount    int
-	LastUpdatedAt time.Time
+	EntityID valueobjects.EntityID
+	// TypeDefinitionID is the entity's declared type — a descendant of the
+	// queried type when browsing includes subtypes.
+	TypeDefinitionID valueobjects.TypeDefinitionID
+	ValueCount       int
+	LastUpdatedAt    time.Time
 }
 
 // Repository is the persistence port for attribute values. Reads are
@@ -69,9 +72,10 @@ type Repository interface {
 	List(ctx context.Context, filter Filter, page db.Page) ([]*AttributeValue, int, error)
 
 	// ListEntities returns a page of distinct entities holding live values
-	// of a type definition, most recently changed first, plus the total
+	// of any of the given type definitions (a type plus, optionally, its
+	// descendants), most recently changed first, plus the total
 	// distinct-entity count.
-	ListEntities(ctx context.Context, tenant valueobjects.TenantID, typeDefID valueobjects.TypeDefinitionID, page db.Page) ([]EntitySummary, int, error)
+	ListEntities(ctx context.Context, tenant valueobjects.TenantID, typeDefIDs []valueobjects.TypeDefinitionID, page db.Page) ([]EntitySummary, int, error)
 
 	// Save upserts the aggregate.
 	Save(ctx context.Context, av *AttributeValue) error

@@ -46,6 +46,8 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Post("/{id}/archive", s.archiveTypeDefinition)
 			r.Post("/{id}/restore", s.restoreTypeDefinition)
 			r.Get("/{id}/attributes", s.listAttributesByTypeDefinition)
+			r.Get("/{id}/effective-attributes", s.effectiveAttributes)
+			r.Get("/{id}/children", s.typeChildren)
 		})
 
 		api.Route("/attributes", func(r chi.Router) {

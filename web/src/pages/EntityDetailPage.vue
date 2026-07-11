@@ -25,9 +25,9 @@ const toasts = useToasts()
 const queryClient = useQueryClient()
 
 const type = useQuery({ queryKey: ['type', typeId], queryFn: () => api.getType(typeId.value) })
-const attributes = useQuery({
-  queryKey: ['attributes', typeId],
-  queryFn: () => api.listAttributes({ type_definition_id: typeId.value, limit: 200 }),
+const effective = useQuery({
+  queryKey: ['effective-attributes', typeId],
+  queryFn: () => api.effectiveAttributes(typeId.value),
 })
 const values = useQuery({
   queryKey: ['entity-values', typeId, entityId],
@@ -36,17 +36,23 @@ const values = useQuery({
 
 interface Row {
   attribute: AttributeDefinition
+  declaredIn: { id: string; display_name: string }
   values: AttributeValue[]
 }
 
-// Every live attribute renders a row — including ones with no value yet, so
-// "what's missing" is visible at a glance.
+// Every attribute of the entity's inherited schema renders a row —
+// including ones with no value yet, so "what's missing" is visible at a
+// glance. Inherited rows carry their declaring type.
 const rows = computed<Row[]>(() => {
-  const attrs = attributes.data.value?.items ?? []
+  const attrs = effective.data.value?.items ?? []
   const vals = values.data.value?.items ?? []
   return attrs
-    .filter((a) => !a.archived_at)
-    .map((a) => ({ attribute: a, values: vals.filter((v) => v.attribute_definition_id === a.id) }))
+    .filter((e) => !e.attribute.archived_at)
+    .map((e) => ({
+      attribute: e.attribute,
+      declaredIn: e.declared_in,
+      values: vals.filter((v) => v.attribute_definition_id === e.attribute.id),
+    }))
 })
 
 // --- editing -----------------------------------------------------------------
@@ -89,6 +95,8 @@ const setValue = useMutation({
     return api.setValue({
       attribute_definition_id: editor.attribute.id,
       entity_id: entityId.value,
+      // The entity's declared type: inherited attributes anchor here.
+      type_definition_id: typeId.value,
       value: toApiValue(editor.attribute.data_type, editor.input),
     })
   },
@@ -201,6 +209,9 @@ const removeValue = useMutation({
           <Badge v-else-if="row.attribute.required" tone="accent">required</Badge>
           <Badge v-if="row.attribute.multi_valued">multi</Badge>
           <Badge v-if="row.attribute.unique" tone="warn">unique</Badge>
+          <span v-if="row.declaredIn.id !== typeId" class="text-[12px] text-(--text-muted)">
+            from {{ row.declaredIn.display_name }}
+          </span>
         </div>
         <Button
           v-if="!row.values.length || row.attribute.multi_valued"
@@ -238,9 +249,9 @@ const removeValue = useMutation({
     </article>
 
     <EmptyState
-      v-if="!attributes.isPending.value && !rows.length"
+      v-if="!effective.isPending.value && !rows.length"
       title="This type has no attributes"
-      body="Define attributes on the type first; then entities can hold values."
+      body="Define attributes on the type (or an ancestor) first; then entities can hold values."
     />
   </div>
 

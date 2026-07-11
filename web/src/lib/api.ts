@@ -68,6 +68,8 @@ export interface Paged<T> {
 export interface TypeDefinition {
   id: string
   tenant_id: string
+  kind?: 'entity' | 'relationship_attributes'
+  extends_id?: string
   internal_name: string
   display_name: string
   description?: string
@@ -209,8 +211,14 @@ export interface EntityLink {
 
 export interface EntitySummary {
   entity_id: string
+  type_definition_id: string
   value_count: number
   last_updated_at: string
+}
+
+export interface EffectiveAttribute {
+  attribute: AttributeDefinition
+  declared_in: TypeDefinition
 }
 
 export interface ActivityEntry {
@@ -273,8 +281,12 @@ export const api = {
   listTypes: (q: PageQuery & { include_archived?: boolean } = {}) =>
     request<Paged<TypeDefinition>>('GET', `/type-definitions${qs(q)}`),
   getType: (id: string) => request<TypeDefinition>('GET', `/type-definitions/${id}`),
-  createType: (input: { internal_name: string; display_name: string; description?: string }) =>
+  createType: (input: { internal_name: string; display_name: string; description?: string; extends_id?: string }) =>
     request<TypeDefinition>('POST', '/type-definitions', input),
+  effectiveAttributes: (typeId: string) =>
+    request<{ items: EffectiveAttribute[] }>('GET', `/type-definitions/${typeId}/effective-attributes`),
+  typeChildren: (typeId: string) =>
+    request<{ items: TypeDefinition[] }>('GET', `/type-definitions/${typeId}/children`),
   updateType: (id: string, input: { display_name: string; description?: string }) =>
     request<TypeDefinition>('PATCH', `/type-definitions/${id}`, input),
   archiveType: (id: string) => request<TypeDefinition>('POST', `/type-definitions/${id}/archive`),
@@ -316,7 +328,7 @@ export const api = {
   restoreAttribute: (id: string) => request<AttributeDefinition>('POST', `/attributes/${id}/restore`),
 
   // Values & entities
-  listEntities: (typeId: string, q: PageQuery = {}) =>
+  listEntities: (typeId: string, q: PageQuery & { include_descendants?: boolean } = {}) =>
     request<Paged<EntitySummary>>('GET', `/entities/${typeId}${qs(q)}`),
   listEntityValues: (typeId: string, entityId: string) =>
     request<{ items: AttributeValue[] }>('GET', `/entities/${typeId}/${encodeURIComponent(entityId)}/values`),
@@ -325,7 +337,7 @@ export const api = {
       'GET',
       `/entities/${typeId}/${encodeURIComponent(entityId)}/attributes/${attributeId}/effective-schema`,
     ),
-  setValue: (input: { attribute_definition_id: string; entity_id: string; value: unknown }) =>
+  setValue: (input: { attribute_definition_id: string; entity_id: string; type_definition_id?: string; value: unknown }) =>
     request<AttributeValue>('POST', '/values', input),
   removeValue: (id: string) => request<AttributeValue>('DELETE', `/values/${id}`),
   listValues: (

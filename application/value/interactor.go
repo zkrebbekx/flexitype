@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -21,16 +23,17 @@ import (
 
 // Interactor implements the attribute-value usecases.
 type Interactor struct {
-	uow    uow.UnitOfWork
-	attrs  domainattribute.Repository
-	values domainvalue.Repository
-	deps   domaindependency.Repository
-	now    func() time.Time
+	uow      uow.UnitOfWork
+	typeDefs domaintypedef.Repository
+	attrs    domainattribute.Repository
+	values   domainvalue.Repository
+	deps     domaindependency.Repository
+	now      func() time.Time
 }
 
 // NewInteractor wires the attribute-value usecases.
-func NewInteractor(u uow.UnitOfWork, attrs domainattribute.Repository, values domainvalue.Repository, deps domaindependency.Repository) *Interactor {
-	return &Interactor{uow: u, attrs: attrs, values: values, deps: deps, now: time.Now}
+func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, deps domaindependency.Repository) *Interactor {
+	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, deps: deps, now: time.Now}
 }
 
 // SetInput holds data for writing one attribute value. Value is the raw
@@ -38,7 +41,11 @@ func NewInteractor(u uow.UnitOfWork, attrs domainattribute.Repository, values do
 type SetInput struct {
 	AttributeDefinitionID string
 	EntityID              string
-	Value                 json.RawMessage
+	// TypeDefinitionID is the entity's declared type. Optional: it defaults
+	// to the attribute's declaring type, and must be that type or one of
+	// its descendants (inherited attributes anchor to the subtype).
+	TypeDefinitionID string
+	Value            json.RawMessage
 }
 
 // Set writes a value for an entity attribute: it locks the definition,
@@ -70,12 +77,37 @@ func (i *Interactor) Set(ctx context.Context, in SetInput) (*domainvalue.Snapsho
 			return err
 		}
 
+		// Resolve the entity's declared type and prove the attribute is in
+		// its inherited schema.
+		entityType := def.TypeDefinitionID()
+		if in.TypeDefinitionID != "" {
+			if entityType, err = valueobjects.ParseTypeDefinitionID(in.TypeDefinitionID); err != nil {
+				return domainerrors.NewValidation(err.Error())
+			}
+		}
+		if !entityType.Equals(def.TypeDefinitionID()) {
+			typeDefs := i.typeDefs.WithTx(tx)
+			declared, terr := typeDefs.Get(ctx, entityType)
+			if terr != nil {
+				return terr
+			}
+			ok, terr := apptypedef.IsAncestorOrSelf(ctx, typeDefs, declared, def.TypeDefinitionID())
+			if terr != nil {
+				return terr
+			}
+			if !ok {
+				return domainerrors.NewValidation(
+					"the attribute is not part of the entity type's inherited schema",
+					"attribute", def.InternalName(), "entity_type", entityType.String())
+			}
+		}
+
 		v, err := valueobjects.ParseValue(def.DataType(), in.Value)
 		if err != nil {
 			return domainerrors.NewValidation(err.Error())
 		}
 
-		if err := i.checkDependencies(ctx, tx, def, entityID, v); err != nil {
+		if err := i.checkDependencies(ctx, tx, def, entityType, entityID, v); err != nil {
 			return err
 		}
 		if def.Unique() {
@@ -127,7 +159,7 @@ func (i *Interactor) Set(ctx context.Context, in SetInput) (*domainvalue.Snapsho
 			}
 		}
 
-		av, evts, err := domainvalue.New(def, entityID, v, i.now())
+		av, evts, err := domainvalue.New(def, entityType, entityID, v, i.now())
 		if err != nil {
 			return err
 		}
@@ -157,6 +189,7 @@ func (i *Interactor) checkDependencies(
 	ctx context.Context,
 	tx db.Transactor,
 	def *domainattribute.Definition,
+	entityType valueobjects.TypeDefinitionID,
 	entityID valueobjects.EntityID,
 	v valueobjects.Value,
 ) error {
@@ -173,7 +206,7 @@ func (i *Interactor) checkDependencies(
 
 	entityValues, err := values.ListByEntity(ctx, domainvalue.EntityKey{
 		TenantID:         def.TenantID(),
-		TypeDefinitionID: def.TypeDefinitionID(),
+		TypeDefinitionID: entityType,
 		EntityID:         entityID,
 	})
 	if err != nil {
@@ -275,9 +308,10 @@ func (i *Interactor) ListByEntity(ctx context.Context, rawTypeDefID, rawEntityID
 
 // EntitySummaryOutput is one entity-browser row.
 type EntitySummaryOutput struct {
-	EntityID      string    `json:"entity_id"`
-	ValueCount    int       `json:"value_count"`
-	LastUpdatedAt time.Time `json:"last_updated_at"`
+	EntityID         string    `json:"entity_id"`
+	TypeDefinitionID string    `json:"type_definition_id"`
+	ValueCount       int       `json:"value_count"`
+	LastUpdatedAt    time.Time `json:"last_updated_at"`
 }
 
 // EntityListOutput is one page of the entity browser.
@@ -287,8 +321,10 @@ type EntityListOutput struct {
 }
 
 // ListEntities pages the distinct entities holding live values of a type
-// definition — the observability entry point for the admin console.
-func (i *Interactor) ListEntities(ctx context.Context, rawTypeDefID string, args db.PageArgs) (*EntityListOutput, error) {
+// definition — the observability entry point for the admin console. With
+// includeDescendants, entities of every subtype are included and each row
+// carries its declared type.
+func (i *Interactor) ListEntities(ctx context.Context, rawTypeDefID string, includeDescendants bool, args db.PageArgs) (*EntityListOutput, error) {
 	typeDefID, err := valueobjects.ParseTypeDefinitionID(rawTypeDefID)
 	if err != nil {
 		return nil, domainerrors.NewValidation(err.Error())
@@ -298,7 +334,22 @@ func (i *Interactor) ListEntities(ctx context.Context, rawTypeDefID string, args
 		return nil, domainerrors.NewValidation(err.Error())
 	}
 
-	items, total, err := i.values.ListEntities(ctx, uow.TenantFromContext(ctx), typeDefID, page)
+	typeIDs := []valueobjects.TypeDefinitionID{typeDefID}
+	if includeDescendants {
+		t, err := i.typeDefs.Get(ctx, typeDefID)
+		if err != nil {
+			return nil, err
+		}
+		descendants, err := apptypedef.Descendants(ctx, i.typeDefs, t)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range descendants {
+			typeIDs = append(typeIDs, d.ID())
+		}
+	}
+
+	items, total, err := i.values.ListEntities(ctx, uow.TenantFromContext(ctx), typeIDs, page)
 	if err != nil {
 		return nil, err
 	}
@@ -309,9 +360,10 @@ func (i *Interactor) ListEntities(ctx context.Context, rawTypeDefID string, args
 	}
 	for _, e := range items {
 		out.Items = append(out.Items, EntitySummaryOutput{
-			EntityID:      e.EntityID.String(),
-			ValueCount:    e.ValueCount,
-			LastUpdatedAt: e.LastUpdatedAt,
+			EntityID:         e.EntityID.String(),
+			TypeDefinitionID: e.TypeDefinitionID.String(),
+			ValueCount:       e.ValueCount,
+			LastUpdatedAt:    e.LastUpdatedAt,
 		})
 	}
 	return out, nil

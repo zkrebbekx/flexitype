@@ -126,6 +126,16 @@ func (r *fakeRepo) List(context.Context, domaintypedef.Filter, db.Page) ([]*doma
 	return out, len(out), nil
 }
 
+func (r *fakeRepo) ListChildren(_ context.Context, parentID valueobjects.TypeDefinitionID) ([]*domaintypedef.TypeDefinition, error) {
+	var out []*domaintypedef.TypeDefinition
+	for _, snap := range r.items {
+		if snap.ExtendsID != nil && snap.ExtendsID.Equals(parentID) {
+			out = append(out, domaintypedef.Rehydrate(snap))
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeRepo) Save(_ context.Context, t *domaintypedef.TypeDefinition) error {
 	r.items[t.ID().String()] = t.Snapshot()
 	return nil
@@ -160,7 +170,7 @@ func TestCreateTypeDefinitionUsecase(t *testing.T) {
 
 		unit := uow.New(transactor, dispatcher, log,
 			uow.WithNow(func() time.Time { return time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC) }))
-		interactor := NewInteractor(unit, repo)
+		interactor := NewInteractor(unit, repo, nil)
 
 		ctx := uow.WithActor(context.Background(), uow.Actor{
 			ID: "sa-1", Name: "ci-importer", Kind: uow.ActorServiceAccount,
@@ -210,7 +220,7 @@ func TestCreateTypeDefinitionUsecase(t *testing.T) {
 
 			duplicate := &fakeTransactor{}
 			unit2 := uow.New(duplicate, dispatcher, log)
-			interactor2 := NewInteractor(unit2, repo)
+			interactor2 := NewInteractor(unit2, repo, nil)
 			_, err = interactor2.Create(ctx, CreateInput{InternalName: "product", DisplayName: "Product 2"})
 
 			Convey("Then the usecase conflicts, rolls back, and no events or audit rows leak", func() {

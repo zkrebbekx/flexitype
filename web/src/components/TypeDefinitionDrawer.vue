@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
 import type { TypeDefinition } from '@/lib/api'
@@ -17,6 +17,7 @@ const queryClient = useQueryClient()
 
 const form = reactive({ display_name: '', description: '' })
 const error = ref('')
+const canSubmit = computed(() => !!form.display_name.trim())
 
 watch(
   () => [props.open, props.type?.id],
@@ -58,7 +59,7 @@ const save = useMutation({
     <template #footer>
       <div class="flex justify-end gap-2">
         <Button @click="emit('close')">Cancel</Button>
-        <Button variant="primary" :disabled="save.isPending.value" @click="save.mutate()">Save changes</Button>
+        <Button variant="primary" :disabled="save.isPending.value || !canSubmit" @click="save.mutate()">Save changes</Button>
       </div>
     </template>
   </Drawer>

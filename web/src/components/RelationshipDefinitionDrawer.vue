@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
 import type { RelationshipDefinition, RelationshipKind, TypeDefinition, VersionPolicy } from '@/lib/api'
+import { slug } from '@/lib/validation'
 import { useToasts } from '@/composables/useToasts'
 import Drawer from '@/components/ui/Drawer.vue'
 import Button from '@/components/ui/Button.vue'
@@ -40,6 +41,16 @@ const form = reactive({
   child_version_policy: 'latest' as VersionPolicy,
 })
 const error = ref('')
+
+// Name error only applies on create (immutable on edit); shown inline once
+// the user has typed. Endpoints and display name are required on create.
+const nameError = computed(() => (isEdit.value ? '' : slug(form.internal_name)))
+const fieldErrors = computed(() => ({ internal_name: form.internal_name ? nameError.value : '' }))
+const canSubmit = computed(
+  () =>
+    !!form.display_name.trim() &&
+    (isEdit.value || (nameError.value === '' && !!form.parent_type_id && !!form.child_type_id)),
+)
 
 const isSymmetric = computed(() => form.kind === 'symmetric')
 
@@ -157,6 +168,7 @@ const save = useMutation({
           placeholder="uses"
           :hint="isEdit ? 'Immutable' : 'snake_case; immutable'"
           :disabled="isEdit"
+          :error="fieldErrors.internal_name"
         />
         <Input v-model="form.display_name" label="Display name" placeholder="Uses" />
       </div>
@@ -201,7 +213,7 @@ const save = useMutation({
     <template #footer>
       <div class="flex justify-end gap-2">
         <Button @click="emit('close')">Cancel</Button>
-        <Button variant="primary" :disabled="save.isPending.value" @click="save.mutate()">
+        <Button variant="primary" :disabled="save.isPending.value || !canSubmit" @click="save.mutate()">
           {{ isEdit ? 'Save changes' : 'Create relationship type' }}
         </Button>
       </div>

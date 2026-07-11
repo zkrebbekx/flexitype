@@ -1,9 +1,14 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, useId, watch } from 'vue'
 import { api, ApiError } from '@/lib/api'
 import { suggest } from '@/lib/suggest'
 import type { SuggestSchema, Suggestion } from '@/lib/suggest'
 import { CircleHelp, Search } from 'lucide-vue-next'
+
+// Stable ids so the combobox can point aria-controls at the listbox and
+// aria-activedescendant at the highlighted option (screen-reader support).
+const listboxId = useId()
+const optionId = (i: number) => `${listboxId}-opt-${i}`
 
 // QueryBar: FQL input with context-aware completions, debounced server
 // validation with positioned errors, and a syntax cheat-sheet.
@@ -54,14 +59,14 @@ function onKeydown(e: KeyboardEvent) {
       e.preventDefault()
       return
     }
-    if (e.key === 'Tab' || (e.key === 'Enter' && dropdown.items.length > 0 && model.value.trim() && dropdown.items[dropdown.active])) {
-      // Tab always completes; Enter completes only when the dropdown is
-      // showing a filtered candidate mid-word.
-      if (e.key === 'Tab') {
-        applySuggestion(dropdown.items[dropdown.active]!)
-        e.preventDefault()
-        return
-      }
+    // Combobox convention: while the dropdown is open, both Tab and Enter
+    // accept the highlighted suggestion. Enter only runs the query when no
+    // suggestion is highlighted (dropdown closed) — handled below.
+    const highlighted = dropdown.items[dropdown.active]
+    if ((e.key === 'Tab' || e.key === 'Enter') && highlighted) {
+      applySuggestion(highlighted)
+      e.preventDefault()
+      return
     }
     if (e.key === 'Escape') {
       dropdown.open = false
@@ -118,10 +123,13 @@ const EXAMPLES = [
         type="text"
         role="combobox"
         aria-label="Query entities"
+        aria-autocomplete="list"
         :aria-expanded="dropdown.open"
+        :aria-controls="listboxId"
+        :aria-activedescendant="dropdown.open && dropdown.items[dropdown.active] ? optionId(dropdown.active) : undefined"
         spellcheck="false"
         autocomplete="off"
-        placeholder='e.g. category = "bike" and min(price) >= 500 — Tab completes, Enter runs'
+        placeholder='e.g. category = "bike" and min(price) >= 500 — Tab or Enter completes'
         class="mono h-9 w-full rounded-md border bg-(--surface) pr-9 pl-8 text-[13px]"
         :class="validation.error ? 'border-(--danger)' : 'border-(--border-strong)'"
         @focus="refreshSuggestions"
@@ -148,11 +156,14 @@ const EXAMPLES = [
     <!-- Suggestions -->
     <ul
       v-if="dropdown.open"
+      :id="listboxId"
       role="listbox"
+      aria-label="Query suggestions"
       class="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded-md border border-(--border) bg-(--surface-raised) py-1 shadow-lg"
     >
       <li
         v-for="(s, i) in dropdown.items"
+        :id="optionId(i)"
         :key="s.label"
         role="option"
         :aria-selected="i === dropdown.active"

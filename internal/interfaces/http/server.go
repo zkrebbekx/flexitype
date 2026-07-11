@@ -11,6 +11,7 @@ import (
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
+	"github.com/zkrebbekx/flexitype/pkg/metrics"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 )
 
@@ -22,6 +23,8 @@ type ServerConfig struct {
 	Accounts *serviceaccount.Store // nil disables auth (development)
 	// Reindex rebuilds the search projection; nil when the index is off.
 	Reindex func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
+	// Metrics, when set, records HTTP SLIs and serves /metrics.
+	Metrics *metrics.Metrics
 }
 
 // NewHandler builds the service's HTTP handler: versioned API plus
@@ -31,10 +34,18 @@ func NewHandler(cfg ServerConfig) http.Handler {
 
 	r := chi.NewRouter()
 	r.Use(recoverer(cfg.Logger))
+	if cfg.Metrics != nil {
+		// Before the request logger so the route pattern is resolved and
+		// /metrics itself is measured.
+		r.Use(cfg.Metrics.Middleware)
+	}
 	r.Use(requestLogger(cfg.Logger))
 
 	r.Get("/healthz", cfg.Health.LiveHandler())
 	r.Get("/readyz", cfg.Health.ReadyHandler())
+	if cfg.Metrics != nil {
+		r.Handle("/metrics", cfg.Metrics.Handler())
+	}
 
 	// The OpenAPI document is public (before auth) so client generators
 	// and mock servers can fetch the contract without credentials.

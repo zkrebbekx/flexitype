@@ -40,6 +40,8 @@ type Config struct {
 	// WebhookAllowPrivate lets webhook subscriptions target private hosts
 	// (on-prem consumers). Off by default — SSRF guard.
 	WebhookAllowPrivate bool
+	// EnableMetrics serves Prometheus SLIs at /metrics.
+	EnableMetrics bool
 	// PubSubProject, when set, publishes every event to Google Cloud
 	// Pub/Sub in addition to any webhook subscriptions.
 	PubSubProject string
@@ -85,6 +87,7 @@ func Load() (Config, error) {
 		EnableSearchIndex:   envBool("FLEXITYPE_FEATURE_SEARCH_INDEX", false),
 		EventRetention:      envDuration("FLEXITYPE_EVENT_RETENTION", 7*24*time.Hour),
 		WebhookAllowPrivate: envBool("FLEXITYPE_WEBHOOK_ALLOW_PRIVATE", false),
+		EnableMetrics:       envBool("FLEXITYPE_METRICS", true),
 		PubSubProject:       os.Getenv("FLEXITYPE_PUBSUB_PROJECT"),
 		PubSubTopic:         envStr("FLEXITYPE_PUBSUB_TOPIC", "flexitype-events"),
 		PubSubOrdering:      envBool("FLEXITYPE_PUBSUB_ORDERING", false),

@@ -23,6 +23,7 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
+	"github.com/zkrebbekx/flexitype/pkg/metrics"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 	"github.com/zkrebbekx/flexitype/pkg/shutdown"
 	"github.com/zkrebbekx/flexitype/pkg/telemetry"
@@ -164,10 +165,17 @@ func run(log *logger.Logger) error {
 		return pool.PingContext(ctx)
 	})
 
+	var appMetrics *metrics.Metrics
+	if cfg.EnableMetrics {
+		appMetrics = metrics.New()
+		log.Info().Msg("prometheus metrics enabled at /metrics")
+	}
+
 	handler := svc.APIHandler(flexitype.APIConfig{
 		Logger:   log,
 		Health:   healthChecker,
 		Accounts: accounts,
+		Metrics:  appMetrics,
 	})
 
 	server := &http.Server{

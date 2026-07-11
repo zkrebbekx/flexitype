@@ -507,6 +507,17 @@ export const api = {
   // Event delivery — events feed
   listEvents: (q: { after?: number; types?: string; limit?: number } = {}) =>
     request<{ items: FeedEvent[]; next_cursor: number }>('GET', `/events${qs(q)}`),
+
+  // Operations
+  getFeatures: () => request<Features>('GET', '/features'),
+  reindexSearch: () => request<{ reindexed: number }>('POST', '/search/reindex'),
+}
+
+export interface Features {
+  search: boolean
+  activity: boolean
+  search_index: boolean
+  event_delivery: boolean
 }
 
 // friendlyError renders an ApiError for inline display.

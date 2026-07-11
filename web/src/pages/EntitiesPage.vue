@@ -21,7 +21,7 @@ import Modal from '@/components/ui/Modal.vue'
 import QueryBar from '@/components/QueryBar.vue'
 import ImportWizard from '@/components/ImportWizard.vue'
 import DuplicatesDrawer from '@/components/DuplicatesDrawer.vue'
-import { Bookmark, Copy, Download, Trash2, Upload } from 'lucide-vue-next'
+import { Bookmark, Copy, Download, Table2, Trash2, Upload } from 'lucide-vue-next'
 
 const types = useQuery({ queryKey: ['types-all'], queryFn: () => api.listTypes({ limit: 200 }) })
 const typeId = ref('')
@@ -106,6 +106,7 @@ function applyView(view: SavedView) {
   typeId.value = t.id
   queryText.value = view.query
   activeQuery.value = view.query.trim()
+  gridColumns.value = view.columns ?? []
   selectedViewId.value = view.id
   pageReset()
   router.replace({ query: { ...route.query, view: view.id } })
@@ -141,6 +142,7 @@ const saveView = useMutation({
       name: saveModal.name.trim(),
       root_type: selectedType.value?.internal_name ?? '',
       query: activeQuery.value || queryText.value,
+      columns: gridColumns.value,
     }
     return saveModal.existingId ? api.updateSavedView(saveModal.existingId, input) : api.createSavedView(input)
   },
@@ -223,6 +225,55 @@ function onImported() {
   queryClient.invalidateQueries({ queryKey: ['query', typeId] })
 }
 
+// --- faceted grid ------------------------------------------------------------
+
+// Chosen value columns (attribute internal names), overlaid onto the row set
+// and looked up per entity, so pagination and the row source are unchanged.
+const gridColumns = ref<string[]>([])
+const columnsOpen = ref(false)
+const displayName = (name: string) => importAttributes.value.find((a) => a.internal_name === name)?.display_name ?? name
+function toggleColumn(name: string) {
+  gridColumns.value = gridColumns.value.includes(name)
+    ? gridColumns.value.filter((c) => c !== name)
+    : [...gridColumns.value, name]
+}
+
+const gridValues = useQuery({
+  queryKey: ['grid', typeId, activeQuery, includeSubtypes, cursor, gridColumns],
+  queryFn: () =>
+    api.gridEntities(typeId.value, {
+      attributes: gridColumns.value,
+      query: activeQuery.value || undefined,
+      include_descendants: includeSubtypes.value,
+      cursor: cursor.value || undefined,
+    }),
+  enabled: computed(() => !!typeId.value && gridColumns.value.length > 0),
+})
+const gridValueMap = computed(() => {
+  const m = new Map<string, Record<string, string>>()
+  for (const row of gridValues.data.value?.rows ?? []) m.set(row.entity_id, row.values)
+  return m
+})
+const gridCell = (entityId: string, col: string) => gridValueMap.value.get(entityId)?.[col] ?? ''
+
+// Facets over the current result set for the chosen columns.
+const facets = useQuery({
+  queryKey: ['facets', typeId, activeQuery, includeSubtypes, gridColumns],
+  queryFn: () =>
+    api.entityFacets(typeId.value, {
+      attributes: gridColumns.value,
+      query: activeQuery.value || undefined,
+      include_descendants: includeSubtypes.value,
+    }),
+  enabled: computed(() => !!typeId.value && gridColumns.value.length > 0),
+})
+// Clicking a facet composes an FQL equality term and runs the query.
+function applyFacet(attr: string, value: string) {
+  const term = `${attr} = ${JSON.stringify(value)}`
+  queryText.value = queryText.value.trim() ? `${queryText.value.trim()} and ${term}` : term
+  runQuery(queryText.value)
+}
+
 // Export the current view: the active FQL filter narrows the rows; the type's
 // effective attributes are the columns. Streams a CSV download.
 function exportCurrent() {
@@ -246,7 +297,7 @@ function exportCurrent() {
 
   <div class="mb-2 flex flex-wrap items-end gap-4">
     <div class="w-72">
-      <Select v-model="typeId" label="Type" :options="typeOptions" @update:model-value="() => (pageReset(), (activeQuery = ''), (queryText = ''), (selectedViewId = ''))" />
+      <Select v-model="typeId" label="Type" :options="typeOptions" @update:model-value="() => (pageReset(), (activeQuery = ''), (queryText = ''), (selectedViewId = ''), (gridColumns = []))" />
     </div>
     <label v-if="!activeQuery" class="flex items-center gap-1.5 pb-2 text-[13px] text-(--text-muted)">
       <input v-model="includeSubtypes" type="checkbox" class="accent-(--accent)" @change="pageReset" />
@@ -261,6 +312,30 @@ function exportCurrent() {
       <Button v-if="typeId" size="sm" @click="importOpen = true"><Upload :size="14" /> Import</Button>
       <Button v-if="typeId" size="sm" @click="exportCurrent"><Download :size="14" /> Export</Button>
       <Button v-if="typeId" size="sm" @click="duplicatesOpen = true"><Copy :size="14" /> Duplicates</Button>
+      <div v-if="typeId" class="relative">
+        <Button size="sm" @click="columnsOpen = !columnsOpen">
+          <Table2 :size="14" /> Columns<span v-if="gridColumns.length"> ({{ gridColumns.length }})</span>
+        </Button>
+        <div
+          v-if="columnsOpen"
+          class="absolute right-0 z-20 mt-1 max-h-72 w-60 overflow-y-auto rounded-md border border-(--border-strong) bg-(--surface) p-1.5 shadow-lg"
+        >
+          <p v-if="!importAttributes.length" class="px-2 py-1 text-[13px] text-(--text-muted)">No attributes.</p>
+          <label
+            v-for="a in importAttributes"
+            :key="a.internal_name"
+            class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-[13px] hover:bg-(--canvas)"
+          >
+            <input
+              type="checkbox"
+              class="accent-(--accent)"
+              :checked="gridColumns.includes(a.internal_name)"
+              @change="toggleColumn(a.internal_name)"
+            />
+            {{ a.display_name }}
+          </label>
+        </div>
+      </div>
       <Button
         v-if="selectedViewId"
         size="sm"
@@ -288,18 +363,40 @@ function exportCurrent() {
     </p>
   </div>
 
+  <div
+    v-if="typeId && gridColumns.length && Object.keys(facets.data.value?.facets ?? {}).length"
+    class="mb-3 flex flex-wrap gap-x-6 gap-y-2 rounded-lg border border-(--border) bg-(--surface) px-4 py-3"
+  >
+    <div v-for="col in gridColumns" :key="col">
+      <template v-if="(facets.data.value?.facets[col] ?? []).length">
+        <p class="mb-1 text-[11px] font-medium tracking-wide text-(--text-muted) uppercase">{{ displayName(col) }}</p>
+        <div class="flex flex-wrap gap-1">
+          <button
+            v-for="b in (facets.data.value?.facets[col] ?? []).slice(0, 8)"
+            :key="b.value"
+            class="rounded-full border border-(--border) px-2 py-0.5 text-[12px] hover:border-(--accent) hover:text-(--accent)"
+            @click="applyFacet(col, b.value)"
+          >
+            {{ b.value }} <span class="text-(--text-muted)">({{ b.count }})</span>
+          </button>
+        </div>
+      </template>
+    </div>
+  </div>
+
   <template v-if="typeId">
-    <div class="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
+    <div class="overflow-x-auto rounded-lg border border-(--border) bg-(--surface)">
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-(--border) bg-(--canvas) text-left text-[13px] text-(--text-muted)">
             <th class="px-3 py-2 font-medium">Entity</th>
+            <th v-for="col in gridColumns" :key="col" class="px-3 py-2 font-medium whitespace-nowrap">{{ displayName(col) }}</th>
             <th class="px-3 py-2 font-medium">Values</th>
             <th class="px-3 py-2 font-medium">Last change</th>
           </tr>
         </thead>
         <tbody>
-          <SkeletonRows v-if="rowsPending" :rows="5" :cols="3" />
+          <SkeletonRows v-if="rowsPending" :rows="5" :cols="3 + gridColumns.length" />
           <tr
             v-for="e in rows?.items"
             v-else
@@ -316,6 +413,14 @@ function exportCurrent() {
               <Badge v-if="e.type_definition_id && e.type_definition_id !== typeId" class="ml-2" tone="accent">
                 {{ typeName(e.type_definition_id) }}
               </Badge>
+            </td>
+            <td
+              v-for="col in gridColumns"
+              :key="col"
+              class="max-w-52 truncate px-3 py-2.5 text-(--text-secondary)"
+              :title="gridCell(e.entity_id, col)"
+            >
+              {{ gridCell(e.entity_id, col) || '—' }}
             </td>
             <td class="tnum px-3 py-2.5 text-(--text-secondary)">{{ e.value_count }}</td>
             <td class="px-3 py-2.5 text-(--text-muted)"><RelativeTime :iso="e.last_updated_at" /></td>

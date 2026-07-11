@@ -487,6 +487,29 @@ export const api = {
     }
     return parsed as ImportReport
   },
+  gridEntities: (
+    typeId: string,
+    opts: { attributes: string[]; query?: string; include_descendants?: boolean; limit?: number; cursor?: string },
+  ) =>
+    request<{ columns: string[]; rows: { entity_id: string; values: Record<string, string> }[]; page_info: PageInfo }>(
+      'GET',
+      `/entities/${typeId}/grid${qs({
+        attributes: opts.attributes.join(','),
+        query: opts.query,
+        include_descendants: opts.include_descendants,
+        limit: opts.limit,
+        cursor: opts.cursor,
+      })}`,
+    ),
+  entityFacets: (typeId: string, opts: { attributes: string[]; query?: string; include_descendants?: boolean }) =>
+    request<{ facets: Record<string, { value: string; count: number }[]>; truncated: boolean }>(
+      'GET',
+      `/entities/${typeId}/facets${qs({
+        attributes: opts.attributes.join(','),
+        query: opts.query,
+        include_descendants: opts.include_descendants,
+      })}`,
+    ),
   listMatchRules: (typeId: string) =>
     request<{ items: MatchRule[] }>('GET', `/type-definitions/${typeId}/match-rules`),
   createMatchRule: (typeId: string, input: { attribute_definition_id: string; strategy: MatchStrategy; threshold?: number }) =>

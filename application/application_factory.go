@@ -126,7 +126,7 @@ func (f *factory) New(context.Context) *Interactors {
 	i := &Interactors{
 		typeDefs:      apptypedef.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
 		attrs:         appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
-		values:        appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
+		values:        appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies, repos.Relationships),
 		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
 		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),
 		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query, f.cfg.Features.SearchIndex),

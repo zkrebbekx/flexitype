@@ -391,7 +391,15 @@ export const api = {
     ),
   setValue: (input: { attribute_definition_id: string; entity_id: string; type_definition_id?: string; value: unknown }) =>
     request<AttributeValue>('POST', '/values', input),
+  setValuesBatch: (
+    items: { attribute_definition_id: string; entity_id: string; type_definition_id?: string; value: unknown }[],
+  ) => request<{ items: AttributeValue[] }>('POST', '/values/batch', { items }),
   removeValue: (id: string) => request<AttributeValue>('DELETE', `/values/${id}`),
+  deleteEntity: (typeId: string, entityId: string) =>
+    request<{ entity_id: string; values_removed: number; relationships_gone: number }>(
+      'DELETE',
+      `/entities/${typeId}/${encodeURIComponent(entityId)}`,
+    ),
   listValues: (
     q: PageQuery & {
       type_definition_id?: string

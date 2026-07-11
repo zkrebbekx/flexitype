@@ -220,6 +220,34 @@ paths:
       responses:
         "201": { $ref: "#/components/responses/Value" }
         "422": { $ref: "#/components/responses/Error" }
+  /values/batch:
+    post:
+      tags: [values]
+      summary: Set many values in one transaction
+      description: >
+        Applies every item atomically — either all succeed and their events
+        fire, or the whole batch rolls back. Max 1000 items.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 1000
+                  items: { $ref: "#/components/schemas/SetValue" }
+      responses:
+        "200":
+          description: Written snapshots in input order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { items: { type: array, items: { $ref: "#/components/schemas/Value" } } }
+        "422": { $ref: "#/components/responses/Error" }
   /values/{id}:
     parameters: [{ $ref: "#/components/parameters/ID" }]
     get:
@@ -260,6 +288,29 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/EntitySummary" }
                   page_info: { $ref: "#/components/schemas/PageInfo" }
+  /entities/{typeDefinitionID}/{entityID}:
+    delete:
+      tags: [entities]
+      summary: Remove an entity (cascade)
+      description: >
+        Archives every live value of the entity and unlinks every live
+        relationship touching it, in one unit of work. NotFound if the
+        entity has no values and no links.
+      parameters:
+        - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
+        - { name: entityID, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Cascade summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entity_id: { type: string }
+                  values_removed: { type: integer }
+                  relationships_gone: { type: integer }
+        "404": { $ref: "#/components/responses/Error" }
   /entities/{typeDefinitionID}/{entityID}/values:
     get:
       tags: [entities]

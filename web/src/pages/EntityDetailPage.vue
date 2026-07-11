@@ -17,7 +17,9 @@ import ValueInput from '@/components/ValueInput.vue'
 import Select from '@/components/ui/Select.vue'
 import Input from '@/components/ui/Input.vue'
 import EntityAttributeRow from '@/components/EntityAttributeRow.vue'
-import { ArrowLeftRight, ArrowRight, Link2, Pencil, Plus, Search, Trash2, Unlink } from 'lucide-vue-next'
+import DiffView from '@/components/ui/DiffView.vue'
+import RelativeTime from '@/components/ui/RelativeTime.vue'
+import { ArrowLeftRight, ArrowRight, History, Link2, Pencil, Plus, RotateCcw, Search, Trash2, Unlink } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
@@ -43,6 +45,59 @@ const completeness = useQuery({
 const completenessPct = computed(() =>
   completeness.data.value ? Math.round(completeness.data.value.score * 100) : 0,
 )
+
+// --- revisions ---------------------------------------------------------------
+
+const revisions = useQuery({
+  queryKey: ['revisions', typeId, entityId],
+  queryFn: () => api.listRevisions(typeId.value, entityId.value),
+})
+// The revision currently expanded for a diff against the live state.
+const diffRevisionId = ref('')
+const diffRevision = useQuery({
+  queryKey: ['revision', diffRevisionId],
+  queryFn: () => api.getRevision(diffRevisionId.value),
+  enabled: computed(() => !!diffRevisionId.value),
+})
+// Flat internal_name → value maps for DiffView (revision snapshot vs live).
+const revisionMap = computed<Record<string, unknown>>(() => {
+  const m: Record<string, unknown> = {}
+  for (const v of diffRevision.data.value?.values ?? []) m[v.internal_name] = v.value
+  return m
+})
+const currentMap = computed<Record<string, unknown>>(() => {
+  const m: Record<string, unknown> = {}
+  for (const row of rows.value) {
+    if (row.values.length) m[row.attribute.internal_name] = renderValue(row.values[0].value)
+  }
+  return m
+})
+function toggleDiff(id: string) {
+  diffRevisionId.value = diffRevisionId.value === id ? '' : id
+}
+
+const revLabel = ref('')
+const createRev = useMutation({
+  mutationFn: () => api.createRevision(typeId.value, entityId.value, revLabel.value.trim()),
+  onSuccess: () => {
+    queryClient.invalidateQueries({ queryKey: ['revisions', typeId, entityId] })
+    revLabel.value = ''
+    toasts.success('Revision captured')
+  },
+  onError: (e) => toasts.error(friendlyError(e)),
+})
+
+const restore = useMutation({
+  mutationFn: (id: string) => api.restoreRevision(id),
+  onSuccess: () => {
+    queryClient.invalidateQueries({ queryKey: ['entity-values', typeId, entityId] })
+    queryClient.invalidateQueries({ queryKey: ['entity-completeness', typeId, entityId] })
+    queryClient.invalidateQueries({ queryKey: ['revisions', typeId, entityId] })
+    diffRevisionId.value = ''
+    toasts.success('Restored — a new revision captured the result')
+  },
+  onError: (e) => toasts.error(friendlyError(e)),
+})
 
 interface Row {
   attribute: AttributeDefinition
@@ -403,6 +458,45 @@ const removeValue = useMutation({
         title="No relationships"
         body="Links connect this entity to entities of related types, with their own attributes and version binding."
       />
+    </div>
+  </section>
+
+  <!-- Revisions -->
+  <section class="mt-6">
+    <div class="mb-2 flex items-center justify-between gap-3">
+      <h2 class="flex items-center gap-1.5 text-base font-semibold"><History :size="16" /> Revisions</h2>
+      <div class="flex items-center gap-1.5">
+        <Input v-model="revLabel" placeholder="Optional label" class="w-40" />
+        <Button size="sm" :disabled="createRev.isPending.value" @click="createRev.mutate()">Capture revision</Button>
+      </div>
+    </div>
+
+    <p v-if="!revisions.data.value?.items.length" class="rounded-lg border border-(--border) bg-(--surface) px-4 py-3 text-[13px] text-(--text-muted)">
+      No revisions yet. Capture one to snapshot this entity's current values — then read, diff or restore it later.
+    </p>
+
+    <div v-else class="flex flex-col gap-1.5">
+      <div v-for="rev in revisions.data.value.items" :key="rev.id" class="rounded-lg border border-(--border) bg-(--surface)">
+        <div class="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+          <span class="flex min-w-0 items-center gap-2">
+            <Badge tone="accent">r{{ rev.seq }}</Badge>
+            <span v-if="rev.label" class="font-medium">{{ rev.label }}</span>
+            <span class="text-[12px] text-(--text-muted)"><RelativeTime :iso="rev.created_at" /></span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <Button size="sm" variant="ghost" @click="toggleDiff(rev.id)">
+              {{ diffRevisionId === rev.id ? 'Hide diff' : 'Diff vs current' }}
+            </Button>
+            <Button size="sm" :disabled="restore.isPending.value" @click="restore.mutate(rev.id)">
+              <RotateCcw :size="13" /> Restore
+            </Button>
+          </span>
+        </div>
+        <div v-if="diffRevisionId === rev.id" class="border-t border-(--border) p-3">
+          <p class="mb-2 text-[12px] text-(--text-muted)">Left = revision r{{ rev.seq }} · Right = current values.</p>
+          <DiffView :before="revisionMap" :after="currentMap" />
+        </div>
+      </div>
     </div>
   </section>
 

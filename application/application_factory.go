@@ -11,6 +11,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/feed"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
+	apprevision "github.com/zkrebbekx/flexitype/application/revision"
 	appsavedview "github.com/zkrebbekx/flexitype/application/savedview"
 	appschema "github.com/zkrebbekx/flexitype/application/schema"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
@@ -86,6 +87,9 @@ type FactoryConfig struct {
 	// MatchRules persists duplicate-detection rules and dismissals; nil
 	// disables the feature.
 	MatchRules appdedup.Store
+
+	// Revisions persists entity revisions; nil disables the feature.
+	Revisions apprevision.Store
 }
 
 // factory is the common usecase factory: every request gets fresh
@@ -149,6 +153,9 @@ func (f *factory) New(context.Context) *Interactors {
 	}
 	if f.cfg.MatchRules != nil {
 		i.dedup = appdedup.NewInteractor(f.cfg.MatchRules, repos.TypeDefinitions, repos.Attributes, repos.Values, f.cfg.Now)
+	}
+	if f.cfg.Revisions != nil {
+		i.revisions = apprevision.NewInteractor(f.cfg.Revisions, repos.TypeDefinitions, repos.Attributes, repos.Values, i.values, f.cfg.Now)
 	}
 	if f.cfg.Features.EventDelivery {
 		i.webhooks = webhook.NewInteractor(unit, f.cfg.Subscriptions, f.cfg.Deliveries, f.cfg.WebhookURLPolicy)

@@ -75,8 +75,62 @@ func (s *Store) Repositories() application.Repositories {
 func (s *Store) ActivityLog() activity.Log { return &activityLog{s} }
 
 // Transactor returns a transactor honouring the pre/post/rollback hook
-// contract without real transactions.
-func (s *Store) Transactor() db.Transactor { return &transactor{} }
+// contract. On rollback it restores the store to its pre-transaction
+// state, so a unit of work that writes then fails leaves no partial data
+// — matching PostgreSQL's atomicity.
+func (s *Store) Transactor() db.Transactor { return &transactor{store: s} }
+
+// storeSnapshot is a shallow copy of every collection. Entries are
+// immutable value snapshots, so copying the maps is enough to undo any
+// writes made during a transaction.
+type storeSnapshot struct {
+	typeDefs   map[string]domaintypedef.Snapshot
+	attrs      map[string]domainattribute.Snapshot
+	values     map[string]domainvalue.Snapshot
+	deps       map[string]domaindependency.Snapshot
+	relDefs    map[string]domainrelationship.DefinitionSnapshot
+	rels       map[string]domainrelationship.Snapshot
+	activities []activity.Entry
+	searchDocs map[string]searchDoc
+}
+
+// snapshot captures the current state for a potential rollback.
+func (s *Store) snapshot() storeSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return storeSnapshot{
+		typeDefs:   cloneMap(s.typeDefs),
+		attrs:      cloneMap(s.attrs),
+		values:     cloneMap(s.values),
+		deps:       cloneMap(s.deps),
+		relDefs:    cloneMap(s.relDefs),
+		rels:       cloneMap(s.rels),
+		activities: append([]activity.Entry(nil), s.activities...),
+		searchDocs: cloneMap(s.searchDocs),
+	}
+}
+
+// restore reverts the store to a captured snapshot.
+func (s *Store) restore(snap storeSnapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.typeDefs = snap.typeDefs
+	s.attrs = snap.attrs
+	s.values = snap.values
+	s.deps = snap.deps
+	s.relDefs = snap.relDefs
+	s.rels = snap.rels
+	s.activities = snap.activities
+	s.searchDocs = snap.searchDocs
+}
+
+func cloneMap[K comparable, V any](m map[K]V) map[K]V {
+	out := make(map[K]V, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
 
 // paginate slices a sorted result set and reports the total.
 func paginate[T any](items []T, page db.Page) ([]T, int) {

@@ -9,11 +9,12 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
 
-// transactor satisfies db.Transactor without a database. Data writes apply
-// immediately; the value it provides is the commit-hook contract the unit
-// of work depends on: pre-commit hooks run before "commit" (an error
-// aborts and fires rollback hooks), post-commit hooks after.
-type transactor struct{}
+// transactor satisfies db.Transactor without a database. It honours the
+// commit-hook contract (pre-commit before commit, post-commit after,
+// rollback hooks on abort) and — via the store snapshot taken at Begin —
+// restores the store on rollback, so a failed unit of work leaves no
+// partial data, matching PostgreSQL atomicity.
+type transactor struct{ store *Store }
 
 var errNoSQL = errors.New("memory: repositories do not execute SQL")
 
@@ -27,7 +28,14 @@ func (t *transactor) QueryContext(context.Context, string, ...any) (*sql.Rows, e
 }
 func (t *transactor) QueryRowContext(context.Context, string, ...any) *sql.Row { return nil }
 
-func (t *transactor) Begin(context.Context) (db.Transactor, error) { return &memTx{}, nil }
+func (t *transactor) Begin(context.Context) (db.Transactor, error) {
+	tx := &memTx{store: t.store}
+	if t.store != nil {
+		snap := t.store.snapshot()
+		tx.snapshot = &snap
+	}
+	return tx, nil
+}
 
 func (t *transactor) Commit(context.Context) error   { return db.ErrNotInTransaction }
 func (t *transactor) Rollback(context.Context) error { return db.ErrNotInTransaction }
@@ -45,8 +53,11 @@ func (t *transactor) OnPreCommit(db.Hook)  { panic("memory: OnPreCommit outside 
 func (t *transactor) OnPostCommit(db.Hook) { panic("memory: OnPostCommit outside transaction") }
 func (t *transactor) OnRollback(db.Hook)   { panic("memory: OnRollback outside transaction") }
 
-// memTx is one logical transaction: hook bookkeeping only.
+// memTx is one logical transaction: hook bookkeeping plus the pre-write
+// store snapshot used to undo data mutations on rollback.
 type memTx struct {
+	store    *Store
+	snapshot *storeSnapshot
 	depth    int
 	done     bool
 	pre      []db.Hook
@@ -101,6 +112,11 @@ func (t *memTx) Rollback(ctx context.Context) error {
 		return nil
 	}
 	t.done = true
+	// Undo any data written during the transaction, then run the rollback
+	// observers.
+	if t.store != nil && t.snapshot != nil {
+		t.store.restore(*t.snapshot)
+	}
 	var errs []error
 	for _, h := range t.rollback {
 		if err := h(ctx); err != nil {

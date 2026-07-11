@@ -354,6 +354,35 @@ func (r *attributeValueRepository) ListByDefinition(ctx context.Context, defID v
 	return out, result.Total, nil
 }
 
+func (r *attributeValueRepository) ListByEntities(ctx context.Context, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) ([]*domainvalue.AttributeValue, error) {
+	if len(entityIDs) == 0 {
+		return nil, nil
+	}
+	tuples := make([]string, 0, len(entityIDs))
+	args := make([]any, 0, len(entityIDs)*2)
+	for _, id := range entityIDs {
+		tuples = append(tuples, "(?, ?)")
+		args = append(args, tenant.String(), id.String())
+	}
+	query := bind(`SELECT ` + valueColumnList + ` FROM flexitype_attribute_value
+	 WHERE archived_at IS NULL
+	   AND (tenant_id, entity_id) IN (` + strings.Join(tuples, ", ") + `)
+	 ORDER BY id`)
+	var rows []valueRow
+	if err := r.q.SelectContext(ctx, &rows, query, args...); err != nil {
+		return nil, fmt.Errorf("list values by entities: %w", err)
+	}
+	out := make([]*domainvalue.AttributeValue, 0, len(rows))
+	for _, row := range rows {
+		snap, err := row.snapshot()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, domainvalue.Rehydrate(snap))
+	}
+	return out, nil
+}
+
 func (r *attributeValueRepository) FindByDefinitionAndEntity(ctx context.Context, defID valueobjects.AttributeDefinitionID, entityID valueobjects.EntityID) ([]*domainvalue.AttributeValue, error) {
 	query := bind(`SELECT ` + valueColumnList + ` FROM flexitype_attribute_value
 	 WHERE attribute_definition_id = ? AND entity_id = ? AND archived_at IS NULL

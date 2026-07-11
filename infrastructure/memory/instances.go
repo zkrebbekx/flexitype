@@ -60,6 +60,23 @@ func (r *valueRepo) ListByDefinition(_ context.Context, defID valueobjects.Attri
 	return pageItems, total, nil
 }
 
+func (r *valueRepo) ListByEntities(_ context.Context, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) ([]*domainvalue.AttributeValue, error) {
+	want := make(map[valueobjects.EntityID]bool, len(entityIDs))
+	for _, id := range entityIDs {
+		want[id] = true
+	}
+	r.s.mu.RLock()
+	var out []*domainvalue.AttributeValue
+	for _, snap := range r.s.values {
+		if snap.TenantID == tenant && want[snap.EntityID] && snap.ArchivedAt == nil {
+			out = append(out, domainvalue.Rehydrate(snap))
+		}
+	}
+	r.s.mu.RUnlock()
+	sortByID(out, func(v *domainvalue.AttributeValue) string { return v.ID().String() })
+	return out, nil
+}
+
 func (r *valueRepo) FindByDefinitionAndEntity(_ context.Context, defID valueobjects.AttributeDefinitionID, entityID valueobjects.EntityID) ([]*domainvalue.AttributeValue, error) {
 	r.s.mu.RLock()
 	defer r.s.mu.RUnlock()

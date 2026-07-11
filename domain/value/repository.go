@@ -58,6 +58,11 @@ type Repository interface {
 	// total count (pages batch across definitions).
 	ListByDefinition(ctx context.Context, defID valueobjects.AttributeDefinitionID, page db.Page) ([]*AttributeValue, int, error)
 
+	// ListByEntities loads every live value held by any of the given
+	// entities, in one query — the grid's projection path, so rendering a
+	// page of rows never fans out to one query per entity.
+	ListByEntities(ctx context.Context, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) ([]*AttributeValue, error)
+
 	// FindByDefinitionAndEntity returns the live values one entity holds
 	// for one attribute. Used inside write transactions for multi-value
 	// and upsert decisions.

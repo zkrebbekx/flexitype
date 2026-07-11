@@ -203,6 +203,10 @@ func (r *fakeValueRepo) ListByDefinition(context.Context, valueobjects.Attribute
 	return nil, 0, nil
 }
 
+func (r *fakeValueRepo) ListByEntities(context.Context, valueobjects.TenantID, []valueobjects.EntityID) ([]*domainvalue.AttributeValue, error) {
+	return nil, nil
+}
+
 func (r *fakeValueRepo) FindByDefinitionAndEntity(_ context.Context, defID valueobjects.AttributeDefinitionID, entityID valueobjects.EntityID) ([]*domainvalue.AttributeValue, error) {
 	var out []*domainvalue.AttributeValue
 	for _, snap := range r.values {

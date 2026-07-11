@@ -1,246 +1,207 @@
-# FlexiType
+# flexitype
 
-FlexiType is a Go library for defining dynamic types with attributes and validation rules. It follows Domain-Driven Design principles with a clean/hexagonal architecture.
+Soft types and attributes for Go: define entity types, typed and constrained
+attributes, and attribute dependencies at **runtime** — then attach validated
+values to your own domain objects. Inspired by PLM-class flexible attribute
+systems, built as a production-grade DDD Go service.
+
+Runs two ways from one codebase:
+
+- **Embedded library** — wire it into your service over your own `*sqlx.DB`
+- **Standalone service** — a single binary with a versioned REST API,
+  service-account auth, OpenTelemetry and health endpoints
 
 ## Features
 
-- Define custom types with dynamic attributes
-- Apply validation rules to attributes
-- Type versioning with instance migration
-- Cascades with inheritance and logic expressions
-- Attribute disabling between type versions
-- Extensible architecture (standalone service or embedded library)
-- Import/export type definitions via YAML
-- Multiple storage backends (PostgreSQL, in-memory)
-
-## Usage Modes
-
-- Standalone microservice (Connect gRPC API with PostgreSQL)
-- Embedded library (bring your own storage)
-- In-memory mode for testing/development
+- **Soft types**: `TypeDefinition` → `AttributeDefinition` → `AttributeValue`,
+  anchored to *your* entities via an opaque `entity_id`
+- **12 data types**: bool, string, integer, float, decimal (arbitrary
+  precision), date, time, datetime, enum, url, email, json
+- **Constraints**: min/max length, min/max value, RE2 pattern, one-of, plus
+  required / multi-valued / unique attribute flags
+- **Attribute dependencies**: cascading picklists and conditional validation —
+  when a source attribute matches conditions (equals / in / range / pattern /
+  dynamic time), the target's allowed values narrow, constraints tighten or
+  required flips; resolve the *effective schema* per entity for building UIs
+- **Dynamic values**: `now` / `today` / relative-time defaults and conditions
+- **Domain events**: aggregates return `[]events.Event`; a dispatcher fans a
+  stable JSON envelope out to **your** infrastructure — pub/sub brokers,
+  HMAC-signed webhooks, or plain funcs
+- **Activity log**: every change audited with JSON before/after descriptors,
+  written in the *same transaction* as the change
+- **Dataloaders throughout the repositories**: point lookups batch into
+  `ANY()` queries, identical filter+page queries deduplicate, per-parent
+  pagination collapses into one windowed query
+- **Multi-tenant** from day one; **definition versioning** with values pinned
+  to the version they were validated against
 
 ## Architecture
 
-- Clean/Hexagonal architecture with rich domain model
-- Modular components that can be used independently
-- SDK for easy integration into existing applications
-
-## Getting Started
-
-### Prerequisites
-
-- Go 1.21 or later
-- Protocol Buffers compiler (`protoc`)
-- PostgreSQL (optional, for PostgreSQL storage backend)
-
-### Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/zac300/flexitype.git
-   cd flexitype
-   ```
-
-2. Install required tools:
-   ```bash
-   make install-tools
-   ```
-
-3. Generate Protocol Buffer and Connect gRPC code:
-   ```bash
-   make proto
-   ```
-
-4. Build the server and client:
-   ```bash
-   make build
-   ```
-
-### Running the Server
-
-Run the standalone server:
-
-```bash
-make run-server
+```
+domain/          Aggregates, value objects, constraints, events, repo ports
+application/     Usecases (interactors), common factory, unit of work,
+                 activity log contract, actor/tenant context
+infrastructure/  PostgreSQL repositories (dataloader-backed), migrations,
+                 activity log, embedded migration runner
+internal/.../http REST API for the standalone service
+pkg/             Reusable primitives: ulid, db (Transactor + commit hooks),
+                 dataloader, events (dispatcher + hooks), logger, config,
+                 telemetry, health, shutdown, serviceaccount
+cmd/flexitype    Composition root for the standalone service
+flexitype.go     Embedding facade
 ```
 
-By default, the server uses in-memory storage. To use PostgreSQL:
+Every write flows through the **unit of work**: the usecase opens the
+transaction, repositories join it (`WithTx`, `GetForUpdate` row locks), and
+the common factory registers three commit handlers —
 
-```bash
-# Set the PostgreSQL connection string
-export FLEXITYPE_PG_CONN="postgres://user:password@localhost:5432/flexitype?sslmode=disable"
+1. **pre-commit** → activity-log rows written inside the transaction
+2. **post-commit** → domain events dispatched to your hooks (only after the
+   change is durable)
+3. **rollback** → observability hook
 
-# Run database migrations
-make db-migrate DB_URL="${FLEXITYPE_PG_CONN}"
-
-# Start the server
-make run-server
-```
-
-### Using the Client
-
-The command-line client can be used to interact with the server:
-
-```bash
-# List all types
-make run-client ARGS="-action list"
-
-# Create a new type
-make run-client ARGS="-action create -id product-001 -name Product -desc 'Product type'"
-
-# Get a type by ID
-make run-client ARGS="-action get -id product-001"
-```
-
-### Using as a Library
-
-Import the FlexiType library in your Go code:
+## Embedded usage
 
 ```go
 import (
-	"github.com/zac300/flexitype/pkg/sdk"
-	"github.com/zac300/flexitype/internal/adapters/repositories/memory"
+    "github.com/jmoiron/sqlx"
+    _ "github.com/lib/pq"
+
+    "github.com/zkrebbekx/flexitype"
+    "github.com/zkrebbekx/flexitype/pkg/events"
 )
 
-func main() {
-	// Initialize in-memory repositories
-	typeRepo := memory.NewInMemoryTypeRepository()
-	instanceRepo := memory.NewInMemoryInstanceRepository()
-	
-	// Create a client
-	client := sdk.NewClient(typeRepo, instanceRepo)
-	
-	// Use the client to work with types and instances
-	typeDef, err := client.CreateType(ctx, "user-001", "User", "User type")
-	// ...
+pool, _ := sqlx.Connect("postgres", dsn)
+
+svc := flexitype.New(pool,
+    // Route events into your broker (NATS, Kafka, SNS, ...).
+    flexitype.WithPublisher("nats", myNATSPublisher, nil),
+    // Or deliver signed webhooks.
+    flexitype.WithWebhook("billing", events.WebhookConfig{
+        URL:    "https://billing.internal/hooks/flexitype",
+        Secret: os.Getenv("HOOK_SECRET"),
+    }),
+    // Or just run a func.
+    flexitype.WithHandlerFunc("cache-invalidator", func(ctx context.Context, env events.Envelope) error {
+        cache.Invalidate(env.AggregateID)
+        return nil
+    }, events.WithEventTypes("flexitype.attribute_value.updated")),
+)
+
+_ = svc.Migrate(ctx) // embedded migrations, advisory-locked, idempotent
+
+// One interactor set per request/unit of work (fresh dataloader caches).
+interactors := svc.Interactors(ctx)
+product, _ := interactors.TypeDefinitions().Create(ctx, typedef.CreateInput{
+    InternalName: "product",
+    DisplayName:  "Product",
+})
+```
+
+Consumers on other stacks integrate via the standalone service's REST API and
+webhooks; every subscriber sees the same envelope:
+
+```json
+{
+  "id": "01J...",
+  "type": "flexitype.attribute_value.updated",
+  "aggregate_type": "attribute_value",
+  "aggregate_id": "01J...",
+  "tenant_id": "acme",
+  "actor": "service_account:ci-importer",
+  "occurred_at": "2026-07-11T10:00:00Z",
+  "recorded_at": "2026-07-11T10:00:00.003Z",
+  "schema_version": 1,
+  "payload": { "old_value": "SN-100", "new_value": "SN-200", "...": "..." }
 }
 ```
 
-## Connect gRPC API
+Webhook deliveries carry `X-Flexitype-Signature` (hex HMAC-SHA256 of the
+body); verify with `events.VerifySignature`.
 
-FlexiType exposes a Connect gRPC API that can be used with any Connect client. The API is defined in the `api/flexitype.proto` file.
-
-### Example Client in Go
-
-```go
-import (
-	"context"
-	"net/http"
-	
-	"github.com/bufbuild/connect-go"
-	
-	"github.com/zac300/flexitype/api/flexitypev1"
-	"github.com/zac300/flexitype/api/flexitypev1/flexitypev1connect"
-)
-
-func main() {
-	client := flexitypev1connect.NewFlexiTypeServiceClient(
-		http.DefaultClient,
-		"http://localhost:8080",
-	)
-	
-	req := &flexitypev1.ListTypesRequest{}
-	res, err := client.ListTypes(context.Background(), connect.NewRequest(req))
-	if err != nil {
-		// Handle error
-	}
-	
-	// Use the response
-	for _, typeDef := range res.Msg.Types {
-		fmt.Printf("%s (ID: %s)\n", typeDef.Name, typeDef.Id)
-	}
-}
-```
-
-## Database Schema
-
-FlexiType supports multiple database backends, with a focus on PostgreSQL support for production use. The schema is designed to be portable across major databases (PostgreSQL, MySQL, Oracle) and follows these principles:
-
-- All tables are in the `flexitype` schema
-- Table names are singular (not plural)
-- Avoids database-specific features like JSON types
-- Uses standard SQL data types for maximum compatibility
-- Comprehensive indexing for query performance
-
-### Schema Design
-
-The database schema consists of these main tables:
-
-1. `type_definition` - Stores type definitions with versioning support
-2. `attribute_definition` - Stores attribute definitions with validation and inheritance rules
-3. `validation_rule` - Stores validation rules for attributes
-4. `instance` - Stores instances of types
-5. `attribute_value` - Stores attribute values for instances
-6. `object_value` - Supports nested complex values for attributes
-
-### Database Migrations
-
-FlexiType uses [Goose](https://github.com/pressly/goose) for database migrations, which provides a robust way to manage schema changes:
+## Standalone service
 
 ```bash
-# Apply all migrations
-make db-migrate DB_URL="postgres://user:password@localhost:5432/flexitype?sslmode=disable"
-
-# Check migration status
-make db-status DB_URL="postgres://user:password@localhost:5432/flexitype?sslmode=disable"
-
-# Roll back the latest migration
-make db-down DB_URL="postgres://user:password@localhost:5432/flexitype?sslmode=disable"
-
-# Roll back all migrations
-make db-reset DB_URL="postgres://user:password@localhost:5432/flexitype?sslmode=disable"
-
-# Create a new migration
-make db-create name=add_new_field DB_URL="postgres://user:password@localhost:5432/flexitype?sslmode=disable"
+go build -o flexitype ./cmd/flexitype
+FLEXITYPE_DB_HOST=localhost FLEXITYPE_DB_NAME=flexitype ./flexitype
 ```
 
-Migration files are stored in the `db/migrations` directory using Goose's standard format:
+Configuration is environment-driven (`FLEXITYPE_PORT`, `FLEXITYPE_DB_*`,
+`FLEXITYPE_SERVICE_ACCOUNTS`, `FLEXITYPE_WEBHOOK_URL`/`_SECRET`,
+`FLEXITYPE_MIGRATE_ON_START`, `FLEXITYPE_LOG_LEVEL`). Tracing follows the
+standard `OTEL_EXPORTER_OTLP_ENDPOINT`. Liveness at `/healthz`, readiness
+(with a database probe) at `/readyz`.
 
-```sql
--- +goose Up
--- SQL in this section is executed when the migration is applied
-CREATE TABLE example (
-  id SERIAL PRIMARY KEY
-);
+### Service accounts
 
--- +goose Down
--- SQL in this section is executed when the migration is rolled back
-DROP TABLE example;
+Machine-to-machine auth via bearer tokens (`ft_<account>_<secret>`), accounts
+declared in a JSON file with SHA-256 secret hashes and `read`/`write`/`admin`
+scopes; each account is pinned to a tenant:
+
+```json
+[
+  {
+    "id": "ci",
+    "name": "CI Importer",
+    "tenant_id": "acme",
+    "scopes": ["read", "write"],
+    "secret_hash": "<hex sha256 of the secret>"
+  }
+]
 ```
 
-## Examples
+No file configured → auth disabled (development mode).
 
-FlexiType includes several examples that demonstrate various features:
+### REST API (v1)
 
-### Attribute Disabling
+```
+GET|POST   /api/v1/type-definitions            PATCH /api/v1/type-definitions/{id}
+POST       /api/v1/type-definitions/{id}/archive|restore
+GET        /api/v1/type-definitions/{id}/attributes
+GET|POST   /api/v1/attributes                  PATCH /api/v1/attributes/{id}
+POST       /api/v1/attributes/{id}/archive|restore
+GET|POST   /api/v1/values                      GET|DELETE /api/v1/values/{id}
+GET        /api/v1/entities/{typeDef}/{entity}/values
+GET        /api/v1/entities/{typeDef}/{entity}/attributes/{attr}/effective-schema
+GET|POST   /api/v1/dependencies                PATCH|DELETE /api/v1/dependencies/{id}
+GET        /api/v1/activity
+```
 
-FlexiType supports disabling attributes in newer versions of a type definition. A disabled attribute:
+Lists paginate with `?limit=` and an opaque `?cursor=`; errors carry stable
+machine codes (`VALIDATION`, `NOT_FOUND`, `CONFLICT`, `ARCHIVED`,
+`DEPENDENCY_VIOLATION`).
 
-- Cannot be set or updated via APIs
-- Is not enforced in validation
-- Can be re-enabled in a later version
-- Is preserved in existing instances but ignored for validation
+## Example: cascading picklist
 
-You can see this feature in action in these examples:
-- `examples/version_with_disabled_attr.go` - SDK/in-memory example
-- `examples/disabled_attr_grpc_example.go` - Connect gRPC example
+```bash
+# category: enum(bike, car)      subcategory: enum(mountain, road, sedan, suv)
+curl -X POST :8080/api/v1/dependencies -d '{
+  "source_attribute_id": "'$CATEGORY'",
+  "target_attribute_id": "'$SUBCATEGORY'",
+  "conditions": [{"kind": "equals", "value": {"type": "enum", "value": "bike"}}],
+  "effect": {"allowed_values": [
+    {"type": "enum", "value": "mountain"},
+    {"type": "enum", "value": "road"}
+  ]}
+}'
 
-### Cascades and Inheritance
+# With category=bike set on product-9, the UI asks what subcategory may be:
+curl :8080/api/v1/entities/$TYPE/product-9/attributes/$SUBCATEGORY/effective-schema
+# → {"required":false,"restricted":true,"allowed_values":["mountain","road"], ...}
+```
 
-The cascade system allows attributes to be inherited by child types with configurable behavior:
+## Development
 
-- Inheritance of attributes from parent types
-- Customizable cascade behavior (inherit/override/disable)
-- Logic expressions to enforce complex business rules
+```bash
+go build ./...   # everything compiles without a database
+go test ./...    # goconvey Given/When/Then suites
+go vet ./...
+```
 
-See `examples/cascade_example.go` for usage.
+Storage is a single polymorphic value table with one typed, indexed column
+per storage class — no table-per-type explosion, uniqueness probes stay
+index-backed, and entity hydration is one composite-index scan.
 
-### Type Versioning
+## License
 
-Type definitions can evolve through versions, with instances tracking the version they were created with:
-
-- Automatic versioning when types are modified
-- Migration of instances to newer versions
-- Validation against the current schema
-
-See `examples/versioning_example.go` for details.
+MIT

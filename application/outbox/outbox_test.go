@@ -13,10 +13,13 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/events"
 )
 
-// fakeStore is an in-memory outbox honouring the claim/mark contract.
+// fakeStore is an in-memory outbox honouring the claim/finalize contract:
+// Claim leases pending rows (so a concurrent relay skips them) and Finalize
+// records the dispatch outcome, retiring successes and un-leasing failures.
 type fakeStore struct {
 	mu      sync.Mutex
 	pending []events.Envelope
+	leased  map[string]bool
 	done    []string
 	fails   map[string]int
 }
@@ -28,24 +31,34 @@ func (s *fakeStore) Write(_ context.Context, _ db.QueryExecer, envs []events.Env
 	return nil
 }
 
-func (s *fakeStore) Expand(_ context.Context, limit int, fn func(envs []events.Envelope) []Result) error {
-	s.mu.Lock()
-	batch := s.pending
-	if len(batch) > limit {
-		batch = batch[:limit]
-	}
-	claimed := make([]events.Envelope, len(batch))
-	copy(claimed, batch)
-	s.mu.Unlock()
-
-	if len(claimed) == 0 {
-		return nil
-	}
-	results := fn(claimed)
-
+func (s *fakeStore) Claim(_ context.Context, _ string, limit int, _ time.Duration) ([]events.Envelope, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.leased == nil {
+		s.leased = map[string]bool{}
+	}
+	claimed := make([]events.Envelope, 0, limit)
+	for _, env := range s.pending {
+		if len(claimed) == limit {
+			break
+		}
+		if s.leased[env.ID] {
+			continue
+		}
+		s.leased[env.ID] = true
+		claimed = append(claimed, env)
+	}
+	return claimed, nil
+}
+
+func (s *fakeStore) Finalize(_ context.Context, results []Result) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fails == nil {
+		s.fails = map[string]int{}
+	}
 	for _, res := range results {
+		delete(s.leased, res.EnvelopeID)
 		if res.Err == nil {
 			s.done = append(s.done, res.EnvelopeID)
 			for i, env := range s.pending {
@@ -55,9 +68,6 @@ func (s *fakeStore) Expand(_ context.Context, limit int, fn func(envs []events.E
 				}
 			}
 		} else {
-			if s.fails == nil {
-				s.fails = map[string]int{}
-			}
 			s.fails[res.EnvelopeID]++
 		}
 	}

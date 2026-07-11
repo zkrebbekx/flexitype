@@ -11,6 +11,7 @@ import (
 	"github.com/zkrebbekx/flexitype"
 	"github.com/zkrebbekx/flexitype/application"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
+	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
@@ -269,6 +270,36 @@ func TestInMemoryService(t *testing.T) {
 				So(err, ShouldBeNil)
 				So(out.Items, ShouldHaveLength, 1)
 				So(out.Items[0].ID.String(), ShouldEqual, productID)
+			})
+		})
+
+		Convey("When a unit of work fails after an intermediate write", func() {
+			productID := h.createType("product", "")
+			attrID := h.createAttr(productID, "sku", "string")
+
+			// A dependency create loads source + target attributes and
+			// validates they share a hierarchy chain; a bad target aborts
+			// the transaction after the source was resolved. Assert the
+			// store is left untouched: no dependency, no orphaned state.
+			before, err := h.interactors().Dependencies().List(h.ctx, appdependency.ListInput{})
+			So(err, ShouldBeNil)
+
+			_, err = h.interactors().Dependencies().Create(h.ctx, appdependency.CreateInput{
+				SourceAttributeID: attrID,
+				TargetAttributeID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", // nonexistent
+				Conditions:        json.RawMessage(`[{"kind":"equals","value":{"type":"string","value":"x"}}]`),
+				Effect:            json.RawMessage(`{}`),
+			})
+			So(err, ShouldNotBeNil)
+
+			Convey("Then no partial data survives the rollback", func() {
+				after, err := h.interactors().Dependencies().List(h.ctx, appdependency.ListInput{})
+				So(err, ShouldBeNil)
+				So(len(after.Items), ShouldEqual, len(before.Items))
+				// The type and attribute created before the failed uow remain.
+				got, err := h.interactors().TypeDefinitions().Get(h.ctx, productID)
+				So(err, ShouldBeNil)
+				So(got.InternalName, ShouldEqual, "product")
 			})
 		})
 	})

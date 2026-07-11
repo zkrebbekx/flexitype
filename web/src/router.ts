@@ -10,6 +10,7 @@ export const router = createRouter({
     { path: '/entities/:typeId/:entityId', component: () => import('./pages/EntityDetailPage.vue') },
     { path: '/delivery', component: () => import('./pages/DeliveryPage.vue') },
     { path: '/activity', component: () => import('./pages/ActivityPage.vue') },
+    { path: '/settings', component: () => import('./pages/SettingsPage.vue') },
     { path: '/:pathMatch(.*)*', component: () => import('./pages/NotFoundPage.vue') },
   ],
 })

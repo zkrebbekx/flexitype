@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
 import type { AttributeDefinition, Dependency, RelationshipDefinition } from '@/lib/api'
@@ -21,9 +21,13 @@ import AttributeDrawer from '@/components/AttributeDrawer.vue'
 import DependencyDrawer from '@/components/DependencyDrawer.vue'
 import RelationshipDefinitionDrawer from '@/components/RelationshipDefinitionDrawer.vue'
 import TypeDefinitionDrawer from '@/components/TypeDefinitionDrawer.vue'
-import { Plus, Archive, ArchiveRestore, ArrowLeftRight, ArrowRight, Pencil } from 'lucide-vue-next'
+import { Plus, Archive, ArchiveRestore, ArrowLeftRight, ArrowRight, History, Pencil } from 'lucide-vue-next'
 
 const route = useRoute()
+const router = useRouter()
+function viewHistory(entity: string, entityId: string) {
+  router.push({ path: '/activity', query: { entity, entity_id: entityId } })
+}
 const typeId = computed(() => String(route.params.id))
 const toasts = useToasts()
 const queryClient = useQueryClient()
@@ -223,6 +227,7 @@ function describeEffect(d: Dependency): string {
       </span>
       <Badge v-if="type.data.value?.archived_at" tone="warn">archived</Badge>
       <template v-if="type.data.value">
+        <Button size="sm" @click="viewHistory('type_definition', typeId)"><History :size="14" /> History</Button>
         <Button size="sm" @click="typeDrawer = true"><Pencil :size="14" /> Edit</Button>
         <Button
           size="sm"
@@ -285,6 +290,14 @@ function describeEffect(d: Dependency): string {
             <td class="tnum px-3 py-2.5 text-(--text-secondary)">v{{ a.version }}</td>
             <td class="px-3 py-2.5 text-right">
               <span class="flex justify-end gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  :aria-label="`History for ${a.display_name}`"
+                  @click="viewHistory('attribute_definition', a.id)"
+                >
+                  <History :size="14" />
+                </Button>
                 <Button size="sm" variant="ghost" :aria-label="`Edit ${a.display_name}`" @click="openAttr(a)">
                   <Pencil :size="14" />
                 </Button>

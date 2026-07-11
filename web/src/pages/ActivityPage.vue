@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useQuery } from '@tanstack/vue-query'
 import { api } from '@/lib/api'
 import type { ActivityEntry } from '@/lib/api'
@@ -16,7 +17,11 @@ import SkeletonRows from '@/components/ui/SkeletonRows.vue'
 import Pagination from '@/components/ui/Pagination.vue'
 import { ChevronDown, ChevronRight } from 'lucide-vue-next'
 
-const filters = reactive({ entity: '', entity_id: '', actor: '' })
+// Seed filters from the URL so detail pages can deep-link into a
+// pre-filtered audit view (e.g. /activity?entity=type_definition&entity_id=…).
+const route = useRoute()
+const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] as string) : '')
+const filters = reactive({ entity: q('entity'), entity_id: q('entity_id'), actor: q('actor') })
 const { cursor, canPrevious, next: pageNext, previous: pagePrev, reset: pageReset } = usePagedCursor()
 
 const activity = useQuery({

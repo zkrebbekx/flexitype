@@ -23,27 +23,32 @@ import (
 
 const relDefColumns = `id, tenant_id, internal_name, display_name, description, kind, parent_type_id,
 	child_type_id, parent_label, child_label, attribute_set_id, extends_id, parent_version_policy,
-	child_version_policy, version, created_at, updated_at, archived_at`
+	child_version_policy, version, created_at, updated_at, archived_at,
+	min_children, max_children, min_parents, max_parents`
 
 type relDefRow struct {
-	ID                  ulid.ID      `db:"id"`
-	TenantID            string       `db:"tenant_id"`
-	InternalName        string       `db:"internal_name"`
-	DisplayName         string       `db:"display_name"`
-	Description         string       `db:"description"`
-	Kind                string       `db:"kind"`
-	ParentTypeID        ulid.ID      `db:"parent_type_id"`
-	ChildTypeID         ulid.ID      `db:"child_type_id"`
-	ParentLabel         string       `db:"parent_label"`
-	ChildLabel          string       `db:"child_label"`
-	AttributeSetID      ulid.ID      `db:"attribute_set_id"`
-	ExtendsID           ulid.ID      `db:"extends_id"`
-	ParentVersionPolicy string       `db:"parent_version_policy"`
-	ChildVersionPolicy  string       `db:"child_version_policy"`
-	Version             int          `db:"version"`
-	CreatedAt           time.Time    `db:"created_at"`
-	UpdatedAt           time.Time    `db:"updated_at"`
-	ArchivedAt          sql.NullTime `db:"archived_at"`
+	ID                  ulid.ID       `db:"id"`
+	TenantID            string        `db:"tenant_id"`
+	InternalName        string        `db:"internal_name"`
+	DisplayName         string        `db:"display_name"`
+	Description         string        `db:"description"`
+	Kind                string        `db:"kind"`
+	ParentTypeID        ulid.ID       `db:"parent_type_id"`
+	ChildTypeID         ulid.ID       `db:"child_type_id"`
+	ParentLabel         string        `db:"parent_label"`
+	ChildLabel          string        `db:"child_label"`
+	AttributeSetID      ulid.ID       `db:"attribute_set_id"`
+	ExtendsID           ulid.ID       `db:"extends_id"`
+	ParentVersionPolicy string        `db:"parent_version_policy"`
+	ChildVersionPolicy  string        `db:"child_version_policy"`
+	Version             int           `db:"version"`
+	CreatedAt           time.Time     `db:"created_at"`
+	UpdatedAt           time.Time     `db:"updated_at"`
+	ArchivedAt          sql.NullTime  `db:"archived_at"`
+	MinChildren         sql.NullInt64 `db:"min_children"`
+	MaxChildren         sql.NullInt64 `db:"max_children"`
+	MinParents          sql.NullInt64 `db:"min_parents"`
+	MaxParents          sql.NullInt64 `db:"max_parents"`
 }
 
 func (r relDefRow) snapshot() domainrelationship.DefinitionSnapshot {
@@ -71,6 +76,10 @@ func (r relDefRow) snapshot() domainrelationship.DefinitionSnapshot {
 		CreatedAt:           r.CreatedAt,
 		UpdatedAt:           r.UpdatedAt,
 		ArchivedAt:          timePtr(r.ArchivedAt),
+		MinChildren:         intPtr(r.MinChildren),
+		MaxChildren:         intPtr(r.MaxChildren),
+		MinParents:          intPtr(r.MinParents),
+		MaxParents:          intPtr(r.MaxParents),
 	}
 }
 
@@ -269,8 +278,9 @@ func (r *relationshipDefinitionRepository) Save(ctx context.Context, d *domainre
 		`INSERT INTO flexitype_relationship_definition
 		   (id, tenant_id, internal_name, display_name, description, kind, parent_type_id, child_type_id,
 		    parent_label, child_label, attribute_set_id, extends_id, parent_version_policy,
-		    child_version_policy, version, created_at, updated_at, archived_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		    child_version_policy, version, created_at, updated_at, archived_at,
+		    min_children, max_children, min_parents, max_parents)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   display_name          = EXCLUDED.display_name,
 		   description           = EXCLUDED.description,
@@ -280,12 +290,17 @@ func (r *relationshipDefinitionRepository) Save(ctx context.Context, d *domainre
 		   child_version_policy  = EXCLUDED.child_version_policy,
 		   version               = EXCLUDED.version,
 		   updated_at            = EXCLUDED.updated_at,
-		   archived_at           = EXCLUDED.archived_at`),
+		   archived_at           = EXCLUDED.archived_at,
+		   min_children          = EXCLUDED.min_children,
+		   max_children          = EXCLUDED.max_children,
+		   min_parents           = EXCLUDED.min_parents,
+		   max_parents           = EXCLUDED.max_parents`),
 		s.ID.String(), s.TenantID.String(), s.InternalName, s.DisplayName, s.Description,
 		string(s.Kind), s.ParentTypeID.String(), s.ChildTypeID.String(), s.ParentLabel, s.ChildLabel,
 		s.AttributeSetID.String(), extends,
 		string(s.ParentVersionPolicy), string(s.ChildVersionPolicy), s.Version,
 		s.CreatedAt, s.UpdatedAt, nullableTime(s.ArchivedAt),
+		nullableInt(s.MinChildren), nullableInt(s.MaxChildren), nullableInt(s.MinParents), nullableInt(s.MaxParents),
 	)
 	if err != nil {
 		return fmt.Errorf("save relationship definition: %w", err)
@@ -610,6 +625,24 @@ func (r *relationshipRepository) List(ctx context.Context, filter domainrelation
 		out = append(out, domainrelationship.Rehydrate(snap))
 	}
 	return out, result.Total, nil
+}
+
+func (r *relationshipRepository) CountLiveLinks(ctx context.Context, defID valueobjects.RelationshipDefinitionID, entity valueobjects.EntityID) (int, int, error) {
+	var row struct {
+		AsParent int `db:"as_parent"`
+		AsChild  int `db:"as_child"`
+	}
+	err := r.q.GetContext(ctx, &row, bind(
+		`SELECT
+		   count(*) FILTER (WHERE parent_entity_id = ?) AS as_parent,
+		   count(*) FILTER (WHERE child_entity_id = ?)  AS as_child
+		 FROM flexitype_relationship
+		 WHERE relationship_definition_id = ? AND archived_at IS NULL`),
+		entity.String(), entity.String(), defID.String())
+	if err != nil {
+		return 0, 0, fmt.Errorf("count live links: %w", err)
+	}
+	return row.AsParent, row.AsChild, nil
 }
 
 func (r *relationshipRepository) Save(ctx context.Context, rel *domainrelationship.Relationship) error {

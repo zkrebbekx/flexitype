@@ -112,6 +112,14 @@ func valueFromColumns(dt valueobjects.DataType, c valueColumns) (valueobjects.Va
 }
 
 // nullableTime converts a *time.Time to its driver representation.
+// nullableInt renders a *int as a NULL-aware SQL argument.
+func nullableInt(n *int) any {
+	if n == nil {
+		return nil
+	}
+	return *n
+}
+
 func nullableTime(t *time.Time) sql.NullTime {
 	if t == nil {
 		return sql.NullTime{}

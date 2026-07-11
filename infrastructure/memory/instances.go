@@ -330,6 +330,24 @@ func (r *relRepo) FindLive(_ context.Context, defID valueobjects.RelationshipDef
 	return nil, nil
 }
 
+func (r *relRepo) CountLiveLinks(_ context.Context, defID valueobjects.RelationshipDefinitionID, entity valueobjects.EntityID) (int, int, error) {
+	r.s.mu.RLock()
+	defer r.s.mu.RUnlock()
+	var asParent, asChild int
+	for _, snap := range r.s.rels {
+		if !snap.DefinitionID.Equals(defID) || snap.ArchivedAt != nil {
+			continue
+		}
+		if snap.ParentEntityID == entity {
+			asParent++
+		}
+		if snap.ChildEntityID == entity {
+			asChild++
+		}
+	}
+	return asParent, asChild, nil
+}
+
 func (r *relRepo) ListByEntity(_ context.Context, key domainrelationship.EntityLinksKey) ([]*domainrelationship.Relationship, error) {
 	r.s.mu.RLock()
 	defer r.s.mu.RUnlock()

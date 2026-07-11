@@ -39,6 +39,10 @@ const form = reactive({
   extends_id: '',
   parent_version_policy: 'latest' as VersionPolicy,
   child_version_policy: 'latest' as VersionPolicy,
+  min_children: '',
+  max_children: '',
+  min_parents: '',
+  max_parents: '',
 })
 const error = ref('')
 
@@ -71,6 +75,10 @@ watch(
     form.extends_id = d?.extends_id ?? ''
     form.parent_version_policy = d?.parent_version_policy ?? 'latest'
     form.child_version_policy = d?.child_version_policy ?? 'latest'
+    form.min_children = d?.min_children != null ? String(d.min_children) : ''
+    form.max_children = d?.max_children != null ? String(d.max_children) : ''
+    form.min_parents = d?.min_parents != null ? String(d.min_parents) : ''
+    form.max_parents = d?.max_parents != null ? String(d.max_parents) : ''
   },
   { immediate: true },
 )
@@ -117,6 +125,14 @@ const KINDS = [
   { value: 'symmetric', label: 'Symmetric (unordered peers)' },
 ]
 
+const numOrNull = (v: string) => (v.trim() === '' ? null : Number(v))
+const cardinality = () => ({
+  min_children: numOrNull(form.min_children),
+  max_children: numOrNull(form.max_children),
+  min_parents: numOrNull(form.min_parents),
+  max_parents: numOrNull(form.max_parents),
+})
+
 const save = useMutation({
   mutationFn: () => {
     if (props.definition) {
@@ -127,6 +143,7 @@ const save = useMutation({
         child_label: isSymmetric.value ? undefined : form.child_label || undefined,
         parent_version_policy: form.parent_version_policy,
         child_version_policy: form.child_version_policy,
+        ...cardinality(),
       })
     }
     return api.createRelationshipDefinition({
@@ -141,6 +158,7 @@ const save = useMutation({
       extends_id: form.extends_id || undefined,
       parent_version_policy: form.parent_version_policy,
       child_version_policy: form.child_version_policy,
+      ...cardinality(),
     })
   },
   onSuccess: (d) => {
@@ -198,6 +216,25 @@ const save = useMutation({
         <Select v-model="form.parent_version_policy" label="Parent version binding" :options="POLICIES" />
         <Select v-model="form.child_version_policy" label="Child version binding" :options="POLICIES" />
       </div>
+
+      <fieldset class="flex flex-col gap-2.5 rounded-md border border-(--border) p-3">
+        <legend class="px-1 text-[13px] font-medium text-(--text-secondary)">Cardinality</legend>
+        <p class="text-[12px] text-(--text-muted)">Blank = unbounded. Enforced when linking.</p>
+        <template v-if="isSymmetric">
+          <Input v-model="form.max_children" type="number" label="Max links per entity" />
+          <Input v-model="form.min_children" type="number" label="Min links per entity" />
+        </template>
+        <template v-else>
+          <div class="grid grid-cols-2 gap-3">
+            <Input v-model="form.min_children" type="number" label="Min children (per parent)" />
+            <Input v-model="form.max_children" type="number" label="Max children (per parent)" />
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <Input v-model="form.min_parents" type="number" label="Min parents (per child)" />
+            <Input v-model="form.max_parents" type="number" label="Max parents (per child)" />
+          </div>
+        </template>
+      </fieldset>
 
       <Select
         v-if="!isEdit"

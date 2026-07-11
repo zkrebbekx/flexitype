@@ -39,6 +39,8 @@ const emit = defineEmits<{
       </Button>
     </div>
 
+    <p v-if="attribute.help_text" class="mt-1 text-[13px] text-(--text-muted)">{{ attribute.help_text }}</p>
+
     <ul v-if="values.length" class="mt-2 flex flex-col gap-1">
       <li
         v-for="v in values"

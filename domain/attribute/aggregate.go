@@ -28,6 +28,9 @@ type Definition struct {
 	unique           bool
 	constraints      Constraints
 	defaultValue     *valueobjects.Default
+	group            string
+	sortOrder        int
+	helpText         string
 	version          int
 	createdAt        time.Time
 	updatedAt        time.Time
@@ -47,6 +50,11 @@ type NewInput struct {
 	Unique           bool
 	Constraints      Constraints
 	DefaultValue     *valueobjects.Default
+	// Presentation metadata (optional): the section this attribute belongs
+	// to, its order within the type, and inline help.
+	Group     string
+	SortOrder int
+	HelpText  string
 }
 
 // New creates an Definition, returning the aggregate and its
@@ -87,6 +95,9 @@ func New(in NewInput, now time.Time) (*Definition, []events.Event, error) {
 		unique:           in.Unique,
 		constraints:      in.Constraints,
 		defaultValue:     in.DefaultValue,
+		group:            in.Group,
+		sortOrder:        in.SortOrder,
+		helpText:         in.HelpText,
 		version:          1,
 		createdAt:        now,
 		updatedAt:        now,
@@ -114,6 +125,9 @@ type UpdateInput struct {
 	Unique       bool
 	Constraints  Constraints
 	DefaultValue *valueobjects.Default
+	Group        string
+	SortOrder    int
+	HelpText     string
 }
 
 // Update mutates the definition, bumping the version. Stored values keep
@@ -136,6 +150,9 @@ func (a *Definition) Update(in UpdateInput, now time.Time) ([]events.Event, erro
 	a.unique = in.Unique
 	a.constraints = in.Constraints
 	a.defaultValue = in.DefaultValue
+	a.group = in.Group
+	a.sortOrder = in.SortOrder
+	a.helpText = in.HelpText
 	a.version++
 	a.updatedAt = now
 
@@ -310,6 +327,9 @@ type Snapshot struct {
 	Unique           bool                               `json:"unique"`
 	Constraints      Constraints                        `json:"constraints"`
 	DefaultValue     *valueobjects.Default              `json:"default_value,omitempty"`
+	Group            string                             `json:"group,omitempty"`
+	SortOrder        int                                `json:"sort_order"`
+	HelpText         string                             `json:"help_text,omitempty"`
 	Version          int                                `json:"version"`
 	CreatedAt        time.Time                          `json:"created_at"`
 	UpdatedAt        time.Time                          `json:"updated_at"`
@@ -331,6 +351,9 @@ func (a *Definition) Snapshot() Snapshot {
 		Unique:           a.unique,
 		Constraints:      a.constraints,
 		DefaultValue:     a.defaultValue,
+		Group:            a.group,
+		SortOrder:        a.sortOrder,
+		HelpText:         a.helpText,
 		Version:          a.version,
 		CreatedAt:        a.createdAt,
 		UpdatedAt:        a.updatedAt,
@@ -354,6 +377,9 @@ func Rehydrate(s Snapshot) *Definition {
 		unique:           s.Unique,
 		constraints:      s.Constraints,
 		defaultValue:     s.DefaultValue,
+		group:            s.Group,
+		sortOrder:        s.SortOrder,
+		helpText:         s.HelpText,
 		version:          s.Version,
 		createdAt:        s.CreatedAt,
 		updatedAt:        s.UpdatedAt,

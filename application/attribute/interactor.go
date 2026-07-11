@@ -45,6 +45,9 @@ type CreateInput struct {
 	Unique           bool
 	Constraints      json.RawMessage
 	DefaultValue     json.RawMessage
+	Group            string
+	SortOrder        int
+	HelpText         string
 }
 
 // Create creates an attribute definition under a type definition. The
@@ -130,6 +133,9 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 			Unique:           in.Unique,
 			Constraints:      constraints,
 			DefaultValue:     defaultValue,
+			Group:            in.Group,
+			SortOrder:        in.SortOrder,
+			HelpText:         in.HelpText,
 		}, i.now())
 		if err != nil {
 			return err
@@ -164,6 +170,9 @@ type UpdateInput struct {
 	Unique       bool
 	Constraints  json.RawMessage
 	DefaultValue json.RawMessage
+	Group        string
+	SortOrder    int
+	HelpText     string
 }
 
 // Update mutates an attribute definition, bumping its version.
@@ -198,6 +207,9 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			Unique:       in.Unique,
 			Constraints:  constraints,
 			DefaultValue: defaultValue,
+			Group:        in.Group,
+			SortOrder:    in.SortOrder,
+			HelpText:     in.HelpText,
 		}, i.now())
 		if err != nil {
 			return err

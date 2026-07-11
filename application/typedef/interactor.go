@@ -4,6 +4,7 @@ package typedef
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
@@ -284,6 +285,18 @@ func (i *Interactor) EffectiveAttributes(ctx context.Context, rawID string) ([]E
 			out = append(out, EffectiveAttribute{Attribute: a.Snapshot(), DeclaredIn: link.Snapshot()})
 		}
 	}
+	// Present grouped and ordered: inherited attributes merge into the same
+	// named group as own ones, and sort_order controls order within a group
+	// (ungrouped attributes sort first). The sort is stable, so attributes
+	// with equal (group, sort_order) — e.g. all ungrouped ones — keep their
+	// original declaration/inheritance order.
+	sort.SliceStable(out, func(x, y int) bool {
+		a, b := out[x].Attribute, out[y].Attribute
+		if a.Group != b.Group {
+			return a.Group < b.Group
+		}
+		return a.SortOrder < b.SortOrder
+	})
 	return out, nil
 }
 

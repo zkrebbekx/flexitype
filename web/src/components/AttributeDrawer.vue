@@ -44,6 +44,9 @@ const form = reactive({
   pattern: '',
   enumMembers: [] as string[],
   newMember: '',
+  group: '',
+  sortOrder: '',
+  helpText: '',
 })
 const error = ref('')
 
@@ -69,6 +72,9 @@ watch(
     form.required = a?.required ?? false
     form.multi_valued = a?.multi_valued ?? false
     form.unique = a?.unique ?? false
+    form.group = a?.group ?? ''
+    form.sortOrder = a?.sort_order != null ? String(a.sort_order) : ''
+    form.helpText = a?.help_text ?? ''
     form.minLength = ''
     form.maxLength = ''
     form.minValue = ''
@@ -114,6 +120,11 @@ function addMember() {
 const save = useMutation({
   mutationFn: async () => {
     const constraints = buildConstraints()
+    const presentation = {
+      group: form.group || undefined,
+      sort_order: form.sortOrder ? Number(form.sortOrder) : undefined,
+      help_text: form.helpText || undefined,
+    }
     if (props.attribute) {
       return api.updateAttribute(props.attribute.id, {
         display_name: form.display_name,
@@ -122,6 +133,7 @@ const save = useMutation({
         multi_valued: form.multi_valued,
         unique: form.unique,
         constraints,
+        ...presentation,
       })
     }
     return api.createAttribute({
@@ -134,6 +146,7 @@ const save = useMutation({
       multi_valued: form.multi_valued,
       unique: form.unique,
       constraints,
+      ...presentation,
     })
   },
   onSuccess: (a) => {
@@ -201,6 +214,15 @@ async function tryValue() {
 
       <Input v-model="form.display_name" label="Display name" placeholder="Unit weight (kg)" />
       <Input v-model="form.description" label="Description" placeholder="Optional" />
+
+      <fieldset class="flex flex-col gap-2.5 rounded-md border border-(--border) p-3">
+        <legend class="px-1 text-[13px] font-medium text-(--text-secondary)">Presentation</legend>
+        <div class="grid grid-cols-2 gap-3">
+          <Input v-model="form.group" label="Group" placeholder="e.g. Pricing" hint="Section this attribute renders in" />
+          <Input v-model="form.sortOrder" type="number" label="Order" hint="Position within the group" />
+        </div>
+        <Input v-model="form.helpText" label="Help text" placeholder="Optional inline guidance for editors" />
+      </fieldset>
 
       <fieldset class="flex flex-col gap-2.5 rounded-md border border-(--border) p-3">
         <legend class="px-1 text-[13px] font-medium text-(--text-secondary)">Rules</legend>

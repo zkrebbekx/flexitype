@@ -21,7 +21,7 @@ import (
 
 const attrColumns = `id, tenant_id, type_definition_id, internal_name, display_name, description,
 	data_type, required, multi_valued, is_unique, constraints, default_value, version,
-	created_at, updated_at, archived_at`
+	created_at, updated_at, archived_at, attr_group, sort_order, help_text`
 
 type attrRow struct {
 	ID               ulid.ID      `db:"id"`
@@ -40,6 +40,9 @@ type attrRow struct {
 	CreatedAt        time.Time    `db:"created_at"`
 	UpdatedAt        time.Time    `db:"updated_at"`
 	ArchivedAt       sql.NullTime `db:"archived_at"`
+	Group            string       `db:"attr_group"`
+	SortOrder        int          `db:"sort_order"`
+	HelpText         string       `db:"help_text"`
 }
 
 func (r attrRow) snapshot() (domainattribute.Snapshot, error) {
@@ -74,6 +77,9 @@ func (r attrRow) snapshot() (domainattribute.Snapshot, error) {
 		CreatedAt:        r.CreatedAt,
 		UpdatedAt:        r.UpdatedAt,
 		ArchivedAt:       timePtr(r.ArchivedAt),
+		Group:            r.Group,
+		SortOrder:        r.SortOrder,
+		HelpText:         r.HelpText,
 	}, nil
 }
 
@@ -459,8 +465,8 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 		`INSERT INTO flexitype_attribute_definition
 		   (id, tenant_id, type_definition_id, internal_name, display_name, description,
 		    data_type, required, multi_valued, is_unique, constraints, default_value, version,
-		    created_at, updated_at, archived_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		    created_at, updated_at, archived_at, attr_group, sort_order, help_text)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   display_name  = EXCLUDED.display_name,
 		   description   = EXCLUDED.description,
@@ -471,11 +477,14 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 		   default_value = EXCLUDED.default_value,
 		   version       = EXCLUDED.version,
 		   updated_at    = EXCLUDED.updated_at,
-		   archived_at   = EXCLUDED.archived_at`),
+		   archived_at   = EXCLUDED.archived_at,
+		   attr_group    = EXCLUDED.attr_group,
+		   sort_order    = EXCLUDED.sort_order,
+		   help_text     = EXCLUDED.help_text`),
 		s.ID.String(), s.TenantID.String(), s.TypeDefinitionID.String(), s.InternalName,
 		s.DisplayName, s.Description, s.DataType.String(), s.Required, s.MultiValued,
 		s.Unique, jsonbParam(constraints), jsonbParam(defaultValue), s.Version, s.CreatedAt,
-		s.UpdatedAt, nullableTime(s.ArchivedAt),
+		s.UpdatedAt, nullableTime(s.ArchivedAt), s.Group, s.SortOrder, s.HelpText,
 	)
 	if err != nil {
 		return fmt.Errorf("save attribute definition: %w", err)

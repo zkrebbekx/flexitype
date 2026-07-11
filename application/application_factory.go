@@ -6,11 +6,11 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/activity"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
+	appdedup "github.com/zkrebbekx/flexitype/application/dedup"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	"github.com/zkrebbekx/flexitype/application/feed"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
-	appdedup "github.com/zkrebbekx/flexitype/application/dedup"
 	appsavedview "github.com/zkrebbekx/flexitype/application/savedview"
 	appschema "github.com/zkrebbekx/flexitype/application/schema"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"

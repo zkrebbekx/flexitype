@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/pkg/events"
+	"github.com/zkrebbekx/flexitype/pkg/safedial"
 )
 
 // Worker drains due deliveries: claim (short tx) → POST (no tx) → record
@@ -61,11 +62,13 @@ func WithHTTPClient(c *http.Client) WorkerOption {
 	return func(w *Worker) { w.client = c }
 }
 
-// NewWorker builds a delivery worker over the store.
+// NewWorker builds a delivery worker over the store. The default HTTP
+// client refuses non-public targets (SSRF guard); override with
+// WithHTTPClient (e.g. safedial.NewClient with AllowPrivate for on-prem).
 func NewWorker(deliveries DeliveryStore, opts ...WorkerOption) *Worker {
 	w := &Worker{
 		deliveries:  deliveries,
-		client:      &http.Client{Timeout: 10 * time.Second},
+		client:      safedial.NewClient(safedial.Options{Timeout: 10 * time.Second}),
 		interval:    time.Second,
 		lease:       time.Minute,
 		batch:       32,

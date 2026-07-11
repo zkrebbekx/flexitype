@@ -8,8 +8,10 @@ package webhook
 
 import (
 	"context"
+	"net"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
@@ -61,14 +63,37 @@ func (s Subscription) Matches(eventType string) bool {
 	return false
 }
 
-// Validate checks the subscription's shape.
-func (s Subscription) Validate() error {
+// URLPolicy governs which subscription URLs are accepted. The zero value
+// is the safe default: https only, no private/loopback/link-local hosts.
+type URLPolicy struct {
+	// AllowPrivate permits http and private/loopback/link-local hosts —
+	// for on-prem deployments whose consumers live on internal networks.
+	// The delivery worker's dialer guard must be relaxed in step.
+	AllowPrivate bool
+}
+
+// Validate checks the subscription's shape and its URL against the policy.
+func (s Subscription) Validate(policy URLPolicy) error {
 	if !namePattern.MatchString(s.Name) {
 		return domainerrors.NewValidation("subscription name must be lowercase alphanumeric with _ or -, 2-64 chars")
 	}
 	u, err := url.Parse(s.URL)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
-		return domainerrors.NewValidation("subscription url must be an absolute http(s) URL")
+	if err != nil || u.Host == "" {
+		return domainerrors.NewValidation("subscription url must be an absolute URL")
+	}
+	if policy.AllowPrivate {
+		if u.Scheme != "https" && u.Scheme != "http" {
+			return domainerrors.NewValidation("subscription url must be http or https")
+		}
+	} else {
+		if u.Scheme != "https" {
+			return domainerrors.NewValidation("subscription url must be https")
+		}
+		if host := hostOnly(u.Host); isLiteralPrivateHost(host) {
+			return domainerrors.NewValidation(
+				"subscription url must target a public host; private, loopback and link-local addresses are not allowed",
+				"host", host)
+		}
 	}
 	for _, t := range s.EventTypes {
 		if t == "" {
@@ -76,6 +101,29 @@ func (s Subscription) Validate() error {
 		}
 	}
 	return nil
+}
+
+func hostOnly(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
+}
+
+// isLiteralPrivateHost catches obvious non-public targets at write time.
+// It is a fast-fail UX guard; the delivery worker's dialer is the
+// authoritative check (it resolves names and defeats DNS rebinding).
+func isLiteralPrivateHost(host string) bool {
+	lower := strings.ToLower(host)
+	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false // a name — resolution-time guard handles it
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 // SubscriptionStore persists subscriptions. WithTx binds the store to a

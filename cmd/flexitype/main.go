@@ -118,6 +118,9 @@ func run(log *logger.Logger) error {
 		if cfg.EventRetention > 0 {
 			opts = append(opts, flexitype.WithEventRetention(cfg.EventRetention))
 		}
+		if cfg.WebhookAllowPrivate {
+			opts = append(opts, flexitype.WithWebhookAllowPrivate())
+		}
 		log.Info().Msg("transactional outbox enabled; event delivery API active")
 	}
 	if cfg.EnableSearchIndex {

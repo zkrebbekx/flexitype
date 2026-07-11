@@ -20,12 +20,14 @@ type Interactor struct {
 	uow        uow.UnitOfWork
 	subs       SubscriptionStore
 	deliveries DeliveryStore
+	policy     URLPolicy
 	now        func() time.Time
 }
 
-// NewInteractor wires the webhook usecases.
-func NewInteractor(u uow.UnitOfWork, subs SubscriptionStore, deliveries DeliveryStore) *Interactor {
-	return &Interactor{uow: u, subs: subs, deliveries: deliveries, now: time.Now}
+// NewInteractor wires the webhook usecases. policy governs which
+// subscription URLs are accepted (SSRF guard).
+func NewInteractor(u uow.UnitOfWork, subs SubscriptionStore, deliveries DeliveryStore, policy URLPolicy) *Interactor {
+	return &Interactor{uow: u, subs: subs, deliveries: deliveries, policy: policy, now: time.Now}
 }
 
 // CreateInput registers a new subscription.
@@ -53,7 +55,7 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*Subscription,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-	if err := sub.Validate(); err != nil {
+	if err := sub.Validate(i.policy); err != nil {
 		return nil, err
 	}
 
@@ -150,7 +152,7 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*Subscription,
 			sub.Secret = *in.RotateSecret
 		}
 		sub.UpdatedAt = i.now().UTC()
-		if err := sub.Validate(); err != nil {
+		if err := sub.Validate(i.policy); err != nil {
 			return err
 		}
 		if err := store.Update(ctx, sub); err != nil {

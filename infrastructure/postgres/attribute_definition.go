@@ -20,7 +20,7 @@ import (
 )
 
 const attrColumns = `id, tenant_id, type_definition_id, internal_name, display_name, description,
-	data_type, required, multi_valued, is_unique, localizable, scopable, constraints, default_value, version,
+	data_type, required, multi_valued, is_unique, localizable, scopable, computed, constraints, default_value, version,
 	created_at, updated_at, archived_at, attr_group, sort_order, help_text`
 
 type attrRow struct {
@@ -36,6 +36,7 @@ type attrRow struct {
 	IsUnique         bool         `db:"is_unique"`
 	Localizable      bool         `db:"localizable"`
 	Scopable         bool         `db:"scopable"`
+	Computed         []byte       `db:"computed"`
 	Constraints      []byte       `db:"constraints"`
 	DefaultValue     []byte       `db:"default_value"`
 	Version          int          `db:"version"`
@@ -62,6 +63,14 @@ func (r attrRow) snapshot() (domainattribute.Snapshot, error) {
 		}
 		defaultValue = &d
 	}
+	var computed *domainattribute.Computed
+	if len(r.Computed) > 0 && string(r.Computed) != "null" {
+		var cmp domainattribute.Computed
+		if err := json.Unmarshal(r.Computed, &cmp); err != nil {
+			return domainattribute.Snapshot{}, fmt.Errorf("decode computed for %s: %w", r.ID, err)
+		}
+		computed = &cmp
+	}
 	return domainattribute.Snapshot{
 		ID:               valueobjects.AttributeDefinitionID{ID: r.ID},
 		TenantID:         valueobjects.TenantID(r.TenantID),
@@ -75,6 +84,7 @@ func (r attrRow) snapshot() (domainattribute.Snapshot, error) {
 		Unique:           r.IsUnique,
 		Localizable:      r.Localizable,
 		Scopable:         r.Scopable,
+		Computed:         computed,
 		Constraints:      constraints,
 		DefaultValue:     defaultValue,
 		Version:          r.Version,
@@ -464,13 +474,19 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 			return fmt.Errorf("encode default value: %w", err)
 		}
 	}
+	var computed []byte
+	if s.Computed != nil {
+		if computed, err = json.Marshal(s.Computed); err != nil {
+			return fmt.Errorf("encode computed: %w", err)
+		}
+	}
 
 	_, err = r.q.ExecContext(ctx, bind(
 		`INSERT INTO flexitype_attribute_definition
 		   (id, tenant_id, type_definition_id, internal_name, display_name, description,
-		    data_type, required, multi_valued, is_unique, localizable, scopable, constraints, default_value, version,
+		    data_type, required, multi_valued, is_unique, localizable, scopable, computed, constraints, default_value, version,
 		    created_at, updated_at, archived_at, attr_group, sort_order, help_text)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   display_name  = EXCLUDED.display_name,
 		   description   = EXCLUDED.description,
@@ -479,6 +495,7 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 		   is_unique     = EXCLUDED.is_unique,
 		   localizable   = EXCLUDED.localizable,
 		   scopable      = EXCLUDED.scopable,
+		   computed      = EXCLUDED.computed,
 		   constraints   = EXCLUDED.constraints,
 		   default_value = EXCLUDED.default_value,
 		   version       = EXCLUDED.version,
@@ -489,7 +506,7 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 		   help_text     = EXCLUDED.help_text`),
 		s.ID.String(), s.TenantID.String(), s.TypeDefinitionID.String(), s.InternalName,
 		s.DisplayName, s.Description, s.DataType.String(), s.Required, s.MultiValued,
-		s.Unique, s.Localizable, s.Scopable, jsonbParam(constraints), jsonbParam(defaultValue), s.Version, s.CreatedAt,
+		s.Unique, s.Localizable, s.Scopable, jsonbParam(computed), jsonbParam(constraints), jsonbParam(defaultValue), s.Version, s.CreatedAt,
 		s.UpdatedAt, nullableTime(s.ArchivedAt), s.Group, s.SortOrder, s.HelpText,
 	)
 	if err != nil {

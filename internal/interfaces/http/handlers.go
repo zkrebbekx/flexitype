@@ -161,6 +161,7 @@ type attributeRequest struct {
 	Unique           bool            `json:"unique,omitempty"`
 	Localizable      bool            `json:"localizable,omitempty"`
 	Scopable         bool            `json:"scopable,omitempty"`
+	Computed         json.RawMessage `json:"computed,omitempty"`
 	Constraints      json.RawMessage `json:"constraints,omitempty"`
 	DefaultValue     json.RawMessage `json:"default_value,omitempty"`
 	Group            string          `json:"group,omitempty"`
@@ -185,6 +186,7 @@ func (s *server) createAttribute(w http.ResponseWriter, r *http.Request) {
 		Unique:           req.Unique,
 		Localizable:      req.Localizable,
 		Scopable:         req.Scopable,
+		Computed:         req.Computed,
 		Constraints:      req.Constraints,
 		DefaultValue:     req.DefaultValue,
 		Group:            req.Group,
@@ -222,6 +224,7 @@ func (s *server) updateAttribute(w http.ResponseWriter, r *http.Request) {
 		Unique:       req.Unique,
 		Localizable:  req.Localizable,
 		Scopable:     req.Scopable,
+		Computed:     req.Computed,
 		Constraints:  req.Constraints,
 		DefaultValue: req.DefaultValue,
 		Group:        req.Group,

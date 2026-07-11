@@ -41,12 +41,13 @@ const emit = defineEmits<{
         <Badge v-if="attribute.multi_valued">multi</Badge>
         <Badge v-if="attribute.localizable" tone="accent">i18n</Badge>
         <Badge v-if="attribute.scopable" tone="accent">scoped</Badge>
+        <Badge v-if="attribute.computed" tone="accent" :title="attribute.computed.formula">computed</Badge>
         <Badge v-if="attribute.unique" tone="warn">unique</Badge>
         <span v-if="declaredIn.id !== ownTypeId" class="text-[12px] text-(--text-muted)">
           from {{ declaredIn.display_name }}
         </span>
       </div>
-      <Button v-if="!values.length || attribute.multi_valued" size="sm" variant="ghost" @click="emit('edit', attribute)">
+      <Button v-if="!attribute.computed && (!values.length || attribute.multi_valued)" size="sm" variant="ghost" @click="emit('edit', attribute)">
         <Plus :size="14" /> {{ values.length ? 'Add value' : 'Set value' }}
       </Button>
     </div>
@@ -85,12 +86,14 @@ const emit = defineEmits<{
             <Badge tone="warn">stale</Badge>
           </span>
           <RelativeTime :iso="v.updated_at" />
-          <Button size="sm" variant="ghost" aria-label="Edit value" @click="emit('edit', attribute, v)">
-            <Pencil :size="13" />
-          </Button>
-          <Button size="sm" variant="ghost" aria-label="Remove value" @click="emit('remove', v)">
-            <Trash2 :size="13" />
-          </Button>
+          <template v-if="!attribute.computed">
+            <Button size="sm" variant="ghost" aria-label="Edit value" @click="emit('edit', attribute, v)">
+              <Pencil :size="13" />
+            </Button>
+            <Button size="sm" variant="ghost" aria-label="Remove value" @click="emit('remove', v)">
+              <Trash2 :size="13" />
+            </Button>
+          </template>
         </span>
       </li>
     </ul>

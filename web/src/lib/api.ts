@@ -102,6 +102,11 @@ export interface DefaultValue {
   dynamic?: { kind: 'now' | 'today' | 'relative_time'; period?: string; amount?: number }
 }
 
+export interface ComputedSpec {
+  kind: 'formula' | 'rollup'
+  formula?: string
+}
+
 export interface AttributeDefinition {
   id: string
   tenant_id: string
@@ -115,6 +120,7 @@ export interface AttributeDefinition {
   unique: boolean
   localizable?: boolean
   scopable?: boolean
+  computed?: ComputedSpec
   constraints: Constraint[]
   default_value?: DefaultValue
   group?: string
@@ -459,6 +465,7 @@ export const api = {
     unique?: boolean
     localizable?: boolean
     scopable?: boolean
+    computed?: ComputedSpec
     constraints?: Constraint[]
     default_value?: DefaultValue
     group?: string
@@ -475,6 +482,7 @@ export const api = {
       unique?: boolean
       localizable?: boolean
       scopable?: boolean
+      computed?: ComputedSpec
       constraints?: Constraint[]
       default_value?: DefaultValue
       group?: string

@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, ApiError, DATA_TYPES, friendlyError } from '@/lib/api'
 import type { AttributeDefinition, Constraint, DataType } from '@/lib/api'
 import { renderTyped, toApiValue, typedValue } from '@/lib/values'
+import { slug } from '@/lib/validation'
 import { useToasts } from '@/composables/useToasts'
 import Drawer from '@/components/ui/Drawer.vue'
 import Button from '@/components/ui/Button.vue'
@@ -45,6 +46,13 @@ const form = reactive({
   newMember: '',
 })
 const error = ref('')
+
+// internal_name is immutable on edit; only validate it when creating.
+const nameError = computed(() => (props.attribute ? '' : slug(form.internal_name)))
+// Surface the name error inline only once the user has typed — emptiness is
+// signalled by the disabled submit and the placeholder.
+const fieldErrors = computed(() => ({ internal_name: form.internal_name ? nameError.value : '' }))
+const canSubmit = computed(() => !!form.display_name.trim() && nameError.value === '')
 
 watch(
   () => [props.open, props.attribute?.id],
@@ -181,6 +189,7 @@ async function tryValue() {
           mono
           placeholder="unit_weight_kg"
           hint="snake_case; immutable once created"
+          :error="fieldErrors.internal_name"
         />
         <Select
           v-model="form.data_type"
@@ -271,7 +280,7 @@ async function tryValue() {
         <span v-else />
         <div class="flex gap-2">
           <Button @click="emit('close')">Cancel</Button>
-          <Button variant="primary" :disabled="save.isPending.value" @click="save.mutate()">
+          <Button variant="primary" :disabled="save.isPending.value || !canSubmit" @click="save.mutate()">
             {{ attribute ? 'Save changes' : 'Create attribute' }}
           </Button>
         </div>

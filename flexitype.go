@@ -8,6 +8,7 @@ package flexitype
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -249,9 +250,16 @@ func (s *Service) RunOutboxRelay(ctx context.Context) {
 	if s.relay == nil {
 		return
 	}
-	go s.worker.Run(ctx)
-	go s.pruner.Run(ctx)
+	// Block until all three loops have observed ctx cancellation and
+	// returned, so shutdown can be ordered around this call: the relay,
+	// delivery worker and pruner are fully stopped before the pool or
+	// broker clients they depend on are closed.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); s.worker.Run(ctx) }()
+	go func() { defer wg.Done(); s.pruner.Run(ctx) }()
 	s.relay.Run(ctx)
+	wg.Wait()
 }
 
 // EnsureWebhookSubscription upserts a webhook subscription by name — the

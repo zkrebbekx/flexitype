@@ -60,7 +60,7 @@ func (r *queryRepo) Search(_ context.Context, tenant valueobjects.TenantID, root
 
 	var matched []domainvalue.EntitySummary
 	for _, e := range agg {
-		ok, err := r.eval(node, evalScope{
+		res, err := r.eval(node, evalScope{
 			tenant: tenant.String(),
 			entity: e.EntityID.String(),
 			typeID: e.TypeDefinitionID.String(),
@@ -68,7 +68,9 @@ func (r *queryRepo) Search(_ context.Context, tenant valueobjects.TenantID, root
 		if err != nil {
 			return nil, 0, err
 		}
-		if ok {
+		// Only a definite TRUE selects the row — UNKNOWN (SQL NULL) and
+		// FALSE both exclude, matching a Postgres WHERE clause.
+		if res == triTrue {
 			matched = append(matched, *e)
 		}
 	}
@@ -83,28 +85,62 @@ func (r *queryRepo) Search(_ context.Context, tenant valueobjects.TenantID, root
 	return pageItems, total, nil
 }
 
-// eval runs one bound node against the current scope. Callers hold the
-// store read lock.
-func (r *queryRepo) eval(node query.BoundNode, s evalScope) (bool, error) {
+// tri is a three-valued truth (Kleene) logic value, mirroring SQL's
+// boolean-with-NULL semantics so the in-memory evaluator agrees with the
+// PostgreSQL compiler on which rows a query selects.
+type tri int
+
+const (
+	triFalse tri = iota
+	triTrue
+	triUnknown
+)
+
+func triOf(b bool) tri {
+	if b {
+		return triTrue
+	}
+	return triFalse
+}
+
+// eval runs one bound node against the current scope, returning a
+// three-valued result. Callers hold the store read lock.
+func (r *queryRepo) eval(node query.BoundNode, s evalScope) (tri, error) {
 	switch n := node.(type) {
 	case *query.BoundLogical:
+		// Kleene AND/OR: AND is false if any operand is false, else unknown
+		// if any is unknown, else true; OR is the dual.
+		anyUnknown := false
 		for _, expr := range n.Exprs {
-			ok, err := r.eval(expr, s)
+			res, err := r.eval(expr, s)
 			if err != nil {
-				return false, err
+				return triFalse, err
 			}
-			if n.Op == fql.OpAnd && !ok {
-				return false, nil
+			if n.Op == fql.OpAnd && res == triFalse {
+				return triFalse, nil
 			}
-			if n.Op == fql.OpOr && ok {
-				return true, nil
+			if n.Op == fql.OpOr && res == triTrue {
+				return triTrue, nil
+			}
+			if res == triUnknown {
+				anyUnknown = true
 			}
 		}
-		return n.Op == fql.OpAnd, nil
+		if anyUnknown {
+			return triUnknown, nil
+		}
+		return triOf(n.Op == fql.OpAnd), nil
 
 	case *query.BoundNot:
-		ok, err := r.eval(n.Expr, s)
-		return !ok, err
+		res, err := r.eval(n.Expr, s)
+		switch res {
+		case triTrue:
+			return triFalse, err
+		case triFalse:
+			return triTrue, err
+		default:
+			return triUnknown, err // NOT NULL = NULL
+		}
 
 	case *query.BoundType:
 		member := false
@@ -115,9 +151,9 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (bool, error) {
 			}
 		}
 		if n.Negate {
-			return !member, nil
+			return triOf(!member), nil
 		}
-		return member, nil
+		return triOf(member), nil
 
 	case *query.BoundCompare:
 		return r.evalCompare(n, s)
@@ -126,30 +162,30 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (bool, error) {
 		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, s) {
 			for _, want := range n.Values {
 				if snap.Value.Equal(want) {
-					return true, nil
+					return triTrue, nil
 				}
 			}
 		}
-		return false, nil
+		return triFalse, nil
 
 	case *query.BoundRange:
 		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, s) {
 			lo, err := snap.Value.Compare(n.Lo)
 			if err != nil {
-				return false, err
+				return triFalse, err
 			}
 			hi, err := snap.Value.Compare(n.Hi)
 			if err != nil {
-				return false, err
+				return triFalse, err
 			}
 			if lo >= 0 && hi <= 0 {
-				return true, nil
+				return triTrue, nil
 			}
 		}
-		return false, nil
+		return triFalse, nil
 
 	case *query.BoundHas:
-		return len(r.scopedValues(n.Attr.ID.String(), n.Link, s)) > 0, nil
+		return triOf(len(r.scopedValues(n.Attr.ID.String(), n.Link, s)) > 0), nil
 
 	case *query.BoundStringMatch:
 		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, s) {
@@ -157,88 +193,93 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (bool, error) {
 			switch n.Kind {
 			case fql.MatchContains:
 				if strings.Contains(text, n.Value) {
-					return true, nil
+					return triTrue, nil
 				}
 			case fql.MatchIContains:
 				if containsFold(text, n.Value) {
-					return true, nil
+					return triTrue, nil
 				}
 			case fql.MatchIEquals:
 				if strings.EqualFold(text, n.Value) {
-					return true, nil
+					return triTrue, nil
 				}
 			default:
-				return false, fmt.Errorf("unknown string match %q", n.Kind)
+				return triFalse, fmt.Errorf("unknown string match %q", n.Kind)
 			}
 		}
-		return false, nil
+		return triFalse, nil
 
 	case *query.BoundMatches:
 		doc, ok := r.s.searchDocs[s.tenant+"\x00"+s.entity]
 		if !ok {
-			return false, nil
+			return triFalse, nil
 		}
-		return matchesText(doc.text, n.Query), nil
+		return triOf(matchesText(doc.text, n.Query)), nil
 
 	case *query.BoundTraversal:
 		return r.evalTraversal(n, s)
 
 	default:
-		return false, fmt.Errorf("unsupported bound node %T", node)
+		return triFalse, fmt.Errorf("unsupported bound node %T", node)
 	}
 }
 
-func (r *queryRepo) evalCompare(n *query.BoundCompare, s evalScope) (bool, error) {
+func (r *queryRepo) evalCompare(n *query.BoundCompare, s evalScope) (tri, error) {
 	snaps := r.scopedValues(n.Attr.ID.String(), n.Link, s)
 
 	switch n.Func {
 	case fql.FuncMin, fql.FuncMax:
-		// No values → no match, mirroring the SQL NULL comparison.
+		// SQL compiles these to a scalar subquery: min/max over no rows is
+		// NULL, and NULL compared to anything is NULL (UNKNOWN) — which,
+		// unlike FALSE, stays excluded even under NOT.
 		if len(snaps) == 0 {
-			return false, nil
+			return triUnknown, nil
 		}
 		best := snaps[0].Value
 		for _, snap := range snaps[1:] {
 			cmp, err := snap.Value.Compare(best)
 			if err != nil {
-				return false, err
+				return triFalse, err
 			}
 			if (n.Func == fql.FuncMin && cmp < 0) || (n.Func == fql.FuncMax && cmp > 0) {
 				best = snap.Value
 			}
 		}
-		return compareValues(best, n.Value, n.Op)
+		ok, err := compareValues(best, n.Value, n.Op)
+		return triOf(ok), err
 
 	case fql.FuncCount:
-		return compareInts(int64(len(snaps)), n.Value.Int(), n.Op)
+		// count() over no rows is 0, not NULL — a definite comparison.
+		ok, err := compareInts(int64(len(snaps)), n.Value.Int(), n.Op)
+		return triOf(ok), err
 
 	case fql.FuncLength:
 		for _, snap := range snaps {
 			ok, err := compareInts(int64(snap.Value.Length()), n.Value.Int(), n.Op)
 			if err != nil {
-				return false, err
+				return triFalse, err
 			}
 			if ok {
-				return true, nil
+				return triTrue, nil
 			}
 		}
-		return false, nil
+		return triFalse, nil
 
 	default:
 		for _, snap := range snaps {
 			ok, err := compareValues(snap.Value, n.Value, n.Op)
 			if err != nil {
-				return false, err
+				return triFalse, err
 			}
 			if ok {
-				return true, nil
+				return triTrue, nil
 			}
 		}
-		return false, nil
+		return triFalse, nil
 	}
 }
 
-func (r *queryRepo) evalTraversal(n *query.BoundTraversal, s evalScope) (bool, error) {
+func (r *queryRepo) evalTraversal(n *query.BoundTraversal, s evalScope) (tri, error) {
 	for _, rel := range r.s.rels {
 		if rel.TenantID.String() != s.tenant || rel.ArchivedAt != nil ||
 			!rel.DefinitionID.Equals(n.Def.ID) {
@@ -270,20 +311,22 @@ func (r *queryRepo) evalTraversal(n *query.BoundTraversal, s evalScope) (bool, e
 			far = child
 		}
 
-		ok, err := r.eval(n.Inner, evalScope{
+		res, err := r.eval(n.Inner, evalScope{
 			tenant: s.tenant,
 			entity: far,
 			typeID: r.declaredType(s.tenant, far),
 			link:   rel.ID.String(),
 		})
 		if err != nil {
-			return false, err
+			return triFalse, err
 		}
-		if ok {
-			return true, nil
+		// The traversal is an EXISTS over counterparts: any counterpart
+		// satisfying the inner expression makes it true, matching SQL.
+		if res == triTrue {
+			return triTrue, nil
 		}
 	}
-	return false, nil
+	return triFalse, nil
 }
 
 // scopedValues returns the current scope's live values of one attribute.

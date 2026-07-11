@@ -133,6 +133,24 @@ func TestInMemoryService(t *testing.T) {
 				So(h.query("product", `matches("gravel")`).Items, ShouldBeEmpty)
 			})
 
+			Convey("Then min/max over absent values is UNKNOWN, excluded even under NOT", func() {
+				// sku-3 has a name but no price. In SQL, min(price) is NULL,
+				// so `min(price) > 1000` and its NOT are both NULL and exclude
+				// sku-3. The memory evaluator must agree — this is the exact
+				// SQL/memory divergence #29 fixes.
+				h.setValue(nameAttr, "sku-3", productID, "Gravel Bike")
+
+				pos := entityIDs(h.query("product", `min(price) > 1000`))
+				So(pos, ShouldResemble, []string{"sku-1"}) // only 1499
+
+				neg := entityIDs(h.query("product", `not (min(price) > 1000)`))
+				So(neg, ShouldContain, "sku-2")    // 799: definite FALSE → NOT true
+				So(neg, ShouldNotContain, "sku-3") // NULL, not FALSE → still excluded
+
+				// count() over no rows is 0 (definite, not NULL), so this matches.
+				So(entityIDs(h.query("product", `count(price) = 0`)), ShouldContain, "sku-3")
+			})
+
 			Convey("Then the activity log recorded the changes", func() {
 				out, err := h.interactors().Activity().List(h.ctx, application.ActivityListInput{})
 				So(err, ShouldBeNil)

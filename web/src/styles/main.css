@@ -10,7 +10,11 @@
   --border-strong: #cbd5e1;
   --text: #0f172a;
   --text-secondary: #475569;
-  --text-muted: #94a3b8;
+  /* WCAG AA (≥4.5:1) on both --surface (#fff) and --canvas: slate-500
+     lands 4.76:1 / 4.55:1. The old slate-400 was ~2.6:1. Use --hairline
+     for purely decorative gray (borders, faint dividers). */
+  --text-muted: #64748b;
+  --hairline: #94a3b8;
   --accent: #4f46e5;
   --accent-hover: #4338ca;
   --accent-soft: #eef2ff;
@@ -32,7 +36,11 @@
   --border-strong: #334155;
   --text: #f1f5f9;
   --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  /* WCAG AA on the dark surfaces: 5.10:1 on --surface, 5.38:1 on --canvas
+     (the old slate-500 was ~3.75:1), while staying dimmer than
+     --text-secondary. */
+  --text-muted: #7c8aa0;
+  --hairline: #64748b;
   --accent: #818cf8;
   --accent-hover: #a5b4fc;
   --accent-soft: #1e1b4b;

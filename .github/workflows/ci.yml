@@ -48,7 +48,10 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test -race -timeout 120s ./...
+        env:
+          # Enables the Postgres-backed integration tests (they skip when unset).
+          FLEXITYPE_TEST_DSN: postgres://postgres:postgres@localhost:5432/flexitype?sslmode=disable
+        run: go test -race -timeout 180s ./...
       - name: Smoke test (migrations + service boot)
         env:
           FLEXITYPE_PORT: "58080"

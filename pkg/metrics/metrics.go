@@ -18,10 +18,12 @@ import (
 
 // Metrics holds the registry and the instruments the service reports.
 type Metrics struct {
-	registry     *prometheus.Registry
-	httpRequests *prometheus.CounterVec
-	httpDuration *prometheus.HistogramVec
-	httpInFlight prometheus.Gauge
+	registry        *prometheus.Registry
+	httpRequests    *prometheus.CounterVec
+	httpDuration    *prometheus.HistogramVec
+	httpInFlight    prometheus.Gauge
+	tenantRequests  *prometheus.CounterVec
+	rateLimitReject *prometheus.CounterVec
 }
 
 // New builds a Metrics with a private registry (Go runtime + process
@@ -48,9 +50,35 @@ func New() *Metrics {
 			Name: "flexitype_http_requests_in_flight",
 			Help: "HTTP requests currently being served.",
 		}),
+		tenantRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "flexitype_tenant_requests_total",
+			Help: "Authenticated API requests by tenant.",
+		}, []string{"tenant"}),
+		rateLimitReject: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "flexitype_ratelimit_rejected_total",
+			Help: "Requests rejected by the rate limiter, by tenant.",
+		}, []string{"tenant"}),
 	}
-	reg.MustRegister(m.httpRequests, m.httpDuration, m.httpInFlight)
+	reg.MustRegister(m.httpRequests, m.httpDuration, m.httpInFlight, m.tenantRequests, m.rateLimitReject)
 	return m
+}
+
+// CountTenantRequest records one authenticated request for a tenant. Safe
+// on a nil Metrics.
+func (m *Metrics) CountTenantRequest(tenant string) {
+	if m == nil {
+		return
+	}
+	m.tenantRequests.WithLabelValues(tenant).Inc()
+}
+
+// CountRateLimitReject records one rate-limited request for a tenant. Safe
+// on a nil Metrics.
+func (m *Metrics) CountRateLimitReject(tenant string) {
+	if m == nil {
+		return
+	}
+	m.rateLimitReject.WithLabelValues(tenant).Inc()
 }
 
 // Registry exposes the underlying registry so callers can register extra

@@ -24,6 +24,7 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
 	"github.com/zkrebbekx/flexitype/pkg/metrics"
+	"github.com/zkrebbekx/flexitype/pkg/ratelimit"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 	"github.com/zkrebbekx/flexitype/pkg/shutdown"
 	"github.com/zkrebbekx/flexitype/pkg/telemetry"
@@ -191,12 +192,19 @@ func run(log *logger.Logger) error {
 		log.Info().Msg("prometheus metrics enabled at /metrics")
 	}
 
+	var limiter *ratelimit.Limiter
+	if cfg.RateLimitRPS > 0 {
+		limiter = ratelimit.New(cfg.RateLimitRPS, cfg.RateLimitBurst)
+		log.Info().Float64("rps", cfg.RateLimitRPS).Int("burst", cfg.RateLimitBurst).Msg("per-account rate limiting enabled")
+	}
+
 	handler := svc.APIHandler(flexitype.APIConfig{
 		Logger:             log,
 		Health:             healthChecker,
 		Accounts:           accounts,
 		Metrics:            appMetrics,
 		EnableProvisioning: cfg.EnableProvisioning,
+		RateLimiter:        limiter,
 	})
 
 	server := &http.Server{

@@ -827,7 +827,7 @@ components:
           properties:
             code:
               type: string
-              enum: [VALIDATION, NOT_FOUND, CONFLICT, ARCHIVED, DEPENDENCY_VIOLATION, FEATURE_DISABLED, CURSOR_CONFLICT, CURSOR_EXPIRED, UNAUTHENTICATED, FORBIDDEN, INTERNAL]
+              enum: [VALIDATION, NOT_FOUND, CONFLICT, ARCHIVED, DEPENDENCY_VIOLATION, FEATURE_DISABLED, CURSOR_CONFLICT, CURSOR_EXPIRED, UNAUTHENTICATED, FORBIDDEN, RATE_LIMITED, INTERNAL]
             message: { type: string }
             details: { type: object, additionalProperties: true }
     PageInfo:

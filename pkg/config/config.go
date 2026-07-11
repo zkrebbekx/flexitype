@@ -51,6 +51,11 @@ type Config struct {
 	// BootstrapAdmin seeds a first admin account when provisioning is on
 	// and the account store is empty.
 	BootstrapAdmin bool
+	// RateLimitRPS is the sustained per-account request rate; 0 disables
+	// rate limiting.
+	RateLimitRPS float64
+	// RateLimitBurst is the token-bucket ceiling for short bursts.
+	RateLimitBurst int
 	// PubSubProject, when set, publishes every event to Google Cloud
 	// Pub/Sub in addition to any webhook subscriptions.
 	PubSubProject string
@@ -100,6 +105,8 @@ func Load() (Config, error) {
 		EnableProvisioning:  envBool("FLEXITYPE_PROVISIONING", false),
 		AuthCacheTTL:        envDuration("FLEXITYPE_AUTH_CACHE_TTL", 30*time.Second),
 		BootstrapAdmin:      envBool("FLEXITYPE_BOOTSTRAP_ADMIN", false),
+		RateLimitRPS:        envFloat("FLEXITYPE_RATE_LIMIT_RPS", 0),
+		RateLimitBurst:      envInt("FLEXITYPE_RATE_LIMIT_BURST", 200),
 		PubSubProject:       os.Getenv("FLEXITYPE_PUBSUB_PROJECT"),
 		PubSubTopic:         envStr("FLEXITYPE_PUBSUB_TOPIC", "flexitype-events"),
 		PubSubOrdering:      envBool("FLEXITYPE_PUBSUB_ORDERING", false),
@@ -150,6 +157,18 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return b
+}
+
+func envFloat(key string, fallback float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return f
 }
 
 func envDuration(key string, fallback time.Duration) time.Duration {

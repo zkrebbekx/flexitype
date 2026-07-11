@@ -13,6 +13,7 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
 	"github.com/zkrebbekx/flexitype/pkg/metrics"
+	"github.com/zkrebbekx/flexitype/pkg/ratelimit"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 )
 
@@ -28,6 +29,8 @@ type ServerConfig struct {
 	Reindex func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
 	// Metrics, when set, records HTTP SLIs and serves /metrics.
 	Metrics *metrics.Metrics
+	// RateLimiter, when set, throttles API requests per service account.
+	RateLimiter *ratelimit.Limiter
 }
 
 // NewHandler builds the service's HTTP handler: versioned API plus
@@ -57,6 +60,9 @@ func NewHandler(cfg ServerConfig) http.Handler {
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(authenticate(cfg.Accounts, cfg.Logger))
+		// Throttle after auth so the limiter keys on the resolved account
+		// and counts usage per tenant.
+		api.Use(rateLimit(cfg.RateLimiter, cfg.Metrics))
 		// Interactors after auth: the set is built with the request's actor
 		// and tenant already on the context.
 		api.Use(withInteractors(cfg.Factory))

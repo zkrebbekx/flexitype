@@ -106,8 +106,8 @@ commit* into two lanes:
                      ┌──────────────────────────────────────────────┐
  unit of work ──────▶│ flexitype_event_outbox  (durable, ordered)   │
  (same tx as change) └──────────┬───────────────────────────────────┘
-                                │ expansion (single sequencer,
-                                │ advisory-locked, stamps feed_seq)
+                                │ claim (lease) ▸ dispatch (no lock)
+                                │ ▸ finalize (advisory-locked, stamps feed_seq)
               ┌─────────────────┼──────────────────────────────┐
               ▼                 ▼                              ▼
    in-process hooks    flexitype_webhook_delivery     events feed / SSE
@@ -119,16 +119,33 @@ commit* into two lanes:
 
 ### 1. Expansion: one sequencer, horizontally scaled delivery
 
-A relay pass first **expands**: claim pending outbox rows (SKIP LOCKED),
-dispatch to in-process handlers, insert one `webhook_delivery` row per
-active matching subscription, stamp a gap-free `feed_seq`, mark the
-envelope dispatched — all in one short transaction with **no network
-I/O**. Expansion serializes on a `pg_try_advisory_xact_lock` so exactly
-one replica sequences at a time: `feed_seq` is then assigned in commit
-order, which makes feed cursors gap-safe (no "row with a smaller id
-commits later and is skipped forever"). Expansion is pure row-shuffling —
-a single sequencer sustains far more throughput than event production
-will ever need; delivery is where parallelism matters.
+A relay pass runs three steps and holds the sequencer lock only for the
+last, DB-only one:
+
+1. **Claim** — a single `UPDATE … RETURNING` leases a batch of pending
+   rows to this relay (`claimed_by`/`claimed_at`), skipping rows another
+   relay holds (`FOR UPDATE SKIP LOCKED`) and reclaiming leases older than
+   the TTL (a crashed relay). No lock, no dispatch.
+2. **Dispatch** — the in-process handlers (search indexer, embedded
+   `WithPublisher`/`WithHandler` hooks) run for the batch **outside any
+   transaction or lock**. A slow or failing handler therefore never pins a
+   database connection or blocks other relays.
+3. **Finalize** — under `pg_advisory_xact_lock` (blocking, since the batch
+   is already dispatched and its outcome must be recorded), stamp a
+   gap-free `feed_seq` on each success in claim order, insert one
+   `webhook_delivery` row per active matching subscription, and mark the
+   envelope dispatched. Failures have their attempt counted and their
+   lease cleared so a later pass retries them. This step is pure
+   row-shuffling with **no network I/O**.
+
+Serializing only finalize keeps `feed_seq` assigned in commit order — feed
+cursors stay gap-safe (no "row with a smaller id commits later and is
+skipped forever") — while moving handler I/O off the critical section.
+Finalize re-reads the still-pending rows, so a batch that was
+double-claimed after a lease expiry is expanded at most once (no duplicate
+`feed_seq`, no duplicate delivery rows). With multiple relays, `feed_seq`
+order can differ from insert order but remains monotonic and gap-free;
+with a single relay it is identical to insert order.
 
 ### 2. Delivery workers: claim → HTTP outside any tx → record
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
+	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
 // Store is the persistence port for the outbox.
@@ -20,15 +21,21 @@ type Store interface {
 	// of work's pre-commit handler.
 	Write(ctx context.Context, tx db.QueryExecer, envs []events.Envelope) error
 
-	// Expand claims up to limit undispatched envelopes and hands them to
-	// fn (in-process dispatch). For each success it assigns the next
-	// feed_seq, fans out one webhook-delivery row per matching
-	// subscription and marks the envelope dispatched — all in one
-	// transaction with no network I/O. Failures stay pending for the next
-	// pass. Implementations must serialize expansion (a single sequencer)
-	// so feed_seq is assigned in commit order, and must not claim rows
-	// another relay holds (SKIP LOCKED semantics).
-	Expand(ctx context.Context, limit int, fn func(envs []events.Envelope) []Result) error
+	// Claim leases up to limit undispatched envelopes for the given relay
+	// and returns them for dispatch. Claiming takes a short row lease
+	// (claimed_by/claimed_at) so no other relay grabs the same rows while
+	// this relay dispatches them outside any transaction; a lease older
+	// than leaseTTL is treated as abandoned (crashed relay) and reclaimed.
+	// It does NOT hold the sequencer lock — no network I/O happens here.
+	Claim(ctx context.Context, relayID string, limit int, leaseTTL time.Duration) ([]events.Envelope, error)
+
+	// Finalize records the outcome of dispatching a claimed batch. Under
+	// the single-sequencer advisory lock (DB-only, no network I/O) it
+	// assigns feed_seq to each success in claim order, fans out one
+	// webhook-delivery row per matching subscription and marks the
+	// envelope dispatched; failures have their attempt counted and their
+	// lease cleared so a later pass retries them.
+	Finalize(ctx context.Context, results []Result) error
 }
 
 // Result records one dispatch attempt.
@@ -45,6 +52,8 @@ type Relay struct {
 	dispatcher  *events.Dispatcher
 	interval    time.Duration
 	batch       int
+	leaseTTL    time.Duration
+	relayID     string
 	nudge       chan struct{}
 	onError     func(err error)
 	afterExpand func()
@@ -76,6 +85,19 @@ func WithAfterExpand(fn func()) RelayOption {
 	return func(r *Relay) { r.afterExpand = fn }
 }
 
+// WithLeaseTTL sets how long a claimed batch stays leased to this relay
+// before another relay may reclaim it (default 1m). It should comfortably
+// exceed the slowest expected dispatch of one batch.
+func WithLeaseTTL(d time.Duration) RelayOption {
+	return func(r *Relay) { r.leaseTTL = d }
+}
+
+// WithRelayID sets the identifier stamped on leases (default a random
+// ULID). Only useful for deterministic tests.
+func WithRelayID(id string) RelayOption {
+	return func(r *Relay) { r.relayID = id }
+}
+
 // NewRelay builds a relay over the store and dispatcher.
 func NewRelay(store Store, dispatcher *events.Dispatcher, opts ...RelayOption) *Relay {
 	r := &Relay{
@@ -83,6 +105,8 @@ func NewRelay(store Store, dispatcher *events.Dispatcher, opts ...RelayOption) *
 		dispatcher: dispatcher,
 		interval:   2 * time.Second,
 		batch:      100,
+		leaseTTL:   time.Minute,
+		relayID:    ulid.New().String(),
 		nudge:      make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
@@ -116,34 +140,52 @@ func (r *Relay) Run(ctx context.Context) {
 	}
 }
 
-// drain processes batches until the outbox is empty or ctx ends.
+// DrainOnce performs one drain pass — claiming, dispatching and finalizing
+// batches until the outbox is empty. Run loops these on a nudge or the
+// interval; DrainOnce is exposed for one-shot draining and tests.
+func (r *Relay) DrainOnce(ctx context.Context) { r.drain(ctx) }
+
+// drain processes batches until the outbox is empty or ctx ends. Each pass
+// leases a batch, dispatches it to the in-process handlers OUTSIDE any lock
+// or transaction, then finalizes the outcomes under the sequencer lock. A
+// slow or failing handler therefore never holds the expansion lock or a
+// database connection across its network I/O.
 func (r *Relay) drain(ctx context.Context) {
 	expanded := false
 	for ctx.Err() == nil {
-		processed := 0
-		err := r.store.Expand(ctx, r.batch, func(envs []events.Envelope) []Result {
-			processed = len(envs)
-			results := make([]Result, 0, len(envs))
-			for _, env := range envs {
-				results = append(results, Result{
-					EnvelopeID: env.ID,
-					Err:        r.dispatcher.DispatchEnvelopes(ctx, env),
-				})
-			}
-			return results
-		})
+		envs, err := r.store.Claim(ctx, r.relayID, r.batch, r.leaseTTL)
 		if err != nil {
-			if r.onError != nil {
-				r.onError(err)
-			}
+			r.report(err)
 			break
 		}
-		expanded = expanded || processed > 0
-		if processed < r.batch {
+		if len(envs) == 0 {
+			break
+		}
+
+		results := make([]Result, 0, len(envs))
+		for _, env := range envs {
+			results = append(results, Result{
+				EnvelopeID: env.ID,
+				Err:        r.dispatcher.DispatchEnvelopes(ctx, env),
+			})
+		}
+
+		if err := r.store.Finalize(ctx, results); err != nil {
+			r.report(err)
+			break
+		}
+		expanded = true
+		if len(envs) < r.batch {
 			break
 		}
 	}
 	if expanded && r.afterExpand != nil {
 		r.afterExpand()
+	}
+}
+
+func (r *Relay) report(err error) {
+	if r.onError != nil {
+		r.onError(err)
 	}
 }

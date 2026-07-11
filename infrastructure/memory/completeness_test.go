@@ -11,8 +11,8 @@ import (
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
-	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	"github.com/zkrebbekx/flexitype/application/uow"
+	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 )
 

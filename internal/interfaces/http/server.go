@@ -91,6 +91,11 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Delete("/{id}", s.removeValue)
 		})
 
+		api.Route("/schema", func(r chi.Router) {
+			r.Get("/export", s.exportSchema)
+			r.Post("/import", s.importSchema)
+		})
+
 		api.Get("/entities/{typeDefinitionID}", s.listEntitiesOfType)
 		api.Route("/entities/{typeDefinitionID}/{entityID}", func(r chi.Router) {
 			r.Get("/values", s.listEntityValues)

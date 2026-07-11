@@ -15,6 +15,7 @@ import (
 	appfeed "github.com/zkrebbekx/flexitype/application/feed"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
+	appschema "github.com/zkrebbekx/flexitype/application/schema"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
@@ -86,6 +87,7 @@ type Interactors struct {
 	activity      *ActivityInteractor
 	webhooks      *appwebhook.Interactor
 	feed          *appfeed.Interactor
+	schema        *appschema.Interactor
 	features      Features
 }
 
@@ -120,6 +122,9 @@ func (i *Interactors) Webhooks() *appwebhook.Interactor { return i.webhooks }
 // Feed returns the events-feed usecases; nil unless event delivery is
 // enabled (requires the outbox).
 func (i *Interactors) Feed() *appfeed.Interactor { return i.feed }
+
+// Schema returns the schema import/export usecases.
+func (i *Interactors) Schema() *appschema.Interactor { return i.schema }
 
 // ActivityInteractor serves the audit-log read side.
 type ActivityInteractor struct {

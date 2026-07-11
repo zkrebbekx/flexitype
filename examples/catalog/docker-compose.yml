@@ -1,0 +1,54 @@
+# End-to-end catalog example: flexitype (outbox on) + Postgres + a webhook
+# consumer that verifies signatures and logs every event.
+#
+#   cd examples/catalog
+#   docker compose up --build
+#   ./seed.sh                       # seed schema + products, run FQL
+#   docker compose logs -f consumer # watch events arrive
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: flexitype
+      POSTGRES_PASSWORD: flexitype
+      POSTGRES_DB: flexitype
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flexitype"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  consumer:
+    build:
+      context: ../..
+      dockerfile: examples/catalog/consumer/Dockerfile
+    environment:
+      CONSUMER_ADDR: ":9100"
+      FLEXITYPE_WEBHOOK_SECRET: catalog-demo-secret
+
+  flexitype:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      consumer:
+        condition: service_started
+    environment:
+      FLEXITYPE_DB_HOST: postgres
+      FLEXITYPE_DB_PORT: "5432"
+      FLEXITYPE_DB_USER: flexitype
+      FLEXITYPE_DB_PASSWORD: flexitype
+      FLEXITYPE_DB_NAME: flexitype
+      FLEXITYPE_MIGRATE_ON_START: "true"
+      FLEXITYPE_OUTBOX: "true"
+      FLEXITYPE_FEATURE_SEARCH_INDEX: "true"
+      # With the outbox on, this URL is registered as a managed subscription
+      # (retries, backoff, dead-lettering) signed with the shared secret.
+      FLEXITYPE_WEBHOOK_URL: http://consumer:9100/hook
+      FLEXITYPE_WEBHOOK_SECRET: catalog-demo-secret
+      # The consumer runs on a private network address, so allow it.
+      FLEXITYPE_WEBHOOK_ALLOW_PRIVATE: "true"
+    ports:
+      - "8080:8080"

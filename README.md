@@ -214,6 +214,11 @@ The published image is available without cloning:
 docker pull ghcr.io/zkrebbekx/flexitype:latest
 ```
 
+For a realistic, end-to-end scenario — a PLM-style product catalog with
+inheritance, a cascading dependency, FQL and a signed webhook consumer —
+see [`examples/catalog`](examples/catalog/) (`docker compose up` + a seed
+script).
+
 ## Standalone service
 
 ```bash

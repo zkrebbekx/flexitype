@@ -14,6 +14,7 @@ import (
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
+	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
@@ -644,8 +645,9 @@ func (s *server) listEntityRelationships(w http.ResponseWriter, r *http.Request)
 func (s *server) features(w http.ResponseWriter, r *http.Request) {
 	f := application.FromContext(r.Context()).Features()
 	writeJSON(w, http.StatusOK, map[string]bool{
-		"search":   !f.DisableSearch,
-		"activity": !f.DisableActivity,
+		"search":       !f.DisableSearch,
+		"activity":     !f.DisableActivity,
+		"search_index": f.SearchIndex,
 	})
 }
 
@@ -695,6 +697,19 @@ func (s *server) validateQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"valid": true})
+}
+
+func (s *server) reindexSearch(w http.ResponseWriter, r *http.Request) {
+	if s.reindex == nil {
+		s.featureDisabled(w, "search index")
+		return
+	}
+	count, err := s.reindex(r.Context(), uow.TenantFromContext(r.Context()))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"reindexed": count})
 }
 
 // --- activity ----------------------------------------------------------------

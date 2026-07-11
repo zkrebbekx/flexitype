@@ -29,6 +29,11 @@ type Config struct {
 	EnableSearch bool
 	// EnableActivity toggles the audit log (writes and read API).
 	EnableActivity bool
+	// EnableOutbox switches event delivery to the transactional outbox.
+	EnableOutbox bool
+	// EnableSearchIndex maintains the entity search projection and unlocks
+	// FQL matches().
+	EnableSearchIndex bool
 }
 
 // Database holds PostgreSQL pool settings.
@@ -62,6 +67,8 @@ func Load() (Config, error) {
 		MigrateOnStart:      envBool("FLEXITYPE_MIGRATE_ON_START", true),
 		EnableSearch:        envBool("FLEXITYPE_FEATURE_SEARCH", true),
 		EnableActivity:      envBool("FLEXITYPE_FEATURE_ACTIVITY", true),
+		EnableOutbox:        envBool("FLEXITYPE_OUTBOX", false),
+		EnableSearchIndex:   envBool("FLEXITYPE_FEATURE_SEARCH_INDEX", false),
 		Database: Database{
 			Host:            envStr("FLEXITYPE_DB_HOST", "localhost"),
 			Port:            envInt("FLEXITYPE_DB_PORT", 5432),

@@ -24,6 +24,8 @@ type Features struct {
 	// DisableActivity turns the audit log off entirely: no pre-commit
 	// writes, no read API.
 	DisableActivity bool
+	// SearchIndex enables the entity search projection and FQL matches().
+	SearchIndex bool
 }
 
 // FactoryConfig carries the factory's composition-time dependencies.
@@ -53,6 +55,12 @@ type FactoryConfig struct {
 
 	// Features toggles optional capabilities.
 	Features Features
+
+	// Outbox, when set, switches event delivery to at-least-once: the unit
+	// of work writes envelopes transactionally and OutboxNudge wakes the
+	// relay after commit.
+	Outbox      uow.EnvelopeSink
+	OutboxNudge func()
 }
 
 // factory is the common usecase factory: every request gets fresh
@@ -91,6 +99,9 @@ func (f *factory) New(context.Context) *Interactors {
 	if f.cfg.OnRollback != nil {
 		opts = append(opts, uow.WithRollbackObserver(f.cfg.OnRollback))
 	}
+	if f.cfg.Outbox != nil {
+		opts = append(opts, uow.WithOutbox(f.cfg.Outbox, f.cfg.OutboxNudge))
+	}
 	activityLog := f.cfg.ActivityLog
 	if f.cfg.Features.DisableActivity {
 		activityLog = nil // the unit of work skips audit writes entirely
@@ -103,7 +114,7 @@ func (f *factory) New(context.Context) *Interactors {
 		values:        appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
 		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
 		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),
-		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query),
+		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query, f.cfg.Features.SearchIndex),
 		activity:      &ActivityInteractor{log: activityLog},
 		features:      f.cfg.Features,
 	}

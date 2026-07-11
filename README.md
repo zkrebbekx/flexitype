@@ -50,6 +50,17 @@ Runs two ways from one codebase:
   `type isa` hierarchy matching. Names bind against the (inherited) schema
   with positioned errors; archived types, attributes and entities are
   invisible. See `docs/design/query-language.md`.
+- **Transactional outbox** (optional): event envelopes persist in the same
+  transaction as the change and a relay dispatches them with retries —
+  at-least-once delivery for every hook (webhooks, pub/sub, the search
+  indexer). `FLEXITYPE_OUTBOX=true` or `flexitype.WithOutbox()` +
+  `Service.RunOutboxRelay`.
+- **Search index** (optional): an event-driven projection keeps one
+  searchable document per entity, unlocking FQL `matches("free text")` and
+  `POST /api/v1/search/reindex`; trigram indexes accelerate
+  `contains`/`icontains` everywhere. `FLEXITYPE_FEATURE_SEARCH_INDEX=true`
+  or `flexitype.WithSearchIndex()`. Design:
+  `docs/design/search-indexing.md`.
 - **Feature toggles**: search and activity history switch off per
   deployment (`FLEXITYPE_FEATURE_SEARCH`, `FLEXITYPE_FEATURE_ACTIVITY`, or
   `flexitype.WithoutSearch()` / `WithoutActivityLog()` when embedding);

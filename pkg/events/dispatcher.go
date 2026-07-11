@@ -118,6 +118,23 @@ func (d *Dispatcher) Dispatch(ctx context.Context, meta Metadata, evts ...Event)
 	return errors.Join(errs...)
 }
 
+// DispatchEnvelopes delivers pre-built envelopes (the outbox relay path):
+// no re-enveloping, same fan-out and panic isolation as Dispatch.
+func (d *Dispatcher) DispatchEnvelopes(ctx context.Context, envs ...Envelope) error {
+	var errs []error
+	for _, env := range envs {
+		for _, reg := range d.registrations {
+			if !reg.wants(env.Type) {
+				continue
+			}
+			if err := d.deliver(ctx, reg.handler, env); err != nil {
+				errs = append(errs, fmt.Errorf("handler %s: %w", reg.handler.Name(), err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (d *Dispatcher) deliver(ctx context.Context, h Handler, env Envelope) (err error) {
 	defer func() {
 		if r := recover(); r != nil {

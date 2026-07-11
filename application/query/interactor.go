@@ -24,16 +24,17 @@ type Repository interface {
 
 // Interactor implements the FQL usecases.
 type Interactor struct {
-	typeDefs domaintypedef.Repository
-	attrs    domainattribute.Repository
-	relDefs  domainrelationship.DefinitionRepository
-	repo     Repository
-	now      func() time.Time
+	typeDefs    domaintypedef.Repository
+	attrs       domainattribute.Repository
+	relDefs     domainrelationship.DefinitionRepository
+	repo        Repository
+	searchIndex bool
+	now         func() time.Time
 }
 
-// NewInteractor wires the query usecases.
-func NewInteractor(typeDefs domaintypedef.Repository, attrs domainattribute.Repository, relDefs domainrelationship.DefinitionRepository, repo Repository) *Interactor {
-	return &Interactor{typeDefs: typeDefs, attrs: attrs, relDefs: relDefs, repo: repo, now: time.Now}
+// NewInteractor wires the query usecases. searchIndex unlocks matches().
+func NewInteractor(typeDefs domaintypedef.Repository, attrs domainattribute.Repository, relDefs domainrelationship.DefinitionRepository, repo Repository, searchIndex bool) *Interactor {
+	return &Interactor{typeDefs: typeDefs, attrs: attrs, relDefs: relDefs, repo: repo, searchIndex: searchIndex, now: time.Now}
 }
 
 // ExecuteInput is one query run.
@@ -116,6 +117,7 @@ func (i *Interactor) prepare(ctx context.Context, rootType, queryText string) ([
 
 	b := &binder{
 		tenant:      tenant,
+		searchIndex: i.searchIndex,
 		typeDefs:    i.typeDefs,
 		attrs:       i.attrs,
 		relDefs:     i.relDefs,

@@ -31,10 +31,11 @@ type scope struct {
 
 // binder resolves parsed queries against the schema.
 type binder struct {
-	tenant   valueobjects.TenantID
-	typeDefs domaintypedef.Repository
-	attrs    domainattribute.Repository
-	relDefs  domainrelationship.DefinitionRepository
+	tenant      valueobjects.TenantID
+	searchIndex bool
+	typeDefs    domaintypedef.Repository
+	attrs       domainattribute.Repository
+	relDefs     domainrelationship.DefinitionRepository
 	// typesByName caches every live entity type for the virtual type field.
 	typesByName map[string]domaintypedef.Snapshot
 }
@@ -178,6 +179,12 @@ func (b *binder) bind(ctx context.Context, node fql.Node, s *scope) (BoundNode, 
 			return nil, positioned(n.Pos, "%s requires a textual attribute; %q is %s", n.Kind, attr.InternalName, attr.DataType)
 		}
 		return &BoundStringMatch{Attr: attr, Link: link, Kind: n.Kind, Value: n.Value.Text}, nil
+
+	case *fql.Matches:
+		if !b.searchIndex {
+			return nil, positioned(n.Pos, "matches() requires the search-index feature, which is disabled in this deployment")
+		}
+		return &BoundMatches{Query: n.Query}, nil
 
 	case *fql.Traversal:
 		return b.bindTraversal(ctx, n, s)

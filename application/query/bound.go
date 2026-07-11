@@ -74,6 +74,11 @@ type BoundType struct {
 	Negate  bool
 }
 
+// BoundMatches is full-text search over the entity's search document.
+type BoundMatches struct {
+	Query string
+}
+
 // BoundTraversal crosses a relationship; Inner evaluates against the
 // counterpart entity (and the link's own attributes).
 type BoundTraversal struct {
@@ -91,3 +96,4 @@ func (*BoundHas) boundNode()         {}
 func (*BoundStringMatch) boundNode() {}
 func (*BoundType) boundNode()        {}
 func (*BoundTraversal) boundNode()   {}
+func (*BoundMatches) boundNode()     {}

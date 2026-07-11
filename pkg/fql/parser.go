@@ -139,6 +139,8 @@ func (p *parser) parsePrimary() (Node, error) {
 		return p.parseHas()
 	case "contains", "icontains", "iequals":
 		return p.parseStringMatch()
+	case "matches":
+		return p.parseMatches()
 	}
 	return p.parseComparisonOrIn()
 }
@@ -240,6 +242,22 @@ func (p *parser) parseStringMatch() (Node, error) {
 		return nil, err
 	}
 	return &StringMatch{Kind: kind, Field: field, Value: value, Pos: kw.Pos}, nil
+}
+
+// parseMatches: matches "(" string ")"
+func (p *parser) parseMatches() (Node, error) {
+	kw := p.next()
+	if _, err := p.expect(TokenLParen, "'(' after matches"); err != nil {
+		return nil, err
+	}
+	q, err := p.expect(TokenString, "a quoted search string")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(TokenRParen, "')'"); err != nil {
+		return nil, err
+	}
+	return &Matches{Query: q.Text, Pos: kw.Pos}, nil
 }
 
 // parseComparisonOrIn: operand (op literal | in "(" literals ")")

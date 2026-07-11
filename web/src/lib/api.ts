@@ -14,6 +14,7 @@ export type DataType =
   | 'url'
   | 'email'
   | 'json'
+  | 'media'
 
 export const DATA_TYPES: DataType[] = [
   'string',
@@ -28,6 +29,7 @@ export const DATA_TYPES: DataType[] = [
   'url',
   'email',
   'json',
+  'media',
 ]
 
 export type ErrorCode =
@@ -492,6 +494,22 @@ export const api = {
       'GET',
       `/entities/${typeId}/${encodeURIComponent(entityId)}/completeness`,
     ),
+  mediaUrl: (objectKey: string) => `/api/v1/media/${encodeURIComponent(objectKey)}`,
+  uploadMedia: async (typeId: string, entityId: string, attributeId: string, file: File): Promise<AttributeValue> => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch(
+      `/api/v1/entities/${typeId}/${encodeURIComponent(entityId)}/attributes/${attributeId}/media`,
+      { method: 'POST', body: form },
+    )
+    const text = await res.text()
+    const parsed = text ? JSON.parse(text) : undefined
+    if (!res.ok) {
+      const err = (parsed as { error?: { code?: string; message?: string; details?: Record<string, unknown> } })?.error
+      throw new ApiError(res.status, (err?.code as ErrorCode) ?? 'INTERNAL', err?.message ?? `upload failed (${res.status})`, err?.details)
+    }
+    return parsed as AttributeValue
+  },
   listRevisions: (typeId: string, entityId: string) =>
     request<{ items: EntityRevision[] }>('GET', `/entities/${typeId}/${encodeURIComponent(entityId)}/revisions`),
   createRevision: (typeId: string, entityId: string, label: string) =>

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
@@ -34,8 +35,20 @@ type Interactor struct {
 	values   domainvalue.Repository
 	deps     domaindependency.Repository
 	links    domainrelationship.Repository
+	blobs    blobStore
 	now      func() time.Time
 }
+
+// blobStore is the subset of the object-storage port the value interactor
+// needs for media uploads and archival cleanup. Nil disables media.
+type blobStore interface {
+	Put(ctx context.Context, key string, r io.Reader, mime string) error
+	Delete(ctx context.Context, key string) error
+}
+
+// SetBlobStore installs the object store backing media attributes. Called
+// once at wiring time when a blob store is configured.
+func (i *Interactor) SetBlobStore(s blobStore) { i.blobs = s }
 
 // NewInteractor wires the attribute-value usecases.
 func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, deps domaindependency.Repository, links domainrelationship.Repository) *Interactor {
@@ -428,7 +441,22 @@ func (i *Interactor) Remove(ctx context.Context, rawID string) (*domainvalue.Sna
 	if err != nil {
 		return nil, err
 	}
+	// Deletion lifecycle: once the archival has committed, drop the backing
+	// blob of a media value (best effort; storage errors don't fail the API
+	// call — a later sweep can reconcile).
+	i.gcMedia(ctx, snap.Value)
 	return &snap, nil
+}
+
+// gcMedia removes the object backing a media value from storage. It is a
+// no-op for non-media values or when no blob store is configured.
+func (i *Interactor) gcMedia(ctx context.Context, v valueobjects.Value) {
+	if i.blobs == nil || v.DataType() != valueobjects.DataTypeMedia {
+		return
+	}
+	if key := v.Media().ObjectKey; key != "" {
+		_ = i.blobs.Delete(ctx, key)
+	}
 }
 
 // Get loads one stored value by ID.

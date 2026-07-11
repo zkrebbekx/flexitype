@@ -20,6 +20,7 @@ const (
 	KindMaxValue  ConstraintKind = "max_value"
 	KindPattern   ConstraintKind = "pattern"
 	KindOneOf     ConstraintKind = "one_of"
+	KindMedia     ConstraintKind = "media"
 )
 
 // Constraint is a validation rule applied to attribute values. Each kind
@@ -240,16 +241,63 @@ func (c OneOf) Check(v valueobjects.Value) error {
 		"constraint", string(KindOneOf), "value", v.String())
 }
 
+// MediaConstraint bounds a media attribute's uploads by MIME type and size.
+type MediaConstraint struct {
+	// AllowedMIME is the set of accepted MIME types; empty accepts any.
+	AllowedMIME []string `json:"mime,omitempty"`
+	// MaxSize is the maximum size in bytes; 0 is unbounded.
+	MaxSize int64 `json:"max_size,omitempty"`
+}
+
+// Kind implements Constraint.
+func (c MediaConstraint) Kind() ConstraintKind { return KindMedia }
+
+// Validate implements Constraint.
+func (c MediaConstraint) Validate(dt valueobjects.DataType) error {
+	if dt != valueobjects.DataTypeMedia {
+		return domainerrors.NewValidation("media constraint requires a media attribute", "data_type", dt.String())
+	}
+	if c.MaxSize < 0 {
+		return domainerrors.NewValidation("media max_size must be non-negative")
+	}
+	return nil
+}
+
+// Check implements Constraint.
+func (c MediaConstraint) Check(v valueobjects.Value) error {
+	m := v.Media()
+	if len(c.AllowedMIME) > 0 {
+		ok := false
+		for _, mime := range c.AllowedMIME {
+			if mime == m.MIME {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return domainerrors.NewValidation("media type is not allowed",
+				"constraint", string(KindMedia), "mime", m.MIME)
+		}
+	}
+	if c.MaxSize > 0 && m.Size > c.MaxSize {
+		return domainerrors.NewValidation("media exceeds the maximum size",
+			"constraint", string(KindMedia), "size", m.Size, "max_size", c.MaxSize)
+	}
+	return nil
+}
+
 // Constraints is an ordered set of constraints with self-describing JSON
 // encoding for JSONB storage and the API.
 type Constraints []Constraint
 
 type constraintJSON struct {
-	Kind   ConstraintKind    `json:"kind"`
-	N      *int              `json:"n,omitempty"`
-	Value  json.RawMessage   `json:"value,omitempty"`
-	Expr   string            `json:"expr,omitempty"`
-	Values []json.RawMessage `json:"values,omitempty"`
+	Kind    ConstraintKind    `json:"kind"`
+	N       *int              `json:"n,omitempty"`
+	Value   json.RawMessage   `json:"value,omitempty"`
+	Expr    string            `json:"expr,omitempty"`
+	Values  []json.RawMessage `json:"values,omitempty"`
+	MIME    []string          `json:"mime,omitempty"`
+	MaxSize *int64            `json:"max_size,omitempty"`
 }
 
 // MarshalJSON encodes each constraint with a kind discriminator and typed
@@ -287,6 +335,12 @@ func (cs Constraints) MarshalJSON() ([]byte, error) {
 					return nil, err
 				}
 				cj.Values = append(cj.Values, typed)
+			}
+		case MediaConstraint:
+			cj.MIME = t.AllowedMIME
+			if t.MaxSize > 0 {
+				size := t.MaxSize
+				cj.MaxSize = &size
 			}
 		default:
 			return nil, fmt.Errorf("unknown constraint kind %q", c.Kind())
@@ -343,6 +397,12 @@ func (cs *Constraints) UnmarshalJSON(b []byte) error {
 				values = append(values, v)
 			}
 			out = append(out, OneOf{Values: values})
+		case KindMedia:
+			mc := MediaConstraint{AllowedMIME: cj.MIME}
+			if cj.MaxSize != nil {
+				mc.MaxSize = *cj.MaxSize
+			}
+			out = append(out, mc)
 		default:
 			return fmt.Errorf("unknown constraint kind %q", cj.Kind)
 		}

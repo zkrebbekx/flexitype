@@ -10,6 +10,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/admin"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/blob"
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
 	"github.com/zkrebbekx/flexitype/pkg/metrics"
@@ -31,12 +32,14 @@ type ServerConfig struct {
 	Metrics *metrics.Metrics
 	// RateLimiter, when set, throttles API requests per service account.
 	RateLimiter *ratelimit.Limiter
+	// BlobStore serves media downloads; nil when media is disabled.
+	BlobStore blob.Store
 }
 
 // NewHandler builds the service's HTTP handler: versioned API plus
 // operational endpoints, instrumented with OpenTelemetry.
 func NewHandler(cfg ServerConfig) http.Handler {
-	s := &server{factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex, admin: cfg.Admin}
+	s := &server{factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex, admin: cfg.Admin, blobs: cfg.BlobStore}
 
 	r := chi.NewRouter()
 	r.Use(recoverer(cfg.Logger))
@@ -133,6 +136,7 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Get("/revisions", s.listRevisions)
 			r.Post("/revisions", s.createRevision)
 			r.Get("/as-of", s.entityAsOf)
+			r.Post("/attributes/{attributeID}/media", s.uploadMedia)
 			// Cascade: archive the entity's values and unlink its relationships.
 			r.Delete("/", s.removeEntity)
 		})
@@ -142,6 +146,8 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Get("/{id}/diff", s.diffRevisions)
 			r.Post("/{id}/restore", s.restoreRevision)
 		})
+
+		api.Get("/media/{objectKey}", s.downloadMedia)
 
 		api.Route("/dependencies", func(r chi.Router) {
 			r.Get("/", s.listDependencies)
@@ -219,4 +225,5 @@ type server struct {
 	log     *logger.Logger
 	reindex func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
 	admin   *admin.Interactor
+	blobs   blob.Store
 }

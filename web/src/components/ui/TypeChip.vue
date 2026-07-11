@@ -17,6 +17,7 @@ const glyphs: Record<DataType, string> = {
   url: '⌘',
   email: '@',
   json: '{}',
+  media: '🖼',
 }
 
 const glyph = glyphs[props.dataType] ?? '?'

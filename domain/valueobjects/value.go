@@ -127,6 +127,47 @@ func NewJSONValue(raw json.RawMessage) (Value, error) {
 	return Value{dataType: DataTypeJSON, jsonVal: json.RawMessage(buf.Bytes())}, nil
 }
 
+// MediaMeta describes a stored file/image. The bytes live in object storage;
+// this metadata is the attribute value.
+type MediaMeta struct {
+	ObjectKey string `json:"object_key"`
+	MIME      string `json:"mime"`
+	Size      int64  `json:"size"`
+	Checksum  string `json:"checksum,omitempty"`
+	Filename  string `json:"filename,omitempty"`
+}
+
+// NewMediaValue builds a media value from its metadata JSON. The object key,
+// MIME type and a non-negative size are required — the caller (an upload
+// handler) has already put the bytes in storage.
+func NewMediaValue(raw json.RawMessage) (Value, error) {
+	var m MediaMeta
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return Value{}, fmt.Errorf("decode media metadata: %w", err)
+	}
+	if m.ObjectKey == "" {
+		return Value{}, fmt.Errorf("media value requires an object_key")
+	}
+	if m.MIME == "" {
+		return Value{}, fmt.Errorf("media value requires a mime type")
+	}
+	if m.Size < 0 {
+		return Value{}, fmt.Errorf("media size must be non-negative")
+	}
+	canonical, err := json.Marshal(m)
+	if err != nil {
+		return Value{}, fmt.Errorf("encode media metadata: %w", err)
+	}
+	return Value{dataType: DataTypeMedia, jsonVal: canonical}, nil
+}
+
+// Media decodes the media metadata payload (media values only).
+func (v Value) Media() MediaMeta {
+	var m MediaMeta
+	_ = json.Unmarshal(v.jsonVal, &m)
+	return m
+}
+
 // ParseValue decodes a raw JSON scalar into a typed Value according to the
 // declared data type. This is the single entry point for values arriving
 // over the API.
@@ -246,6 +287,9 @@ func ParseValue(dt DataType, raw json.RawMessage) (Value, error) {
 	case DataTypeJSON:
 		return NewJSONValue(raw)
 
+	case DataTypeMedia:
+		return NewMediaValue(raw)
+
 	default:
 		return Value{}, fmt.Errorf("unknown data type %q", dt)
 	}
@@ -303,6 +347,8 @@ func (v Value) String() string {
 		return v.timeVal.Format(time.RFC3339Nano)
 	case DataTypeJSON:
 		return string(v.jsonVal)
+	case DataTypeMedia:
+		return v.Media().ObjectKey
 	default:
 		return v.textVal
 	}
@@ -317,7 +363,7 @@ func (v Value) MarshalJSON() ([]byte, error) {
 		return json.Marshal(v.intVal)
 	case DataTypeFloat:
 		return json.Marshal(v.floatVal)
-	case DataTypeJSON:
+	case DataTypeJSON, DataTypeMedia:
 		return v.jsonVal, nil
 	case "":
 		return []byte("null"), nil
@@ -370,7 +416,7 @@ func (v Value) Equal(other Value) bool {
 	case DataTypeDecimal:
 		cmp, err := v.Compare(other)
 		return err == nil && cmp == 0
-	case DataTypeJSON:
+	case DataTypeJSON, DataTypeMedia:
 		return bytes.Equal(v.jsonVal, other.jsonVal)
 	case DataTypeDate, DataTypeTime, DataTypeDateTime:
 		return v.timeVal.Equal(other.timeVal)

@@ -18,6 +18,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	"github.com/zkrebbekx/flexitype/application/webhook"
+	"github.com/zkrebbekx/flexitype/pkg/blob"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 )
@@ -90,6 +91,9 @@ type FactoryConfig struct {
 
 	// Revisions persists entity revisions; nil disables the feature.
 	Revisions apprevision.Store
+
+	// BlobStore backs media attribute values; nil disables media uploads.
+	BlobStore blob.Store
 }
 
 // factory is the common usecase factory: every request gets fresh
@@ -146,6 +150,9 @@ func (f *factory) New(context.Context) *Interactors {
 		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query, f.cfg.Features.SearchIndex),
 		activity:      &ActivityInteractor{log: activityLog},
 		features:      f.cfg.Features,
+	}
+	if f.cfg.BlobStore != nil {
+		i.values.SetBlobStore(f.cfg.BlobStore)
 	}
 	i.schema = appschema.NewInteractor(i.typeDefs, i.attrs, i.relationships, i.deps)
 	if f.cfg.SavedViews != nil {

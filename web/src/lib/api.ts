@@ -213,6 +213,24 @@ export interface ImportMapping {
   dry_run: boolean
 }
 
+export interface RevisionValue {
+  attribute_definition_id: string
+  internal_name: string
+  display_name: string
+  data_type: string
+  value: string
+}
+
+export interface EntityRevision {
+  id: string
+  type_definition_id: string
+  entity_id: string
+  seq: number
+  label?: string
+  created_at: string
+  values: RevisionValue[]
+}
+
 export type MatchStrategy = 'exact' | 'case_insensitive' | 'trigram'
 
 export interface MatchRule {
@@ -474,6 +492,12 @@ export const api = {
       'GET',
       `/entities/${typeId}/${encodeURIComponent(entityId)}/completeness`,
     ),
+  listRevisions: (typeId: string, entityId: string) =>
+    request<{ items: EntityRevision[] }>('GET', `/entities/${typeId}/${encodeURIComponent(entityId)}/revisions`),
+  createRevision: (typeId: string, entityId: string, label: string) =>
+    request<EntityRevision>('POST', `/entities/${typeId}/${encodeURIComponent(entityId)}/revisions`, { label }),
+  getRevision: (revisionId: string) => request<EntityRevision>('GET', `/revisions/${revisionId}`),
+  restoreRevision: (revisionId: string) => request<EntityRevision>('POST', `/revisions/${revisionId}/restore`),
   importEntities: async (typeId: string, file: File, mapping: ImportMapping): Promise<ImportReport> => {
     const form = new FormData()
     form.append('file', file)

@@ -3,8 +3,9 @@ import { reactive, ref } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
 import { api } from '@/lib/api'
 import type { ActivityEntry } from '@/lib/api'
-import { formatTimestamp } from '@/lib/format'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import RelativeTime from '@/components/ui/RelativeTime.vue'
+import { usePagedCursor } from '@/composables/usePagedCursor'
 import Badge from '@/components/ui/Badge.vue'
 import Input from '@/components/ui/Input.vue'
 import Select from '@/components/ui/Select.vue'
@@ -16,7 +17,7 @@ import Pagination from '@/components/ui/Pagination.vue'
 import { ChevronDown, ChevronRight } from 'lucide-vue-next'
 
 const filters = reactive({ entity: '', entity_id: '', actor: '' })
-const cursor = ref<string>()
+const { cursor, canPrevious, next: pageNext, previous: pagePrev, reset: pageReset } = usePagedCursor()
 
 const activity = useQuery({
   queryKey: ['activity', filters, cursor],
@@ -61,9 +62,9 @@ const ENTITY_KINDS = [
   </PageHeader>
 
   <div class="mb-4 grid max-w-3xl grid-cols-3 gap-3">
-    <Select v-model="filters.entity" label="Kind" :options="ENTITY_KINDS" @update:model-value="cursor = undefined" />
-    <Input v-model="filters.entity_id" label="Entity ID" mono placeholder="01J… or order-1234" @change="cursor = undefined" />
-    <Input v-model="filters.actor" label="Actor" placeholder="service_account:ci" @change="cursor = undefined" />
+    <Select v-model="filters.entity" label="Kind" :options="ENTITY_KINDS" @update:model-value="pageReset" />
+    <Input v-model="filters.entity_id" label="Entity ID" mono placeholder="01J… or order-1234" @change="pageReset" />
+    <Input v-model="filters.actor" label="Actor" placeholder="service_account:ci" @change="pageReset" />
   </div>
 
   <div class="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
@@ -83,7 +84,7 @@ const ENTITY_KINDS = [
             </td>
             <td class="px-3 py-2.5 text-[13px] text-(--text-secondary)">{{ e.actor }}</td>
             <td class="px-3 py-2.5 text-right text-[13px] whitespace-nowrap text-(--text-muted)">
-              {{ formatTimestamp(e.occurred_at) }}
+              <RelativeTime :iso="e.occurred_at" />
             </td>
           </tr>
           <tr v-if="expanded.has(e.id)" class="border-b border-(--border)">
@@ -106,7 +107,9 @@ const ENTITY_KINDS = [
   <Pagination
     :page-info="activity.data.value?.page_info"
     :loading="activity.isFetching.value"
-    @next="(c) => (cursor = c)"
-    @reset="cursor = undefined"
+    :can-previous="canPrevious"
+    @next="pageNext"
+    @previous="pagePrev"
+    @reset="pageReset"
   />
 </template>

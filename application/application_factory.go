@@ -10,6 +10,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/feed"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
+	appschema "github.com/zkrebbekx/flexitype/application/schema"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
@@ -133,6 +134,7 @@ func (f *factory) New(context.Context) *Interactors {
 		activity:      &ActivityInteractor{log: activityLog},
 		features:      f.cfg.Features,
 	}
+	i.schema = appschema.NewInteractor(i.typeDefs, i.attrs, i.relationships, i.deps)
 	if f.cfg.Features.EventDelivery {
 		i.webhooks = webhook.NewInteractor(unit, f.cfg.Subscriptions, f.cfg.Deliveries, f.cfg.WebhookURLPolicy)
 		i.feed = feed.NewInteractor(f.cfg.FeedStore, f.cfg.CursorStore)

@@ -13,6 +13,7 @@ import (
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
+	appschema "github.com/zkrebbekx/flexitype/application/schema"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
@@ -347,6 +348,29 @@ func (s *server) setValuesBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out.Items})
+}
+
+func (s *server) exportSchema(w http.ResponseWriter, r *http.Request) {
+	bundle, err := application.FromContext(r.Context()).Schema().Export(r.Context())
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, bundle)
+}
+
+func (s *server) importSchema(w http.ResponseWriter, r *http.Request) {
+	var bundle appschema.Bundle
+	if err := decode(r, &bundle); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	res, err := application.FromContext(r.Context()).Schema().Import(r.Context(), &bundle)
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *server) removeEntity(w http.ResponseWriter, r *http.Request) {

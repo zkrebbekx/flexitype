@@ -110,6 +110,9 @@ func TestParser(t *testing.T) {
 				`name = "unterminated`: "unterminated string",
 				`in (1)`:               "expected",
 				`range(price, 10)`:     "expected ','",
+				`price = 1.2.3`:        "one decimal point",
+				`price = 1..2`:         "must be followed by a digit",
+				`price = 1.`:           "must be followed by a digit",
 			}
 			Convey("Then each fails with a positioned message", func() {
 				for input, wants := range cases {

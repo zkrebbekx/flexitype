@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { RouterLink } from 'vue-router'
-import { useQuery } from '@tanstack/vue-query'
-import { api } from '@/lib/api'
+import { computed, reactive, ref, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
+import { api, friendlyError } from '@/lib/api'
 import type { SuggestSchema } from '@/lib/suggest'
+import type { SavedView } from '@/lib/api'
+import { useToasts } from '@/composables/useToasts'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import RelativeTime from '@/components/ui/RelativeTime.vue'
 import { usePagedCursor } from '@/composables/usePagedCursor'
@@ -13,7 +15,11 @@ import ErrorState from '@/components/ui/ErrorState.vue'
 import SkeletonRows from '@/components/ui/SkeletonRows.vue'
 import Pagination from '@/components/ui/Pagination.vue'
 import Badge from '@/components/ui/Badge.vue'
+import Button from '@/components/ui/Button.vue'
+import Input from '@/components/ui/Input.vue'
+import Modal from '@/components/ui/Modal.vue'
 import QueryBar from '@/components/QueryBar.vue'
+import { Bookmark, Trash2 } from 'lucide-vue-next'
 
 const types = useQuery({ queryKey: ['types-all'], queryFn: () => api.listTypes({ limit: 200 }) })
 const typeId = ref('')
@@ -76,6 +82,86 @@ function runQuery(q: string) {
   activeQuery.value = q.trim()
 }
 
+// --- saved views ---------------------------------------------------------------
+const route = useRoute()
+const router = useRouter()
+const queryClient = useQueryClient()
+const toasts = useToasts()
+
+const savedViews = useQuery({ queryKey: ['saved-views'], queryFn: () => api.listSavedViews() })
+const selectedViewId = ref('')
+const viewOptions = computed(() => [
+  { value: '', label: 'Saved views…' },
+  ...(savedViews.data.value?.items ?? []).map((v) => ({ value: v.id, label: v.name })),
+])
+
+function applyView(view: SavedView) {
+  const t = types.data.value?.items.find((x) => x.internal_name === view.root_type)
+  if (!t) {
+    toasts.error(`View "${view.name}" points at a missing type`)
+    return
+  }
+  typeId.value = t.id
+  queryText.value = view.query
+  activeQuery.value = view.query.trim()
+  selectedViewId.value = view.id
+  pageReset()
+  router.replace({ query: { ...route.query, view: view.id } })
+}
+
+function onViewPicked(id: string) {
+  const view = savedViews.data.value?.items.find((v) => v.id === id)
+  if (view) applyView(view)
+}
+
+// Restore a view addressed by URL once the types + views have loaded.
+watch(
+  () => [savedViews.data.value, types.data.value] as const,
+  () => {
+    const wanted = typeof route.query.view === 'string' ? route.query.view : ''
+    if (wanted && wanted !== selectedViewId.value) {
+      const view = savedViews.data.value?.items.find((v) => v.id === wanted)
+      if (view) applyView(view)
+    }
+  },
+)
+
+const saveModal = reactive({ open: false, name: '', existingId: '' })
+function openSave() {
+  const current = savedViews.data.value?.items.find((v) => v.id === selectedViewId.value)
+  saveModal.existingId = current?.id ?? ''
+  saveModal.name = current?.name ?? ''
+  saveModal.open = true
+}
+const saveView = useMutation({
+  mutationFn: () => {
+    const input = {
+      name: saveModal.name.trim(),
+      root_type: selectedType.value?.internal_name ?? '',
+      query: activeQuery.value || queryText.value,
+    }
+    return saveModal.existingId ? api.updateSavedView(saveModal.existingId, input) : api.createSavedView(input)
+  },
+  onSuccess: (v) => {
+    queryClient.invalidateQueries({ queryKey: ['saved-views'] })
+    selectedViewId.value = v.id
+    saveModal.open = false
+    router.replace({ query: { ...route.query, view: v.id } })
+    toasts.success(`View "${v.name}" saved`)
+  },
+  onError: (e) => toasts.error(friendlyError(e)),
+})
+const deleteView = useMutation({
+  mutationFn: (id: string) => api.deleteSavedView(id),
+  onSuccess: () => {
+    queryClient.invalidateQueries({ queryKey: ['saved-views'] })
+    selectedViewId.value = ''
+    router.replace({ query: {} })
+    toasts.success('View deleted')
+  },
+  onError: (e) => toasts.error(friendlyError(e)),
+})
+
 // Suggestion schema: effective attributes, relationships and their link
 // attributes for the selected type.
 const effective = useQuery({
@@ -120,14 +206,30 @@ const suggestSchema = computed<SuggestSchema>(() => ({
     Your domain objects, seen through the values they hold. Pick a type to browse.
   </PageHeader>
 
-  <div class="mb-2 flex max-w-lg items-end gap-4">
-    <div class="flex-1">
-      <Select v-model="typeId" label="Type" :options="typeOptions" @update:model-value="() => (pageReset(), (activeQuery = ''), (queryText = ''))" />
+  <div class="mb-2 flex flex-wrap items-end gap-4">
+    <div class="w-72">
+      <Select v-model="typeId" label="Type" :options="typeOptions" @update:model-value="() => (pageReset(), (activeQuery = ''), (queryText = ''), (selectedViewId = ''))" />
     </div>
     <label v-if="!activeQuery" class="flex items-center gap-1.5 pb-2 text-[13px] text-(--text-muted)">
       <input v-model="includeSubtypes" type="checkbox" class="accent-(--accent)" @change="pageReset" />
       Include subtypes
     </label>
+
+    <div v-if="savedViews.data.value?.items.length" class="w-56">
+      <Select v-model="selectedViewId" label="View" :options="viewOptions" @update:model-value="onViewPicked" />
+    </div>
+    <div class="flex items-center gap-1.5 pb-1">
+      <Button v-if="typeId" size="sm" @click="openSave"><Bookmark :size="14" /> Save view</Button>
+      <Button
+        v-if="selectedViewId"
+        size="sm"
+        variant="ghost"
+        aria-label="Delete view"
+        @click="deleteView.mutate(selectedViewId)"
+      >
+        <Trash2 :size="14" />
+      </Button>
+    </div>
   </div>
 
   <div v-if="typeId && features.data.value?.search !== false" class="mb-4">
@@ -199,4 +301,27 @@ const suggestSchema = computed<SuggestSchema>(() => ({
   </template>
 
   <EmptyState v-else title="Pick a type to browse its entities" />
+
+  <Modal
+    :open="saveModal.open"
+    role="dialog"
+    :title="saveModal.existingId ? 'Update view' : 'Save view'"
+    @close="saveModal.open = false"
+    @confirm="saveView.mutate()"
+  >
+    <template #actions>
+      <div class="w-full">
+        <Input v-model="saveModal.name" label="View name" placeholder="Active bikes" />
+        <p class="mt-2 text-[13px] text-(--text-muted)">
+          Saves the current type and query. Reopen it any time — the view is shareable by its URL.
+        </p>
+        <div class="mt-4 flex justify-end gap-2">
+          <Button @click="saveModal.open = false">Cancel</Button>
+          <Button variant="primary" :disabled="!saveModal.name.trim() || saveView.isPending.value" @click="saveView.mutate()">
+            Save
+          </Button>
+        </div>
+      </div>
+    </template>
+  </Modal>
 </template>

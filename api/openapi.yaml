@@ -262,6 +262,51 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/Value" }
 
+  /saved-views:
+    get:
+      tags: [saved-views]
+      summary: List the tenant's saved views
+      responses:
+        "200":
+          description: Saved views
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { items: { type: array, items: { $ref: "#/components/schemas/SavedView" } } }
+    post:
+      tags: [saved-views]
+      summary: Save a view
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SavedViewInput" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SavedView" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /saved-views/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [saved-views]
+      summary: Get a saved view
+      responses:
+        "200": { description: Saved view, content: { application/json: { schema: { $ref: "#/components/schemas/SavedView" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [saved-views]
+      summary: Update a saved view
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SavedViewInput" } } }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/SavedView" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [saved-views]
+      summary: Delete a saved view
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+
   /schema/export:
     get:
       tags: [schema]
@@ -1037,6 +1082,24 @@ components:
       properties:
         created: { type: integer }
         skipped: { type: integer }
+    SavedViewInput:
+      type: object
+      required: [name, root_type]
+      properties:
+        name: { type: string }
+        root_type: { type: string, description: Root type internal name }
+        query: { type: string }
+        columns: { type: array, items: { type: string } }
+        sort: { type: string }
+    SavedView:
+      allOf:
+        - $ref: "#/components/schemas/SavedViewInput"
+        - type: object
+          properties:
+            id: { type: string }
+            tenant_id: { type: string }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
     SchemaBundle:
       type: object
       description: A portable, internal-name-keyed snapshot of a tenant's schema.

@@ -102,6 +102,14 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Post("/import", s.importSchema)
 		})
 
+		api.Route("/saved-views", func(r chi.Router) {
+			r.Get("/", s.listSavedViews)
+			r.Post("/", s.createSavedView)
+			r.Get("/{id}", s.getSavedView)
+			r.Patch("/{id}", s.updateSavedView)
+			r.Delete("/{id}", s.deleteSavedView)
+		})
+
 		api.Get("/entities/{typeDefinitionID}", s.listEntitiesOfType)
 		api.Route("/entities/{typeDefinitionID}/{entityID}", func(r chi.Router) {
 			r.Get("/values", s.listEntityValues)

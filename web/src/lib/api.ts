@@ -520,6 +520,32 @@ export const api = {
   // Operations
   getFeatures: () => request<Features>('GET', '/features'),
   reindexSearch: () => request<{ reindexed: number }>('POST', '/search/reindex'),
+
+  // Saved views
+  listSavedViews: () => request<{ items: SavedView[] }>('GET', '/saved-views'),
+  createSavedView: (input: SavedViewInput) => request<SavedView>('POST', '/saved-views', input),
+  updateSavedView: (id: string, input: SavedViewInput) => request<SavedView>('PATCH', `/saved-views/${id}`, input),
+  deleteSavedView: (id: string) => request<void>('DELETE', `/saved-views/${id}`),
+}
+
+export interface SavedView {
+  id: string
+  tenant_id: string
+  name: string
+  root_type: string
+  query: string
+  columns: string[]
+  sort: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SavedViewInput {
+  name: string
+  root_type: string
+  query?: string
+  columns?: string[]
+  sort?: string
 }
 
 export interface Features {

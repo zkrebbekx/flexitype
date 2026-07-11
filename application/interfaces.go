@@ -15,6 +15,7 @@ import (
 	appfeed "github.com/zkrebbekx/flexitype/application/feed"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
+	appsavedview "github.com/zkrebbekx/flexitype/application/savedview"
 	appschema "github.com/zkrebbekx/flexitype/application/schema"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -88,6 +89,7 @@ type Interactors struct {
 	webhooks      *appwebhook.Interactor
 	feed          *appfeed.Interactor
 	schema        *appschema.Interactor
+	savedViews    *appsavedview.Interactor
 	features      Features
 }
 
@@ -125,6 +127,9 @@ func (i *Interactors) Feed() *appfeed.Interactor { return i.feed }
 
 // Schema returns the schema import/export usecases.
 func (i *Interactors) Schema() *appschema.Interactor { return i.schema }
+
+// SavedViews returns the saved-view usecases; nil if the feature is off.
+func (i *Interactors) SavedViews() *appsavedview.Interactor { return i.savedViews }
 
 // ActivityInteractor serves the audit-log read side.
 type ActivityInteractor struct {

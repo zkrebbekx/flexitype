@@ -13,6 +13,7 @@ import (
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
+	appsavedview "github.com/zkrebbekx/flexitype/application/savedview"
 	appschema "github.com/zkrebbekx/flexitype/application/schema"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -357,6 +358,101 @@ func (s *server) setValuesBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out.Items})
+}
+
+type savedViewRequest struct {
+	Name     string   `json:"name"`
+	RootType string   `json:"root_type"`
+	Query    string   `json:"query,omitempty"`
+	Columns  []string `json:"columns,omitempty"`
+	Sort     string   `json:"sort,omitempty"`
+}
+
+func (s *server) savedViewsInteractor(w http.ResponseWriter, r *http.Request) *appsavedview.Interactor {
+	sv := application.FromContext(r.Context()).SavedViews()
+	if sv == nil {
+		s.featureDisabled(w, "saved views")
+		return nil
+	}
+	return sv
+}
+
+func (s *server) listSavedViews(w http.ResponseWriter, r *http.Request) {
+	sv := s.savedViewsInteractor(w, r)
+	if sv == nil {
+		return
+	}
+	views, err := sv.List(r.Context())
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": views})
+}
+
+func (s *server) createSavedView(w http.ResponseWriter, r *http.Request) {
+	sv := s.savedViewsInteractor(w, r)
+	if sv == nil {
+		return
+	}
+	var req savedViewRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	v, err := sv.Create(r.Context(), appsavedview.Input{
+		Name: req.Name, RootType: req.RootType, Query: req.Query, Columns: req.Columns, Sort: req.Sort,
+	})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, v)
+}
+
+func (s *server) getSavedView(w http.ResponseWriter, r *http.Request) {
+	sv := s.savedViewsInteractor(w, r)
+	if sv == nil {
+		return
+	}
+	v, err := sv.Get(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *server) updateSavedView(w http.ResponseWriter, r *http.Request) {
+	sv := s.savedViewsInteractor(w, r)
+	if sv == nil {
+		return
+	}
+	var req savedViewRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	v, err := sv.Update(r.Context(), chi.URLParam(r, "id"), appsavedview.Input{
+		Name: req.Name, RootType: req.RootType, Query: req.Query, Columns: req.Columns, Sort: req.Sort,
+	})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *server) deleteSavedView(w http.ResponseWriter, r *http.Request) {
+	sv := s.savedViewsInteractor(w, r)
+	if sv == nil {
+		return
+	}
+	if err := sv.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) exportSchema(w http.ResponseWriter, r *http.Request) {

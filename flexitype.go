@@ -167,6 +167,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		ActivityLog:     postgres.NewActivityLog(pool),
 		OnRollback:      o.onRollback,
 		Features:        o.features,
+		SavedViews:      postgres.NewSavedViewStore(pool),
 	}
 	if o.outbox {
 		store := postgres.NewOutboxStore(transactor)
@@ -222,6 +223,7 @@ func NewInMemory(opts ...Option) *Service {
 
 	store := memory.NewStore()
 	newRepos := func() application.Repositories { return store.Repositories() }
+	savedViews := memory.NewSavedViewStore()
 
 	var indexer *search.Indexer
 	if o.searchIndex {
@@ -240,6 +242,7 @@ func NewInMemory(opts ...Option) *Service {
 			ActivityLog:     store.ActivityLog(),
 			OnRollback:      o.onRollback,
 			Features:        o.features,
+			SavedViews:      savedViews,
 		}),
 		indexer: indexer,
 	}

@@ -5,15 +5,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/graph-gophers/dataloader/v7"
 	"github.com/lib/pq"
 
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
-	"github.com/zkrebbekx/flexitype/pkg/dataloader"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
@@ -76,15 +77,51 @@ func (r attrRow) snapshot() (domainattribute.Snapshot, error) {
 	}, nil
 }
 
-// attrListKey batches List queries.
-type attrListKey struct {
-	Tenant           string
-	TypeDefinitionID string
-	InternalNames    string
-	DataTypes        string
-	IncludeArchived  bool
-	Limit            int
-	Offset           int
+// attrListFilter is the cleansed JSON dataloader key for attribute List
+// queries; unique keys become UNION ALL arms.
+type attrListFilter struct {
+	Tenant           string   `json:"tenant"`
+	TypeDefinitionID string   `json:"type_definition_id,omitempty"`
+	InternalNames    []string `json:"internal_names,omitempty"`
+	DataTypes        []string `json:"data_types,omitempty"`
+	IncludeArchived  bool     `json:"include_archived,omitempty"`
+	Limit            int      `json:"limit"`
+	Offset           int      `json:"offset"`
+}
+
+func (f attrListFilter) key() string {
+	sort.Strings(f.InternalNames)
+	sort.Strings(f.DataTypes)
+	b, _ := json.Marshal(f)
+	return string(b)
+}
+
+func (f attrListFilter) arm(key string) (string, []any) {
+	where := []string{"tenant_id = ?"}
+	args := []any{key, f.Tenant}
+	if !f.IncludeArchived {
+		where = append(where, "archived_at IS NULL")
+	}
+	if f.TypeDefinitionID != "" {
+		where = append(where, "type_definition_id = ?")
+		args = append(args, f.TypeDefinitionID)
+	}
+	if len(f.InternalNames) > 0 {
+		where = append(where, "internal_name = ANY(?)")
+		args = append(args, pq.Array(f.InternalNames))
+	}
+	if len(f.DataTypes) > 0 {
+		where = append(where, "data_type = ANY(?)")
+		args = append(args, pq.Array(f.DataTypes))
+	}
+	args = append(args, f.Limit, f.Offset)
+
+	query := `(SELECT ?::text AS loader_key, ` + attrColumns + `, count(*) OVER () AS total_count
+	 FROM flexitype_attribute_definition
+	 WHERE ` + strings.Join(where, " AND ") + `
+	 ORDER BY id
+	 LIMIT ? OFFSET ?)`
+	return query, args
 }
 
 type attributeDefinitionRepository struct {
@@ -92,18 +129,18 @@ type attributeDefinitionRepository struct {
 	inTx       bool
 	byID       *dataloader.Loader[string, domainattribute.Snapshot]
 	byName     *dataloader.Loader[nameKey, domainattribute.Snapshot]
-	byTypePage *dataloader.Loader[dataloader.PageKey[string], dataloader.PagedResult[domainattribute.Snapshot]]
-	byList     *dataloader.Loader[attrListKey, dataloader.PagedResult[domainattribute.Snapshot]]
+	byTypePage *dataloader.Loader[pageKey, pagedResult[domainattribute.Snapshot]]
+	byList     *dataloader.Loader[string, pagedResult[domainattribute.Snapshot]]
 }
 
 // NewAttributeDefinitionRepository builds a dataloader-backed repository
 // over the pool.
 func NewAttributeDefinitionRepository(q db.QueryExecer) domainattribute.Repository {
 	r := &attributeDefinitionRepository{q: q}
-	r.byID = dataloader.NewZeroLoader(r.batchByID, loaderConfig())
-	r.byName = dataloader.NewZeroLoader(r.batchByName, loaderConfig())
-	r.byTypePage = dataloader.NewSliceLoader(r.batchByTypePage, loaderConfig())
-	r.byList = dataloader.NewSliceLoader(r.batchList, loaderConfig())
+	r.byID = newLoader(r.batchByID)
+	r.byName = newLoader(r.batchByName)
+	r.byTypePage = newLoader(r.batchByTypePage)
+	r.byList = newLoader(r.batchList)
 	return r
 }
 
@@ -114,7 +151,7 @@ func (r *attributeDefinitionRepository) WithTx(tx db.QueryExecer) domainattribut
 
 func (r *attributeDefinitionRepository) batchByID(ctx context.Context, ids []string) (map[string]domainattribute.Snapshot, error) {
 	var rows []attrRow
-	query := fmt.Sprintf(`SELECT %s FROM flexitype_attribute_definition WHERE id = ANY($1)`, attrColumns)
+	query := bind(`SELECT ` + attrColumns + ` FROM flexitype_attribute_definition WHERE id = ANY(?)`)
 	if err := r.q.SelectContext(ctx, &rows, query, pq.Array(ids)); err != nil {
 		return nil, fmt.Errorf("batch attribute definitions by id: %w", err)
 	}
@@ -130,17 +167,14 @@ func (r *attributeDefinitionRepository) batchByID(ctx context.Context, ids []str
 }
 
 func (r *attributeDefinitionRepository) batchByName(ctx context.Context, keys []nameKey) (map[nameKey]domainattribute.Snapshot, error) {
-	args := make([]any, 0, len(keys)*2)
 	tuples := make([]string, 0, len(keys))
-	for i, k := range keys {
-		tuples = append(tuples, fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2))
-		args = append(args, k.Tenant, k.Name) // Tenant carries the type definition ID here.
+	args := make([]any, 0, len(keys)*2)
+	for _, k := range keys {
+		tuples = append(tuples, "(?, ?)")
+		args = append(args, k.Scope, k.Name) // Scope carries the type definition ID here.
 	}
-	query := fmt.Sprintf(
-		`SELECT %s FROM flexitype_attribute_definition
-		 WHERE archived_at IS NULL AND (type_definition_id, internal_name) IN (%s)`,
-		attrColumns, strings.Join(tuples, ", "),
-	)
+	query := bind(`SELECT ` + attrColumns + ` FROM flexitype_attribute_definition
+	 WHERE archived_at IS NULL AND (type_definition_id, internal_name) IN (` + strings.Join(tuples, ", ") + `)`)
 
 	var rows []attrRow
 	if err := r.q.SelectContext(ctx, &rows, query, args...); err != nil {
@@ -152,30 +186,27 @@ func (r *attributeDefinitionRepository) batchByName(ctx context.Context, keys []
 		if err != nil {
 			return nil, err
 		}
-		out[nameKey{Tenant: row.TypeDefinitionID.String(), Name: row.InternalName}] = snap
+		out[nameKey{Scope: row.TypeDefinitionID.String(), Name: row.InternalName}] = snap
 	}
 	return out, nil
 }
 
 // batchByTypePage collapses per-type-definition attribute pages into one
 // windowed query per (limit, offset) group.
-func (r *attributeDefinitionRepository) batchByTypePage(ctx context.Context, keys []dataloader.PageKey[string]) (map[dataloader.PageKey[string]]dataloader.PagedResult[domainattribute.Snapshot], error) {
-	out := make(map[dataloader.PageKey[string]]dataloader.PagedResult[domainattribute.Snapshot], len(keys))
+func (r *attributeDefinitionRepository) batchByTypePage(ctx context.Context, keys []pageKey) (map[pageKey]pagedResult[domainattribute.Snapshot], error) {
+	out := make(map[pageKey]pagedResult[domainattribute.Snapshot], len(keys))
 
 	for group, parents := range pageKeyGroups(keys) {
 		limit, offset := group[0], group[1]
-		query := fmt.Sprintf(
-			`SELECT * FROM (
-			   SELECT %s,
-			          count(*)     OVER (PARTITION BY type_definition_id) AS total_count,
-			          row_number() OVER (PARTITION BY type_definition_id ORDER BY id) AS rn
-			   FROM flexitype_attribute_definition
-			   WHERE type_definition_id = ANY($1) AND archived_at IS NULL
-			 ) w
-			 WHERE rn > $2 AND rn <= $3
-			 ORDER BY type_definition_id, rn`,
-			attrColumns,
-		)
+		query := bind(`SELECT * FROM (
+		   SELECT ` + attrColumns + `,
+		          count(*)     OVER (PARTITION BY type_definition_id) AS total_count,
+		          row_number() OVER (PARTITION BY type_definition_id ORDER BY id) AS rn
+		   FROM flexitype_attribute_definition
+		   WHERE type_definition_id = ANY(?) AND archived_at IS NULL
+		 ) w
+		 WHERE rn > ? AND rn <= ?
+		 ORDER BY type_definition_id, rn`)
 
 		var rows []struct {
 			attrRow
@@ -186,7 +217,7 @@ func (r *attributeDefinitionRepository) batchByTypePage(ctx context.Context, key
 			return nil, fmt.Errorf("batch attributes by type definition: %w", err)
 		}
 
-		results := make(map[string]dataloader.PagedResult[domainattribute.Snapshot], len(parents))
+		results := make(map[string]pagedResult[domainattribute.Snapshot], len(parents))
 		for _, row := range rows {
 			snap, err := row.snapshot()
 			if err != nil {
@@ -199,79 +230,54 @@ func (r *attributeDefinitionRepository) batchByTypePage(ctx context.Context, key
 			results[parent] = pr
 		}
 		for _, parent := range parents {
-			out[dataloader.PageKey[string]{Parent: parent, Limit: limit, Offset: offset}] = results[parent]
+			out[pageKey{Parent: parent, Limit: limit, Offset: offset}] = results[parent]
 		}
 	}
 	return out, nil
 }
 
-func (r *attributeDefinitionRepository) batchList(ctx context.Context, keys []attrListKey) (map[attrListKey]dataloader.PagedResult[domainattribute.Snapshot], error) {
-	out := make(map[attrListKey]dataloader.PagedResult[domainattribute.Snapshot], len(keys))
+// batchList runs every unique filter key as one UNION ALL statement.
+func (r *attributeDefinitionRepository) batchList(ctx context.Context, keys []string) (map[string]pagedResult[domainattribute.Snapshot], error) {
+	arms := make([]string, 0, len(keys))
+	var args []any
 	for _, key := range keys {
-		items, total, err := r.queryList(ctx, key)
-		if err != nil {
-			return nil, err
+		var f attrListFilter
+		if err := json.Unmarshal([]byte(key), &f); err != nil {
+			return nil, fmt.Errorf("decode list key: %w", err)
 		}
-		out[key] = dataloader.PagedResult[domainattribute.Snapshot]{Items: items, Total: total}
+		arm, armArgs := f.arm(key)
+		arms = append(arms, arm)
+		args = append(args, armArgs...)
 	}
-	return out, nil
-}
-
-func (r *attributeDefinitionRepository) queryList(ctx context.Context, key attrListKey) ([]domainattribute.Snapshot, int, error) {
-	where := []string{"tenant_id = $1"}
-	args := []any{key.Tenant}
-	if !key.IncludeArchived {
-		where = append(where, "archived_at IS NULL")
-	}
-	if key.TypeDefinitionID != "" {
-		args = append(args, key.TypeDefinitionID)
-		where = append(where, fmt.Sprintf("type_definition_id = $%d", len(args)))
-	}
-	if key.InternalNames != "" {
-		args = append(args, pq.Array(strings.Split(key.InternalNames, "\x00")))
-		where = append(where, fmt.Sprintf("internal_name = ANY($%d)", len(args)))
-	}
-	if key.DataTypes != "" {
-		args = append(args, pq.Array(strings.Split(key.DataTypes, "\x00")))
-		where = append(where, fmt.Sprintf("data_type = ANY($%d)", len(args)))
-	}
-	args = append(args, key.Limit, key.Offset)
-
-	query := fmt.Sprintf(
-		`SELECT %s, count(*) OVER () AS total_count
-		 FROM flexitype_attribute_definition
-		 WHERE %s
-		 ORDER BY id
-		 LIMIT $%d OFFSET $%d`,
-		attrColumns, strings.Join(where, " AND "), len(args)-1, len(args),
-	)
 
 	var rows []struct {
+		LoaderKey string `db:"loader_key"`
 		attrRow
 		TotalCount int `db:"total_count"`
 	}
-	if err := r.q.SelectContext(ctx, &rows, query, args...); err != nil {
-		return nil, 0, fmt.Errorf("list attribute definitions: %w", err)
+	if err := r.q.SelectContext(ctx, &rows, bind(strings.Join(arms, "\nUNION ALL\n")), args...); err != nil {
+		return nil, fmt.Errorf("batch list attribute definitions: %w", err)
 	}
 
-	items := make([]domainattribute.Snapshot, 0, len(rows))
-	total := 0
+	out := make(map[string]pagedResult[domainattribute.Snapshot], len(keys))
 	for _, row := range rows {
 		snap, err := row.snapshot()
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
-		items = append(items, snap)
-		total = row.TotalCount
+		pr := out[row.LoaderKey]
+		pr.Items = append(pr.Items, snap)
+		pr.Total = row.TotalCount
+		out[row.LoaderKey] = pr
 	}
-	return items, total, nil
+	return out, nil
 }
 
 func (r *attributeDefinitionRepository) Get(ctx context.Context, id valueobjects.AttributeDefinitionID) (*domainattribute.Definition, error) {
 	if r.inTx {
 		return r.getDirect(ctx, id, false)
 	}
-	snap, err := r.byID.Load(ctx, id.String())
+	snap, err := load(ctx, r.byID, id.String())
 	if err != nil {
 		return nil, err
 	}
@@ -286,30 +292,30 @@ func (r *attributeDefinitionRepository) GetMany(ctx context.Context, ids []value
 	for _, id := range ids {
 		keys = append(keys, id.String())
 	}
+
+	var snaps map[string]domainattribute.Snapshot
+	var err error
 	if r.inTx {
-		fetched, err := r.batchByID(ctx, keys)
+		snaps, err = r.batchByID(ctx, keys)
 		if err != nil {
 			return nil, err
 		}
-		out := make([]*domainattribute.Definition, 0, len(keys))
+	} else {
+		snaps = make(map[string]domainattribute.Snapshot, len(keys))
 		for _, k := range keys {
-			snap, ok := fetched[k]
-			if !ok {
-				return nil, domainerrors.NewNotFound(domainattribute.AggregateType, k)
+			snap, lerr := load(ctx, r.byID, k)
+			if lerr != nil {
+				return nil, lerr
 			}
-			out = append(out, domainattribute.Rehydrate(snap))
+			snaps[k] = snap
 		}
-		return out, nil
 	}
 
-	snaps, err := r.byID.LoadMany(ctx, keys)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*domainattribute.Definition, 0, len(snaps))
-	for i, snap := range snaps {
+	out := make([]*domainattribute.Definition, 0, len(keys))
+	for _, k := range keys {
+		snap := snaps[k]
 		if snap.ID.IsZero() {
-			return nil, domainerrors.NewNotFound(domainattribute.AggregateType, keys[i])
+			return nil, domainerrors.NewNotFound(domainattribute.AggregateType, k)
 		}
 		out = append(out, domainattribute.Rehydrate(snap))
 	}
@@ -324,12 +330,12 @@ func (r *attributeDefinitionRepository) GetForUpdate(ctx context.Context, id val
 }
 
 func (r *attributeDefinitionRepository) getDirect(ctx context.Context, id valueobjects.AttributeDefinitionID, forUpdate bool) (*domainattribute.Definition, error) {
-	query := fmt.Sprintf(`SELECT %s FROM flexitype_attribute_definition WHERE id = $1`, attrColumns)
+	query := `SELECT ` + attrColumns + ` FROM flexitype_attribute_definition WHERE id = ?`
 	if forUpdate {
 		query += " FOR UPDATE"
 	}
 	var row attrRow
-	if err := r.q.GetContext(ctx, &row, query, id.String()); err != nil {
+	if err := r.q.GetContext(ctx, &row, bind(query), id.String()); err != nil {
 		if isNoRows(err) {
 			return nil, domainerrors.NewNotFound(domainattribute.AggregateType, id.String())
 		}
@@ -344,11 +350,8 @@ func (r *attributeDefinitionRepository) getDirect(ctx context.Context, id valueo
 
 func (r *attributeDefinitionRepository) GetByInternalName(ctx context.Context, typeDefID valueobjects.TypeDefinitionID, internalName string) (*domainattribute.Definition, error) {
 	if r.inTx {
-		query := fmt.Sprintf(
-			`SELECT %s FROM flexitype_attribute_definition
-			 WHERE type_definition_id = $1 AND internal_name = $2 AND archived_at IS NULL`,
-			attrColumns,
-		)
+		query := bind(`SELECT ` + attrColumns + ` FROM flexitype_attribute_definition
+		 WHERE type_definition_id = ? AND internal_name = ? AND archived_at IS NULL`)
 		var row attrRow
 		if err := r.q.GetContext(ctx, &row, query, typeDefID.String(), internalName); err != nil {
 			if isNoRows(err) {
@@ -363,7 +366,7 @@ func (r *attributeDefinitionRepository) GetByInternalName(ctx context.Context, t
 		return domainattribute.Rehydrate(snap), nil
 	}
 
-	snap, err := r.byName.Load(ctx, nameKey{Tenant: typeDefID.String(), Name: internalName})
+	snap, err := load(ctx, r.byName, nameKey{Scope: typeDefID.String(), Name: internalName})
 	if err != nil {
 		return nil, err
 	}
@@ -374,18 +377,18 @@ func (r *attributeDefinitionRepository) GetByInternalName(ctx context.Context, t
 }
 
 func (r *attributeDefinitionRepository) ListByTypeDefinition(ctx context.Context, typeDefID valueobjects.TypeDefinitionID, page db.Page) ([]*domainattribute.Definition, int, error) {
-	key := dataloader.PageKey[string]{Parent: typeDefID.String(), Limit: page.Limit, Offset: page.Offset}
+	key := pageKey{Parent: typeDefID.String(), Limit: page.Limit, Offset: page.Offset}
 
-	var result dataloader.PagedResult[domainattribute.Snapshot]
-	var err error
+	var result pagedResult[domainattribute.Snapshot]
 	if r.inTx {
-		fetched, ferr := r.batchByTypePage(ctx, []dataloader.PageKey[string]{key})
-		if ferr != nil {
-			return nil, 0, ferr
+		fetched, err := r.batchByTypePage(ctx, []pageKey{key})
+		if err != nil {
+			return nil, 0, err
 		}
 		result = fetched[key]
 	} else {
-		result, err = r.byTypePage.Load(ctx, key)
+		var err error
+		result, err = load(ctx, r.byTypePage, key)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -403,30 +406,32 @@ func (r *attributeDefinitionRepository) List(ctx context.Context, filter domaina
 	for _, dt := range filter.DataTypes {
 		dataTypes = append(dataTypes, dt.String())
 	}
-	key := attrListKey{
+	f := attrListFilter{
 		Tenant:          filter.TenantID.String(),
-		InternalNames:   joinSorted(filter.InternalNames),
-		DataTypes:       joinSorted(dataTypes),
+		InternalNames:   filter.InternalNames,
+		DataTypes:       dataTypes,
 		IncludeArchived: filter.IncludeArchived,
 		Limit:           page.Limit,
 		Offset:          page.Offset,
 	}
 	if !filter.TypeDefinitionID.IsZero() {
-		key.TypeDefinitionID = filter.TypeDefinitionID.String()
+		f.TypeDefinitionID = filter.TypeDefinitionID.String()
 	}
+	key := f.key()
 
-	var result dataloader.PagedResult[domainattribute.Snapshot]
+	var result pagedResult[domainattribute.Snapshot]
 	var err error
 	if r.inTx {
-		var items []domainattribute.Snapshot
-		var total int
-		items, total, err = r.queryList(ctx, key)
-		result = dataloader.PagedResult[domainattribute.Snapshot]{Items: items, Total: total}
+		fetched, ferr := r.batchList(ctx, []string{key})
+		if ferr != nil {
+			return nil, 0, ferr
+		}
+		result = fetched[key]
 	} else {
-		result, err = r.byList.Load(ctx, key)
-	}
-	if err != nil {
-		return nil, 0, err
+		result, err = load(ctx, r.byList, key)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 
 	out := make([]*domainattribute.Definition, 0, len(result.Items))
@@ -450,12 +455,12 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 		}
 	}
 
-	_, err = r.q.ExecContext(ctx,
+	_, err = r.q.ExecContext(ctx, bind(
 		`INSERT INTO flexitype_attribute_definition
 		   (id, tenant_id, type_definition_id, internal_name, display_name, description,
 		    data_type, required, multi_valued, is_unique, constraints, default_value, version,
 		    created_at, updated_at, archived_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   display_name  = EXCLUDED.display_name,
 		   description   = EXCLUDED.description,
@@ -466,7 +471,7 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 		   default_value = EXCLUDED.default_value,
 		   version       = EXCLUDED.version,
 		   updated_at    = EXCLUDED.updated_at,
-		   archived_at   = EXCLUDED.archived_at`,
+		   archived_at   = EXCLUDED.archived_at`),
 		s.ID.String(), s.TenantID.String(), s.TypeDefinitionID.String(), s.InternalName,
 		s.DisplayName, s.Description, s.DataType.String(), s.Required, s.MultiValued,
 		s.Unique, jsonbParam(constraints), jsonbParam(defaultValue), s.Version, s.CreatedAt,

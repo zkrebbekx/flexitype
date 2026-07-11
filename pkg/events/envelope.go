@@ -17,7 +17,7 @@ const SchemaVersion = 1
 // the JSON encoding of the concrete domain event.
 type Envelope struct {
 	ID            string          `json:"id"`
-	Type          string          `json:"type"`
+	Type          Type            `json:"type"`
 	AggregateType string          `json:"aggregate_type"`
 	AggregateID   string          `json:"aggregate_id"`
 	TenantID      string          `json:"tenant_id,omitempty"`

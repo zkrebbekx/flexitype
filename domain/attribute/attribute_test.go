@@ -9,6 +9,7 @@ import (
 
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/events"
 )
 
 func newTestDefinition(dt valueobjects.DataType, cs Constraints, required bool) *Definition {
@@ -42,7 +43,7 @@ func TestAttributeDefinition(t *testing.T) {
 				So(err, ShouldBeNil)
 				So(def.Version(), ShouldEqual, 1)
 				So(evts, ShouldHaveLength, 1)
-				So(evts[0].EventType(), ShouldEqual, "flexitype.attribute_definition.created")
+				So(evts[0].EventType(), ShouldEqual, events.Type("flexitype.attribute_definition.created"))
 				So(evts[0].AggregateID(), ShouldEqual, def.ID().String())
 			})
 		})
@@ -76,7 +77,7 @@ func TestAttributeDefinition(t *testing.T) {
 				So(def.Version(), ShouldEqual, 2)
 				So(def.DisplayName(), ShouldEqual, "Mass (kg)")
 				So(evts, ShouldHaveLength, 1)
-				So(evts[0].EventType(), ShouldEqual, "flexitype.attribute_definition.updated")
+				So(evts[0].EventType(), ShouldEqual, events.Type("flexitype.attribute_definition.updated"))
 			})
 		})
 
@@ -86,7 +87,7 @@ func TestAttributeDefinition(t *testing.T) {
 
 			evts, err := def.Archive(now.Add(time.Hour))
 			So(err, ShouldBeNil)
-			So(evts[0].EventType(), ShouldEqual, "flexitype.attribute_definition.archived")
+			So(evts[0].EventType(), ShouldEqual, events.Type("flexitype.attribute_definition.archived"))
 
 			_, err = def.Update(UpdateInput{DisplayName: "X"}, now.Add(2*time.Hour))
 

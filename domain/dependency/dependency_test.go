@@ -10,6 +10,7 @@ import (
 	"github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/events"
 )
 
 func newAttr(typeDef valueobjects.TypeDefinitionID, name string, dt valueobjects.DataType, cs attribute.Constraints) *attribute.Definition {
@@ -127,7 +128,7 @@ func TestDependencyAggregate(t *testing.T) {
 			Convey("Then it emits a created event", func() {
 				So(err, ShouldBeNil)
 				So(evts, ShouldHaveLength, 1)
-				So(evts[0].EventType(), ShouldEqual, "flexitype.attribute_value_dependency.created")
+				So(evts[0].EventType(), ShouldEqual, events.Type("flexitype.attribute_value_dependency.created"))
 			})
 		})
 

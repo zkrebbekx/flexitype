@@ -32,6 +32,15 @@ Runs two ways from one codebase:
 - **Dataloaders throughout the repositories**: point lookups batch into
   `ANY()` queries, identical filter+page queries deduplicate, per-parent
   pagination collapses into one windowed query
+- **Relationships between types**: user-defined relationship types with a
+  parent side and a child side, their own attributes and constraints (the
+  full attribute machinery applies to links), definition inheritance, and
+  per-link version binding — track the latest parent/child type version or
+  pin a specific one
+- **Admin console**: a built-in Vue 3 UI at `/` for modelling types,
+  attributes, dependencies and relationships, browsing entities with
+  dependency-aware value editing, and auditing every change with
+  before/after diffs
 - **Multi-tenant** from day one; **definition versioning** with values pinned
   to the version they were validated against
 
@@ -85,7 +94,7 @@ svc := flexitype.New(pool,
     flexitype.WithHandlerFunc("cache-invalidator", func(ctx context.Context, env events.Envelope) error {
         cache.Invalidate(env.AggregateID)
         return nil
-    }, events.WithEventTypes("flexitype.attribute_value.updated")),
+    }, events.WithEventTypes(value.EventUpdated)),
 )
 
 _ = svc.Migrate(ctx) // embedded migrations, advisory-locked, idempotent
@@ -164,6 +173,11 @@ GET|POST   /api/v1/values                      GET|DELETE /api/v1/values/{id}
 GET        /api/v1/entities/{typeDef}/{entity}/values
 GET        /api/v1/entities/{typeDef}/{entity}/attributes/{attr}/effective-schema
 GET|POST   /api/v1/dependencies                PATCH|DELETE /api/v1/dependencies/{id}
+GET|POST   /api/v1/relationship-definitions    PATCH /api/v1/relationship-definitions/{id}
+POST       /api/v1/relationship-definitions/{id}/archive|restore
+GET        /api/v1/relationship-definitions/{id}/attribute-sets
+GET|POST   /api/v1/relationships               GET|DELETE /api/v1/relationships/{id}
+GET        /api/v1/entities/{typeDef}/{entity}/relationships
 GET        /api/v1/activity
 ```
 
@@ -190,12 +204,26 @@ curl :8080/api/v1/entities/$TYPE/product-9/attributes/$SUBCATEGORY/effective-sch
 # → {"required":false,"restricted":true,"allowed_values":["mountain","road"], ...}
 ```
 
+## Admin console
+
+The standalone service ships a built-in admin console at `/` (the API stays
+under `/api/v1`). Develop it with the Go service running:
+
+```bash
+cd web && npm ci && npm run dev   # http://localhost:5173, proxies /api
+```
+
+Production builds embed the console into the binary: `npm run build` in
+`web/`, then `go build ./cmd/flexitype`. A committed stub keeps `go build`
+working without Node.
+
 ## Development
 
 ```bash
 go build ./...   # everything compiles without a database
 go test ./...    # goconvey Given/When/Then suites
 go vet ./...
+cd web && npm test && npm run build   # console tests + typecheck + bundle
 ```
 
 Storage is a single polymorphic value table with one typed, indexed column

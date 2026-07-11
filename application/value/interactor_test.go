@@ -183,6 +183,10 @@ func (r *fakeValueRepo) List(context.Context, domainvalue.Filter, db.Page) ([]*d
 	return nil, 0, nil
 }
 
+func (r *fakeValueRepo) ListEntities(context.Context, valueobjects.TenantID, valueobjects.TypeDefinitionID, db.Page) ([]domainvalue.EntitySummary, int, error) {
+	return nil, 0, nil
+}
+
 func (r *fakeValueRepo) Save(_ context.Context, av *domainvalue.AttributeValue) error {
 	r.values[av.ID().String()] = av.Snapshot()
 	return nil
@@ -306,7 +310,7 @@ func TestSetValueUsecase(t *testing.T) {
 				So(values.values, ShouldHaveLength, 1)
 				So(log.entries, ShouldHaveLength, 1)
 				So(dispatched, ShouldHaveLength, 1)
-				So(dispatched[0].Type, ShouldEqual, "flexitype.attribute_value.set")
+				So(dispatched[0].Type, ShouldEqual, domainvalue.EventSet)
 			})
 		})
 

@@ -33,21 +33,17 @@ func (l *activityLog) Write(ctx context.Context, tx db.QueryExecer, entries []ac
 	const cols = 9
 	args := make([]any, 0, len(entries)*cols)
 	rows := make([]string, 0, len(entries))
-	for i, e := range entries {
-		rows = append(rows, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-			i*cols+1, i*cols+2, i*cols+3, i*cols+4, i*cols+5, i*cols+6, i*cols+7, i*cols+8, i*cols+9))
+	for _, e := range entries {
+		rows = append(rows, "(?, ?, ?, ?, ?, ?, ?, ?, ?)")
 		args = append(args,
 			e.ID.String(), e.TenantID.String(), e.Actor, e.Entity, e.EntityID,
 			string(e.Action), jsonbParam(e.Before), jsonbParam(e.After), e.OccurredAt,
 		)
 	}
 
-	query := fmt.Sprintf(
-		`INSERT INTO flexitype_activity_log
-		   (id, tenant_id, actor, entity, entity_id, action, before_state, after_state, occurred_at)
-		 VALUES %s`,
-		strings.Join(rows, ", "),
-	)
+	query := bind(`INSERT INTO flexitype_activity_log
+	   (id, tenant_id, actor, entity, entity_id, action, before_state, after_state, occurred_at)
+	 VALUES ` + strings.Join(rows, ", "))
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("write activity log: %w", err)
 	}
@@ -55,35 +51,32 @@ func (l *activityLog) Write(ctx context.Context, tx db.QueryExecer, entries []ac
 }
 
 func (l *activityLog) List(ctx context.Context, filter activity.Filter, page db.Page) ([]activity.Entry, int, error) {
-	where := []string{"tenant_id = $1"}
+	where := []string{"tenant_id = ?"}
 	args := []any{filter.TenantID.String()}
 	if filter.Entity != "" {
+		where = append(where, "entity = ?")
 		args = append(args, filter.Entity)
-		where = append(where, fmt.Sprintf("entity = $%d", len(args)))
 	}
 	if filter.EntityID != "" {
+		where = append(where, "entity_id = ?")
 		args = append(args, filter.EntityID)
-		where = append(where, fmt.Sprintf("entity_id = $%d", len(args)))
 	}
 	if filter.Actor != "" {
+		where = append(where, "actor = ?")
 		args = append(args, filter.Actor)
-		where = append(where, fmt.Sprintf("actor = $%d", len(args)))
 	}
 	args = append(args, page.Limit, page.Offset)
 
 	// NULL jsonb cannot scan into json.RawMessage; coalesce to empty text.
-	query := fmt.Sprintf(
-		`SELECT id, tenant_id, actor, entity, entity_id, action,
-		        COALESCE(before_state::text, '') AS before_state,
-		        COALESCE(after_state::text, '')  AS after_state,
-		        occurred_at,
-		        count(*) OVER () AS total_count
-		 FROM flexitype_activity_log
-		 WHERE %s
-		 ORDER BY occurred_at DESC, id DESC
-		 LIMIT $%d OFFSET $%d`,
-		strings.Join(where, " AND "), len(args)-1, len(args),
-	)
+	query := bind(`SELECT id, tenant_id, actor, entity, entity_id, action,
+	        COALESCE(before_state::text, '') AS before_state,
+	        COALESCE(after_state::text, '')  AS after_state,
+	        occurred_at,
+	        count(*) OVER () AS total_count
+	 FROM flexitype_activity_log
+	 WHERE ` + strings.Join(where, " AND ") + `
+	 ORDER BY occurred_at DESC, id DESC
+	 LIMIT ? OFFSET ?`)
 
 	var rows []activityRow
 	if err := l.pool.SelectContext(ctx, &rows, query, args...); err != nil {

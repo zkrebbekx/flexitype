@@ -5,10 +5,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 )
+
+// withInteractors builds one interactor set per request — one dataloader
+// generation shared by everything the request touches — and stows it on the
+// context for handlers to pull via application.FromContext.
+func withInteractors(factory application.Factory) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := application.WithInteractors(r.Context(), factory.New(r.Context()))
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
 
 // authenticate resolves the bearer token to a service account, stamping
 // actor and tenant onto the request context. A nil store disables

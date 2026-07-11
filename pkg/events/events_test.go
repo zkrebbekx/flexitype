@@ -19,7 +19,7 @@ type testEvent struct {
 	At   time.Time `json:"at"`
 }
 
-func (e testEvent) EventType() string       { return "flexitype.test.happened" }
+func (e testEvent) EventType() Type         { return "flexitype.test.happened" }
 func (e testEvent) AggregateType() string   { return "test" }
 func (e testEvent) AggregateID() string     { return e.ID }
 func (e testEvent) OccurredWhen() time.Time { return e.At }
@@ -44,7 +44,7 @@ func TestDispatcher(t *testing.T) {
 				So(err, ShouldBeNil)
 				So(received, ShouldHaveLength, 1)
 				env := received[0]
-				So(env.Type, ShouldEqual, "flexitype.test.happened")
+				So(env.Type, ShouldEqual, Type("flexitype.test.happened"))
 				So(env.AggregateType, ShouldEqual, "test")
 				So(env.AggregateID, ShouldEqual, "agg-1")
 				So(env.TenantID, ShouldEqual, "acme")

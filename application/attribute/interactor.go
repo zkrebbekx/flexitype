@@ -242,6 +242,25 @@ func (i *Interactor) transition(ctx context.Context, rawID string, action activi
 	return &snap, nil
 }
 
+// ValidateValue dry-runs a raw JSON value against a saved attribute
+// definition: parse + type check + constraints, nothing persisted. Powers
+// the console's "try a value" tester.
+func (i *Interactor) ValidateValue(ctx context.Context, rawID string, rawValue json.RawMessage) error {
+	id, err := valueobjects.ParseAttributeDefinitionID(rawID)
+	if err != nil {
+		return domainerrors.NewValidation(err.Error())
+	}
+	def, err := i.attrs.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	v, err := valueobjects.ParseValue(def.DataType(), rawValue)
+	if err != nil {
+		return domainerrors.NewValidation(err.Error())
+	}
+	return def.ValidateValue(v)
+}
+
 // Get loads one attribute definition by ID.
 func (i *Interactor) Get(ctx context.Context, rawID string) (*domainattribute.Snapshot, error) {
 	id, err := valueobjects.ParseAttributeDefinitionID(rawID)

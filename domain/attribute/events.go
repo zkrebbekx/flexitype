@@ -4,10 +4,24 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/events"
 )
 
 // AggregateType is the event aggregate identifier for attribute definitions.
 const AggregateType = "attribute_definition"
+
+// The event types this package emits, for use with
+// events.WithEventTypes and subscriber routing.
+const (
+	// EventCreated identifies attribute created events.
+	EventCreated events.Type = "flexitype.attribute_definition.created"
+	// EventUpdated identifies attribute updated events.
+	EventUpdated events.Type = "flexitype.attribute_definition.updated"
+	// EventArchived identifies attribute archived events.
+	EventArchived events.Type = "flexitype.attribute_definition.archived"
+	// EventRestored identifies attribute restored events.
+	EventRestored events.Type = "flexitype.attribute_definition.restored"
+)
 
 // Created is emitted when an attribute definition is created.
 type Created struct {
@@ -22,7 +36,7 @@ type Created struct {
 }
 
 // EventType identifies the event on the wire.
-func (e Created) EventType() string { return "flexitype.attribute_definition.created" }
+func (e Created) EventType() events.Type { return EventCreated }
 
 // AggregateType names the emitting aggregate.
 func (e Created) AggregateType() string { return AggregateType }
@@ -46,7 +60,7 @@ type Updated struct {
 }
 
 // EventType identifies the event on the wire.
-func (e Updated) EventType() string { return "flexitype.attribute_definition.updated" }
+func (e Updated) EventType() events.Type { return EventUpdated }
 
 // AggregateType names the emitting aggregate.
 func (e Updated) AggregateType() string { return AggregateType }
@@ -66,7 +80,7 @@ type Archived struct {
 }
 
 // EventType identifies the event on the wire.
-func (e Archived) EventType() string { return "flexitype.attribute_definition.archived" }
+func (e Archived) EventType() events.Type { return EventArchived }
 
 // AggregateType names the emitting aggregate.
 func (e Archived) AggregateType() string { return AggregateType }
@@ -86,7 +100,7 @@ type Restored struct {
 }
 
 // EventType identifies the event on the wire.
-func (e Restored) EventType() string { return "flexitype.attribute_definition.restored" }
+func (e Restored) EventType() events.Type { return EventRestored }
 
 // AggregateType names the emitting aggregate.
 func (e Restored) AggregateType() string { return AggregateType }

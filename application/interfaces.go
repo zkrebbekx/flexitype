@@ -10,11 +10,13 @@ import (
 	"github.com/zkrebbekx/flexitype/application/activity"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
+	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
+	domainrelationship "github.com/zkrebbekx/flexitype/domain/relationship"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -24,19 +26,23 @@ import (
 // set means fresh dataloader caches, so nothing leaks across requests or
 // tenants.
 type Repositories struct {
-	TypeDefinitions typedefRepository
-	Attributes      attributeRepository
-	Values          valueRepository
-	Dependencies    dependencyRepository
+	TypeDefinitions         typedefRepository
+	Attributes              attributeRepository
+	Values                  valueRepository
+	Dependencies            dependencyRepository
+	RelationshipDefinitions relationshipDefinitionRepository
+	Relationships           relationshipRepository
 }
 
 // Narrow aliases keep the struct readable without re-importing domain
 // packages at every call site.
 type (
-	typedefRepository    = domaintypedef.Repository
-	attributeRepository  = domainattribute.Repository
-	valueRepository      = domainvalue.Repository
-	dependencyRepository = domaindependency.Repository
+	typedefRepository                = domaintypedef.Repository
+	attributeRepository              = domainattribute.Repository
+	valueRepository                  = domainvalue.Repository
+	dependencyRepository             = domaindependency.Repository
+	relationshipDefinitionRepository = domainrelationship.DefinitionRepository
+	relationshipRepository           = domainrelationship.Repository
 )
 
 // Factory creates request-scoped interactor sets.
@@ -44,13 +50,33 @@ type Factory interface {
 	New(ctx context.Context) *Interactors
 }
 
+type interactorsKey struct{}
+
+// WithInteractors stows a request-scoped interactor set on the context.
+// The service's HTTP middleware calls this once per request so every
+// handler shares one dataloader generation.
+func WithInteractors(ctx context.Context, i *Interactors) context.Context {
+	return context.WithValue(ctx, interactorsKey{}, i)
+}
+
+// FromContext returns the request's interactor set. It panics when the
+// middleware did not run — a wiring error, not a runtime condition.
+func FromContext(ctx context.Context) *Interactors {
+	i, ok := ctx.Value(interactorsKey{}).(*Interactors)
+	if !ok {
+		panic("application: no interactors on context; is the middleware installed?")
+	}
+	return i
+}
+
 // Interactors groups every usecase for one request.
 type Interactors struct {
-	typeDefs *apptypedef.Interactor
-	attrs    *appattribute.Interactor
-	values   *appvalue.Interactor
-	deps     *appdependency.Interactor
-	activity *ActivityInteractor
+	typeDefs      *apptypedef.Interactor
+	attrs         *appattribute.Interactor
+	values        *appvalue.Interactor
+	deps          *appdependency.Interactor
+	relationships *apprelationship.Interactor
+	activity      *ActivityInteractor
 }
 
 // TypeDefinitions returns the type-definition usecases.
@@ -64,6 +90,9 @@ func (i *Interactors) Values() *appvalue.Interactor { return i.values }
 
 // Dependencies returns the dependency usecases.
 func (i *Interactors) Dependencies() *appdependency.Interactor { return i.deps }
+
+// Relationships returns the relationship usecases.
+func (i *Interactors) Relationships() *apprelationship.Interactor { return i.relationships }
 
 // Activity returns the audit-log read usecases.
 func (i *Interactors) Activity() *ActivityInteractor { return i.activity }

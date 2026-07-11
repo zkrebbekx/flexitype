@@ -9,6 +9,7 @@ import (
 	"github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/events"
 )
 
 func newDef(t *testing.T) *attribute.Definition {
@@ -39,7 +40,7 @@ func TestAttributeValue(t *testing.T) {
 				So(err, ShouldBeNil)
 				So(av.DefinitionVersion(), ShouldEqual, def.Version())
 				So(evts, ShouldHaveLength, 1)
-				So(evts[0].EventType(), ShouldEqual, "flexitype.attribute_value.set")
+				So(evts[0].EventType(), ShouldEqual, events.Type("flexitype.attribute_value.set"))
 			})
 		})
 
@@ -103,7 +104,7 @@ func TestAttributeValue(t *testing.T) {
 			Convey("Then it archives and emits a removed event; a second removal fails", func() {
 				So(err, ShouldBeNil)
 				So(av.IsArchived(), ShouldBeTrue)
-				So(evts[0].EventType(), ShouldEqual, "flexitype.attribute_value.removed")
+				So(evts[0].EventType(), ShouldEqual, events.Type("flexitype.attribute_value.removed"))
 
 				_, err := av.Remove(now.Add(2 * time.Hour))
 				So(domainerrors.IsArchived(err), ShouldBeTrue)

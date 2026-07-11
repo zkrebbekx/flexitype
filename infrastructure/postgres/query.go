@@ -43,6 +43,7 @@ type entityRef struct {
 type compiler struct {
 	args    []any
 	aliasNo int
+	scope   valueobjects.Scope
 }
 
 func (c *compiler) alias(prefix string) string {
@@ -55,8 +56,8 @@ func (c *compiler) arg(v any) string {
 	return "?"
 }
 
-func (r *queryRepository) Search(ctx context.Context, tenant valueobjects.TenantID, rootTypeIDs []valueobjects.TypeDefinitionID, node query.BoundNode, page db.Page) ([]domainvalue.EntitySummary, int, error) {
-	c := &compiler{}
+func (r *queryRepository) Search(ctx context.Context, tenant valueobjects.TenantID, rootTypeIDs []valueobjects.TypeDefinitionID, node query.BoundNode, scope valueobjects.Scope, page db.Page) ([]domainvalue.EntitySummary, int, error) {
+	c := &compiler{scope: scope}
 
 	rootIDs := make([]string, 0, len(rootTypeIDs))
 	for _, id := range rootTypeIDs {
@@ -156,23 +157,23 @@ func (r *queryRepository) compile(c *compiler, node query.BoundNode, e entityRef
 		for _, val := range n.Values {
 			args = append(args, valueArg(val))
 		}
-		scope := r.valueScope(c, v, n.Attr.ID.String(), n.Link, e)
+		scope := r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e)
 		return fmt.Sprintf("EXISTS (%s AND %s = %s)",
 			scope, columnExpr(v, n.Attr.DataType), arrayExpr(c.arg(pq.Array(args)), n.Attr.DataType)), nil
 
 	case *query.BoundRange:
 		v := c.alias("v")
-		scope := r.valueScope(c, v, n.Attr.ID.String(), n.Link, e)
+		scope := r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e)
 		return fmt.Sprintf("EXISTS (%s AND %s BETWEEN %s AND %s)",
 			scope, columnExpr(v, n.Attr.DataType), c.arg(valueArg(n.Lo)), c.arg(valueArg(n.Hi))), nil
 
 	case *query.BoundHas:
 		v := c.alias("v")
-		return fmt.Sprintf("EXISTS (%s)", r.valueScope(c, v, n.Attr.ID.String(), n.Link, e)), nil
+		return fmt.Sprintf("EXISTS (%s)", r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e)), nil
 
 	case *query.BoundStringMatch:
 		v := c.alias("v")
-		scope := r.valueScope(c, v, n.Attr.ID.String(), n.Link, e)
+		scope := r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e)
 		var pred string
 		switch n.Kind {
 		case fql.MatchContains:
@@ -204,15 +205,23 @@ func (r *queryRepository) compile(c *compiler, node query.BoundNode, e entityRef
 // valueScope renders the correlated FROM/WHERE prefix selecting the
 // current entity's live values of one attribute. Link-scoped attributes
 // anchor on the enclosing relationship's id instead of the entity.
-func (r *queryRepository) valueScope(c *compiler, alias, attrDefID string, link bool, e entityRef) string {
+func (r *queryRepository) valueScope(c *compiler, alias, attrDefID string, link, scoped bool, e entityRef) string {
 	entity := e.entity
 	if link {
 		entity = e.link
 	}
-	return fmt.Sprintf(`SELECT 1 FROM flexitype_attribute_value %s
+	base := fmt.Sprintf(`SELECT 1 FROM flexitype_attribute_value %s
 	 WHERE %s.tenant_id = %s AND %s.entity_id = %s
 	   AND %s.attribute_definition_id = %s AND %s.archived_at IS NULL`,
 		alias, alias, e.tenant, alias, entity, alias, c.arg(attrDefID), alias)
+	// Scoped attributes match only within the query's locale/channel; base
+	// (zero) scope selects the unscoped value. Non-scoped attributes ignore
+	// scope entirely.
+	if scoped {
+		base += fmt.Sprintf(" AND %s.locale = %s AND %s.channel = %s",
+			alias, c.arg(c.scope.Locale), alias, c.arg(c.scope.Channel))
+	}
+	return base
 }
 
 // columnExpr renders the typed column for comparisons. Decimals persist in
@@ -256,23 +265,23 @@ func (r *queryRepository) compileCompare(c *compiler, n *query.BoundCompare, e e
 		// NULL (no values) never satisfies the comparison — absent
 		// attributes don't match, mirroring the EXISTS semantics.
 		return fmt.Sprintf("(%s) %s %s",
-			strings.Replace(r.valueScope(c, v, n.Attr.ID.String(), n.Link, e),
+			strings.Replace(r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e),
 				"SELECT 1", fmt.Sprintf("SELECT %s(%s)", n.Func, col), 1),
 			op, c.arg(valueArg(n.Value))), nil
 
 	case fql.FuncCount:
 		return fmt.Sprintf("(%s) %s %s",
-			strings.Replace(r.valueScope(c, v, n.Attr.ID.String(), n.Link, e),
+			strings.Replace(r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e),
 				"SELECT 1", "SELECT count(*)", 1),
 			op, c.arg(n.Value.Int())), nil
 
 	case fql.FuncLength:
 		return fmt.Sprintf("EXISTS (%s AND char_length(%s.value_text) %s %s)",
-			r.valueScope(c, v, n.Attr.ID.String(), n.Link, e), v, op, c.arg(n.Value.Int())), nil
+			r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e), v, op, c.arg(n.Value.Int())), nil
 
 	default:
 		return fmt.Sprintf("EXISTS (%s AND %s %s %s)",
-			r.valueScope(c, v, n.Attr.ID.String(), n.Link, e), col, op, c.arg(valueArg(n.Value))), nil
+			r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e), col, op, c.arg(valueArg(n.Value))), nil
 	}
 }
 

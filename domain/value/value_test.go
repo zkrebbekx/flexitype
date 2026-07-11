@@ -34,7 +34,7 @@ func TestAttributeValue(t *testing.T) {
 		entity := valueobjects.EntityID("order-123")
 
 		Convey("When a valid value is created", func() {
-			av, evts, err := New(def, def.TypeDefinitionID(), entity, valueobjects.NewStringValue("SN-001"), now)
+			av, evts, err := New(def, def.TypeDefinitionID(), entity, valueobjects.Scope{}, valueobjects.NewStringValue("SN-001"), now)
 
 			Convey("Then it pins the definition version and emits a set event", func() {
 				So(err, ShouldBeNil)
@@ -45,7 +45,7 @@ func TestAttributeValue(t *testing.T) {
 		})
 
 		Convey("When a constraint-violating value is created", func() {
-			_, _, err := New(def, def.TypeDefinitionID(), entity, valueobjects.NewStringValue("way-too-long-serial"), now)
+			_, _, err := New(def, def.TypeDefinitionID(), entity, valueobjects.Scope{}, valueobjects.NewStringValue("way-too-long-serial"), now)
 
 			Convey("Then creation fails validation", func() {
 				So(domainerrors.IsValidation(err), ShouldBeTrue)
@@ -53,7 +53,7 @@ func TestAttributeValue(t *testing.T) {
 		})
 
 		Convey("When a value of the wrong type is created", func() {
-			_, _, err := New(def, def.TypeDefinitionID(), entity, valueobjects.NewIntegerValue(5), now)
+			_, _, err := New(def, def.TypeDefinitionID(), entity, valueobjects.Scope{}, valueobjects.NewIntegerValue(5), now)
 
 			Convey("Then creation fails validation", func() {
 				So(domainerrors.IsValidation(err), ShouldBeTrue)
@@ -61,7 +61,7 @@ func TestAttributeValue(t *testing.T) {
 		})
 
 		Convey("When an existing value is updated after the definition evolved", func() {
-			av, _, err := New(def, def.TypeDefinitionID(), entity, valueobjects.NewStringValue("SN-001"), now)
+			av, _, err := New(def, def.TypeDefinitionID(), entity, valueobjects.Scope{}, valueobjects.NewStringValue("SN-001"), now)
 			So(err, ShouldBeNil)
 
 			_, err = def.Update(attribute.UpdateInput{
@@ -84,7 +84,7 @@ func TestAttributeValue(t *testing.T) {
 		})
 
 		Convey("When updating with an identical value on the same definition version", func() {
-			av, _, err := New(def, def.TypeDefinitionID(), entity, valueobjects.NewStringValue("SN-001"), now)
+			av, _, err := New(def, def.TypeDefinitionID(), entity, valueobjects.Scope{}, valueobjects.NewStringValue("SN-001"), now)
 			So(err, ShouldBeNil)
 
 			evts, err := av.UpdateValue(def, valueobjects.NewStringValue("SN-001"), now.Add(time.Hour))
@@ -96,7 +96,7 @@ func TestAttributeValue(t *testing.T) {
 		})
 
 		Convey("When a value is removed", func() {
-			av, _, err := New(def, def.TypeDefinitionID(), entity, valueobjects.NewStringValue("SN-001"), now)
+			av, _, err := New(def, def.TypeDefinitionID(), entity, valueobjects.Scope{}, valueobjects.NewStringValue("SN-001"), now)
 			So(err, ShouldBeNil)
 
 			evts, err := av.Remove(now.Add(time.Hour))

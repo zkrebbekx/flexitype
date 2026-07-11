@@ -113,6 +113,8 @@ export interface AttributeDefinition {
   required: boolean
   multi_valued: boolean
   unique: boolean
+  localizable?: boolean
+  scopable?: boolean
   constraints: Constraint[]
   default_value?: DefaultValue
   group?: string
@@ -130,6 +132,8 @@ export interface AttributeValue {
   type_definition_id: string
   attribute_definition_id: string
   entity_id: string
+  locale?: string
+  channel?: string
   value: unknown
   definition_version: number
   created_at: string
@@ -453,6 +457,8 @@ export const api = {
     required?: boolean
     multi_valued?: boolean
     unique?: boolean
+    localizable?: boolean
+    scopable?: boolean
     constraints?: Constraint[]
     default_value?: DefaultValue
     group?: string
@@ -467,6 +473,8 @@ export const api = {
       required?: boolean
       multi_valued?: boolean
       unique?: boolean
+      localizable?: boolean
+      scopable?: boolean
       constraints?: Constraint[]
       default_value?: DefaultValue
       group?: string
@@ -567,7 +575,7 @@ export const api = {
     if (opts.entity_ids?.length) p.entity_ids = opts.entity_ids.join(',')
     return `/api/v1/entities/${typeId}/export${qs(p)}`
   },
-  setValue: (input: { attribute_definition_id: string; entity_id: string; type_definition_id?: string; value: unknown }) =>
+  setValue: (input: { attribute_definition_id: string; entity_id: string; type_definition_id?: string; locale?: string; channel?: string; value: unknown }) =>
     request<AttributeValue>('POST', '/values', input),
   setValuesBatch: (
     items: { attribute_definition_id: string; entity_id: string; type_definition_id?: string; value: unknown }[],

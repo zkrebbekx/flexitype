@@ -43,6 +43,8 @@ type CreateInput struct {
 	Required         bool
 	MultiValued      bool
 	Unique           bool
+	Localizable      bool
+	Scopable         bool
 	Constraints      json.RawMessage
 	DefaultValue     json.RawMessage
 	Group            string
@@ -131,6 +133,8 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 			Required:         in.Required,
 			MultiValued:      in.MultiValued,
 			Unique:           in.Unique,
+			Localizable:      in.Localizable,
+			Scopable:         in.Scopable,
 			Constraints:      constraints,
 			DefaultValue:     defaultValue,
 			Group:            in.Group,
@@ -168,6 +172,8 @@ type UpdateInput struct {
 	Required     bool
 	MultiValued  bool
 	Unique       bool
+	Localizable  bool
+	Scopable     bool
 	Constraints  json.RawMessage
 	DefaultValue json.RawMessage
 	Group        string
@@ -205,6 +211,8 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			Required:     in.Required,
 			MultiValued:  in.MultiValued,
 			Unique:       in.Unique,
+			Localizable:  in.Localizable,
+			Scopable:     in.Scopable,
 			Constraints:  constraints,
 			DefaultValue: defaultValue,
 			Group:        in.Group,

@@ -113,11 +113,22 @@ const rows = computed<Row[]>(() => {
   const vals = values.data.value?.items ?? []
   return attrs
     .filter((e) => !e.attribute.archived_at)
-    .map((e) => ({
-      attribute: e.attribute,
-      declaredIn: e.declared_in,
-      values: vals.filter((v) => v.attribute_definition_id === e.attribute.id),
-    }))
+    .map((e) => {
+      // Scoped attributes show only the value for the active locale/channel,
+      // so the row (and its editor) targets one scope at a time.
+      const wantLocale = e.attribute.localizable ? scopeLocale.value : ''
+      const wantChannel = e.attribute.scopable ? scopeChannel.value : ''
+      return {
+        attribute: e.attribute,
+        declaredIn: e.declared_in,
+        values: vals.filter(
+          (v) =>
+            v.attribute_definition_id === e.attribute.id &&
+            (v.locale ?? '') === wantLocale &&
+            (v.channel ?? '') === wantChannel,
+        ),
+      }
+    })
 })
 
 // Attribute search + owned/inherited grouping keep large schemas legible.
@@ -185,6 +196,12 @@ const editorAllowed = computed<string[] | undefined>(() => {
 
 const blockedByDependency = computed(() => editor.schema?.restricted && editorAllowed.value?.length === 0)
 
+// Active scope for editing/viewing localizable/scopable values.
+const scopeLocale = ref('')
+const scopeChannel = ref('')
+const hasLocalizable = computed(() => (effective.data.value?.items ?? []).some((e) => e.attribute.localizable))
+const hasScopable = computed(() => (effective.data.value?.items ?? []).some((e) => e.attribute.scopable))
+
 const setValue = useMutation({
   mutationFn: () => {
     if (!editor.attribute) throw new Error('no attribute selected')
@@ -193,6 +210,8 @@ const setValue = useMutation({
       entity_id: entityId.value,
       // The entity's declared type: inherited attributes anchor here.
       type_definition_id: typeId.value,
+      locale: editor.attribute.localizable ? scopeLocale.value || undefined : undefined,
+      channel: editor.attribute.scopable ? scopeChannel.value || undefined : undefined,
       value: toApiValue(editor.attribute.data_type, editor.input),
     })
   },
@@ -399,6 +418,22 @@ const removeValue = useMutation({
   />
 
   <div v-else class="flex flex-col gap-2">
+    <div
+      v-if="hasLocalizable || hasScopable"
+      class="mb-1 flex flex-wrap items-center gap-3 rounded-lg border border-(--border) bg-(--surface) px-4 py-2.5"
+    >
+      <span class="text-[13px] font-medium text-(--text-secondary)">Scope</span>
+      <label v-if="hasLocalizable" class="flex items-center gap-1.5 text-[13px] text-(--text-muted)">
+        Locale
+        <input v-model="scopeLocale" placeholder="base" class="h-8 w-28 rounded-md border border-(--border-strong) bg-(--surface) px-2 text-sm" />
+      </label>
+      <label v-if="hasScopable" class="flex items-center gap-1.5 text-[13px] text-(--text-muted)">
+        Channel
+        <input v-model="scopeChannel" placeholder="base" class="h-8 w-28 rounded-md border border-(--border-strong) bg-(--surface) px-2 text-sm" />
+      </label>
+      <span class="text-[12px] text-(--text-muted)">Scoped attributes show/edit the value for this locale/channel; blank = base.</span>
+    </div>
+
     <div v-if="rows.length > 6" class="relative mb-1">
       <Search :size="15" class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-(--text-muted)" />
       <input

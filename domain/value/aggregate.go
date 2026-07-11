@@ -20,6 +20,7 @@ type AttributeValue struct {
 	typeDefinitionID  valueobjects.TypeDefinitionID
 	attributeDefID    valueobjects.AttributeDefinitionID
 	entityID          valueobjects.EntityID
+	scope             valueobjects.Scope
 	value             valueobjects.Value
 	definitionVersion int
 	createdAt         time.Time
@@ -32,7 +33,7 @@ type AttributeValue struct {
 // a descendant of the attribute's declaring type, and the value anchors to
 // it so per-entity hydration stays a single lookup (see
 // docs/design/type-inheritance.md). The caller proves the ancestry.
-func New(def *attribute.Definition, entityType valueobjects.TypeDefinitionID, entityID valueobjects.EntityID, v valueobjects.Value, now time.Time) (*AttributeValue, []events.Event, error) {
+func New(def *attribute.Definition, entityType valueobjects.TypeDefinitionID, entityID valueobjects.EntityID, scope valueobjects.Scope, v valueobjects.Value, now time.Time) (*AttributeValue, []events.Event, error) {
 	if entityID.IsZero() {
 		return nil, nil, domainerrors.NewValidation("entity ID is required")
 	}
@@ -52,6 +53,7 @@ func New(def *attribute.Definition, entityType valueobjects.TypeDefinitionID, en
 		typeDefinitionID:  entityType,
 		attributeDefID:    def.ID(),
 		entityID:          entityID,
+		scope:             scope,
 		value:             v,
 		definitionVersion: def.Version(),
 		createdAt:         now,
@@ -63,6 +65,7 @@ func New(def *attribute.Definition, entityType valueobjects.TypeDefinitionID, en
 		TypeDefinitionID:      av.typeDefinitionID,
 		AttributeDefinitionID: av.attributeDefID,
 		EntityID:              av.entityID,
+		Scope:                 av.scope,
 		Value:                 av.value,
 		DefinitionVersion:     av.definitionVersion,
 		OccurredAt:            now,
@@ -144,6 +147,9 @@ func (av *AttributeValue) AttributeDefinitionID() valueobjects.AttributeDefiniti
 // EntityID returns the consumer entity anchor.
 func (av *AttributeValue) EntityID() valueobjects.EntityID { return av.entityID }
 
+// Scope returns the value's locale/channel dimensions (zero for base).
+func (av *AttributeValue) Scope() valueobjects.Scope { return av.scope }
+
 // Value returns the typed value.
 func (av *AttributeValue) Value() valueobjects.Value { return av.value }
 
@@ -170,6 +176,8 @@ type Snapshot struct {
 	TypeDefinitionID      valueobjects.TypeDefinitionID      `json:"type_definition_id"`
 	AttributeDefinitionID valueobjects.AttributeDefinitionID `json:"attribute_definition_id"`
 	EntityID              valueobjects.EntityID              `json:"entity_id"`
+	Locale                string                             `json:"locale,omitempty"`
+	Channel               string                             `json:"channel,omitempty"`
 	Value                 valueobjects.Value                 `json:"value"`
 	DefinitionVersion     int                                `json:"definition_version"`
 	CreatedAt             time.Time                          `json:"created_at"`
@@ -185,6 +193,8 @@ func (av *AttributeValue) Snapshot() Snapshot {
 		TypeDefinitionID:      av.typeDefinitionID,
 		AttributeDefinitionID: av.attributeDefID,
 		EntityID:              av.entityID,
+		Locale:                av.scope.Locale,
+		Channel:               av.scope.Channel,
 		Value:                 av.value,
 		DefinitionVersion:     av.definitionVersion,
 		CreatedAt:             av.createdAt,
@@ -202,6 +212,7 @@ func Rehydrate(s Snapshot) *AttributeValue {
 		typeDefinitionID:  s.TypeDefinitionID,
 		attributeDefID:    s.AttributeDefinitionID,
 		entityID:          s.EntityID,
+		scope:             valueobjects.Scope{Locale: s.Locale, Channel: s.Channel},
 		value:             s.Value,
 		definitionVersion: s.DefinitionVersion,
 		createdAt:         s.CreatedAt,

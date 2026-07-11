@@ -19,7 +19,7 @@ import (
 )
 
 const valueColumnList = `id, tenant_id, type_definition_id, attribute_definition_id, entity_id,
-	data_type, value_bool, value_int, value_float, value_text, value_time, value_json,
+	locale, channel, data_type, value_bool, value_int, value_float, value_text, value_time, value_json,
 	definition_version, created_at, updated_at, archived_at`
 
 type valueRow struct {
@@ -28,6 +28,8 @@ type valueRow struct {
 	TypeDefinitionID      ulid.ID `db:"type_definition_id"`
 	AttributeDefinitionID ulid.ID `db:"attribute_definition_id"`
 	EntityID              string  `db:"entity_id"`
+	Locale                string  `db:"locale"`
+	Channel               string  `db:"channel"`
 	DataType              string  `db:"data_type"`
 	valueColumns
 	DefinitionVersion int          `db:"definition_version"`
@@ -47,6 +49,8 @@ func (r valueRow) snapshot() (domainvalue.Snapshot, error) {
 		TypeDefinitionID:      valueobjects.TypeDefinitionID{ID: r.TypeDefinitionID},
 		AttributeDefinitionID: valueobjects.AttributeDefinitionID{ID: r.AttributeDefinitionID},
 		EntityID:              valueobjects.EntityID(r.EntityID),
+		Locale:                r.Locale,
+		Channel:               r.Channel,
 		Value:                 v,
 		DefinitionVersion:     r.DefinitionVersion,
 		CreatedAt:             r.CreatedAt,
@@ -403,13 +407,14 @@ func (r *attributeValueRepository) FindByDefinitionAndEntity(ctx context.Context
 	return out, nil
 }
 
-func (r *attributeValueRepository) CountByDefinitionAndValue(ctx context.Context, defID valueobjects.AttributeDefinitionID, v valueobjects.Value, excludeEntity valueobjects.EntityID) (int, error) {
+func (r *attributeValueRepository) CountByDefinitionAndValue(ctx context.Context, defID valueobjects.AttributeDefinitionID, scope valueobjects.Scope, v valueobjects.Value, excludeEntity valueobjects.EntityID) (int, error) {
 	// The value column is an identifier chosen by data type; arguments stay
-	// bound placeholders.
+	// bound placeholders. Uniqueness is scoped by locale/channel.
 	query := bind(`SELECT count(*) FROM flexitype_attribute_value
-	 WHERE attribute_definition_id = ? AND ` + valueColumnName(v.DataType()) + ` = ? AND entity_id <> ? AND archived_at IS NULL`)
+	 WHERE attribute_definition_id = ? AND ` + valueColumnName(v.DataType()) + ` = ?
+	   AND entity_id <> ? AND locale = ? AND channel = ? AND archived_at IS NULL`)
 	var count int
-	if err := r.q.GetContext(ctx, &count, query, defID.String(), valueArg(v), excludeEntity.String()); err != nil {
+	if err := r.q.GetContext(ctx, &count, query, defID.String(), valueArg(v), excludeEntity.String(), scope.Locale, scope.Channel); err != nil {
 		return 0, fmt.Errorf("count values by definition and value: %w", err)
 	}
 	return count, nil
@@ -507,10 +512,10 @@ func (r *attributeValueRepository) Save(ctx context.Context, av *domainvalue.Att
 
 	_, err := r.q.ExecContext(ctx, bind(
 		`INSERT INTO flexitype_attribute_value
-		   (id, tenant_id, type_definition_id, attribute_definition_id, entity_id, data_type,
+		   (id, tenant_id, type_definition_id, attribute_definition_id, entity_id, locale, channel, data_type,
 		    value_bool, value_int, value_float, value_text, value_time, value_json,
 		    definition_version, created_at, updated_at, archived_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   data_type          = EXCLUDED.data_type,
 		   value_bool         = EXCLUDED.value_bool,
@@ -523,7 +528,7 @@ func (r *attributeValueRepository) Save(ctx context.Context, av *domainvalue.Att
 		   updated_at         = EXCLUDED.updated_at,
 		   archived_at        = EXCLUDED.archived_at`),
 		s.ID.String(), s.TenantID.String(), s.TypeDefinitionID.String(),
-		s.AttributeDefinitionID.String(), s.EntityID.String(), s.Value.DataType().String(),
+		s.AttributeDefinitionID.String(), s.EntityID.String(), s.Locale, s.Channel, s.Value.DataType().String(),
 		cols.Bool, cols.Int, cols.Float, cols.Text, cols.Time, jsonbParam(cols.JSON),
 		s.DefinitionVersion, s.CreatedAt, s.UpdatedAt, nullableTime(s.ArchivedAt),
 	)

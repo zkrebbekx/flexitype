@@ -18,6 +18,7 @@ import (
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
+	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
 
@@ -158,6 +159,8 @@ type attributeRequest struct {
 	Required         bool            `json:"required,omitempty"`
 	MultiValued      bool            `json:"multi_valued,omitempty"`
 	Unique           bool            `json:"unique,omitempty"`
+	Localizable      bool            `json:"localizable,omitempty"`
+	Scopable         bool            `json:"scopable,omitempty"`
 	Constraints      json.RawMessage `json:"constraints,omitempty"`
 	DefaultValue     json.RawMessage `json:"default_value,omitempty"`
 	Group            string          `json:"group,omitempty"`
@@ -180,6 +183,8 @@ func (s *server) createAttribute(w http.ResponseWriter, r *http.Request) {
 		Required:         req.Required,
 		MultiValued:      req.MultiValued,
 		Unique:           req.Unique,
+		Localizable:      req.Localizable,
+		Scopable:         req.Scopable,
 		Constraints:      req.Constraints,
 		DefaultValue:     req.DefaultValue,
 		Group:            req.Group,
@@ -215,6 +220,8 @@ func (s *server) updateAttribute(w http.ResponseWriter, r *http.Request) {
 		Required:     req.Required,
 		MultiValued:  req.MultiValued,
 		Unique:       req.Unique,
+		Localizable:  req.Localizable,
+		Scopable:     req.Scopable,
 		Constraints:  req.Constraints,
 		DefaultValue: req.DefaultValue,
 		Group:        req.Group,
@@ -311,6 +318,8 @@ type setValueRequest struct {
 	AttributeDefinitionID string          `json:"attribute_definition_id"`
 	EntityID              string          `json:"entity_id"`
 	TypeDefinitionID      string          `json:"type_definition_id,omitempty"`
+	Locale                string          `json:"locale,omitempty"`
+	Channel               string          `json:"channel,omitempty"`
 	Value                 json.RawMessage `json:"value"`
 }
 
@@ -324,6 +333,8 @@ func (s *server) setValue(w http.ResponseWriter, r *http.Request) {
 		AttributeDefinitionID: req.AttributeDefinitionID,
 		EntityID:              req.EntityID,
 		TypeDefinitionID:      req.TypeDefinitionID,
+		Locale:                req.Locale,
+		Channel:               req.Channel,
 		Value:                 req.Value,
 	})
 	if err != nil {
@@ -349,6 +360,8 @@ func (s *server) setValuesBatch(w http.ResponseWriter, r *http.Request) {
 			AttributeDefinitionID: it.AttributeDefinitionID,
 			EntityID:              it.EntityID,
 			TypeDefinitionID:      it.TypeDefinitionID,
+			Locale:                it.Locale,
+			Channel:               it.Channel,
 			Value:                 it.Value,
 		})
 	}
@@ -889,6 +902,7 @@ func (s *server) runQuery(w http.ResponseWriter, r *http.Request) {
 		Type:  r.URL.Query().Get("type"),
 		Query: r.URL.Query().Get("q"),
 		Page:  pageArgs(r),
+		Scope: valueobjects.Scope{Locale: r.URL.Query().Get("locale"), Channel: r.URL.Query().Get("channel")},
 	})
 	if err != nil {
 		writeError(w, s.log, err)

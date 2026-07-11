@@ -71,7 +71,7 @@ type Repository interface {
 	// CountByDefinitionAndValue counts live values of a definition equal to
 	// v, excluding entity excludeEntity. Used to enforce unique attributes
 	// inside write transactions.
-	CountByDefinitionAndValue(ctx context.Context, defID valueobjects.AttributeDefinitionID, v valueobjects.Value, excludeEntity valueobjects.EntityID) (int, error)
+	CountByDefinitionAndValue(ctx context.Context, defID valueobjects.AttributeDefinitionID, scope valueobjects.Scope, v valueobjects.Value, excludeEntity valueobjects.EntityID) (int, error)
 
 	// List returns a page of values and the total count for the filter.
 	List(ctx context.Context, filter Filter, page db.Page) ([]*AttributeValue, int, error)

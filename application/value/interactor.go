@@ -64,7 +64,12 @@ type SetInput struct {
 	// to the attribute's declaring type, and must be that type or one of
 	// its descendants (inherited attributes anchor to the subtype).
 	TypeDefinitionID string
-	Value            json.RawMessage
+	// Locale and Channel scope the value. Allowed only when the attribute
+	// is localizable / scopable respectively; the value identity is
+	// (entity, attribute, locale, channel).
+	Locale  string
+	Channel string
+	Value   json.RawMessage
 }
 
 // Set writes a value for an entity attribute: it locks the definition,
@@ -148,11 +153,22 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			return domainerrors.NewValidation(err.Error())
 		}
 
+		// Scope is allowed only along the dimensions the attribute enables.
+		scope := valueobjects.Scope{Locale: in.Locale, Channel: in.Channel}
+		if scope.Locale != "" && !def.Localizable() {
+			return domainerrors.NewValidation("attribute is not localizable", "attribute", def.InternalName())
+		}
+		if scope.Channel != "" && !def.Scopable() {
+			return domainerrors.NewValidation("attribute is not scopable", "attribute", def.InternalName())
+		}
+
 		if err := i.checkDependencies(ctx, tx, def, entityType, entityID, v); err != nil {
 			return err
 		}
 		if def.Unique() {
-			count, err := values.CountByDefinitionAndValue(ctx, defID, v, entityID)
+			// Uniqueness applies per scope: the same value may exist in a
+			// different locale/channel.
+			count, err := values.CountByDefinitionAndValue(ctx, defID, scope, v, entityID)
 			if err != nil {
 				return fmt.Errorf("check uniqueness: %w", err)
 			}
@@ -162,9 +178,17 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			}
 		}
 
-		existing, err := values.FindByDefinitionAndEntity(ctx, defID, entityID)
+		all, err := values.FindByDefinitionAndEntity(ctx, defID, entityID)
 		if err != nil {
 			return fmt.Errorf("load existing values: %w", err)
+		}
+		// Values are scoped: only those in the same (locale, channel) share
+		// this write's identity, so an entity holds one value per scope.
+		var existing []*domainvalue.AttributeValue
+		for _, av := range all {
+			if av.Scope().Equals(scope) {
+				existing = append(existing, av)
+			}
 		}
 
 		// Single-valued attributes upsert; multi-valued attributes append
@@ -200,7 +224,7 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			}
 		}
 
-		av, evts, err := domainvalue.New(def, entityType, entityID, v, i.now())
+		av, evts, err := domainvalue.New(def, entityType, entityID, scope, v, i.now())
 		if err != nil {
 			return err
 		}

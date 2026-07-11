@@ -37,6 +37,8 @@ const form = reactive({
   required: false,
   multi_valued: false,
   unique: false,
+  localizable: false,
+  scopable: false,
   minLength: '',
   maxLength: '',
   minValue: '',
@@ -72,6 +74,8 @@ watch(
     form.required = a?.required ?? false
     form.multi_valued = a?.multi_valued ?? false
     form.unique = a?.unique ?? false
+    form.localizable = a?.localizable ?? false
+    form.scopable = a?.scopable ?? false
     form.group = a?.group ?? ''
     form.sortOrder = a?.sort_order != null ? String(a.sort_order) : ''
     form.helpText = a?.help_text ?? ''
@@ -132,6 +136,8 @@ const save = useMutation({
         required: form.required,
         multi_valued: form.multi_valued,
         unique: form.unique,
+        localizable: form.localizable,
+        scopable: form.scopable,
         constraints,
         ...presentation,
       })
@@ -145,6 +151,8 @@ const save = useMutation({
       required: form.required,
       multi_valued: form.multi_valued,
       unique: form.unique,
+      localizable: form.localizable,
+      scopable: form.scopable,
       constraints,
       ...presentation,
     })
@@ -229,6 +237,8 @@ async function tryValue() {
         <Toggle v-model="form.required" label="Required" hint="Entities must hold a value" />
         <Toggle v-model="form.multi_valued" label="Multi-valued" hint="An entity may hold several values" :disabled="form.unique" />
         <Toggle v-model="form.unique" label="Unique" hint="No two entities may share a value" :disabled="form.multi_valued" />
+        <Toggle v-model="form.localizable" label="Localizable" hint="A value per locale (en_AU, de_DE)" />
+        <Toggle v-model="form.scopable" label="Scopable" hint="A value per channel (web, print, …)" />
       </fieldset>
 
       <fieldset class="flex flex-col gap-3 rounded-md border border-(--border) p-3">

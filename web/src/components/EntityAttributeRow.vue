@@ -39,6 +39,8 @@ const emit = defineEmits<{
         <Badge v-if="attribute.required && !values.length" tone="danger">required, missing</Badge>
         <Badge v-else-if="attribute.required" tone="accent">required</Badge>
         <Badge v-if="attribute.multi_valued">multi</Badge>
+        <Badge v-if="attribute.localizable" tone="accent">i18n</Badge>
+        <Badge v-if="attribute.scopable" tone="accent">scoped</Badge>
         <Badge v-if="attribute.unique" tone="warn">unique</Badge>
         <span v-if="declaredIn.id !== ownTypeId" class="text-[12px] text-(--text-muted)">
           from {{ declaredIn.display_name }}

@@ -28,8 +28,10 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/telemetry"
 )
 
-// version is the service's reported version (health + traces).
-const version = "1.0.0"
+// version is the service's reported version (health + traces). It is
+// stamped at build time via -ldflags "-X main.version=$(git describe)";
+// "dev" is the unstamped default for `go run` / `go build`.
+var version = "dev"
 
 func main() {
 	log := logger.New(logger.Config{

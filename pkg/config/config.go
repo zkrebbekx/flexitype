@@ -37,6 +37,14 @@ type Config struct {
 	// EventRetention is how long expanded events stay readable in the
 	// events feed before pruning (outbox mode only).
 	EventRetention time.Duration
+	// PubSubProject, when set, publishes every event to Google Cloud
+	// Pub/Sub in addition to any webhook subscriptions.
+	PubSubProject string
+	// PubSubTopic is the Pub/Sub topic id events publish to.
+	PubSubTopic string
+	// PubSubOrdering stamps per-aggregate ordering keys (the topic's
+	// subscriptions must enable message ordering to benefit).
+	PubSubOrdering bool
 }
 
 // Database holds PostgreSQL pool settings.
@@ -73,6 +81,9 @@ func Load() (Config, error) {
 		EnableOutbox:        envBool("FLEXITYPE_OUTBOX", false),
 		EnableSearchIndex:   envBool("FLEXITYPE_FEATURE_SEARCH_INDEX", false),
 		EventRetention:      envDuration("FLEXITYPE_EVENT_RETENTION", 7*24*time.Hour),
+		PubSubProject:       os.Getenv("FLEXITYPE_PUBSUB_PROJECT"),
+		PubSubTopic:         envStr("FLEXITYPE_PUBSUB_TOPIC", "flexitype-events"),
+		PubSubOrdering:      envBool("FLEXITYPE_PUBSUB_ORDERING", false),
 		Database: Database{
 			Host:            envStr("FLEXITYPE_DB_HOST", "localhost"),
 			Port:            envInt("FLEXITYPE_DB_PORT", 5432),

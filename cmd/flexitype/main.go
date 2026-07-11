@@ -11,12 +11,14 @@ import (
 	"os"
 	"time"
 
+	"cloud.google.com/go/pubsub/v2"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 
 	"github.com/zkrebbekx/flexitype"
 	"github.com/zkrebbekx/flexitype/application/outbox"
 	"github.com/zkrebbekx/flexitype/application/webhook"
+	"github.com/zkrebbekx/flexitype/infrastructure/gcppubsub"
 	"github.com/zkrebbekx/flexitype/pkg/config"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/health"
@@ -74,6 +76,27 @@ func run(log *logger.Logger) error {
 		}))
 		log.Info().Str("url", envWebhookURL).Msg("event webhook registered")
 	}
+	// Google Cloud Pub/Sub: every event publishes to one topic with
+	// filterable attributes. Prefer this over raw webhooks when consumers
+	// already live on GCP — Pub/Sub brings its own consumer groups,
+	// replay and dead-letter topics.
+	var pubsubClient *pubsub.Client
+	if cfg.PubSubProject != "" {
+		pubsubClient, err = pubsub.NewClient(ctx, cfg.PubSubProject)
+		if err != nil {
+			return fmt.Errorf("connect pub/sub: %w", err)
+		}
+		publisher := pubsubClient.Publisher(cfg.PubSubTopic)
+		var pubsubOpts []gcppubsub.Option
+		if cfg.PubSubOrdering {
+			publisher.EnableMessageOrdering = true
+			pubsubOpts = append(pubsubOpts, gcppubsub.WithOrderingKey(gcppubsub.PerAggregate))
+		}
+		opts = append(opts, flexitype.WithHandler(gcppubsub.New("gcp-pubsub", publisher, pubsubOpts...)))
+		log.Info().Str("project", cfg.PubSubProject).Str("topic", cfg.PubSubTopic).
+			Bool("ordering", cfg.PubSubOrdering).Msg("gcp pub/sub publisher registered")
+	}
+
 	opts = append(opts, flexitype.WithRollbackObserver(func(_ context.Context, err error) {
 		log.Warn().Err(err).Msg("unit of work rolled back")
 	}))
@@ -166,6 +189,14 @@ func run(log *logger.Logger) error {
 		Priority: 10,
 		Handler:  func(context.Context) error { return pool.Close() },
 	})
+	if pubsubClient != nil {
+		// After the relay stops (60): no publishes remain in flight.
+		shutdownHandler.RegisterTask(shutdown.Task{
+			Name:     "pubsub",
+			Priority: 40,
+			Handler:  func(context.Context) error { return pubsubClient.Close() },
+		})
+	}
 
 	// The outbox relay drains committed events to hooks; it stops with the
 	// serve context during shutdown.

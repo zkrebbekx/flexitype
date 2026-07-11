@@ -81,9 +81,15 @@ Env-configured publishers in the standalone binary. Brokers already solve
 consumer groups and replay — but this makes flexitype's operational story
 "first deploy a broker", drags driver dependencies into the binary, and
 every consumer needs broker credentials. Embedded mode already covers the
-teams that want this (`WithPublisher`). **Deferred** — the outbox relay's
-dispatcher registration makes adapters straightforward later without
-schema changes.
+teams that want this (`WithPublisher`). Mostly **deferred** — with one
+exception: **Google Cloud Pub/Sub ships as a first-class adapter**
+(`infrastructure/gcppubsub`, `FLEXITYPE_PUBSUB_PROJECT`/`_TOPIC`/
+`_ORDERING`). It is the preferred lane for GCP-resident consumers: one
+message per envelope, filterable attributes, optional per-aggregate
+ordering keys, and publishing runs inside the outbox expansion so a
+broker outage leaves the envelope pending and retried — the same
+at-least-once story as every other lane. Other brokers remain
+demand-driven.
 
 ### D. Direct database tailing (logical decoding / consumers reading the outbox table)
 

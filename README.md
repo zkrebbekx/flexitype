@@ -66,6 +66,11 @@ data resets on reload.
   events feed (`/api/v1/events`), an SSE live tail and named
   compare-and-swap cursors so replicated consumers read as one. Safe with
   any number of flexitype replicas. Design: `docs/design/event-delivery.md`.
+- **Google Cloud Pub/Sub publisher** (optional): every event as one
+  Pub/Sub message with filterable attributes and optional per-aggregate
+  ordering keys — the preferred integration when consumers live on GCP.
+  `FLEXITYPE_PUBSUB_PROJECT` (+ `_TOPIC`, `_ORDERING`) standalone, or the
+  `infrastructure/gcppubsub` handler when embedding.
 - **Search index** (optional): an event-driven projection keeps one
   searchable document per entity, unlocking FQL `matches("free text")` and
   `POST /api/v1/search/reindex`; trigram indexes accelerate
@@ -221,6 +226,17 @@ m}`) commit progress with compare-and-swap, so replicated consumers read
 as one logical consumer. Cursors older than `FLEXITYPE_EVENT_RETENTION`
 (default 7 days) get `410 CURSOR_EXPIRED` — re-baseline instead of
 silently missing events. Full design: `docs/design/event-delivery.md`.
+
+Consumers on GCP should prefer **Pub/Sub**: set
+`FLEXITYPE_PUBSUB_PROJECT` (topic via `FLEXITYPE_PUBSUB_TOPIC`, default
+`flexitype-events`; per-aggregate ordering keys via
+`FLEXITYPE_PUBSUB_ORDERING=true`) and every event publishes as one
+message — envelope JSON as the body, attributes (`event_type`,
+`tenant_id`, `aggregate_id`, ...) for server-side subscription filters.
+Pub/Sub then provides consumer groups, replay and dead-letter topics
+natively; dedupe on the `event_id` attribute as with every other lane.
+Embedded services register the same handler directly:
+`flexitype.WithHandler(gcppubsub.New("gcp-pubsub", client.Publisher("flexitype-events")))`.
 
 ### Service accounts
 

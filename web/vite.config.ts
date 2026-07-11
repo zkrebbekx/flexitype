@@ -4,8 +4,10 @@ import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
 // Dev server proxies the API to the Go service so the console and API are
-// same-origin in every environment (no CORS surface).
+// same-origin in every environment (no CORS surface). VITE_BASE re-roots
+// the app for subpath hosting (the GitHub Pages playground).
 export default defineConfig({
+  base: process.env.VITE_BASE || '/',
   plugins: [vue(), tailwindcss()],
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },

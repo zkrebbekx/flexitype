@@ -125,6 +125,9 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domaintypedef
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, td.TenantID(), domaintypedef.AggregateType, in.ID); err != nil {
+			return err
+		}
 		before := td.Snapshot()
 
 		evts, err := td.Update(in.DisplayName, in.Description, i.now())
@@ -180,6 +183,9 @@ func (i *Interactor) transition(ctx context.Context, rawID string, action activi
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, td.TenantID(), domaintypedef.AggregateType, rawID); err != nil {
+			return err
+		}
 		before := td.Snapshot()
 
 		var evts []events.Event
@@ -223,6 +229,9 @@ func (i *Interactor) Get(ctx context.Context, rawID string) (*domaintypedef.Snap
 	if err != nil {
 		return nil, err
 	}
+	if err := uow.EnsureTenant(ctx, td.TenantID(), domaintypedef.AggregateType, rawID); err != nil {
+		return nil, err
+	}
 	snap := td.Snapshot()
 	return &snap, nil
 }
@@ -257,6 +266,9 @@ func (i *Interactor) EffectiveAttributes(ctx context.Context, rawID string) ([]E
 	if err != nil {
 		return nil, err
 	}
+	if err := uow.EnsureTenant(ctx, t.TenantID(), domaintypedef.AggregateType, rawID); err != nil {
+		return nil, err
+	}
 	chain, err := Chain(ctx, i.typeDefs, t)
 	if err != nil {
 		return nil, err
@@ -280,6 +292,13 @@ func (i *Interactor) Children(ctx context.Context, rawID string) ([]domaintypede
 	id, err := valueobjects.ParseTypeDefinitionID(rawID)
 	if err != nil {
 		return nil, domainerrors.NewValidation(err.Error())
+	}
+	parent, err := i.typeDefs.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := uow.EnsureTenant(ctx, parent.TenantID(), domaintypedef.AggregateType, rawID); err != nil {
+		return nil, err
 	}
 	children, err := i.typeDefs.ListChildren(ctx, id)
 	if err != nil {

@@ -156,6 +156,11 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 		if def.IsComputed() && !in.Internal {
 			return domainerrors.NewValidation("attribute is computed (read-only)", "attribute", def.InternalName())
 		}
+		// Field-level access control: the principal must be permitted to
+		// write this attribute (the materializer writes as the system).
+		if !in.Internal && !uow.AccessFromContext(ctx).CanWrite(def.InternalName()) {
+			return domainerrors.NewForbidden("not permitted to write this attribute", "attribute", def.InternalName())
+		}
 
 		v, err := valueobjects.ParseValue(def.DataType(), in.Value)
 		if err != nil {
@@ -533,7 +538,39 @@ func (i *Interactor) ListByEntity(ctx context.Context, rawTypeDefID, rawEntityID
 	for _, av := range items {
 		snaps = append(snaps, av.Snapshot())
 	}
-	return snaps, nil
+	return i.redactUnreadable(ctx, snaps)
+}
+
+// redactUnreadable drops values of attributes the principal may not read.
+// Admins (and unauthenticated development) keep everything.
+func (i *Interactor) redactUnreadable(ctx context.Context, snaps []domainvalue.Snapshot) ([]domainvalue.Snapshot, error) {
+	access := uow.AccessFromContext(ctx)
+	if access.Admin {
+		return snaps, nil
+	}
+	ids := make([]valueobjects.AttributeDefinitionID, 0, len(snaps))
+	seen := map[string]bool{}
+	for _, s := range snaps {
+		if id := s.AttributeDefinitionID; !seen[id.String()] {
+			seen[id.String()] = true
+			ids = append(ids, id)
+		}
+	}
+	defs, err := i.attrs.GetMany(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	name := make(map[string]string, len(defs))
+	for _, d := range defs {
+		name[d.ID().String()] = d.InternalName()
+	}
+	out := snaps[:0]
+	for _, s := range snaps {
+		if access.CanRead(name[s.AttributeDefinitionID.String()]) {
+			out = append(out, s)
+		}
+	}
+	return out, nil
 }
 
 // EntitySummaryOutput is one entity-browser row.

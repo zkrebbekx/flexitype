@@ -121,6 +121,7 @@ func (i *Interactor) prepare(ctx context.Context, rootType, queryText string) ([
 	b := &binder{
 		tenant:      tenant,
 		searchIndex: i.searchIndex,
+		access:      uow.AccessFromContext(ctx),
 		typeDefs:    i.typeDefs,
 		attrs:       i.attrs,
 		relDefs:     i.relDefs,

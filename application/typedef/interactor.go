@@ -274,6 +274,7 @@ func (i *Interactor) EffectiveAttributes(ctx context.Context, rawID string) ([]E
 	if err != nil {
 		return nil, err
 	}
+	access := uow.AccessFromContext(ctx)
 
 	var out []EffectiveAttribute
 	for _, link := range chain {
@@ -282,6 +283,11 @@ func (i *Interactor) EffectiveAttributes(ctx context.Context, rawID string) ([]E
 			return nil, err
 		}
 		for _, a := range attrs {
+			// Field-level access control: hide attributes the principal may
+			// not read (admins and unauthenticated development see all).
+			if !access.CanRead(a.InternalName()) {
+				continue
+			}
 			out = append(out, EffectiveAttribute{Attribute: a.Snapshot(), DeclaredIn: link.Snapshot()})
 		}
 	}

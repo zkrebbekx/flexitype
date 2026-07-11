@@ -29,9 +29,39 @@ environment variables. Every variable, its default, and its meaning:
 
 ## Authentication
 
+Three modes, in precedence order:
+
+1. **Provisioning** (`FLEXITYPE_PROVISIONING=true`) — accounts live in the
+   database and are managed at runtime via the admin API. Bearer tokens are
+   authenticated against the `flexitype_service_account` table.
+2. **File** (`FLEXITYPE_SERVICE_ACCOUNTS=<path>`) — accounts are read from a
+   JSON file at startup (static; edit-and-redeploy to change).
+3. **Development** (neither set) — authentication is disabled and every
+   request runs as the system actor with admin scope.
+
+Provisioning wins if both it and a file are set.
+
 | Variable | Default | Description |
 | --- | --- | --- |
-| `FLEXITYPE_SERVICE_ACCOUNTS` | _(unset)_ | Path to the service-account JSON file. Unset ⇒ development mode with auth disabled. |
+| `FLEXITYPE_SERVICE_ACCOUNTS` | _(unset)_ | Path to the service-account JSON file (file mode). |
+| `FLEXITYPE_PROVISIONING` | `false` | Enable database-backed auth and the admin-scoped tenant/service-account API. |
+| `FLEXITYPE_BOOTSTRAP_ADMIN` | `false` | On startup, if no accounts exist, seed a `default` tenant and `bootstrap-admin` admin account. Its token is logged **once** — capture it. |
+| `FLEXITYPE_AUTH_CACHE_TTL` | `30s` | How long a database-backed auth result is cached. Bounds how quickly a revoked or rotated credential stops working. |
+
+### Provisioning API
+
+All endpoints require the `admin` scope and return `501` when provisioning
+is off. See `api/openapi.yaml` for the full contract.
+
+| Method & path | Purpose |
+| --- | --- |
+| `POST /api/v1/tenants` | Create a tenant. |
+| `GET /api/v1/tenants` | List tenants. |
+| `PATCH /api/v1/tenants/{name}` | Activate/deactivate a tenant. |
+| `POST /api/v1/service-accounts` | Create an account; token returned **once**. |
+| `GET /api/v1/service-accounts?tenant_name=` | List a tenant's accounts (no secrets). |
+| `POST /api/v1/service-accounts/{id}/rotate` | Rotate the secret; new token returned once. |
+| `DELETE /api/v1/service-accounts/{id}` | Revoke the account. |
 
 ## Features
 

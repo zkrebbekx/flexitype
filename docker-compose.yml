@@ -1,0 +1,44 @@
+# One-command flexitype: the service (console embedded) + Postgres 16, with
+# the transactional outbox and entity search index enabled.
+#
+#   docker compose up --build
+#   open http://localhost:8080
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: flexitype
+      POSTGRES_PASSWORD: flexitype
+      POSTGRES_DB: flexitype
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flexitype"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  flexitype:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/zkrebbekx/flexitype:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FLEXITYPE_DB_HOST: postgres
+      FLEXITYPE_DB_PORT: "5432"
+      FLEXITYPE_DB_USER: flexitype
+      FLEXITYPE_DB_PASSWORD: flexitype
+      FLEXITYPE_DB_NAME: flexitype
+      FLEXITYPE_MIGRATE_ON_START: "true"
+      FLEXITYPE_OUTBOX: "true"
+      FLEXITYPE_FEATURE_SEARCH_INDEX: "true"
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

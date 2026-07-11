@@ -19,7 +19,7 @@ import (
 type Repository interface {
 	// Search returns the page of entities (drawn from rootTypeIDs) matching
 	// the bound expression, plus the total match count.
-	Search(ctx context.Context, tenant valueobjects.TenantID, rootTypeIDs []valueobjects.TypeDefinitionID, node BoundNode, page db.Page) ([]domainvalue.EntitySummary, int, error)
+	Search(ctx context.Context, tenant valueobjects.TenantID, rootTypeIDs []valueobjects.TypeDefinitionID, node BoundNode, scope valueobjects.Scope, page db.Page) ([]domainvalue.EntitySummary, int, error)
 }
 
 // Interactor implements the FQL usecases.
@@ -44,6 +44,9 @@ type ExecuteInput struct {
 	Type  string
 	Query string
 	Page  db.PageArgs
+	// Scope restricts scoped-attribute predicates to one locale/channel;
+	// zero matches base (unscoped) values.
+	Scope valueobjects.Scope
 }
 
 // ResultRow is one matched entity.
@@ -72,7 +75,7 @@ func (i *Interactor) Execute(ctx context.Context, in ExecuteInput) (*ExecuteOutp
 		return nil, err
 	}
 
-	items, total, err := i.repo.Search(ctx, uow.TenantFromContext(ctx), rootTypes, bound, page)
+	items, total, err := i.repo.Search(ctx, uow.TenantFromContext(ctx), rootTypes, bound, in.Scope, page)
 	if err != nil {
 		return nil, err
 	}

@@ -90,12 +90,13 @@ func (r *valueRepo) FindByDefinitionAndEntity(_ context.Context, defID valueobje
 	return out, nil
 }
 
-func (r *valueRepo) CountByDefinitionAndValue(_ context.Context, defID valueobjects.AttributeDefinitionID, v valueobjects.Value, excludeEntity valueobjects.EntityID) (int, error) {
+func (r *valueRepo) CountByDefinitionAndValue(_ context.Context, defID valueobjects.AttributeDefinitionID, scope valueobjects.Scope, v valueobjects.Value, excludeEntity valueobjects.EntityID) (int, error) {
 	r.s.mu.RLock()
 	defer r.s.mu.RUnlock()
 	count := 0
 	for _, snap := range r.s.values {
 		if snap.AttributeDefinitionID.Equals(defID) && snap.EntityID != excludeEntity &&
+			snap.Locale == scope.Locale && snap.Channel == scope.Channel &&
 			snap.ArchivedAt == nil && snap.Value.Equal(v) {
 			count++
 		}

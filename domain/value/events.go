@@ -28,6 +28,7 @@ type Set struct {
 	TypeDefinitionID      valueobjects.TypeDefinitionID      `json:"type_definition_id"`
 	AttributeDefinitionID valueobjects.AttributeDefinitionID `json:"attribute_definition_id"`
 	EntityID              valueobjects.EntityID              `json:"entity_id"`
+	Scope                 valueobjects.Scope                 `json:"scope,omitempty"`
 	Value                 valueobjects.Value                 `json:"value"`
 	DefinitionVersion     int                                `json:"definition_version"`
 	OccurredAt            time.Time                          `json:"occurred_at"`

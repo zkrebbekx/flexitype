@@ -26,9 +26,12 @@ type evalScope struct {
 	entity string
 	typeID string // declared type; resolved lazily inside traversals
 	link   string // enclosing relationship id ("" at root)
+	// query is the locale/channel selecting scoped-attribute values; base
+	// (zero) matches unscoped values.
+	query valueobjects.Scope
 }
 
-func (r *queryRepo) Search(_ context.Context, tenant valueobjects.TenantID, rootTypeIDs []valueobjects.TypeDefinitionID, node query.BoundNode, page db.Page) ([]domainvalue.EntitySummary, int, error) {
+func (r *queryRepo) Search(_ context.Context, tenant valueobjects.TenantID, rootTypeIDs []valueobjects.TypeDefinitionID, node query.BoundNode, scope valueobjects.Scope, page db.Page) ([]domainvalue.EntitySummary, int, error) {
 	wanted := make(map[string]bool, len(rootTypeIDs))
 	for _, id := range rootTypeIDs {
 		wanted[id.String()] = true
@@ -64,6 +67,7 @@ func (r *queryRepo) Search(_ context.Context, tenant valueobjects.TenantID, root
 			tenant: tenant.String(),
 			entity: e.EntityID.String(),
 			typeID: e.TypeDefinitionID.String(),
+			query:  scope,
 		})
 		if err != nil {
 			return nil, 0, err
@@ -159,7 +163,7 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (tri, error) {
 		return r.evalCompare(n, s)
 
 	case *query.BoundIn:
-		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, s) {
+		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, s) {
 			for _, want := range n.Values {
 				if snap.Value.Equal(want) {
 					return triTrue, nil
@@ -169,7 +173,7 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (tri, error) {
 		return triFalse, nil
 
 	case *query.BoundRange:
-		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, s) {
+		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, s) {
 			lo, err := snap.Value.Compare(n.Lo)
 			if err != nil {
 				return triFalse, err
@@ -185,10 +189,10 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (tri, error) {
 		return triFalse, nil
 
 	case *query.BoundHas:
-		return triOf(len(r.scopedValues(n.Attr.ID.String(), n.Link, s)) > 0), nil
+		return triOf(len(r.scopedValues(n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, s)) > 0), nil
 
 	case *query.BoundStringMatch:
-		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, s) {
+		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, s) {
 			text := snap.Value.Text()
 			switch n.Kind {
 			case fql.MatchContains:
@@ -225,7 +229,7 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (tri, error) {
 }
 
 func (r *queryRepo) evalCompare(n *query.BoundCompare, s evalScope) (tri, error) {
-	snaps := r.scopedValues(n.Attr.ID.String(), n.Link, s)
+	snaps := r.scopedValues(n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, s)
 
 	switch n.Func {
 	case fql.FuncMin, fql.FuncMax:
@@ -316,6 +320,7 @@ func (r *queryRepo) evalTraversal(n *query.BoundTraversal, s evalScope) (tri, er
 			entity: far,
 			typeID: r.declaredType(s.tenant, far),
 			link:   rel.ID.String(),
+			query:  s.query,
 		})
 		if err != nil {
 			return triFalse, err
@@ -331,17 +336,23 @@ func (r *queryRepo) evalTraversal(n *query.BoundTraversal, s evalScope) (tri, er
 
 // scopedValues returns the current scope's live values of one attribute.
 // Link-scoped attributes anchor on the enclosing relationship's id.
-func (r *queryRepo) scopedValues(attrDefID string, link bool, s evalScope) []domainvalue.Snapshot {
+func (r *queryRepo) scopedValues(attrDefID string, link, scoped bool, s evalScope) []domainvalue.Snapshot {
 	entity := s.entity
 	if link {
 		entity = s.link
 	}
 	var out []domainvalue.Snapshot
 	for _, snap := range r.s.values {
-		if snap.TenantID.String() == s.tenant && snap.EntityID.String() == entity &&
-			snap.AttributeDefinitionID.String() == attrDefID && snap.ArchivedAt == nil {
-			out = append(out, snap)
+		if snap.TenantID.String() != s.tenant || snap.EntityID.String() != entity ||
+			snap.AttributeDefinitionID.String() != attrDefID || snap.ArchivedAt != nil {
+			continue
 		}
+		// Scoped attributes match only within the query's locale/channel;
+		// non-scoped attributes ignore scope.
+		if scoped && (snap.Locale != s.query.Locale || snap.Channel != s.query.Channel) {
+			continue
+		}
+		out = append(out, snap)
 	}
 	return out
 }

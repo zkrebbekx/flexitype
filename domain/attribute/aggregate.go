@@ -26,6 +26,8 @@ type Definition struct {
 	required         bool
 	multiValued      bool
 	unique           bool
+	localizable      bool
+	scopable         bool
 	constraints      Constraints
 	defaultValue     *valueobjects.Default
 	group            string
@@ -48,8 +50,13 @@ type NewInput struct {
 	Required         bool
 	MultiValued      bool
 	Unique           bool
-	Constraints      Constraints
-	DefaultValue     *valueobjects.Default
+	// Localizable lets an attribute hold a value per locale; Scopable, a
+	// value per channel. Together the value identity is (entity, attribute,
+	// locale, channel).
+	Localizable  bool
+	Scopable     bool
+	Constraints  Constraints
+	DefaultValue *valueobjects.Default
 	// Presentation metadata (optional): the section this attribute belongs
 	// to, its order within the type, and inline help.
 	Group     string
@@ -93,6 +100,8 @@ func New(in NewInput, now time.Time) (*Definition, []events.Event, error) {
 		required:         in.Required,
 		multiValued:      in.MultiValued,
 		unique:           in.Unique,
+		localizable:      in.Localizable,
+		scopable:         in.Scopable,
 		constraints:      in.Constraints,
 		defaultValue:     in.DefaultValue,
 		group:            in.Group,
@@ -123,6 +132,8 @@ type UpdateInput struct {
 	Required     bool
 	MultiValued  bool
 	Unique       bool
+	Localizable  bool
+	Scopable     bool
 	Constraints  Constraints
 	DefaultValue *valueobjects.Default
 	Group        string
@@ -148,6 +159,8 @@ func (a *Definition) Update(in UpdateInput, now time.Time) ([]events.Event, erro
 	a.required = in.Required
 	a.multiValued = in.MultiValued
 	a.unique = in.Unique
+	a.localizable = in.Localizable
+	a.scopable = in.Scopable
 	a.constraints = in.Constraints
 	a.defaultValue = in.DefaultValue
 	a.group = in.Group
@@ -291,6 +304,12 @@ func (a *Definition) MultiValued() bool { return a.multiValued }
 // Unique reports whether values must be unique across entities.
 func (a *Definition) Unique() bool { return a.unique }
 
+// Localizable reports whether the attribute holds a value per locale.
+func (a *Definition) Localizable() bool { return a.localizable }
+
+// Scopable reports whether the attribute holds a value per channel.
+func (a *Definition) Scopable() bool { return a.scopable }
+
 // Constraints returns the validation rules.
 func (a *Definition) Constraints() Constraints { return a.constraints }
 
@@ -325,6 +344,8 @@ type Snapshot struct {
 	Required         bool                               `json:"required"`
 	MultiValued      bool                               `json:"multi_valued"`
 	Unique           bool                               `json:"unique"`
+	Localizable      bool                               `json:"localizable,omitempty"`
+	Scopable         bool                               `json:"scopable,omitempty"`
 	Constraints      Constraints                        `json:"constraints"`
 	DefaultValue     *valueobjects.Default              `json:"default_value,omitempty"`
 	Group            string                             `json:"group,omitempty"`
@@ -349,6 +370,8 @@ func (a *Definition) Snapshot() Snapshot {
 		Required:         a.required,
 		MultiValued:      a.multiValued,
 		Unique:           a.unique,
+		Localizable:      a.localizable,
+		Scopable:         a.scopable,
 		Constraints:      a.constraints,
 		DefaultValue:     a.defaultValue,
 		Group:            a.group,
@@ -375,6 +398,8 @@ func Rehydrate(s Snapshot) *Definition {
 		required:         s.Required,
 		multiValued:      s.MultiValued,
 		unique:           s.Unique,
+		localizable:      s.Localizable,
+		scopable:         s.Scopable,
 		constraints:      s.Constraints,
 		defaultValue:     s.DefaultValue,
 		group:            s.Group,

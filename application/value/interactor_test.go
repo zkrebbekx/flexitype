@@ -217,10 +217,11 @@ func (r *fakeValueRepo) FindByDefinitionAndEntity(_ context.Context, defID value
 	return out, nil
 }
 
-func (r *fakeValueRepo) CountByDefinitionAndValue(_ context.Context, defID valueobjects.AttributeDefinitionID, v valueobjects.Value, exclude valueobjects.EntityID) (int, error) {
+func (r *fakeValueRepo) CountByDefinitionAndValue(_ context.Context, defID valueobjects.AttributeDefinitionID, scope valueobjects.Scope, v valueobjects.Value, exclude valueobjects.EntityID) (int, error) {
 	count := 0
 	for _, snap := range r.values {
-		if snap.AttributeDefinitionID.Equals(defID) && snap.EntityID != exclude && snap.ArchivedAt == nil && snap.Value.Equal(v) {
+		if snap.AttributeDefinitionID.Equals(defID) && snap.EntityID != exclude && snap.ArchivedAt == nil &&
+			snap.Locale == scope.Locale && snap.Channel == scope.Channel && snap.Value.Equal(v) {
 			count++
 		}
 	}

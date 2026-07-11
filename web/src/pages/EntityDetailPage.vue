@@ -4,20 +4,20 @@ import { useRoute, useRouter } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
 import type { AttributeDefinition, AttributeValue, EffectiveSchema, EntityLink, RelationshipDefinition } from '@/lib/api'
-import { formatRelative, renderValue } from '@/lib/format'
+import { renderValue } from '@/lib/format'
 import { fromApiValue, toApiValue } from '@/lib/values'
 import { useToasts } from '@/composables/useToasts'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
-import TypeChip from '@/components/ui/TypeChip.vue'
 import Modal from '@/components/ui/Modal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import ValueInput from '@/components/ValueInput.vue'
 import Select from '@/components/ui/Select.vue'
 import Input from '@/components/ui/Input.vue'
-import { ArrowLeftRight, ArrowRight, Link2, Pencil, Plus, Trash2, Unlink } from 'lucide-vue-next'
+import EntityAttributeRow from '@/components/EntityAttributeRow.vue'
+import { ArrowLeftRight, ArrowRight, Link2, Pencil, Plus, Search, Trash2, Unlink } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
@@ -56,6 +56,20 @@ const rows = computed<Row[]>(() => {
       values: vals.filter((v) => v.attribute_definition_id === e.attribute.id),
     }))
 })
+
+// Attribute search + owned/inherited grouping keep large schemas legible.
+const attrFilter = ref('')
+function matchesFilter(row: Row): boolean {
+  const q = attrFilter.value.trim().toLowerCase()
+  if (!q) return true
+  return (
+    row.attribute.display_name.toLowerCase().includes(q) ||
+    row.attribute.internal_name.toLowerCase().includes(q)
+  )
+}
+const ownedRows = computed(() => rows.value.filter((r) => r.declaredIn.id === typeId.value && matchesFilter(r)))
+const inheritedRows = computed(() => rows.value.filter((r) => r.declaredIn.id !== typeId.value && matchesFilter(r)))
+const noMatches = computed(() => !!attrFilter.value.trim() && !ownedRows.value.length && !inheritedRows.value.length)
 
 // --- editing -----------------------------------------------------------------
 
@@ -141,6 +155,12 @@ const relDefs = useQuery({
   queryFn: () => api.listRelationshipDefinitions({ type_definition_id: typeId.value, limit: 200 }),
 })
 
+// Collapse a long link list so the page stays scannable.
+const LINK_PREVIEW = 10
+const showAllLinks = ref(false)
+const allLinks = computed(() => links.data.value?.items ?? [])
+const visibleLinks = computed(() => (showAllLinks.value ? allLinks.value : allLinks.value.slice(0, LINK_PREVIEW)))
+
 const linker = reactive({
   open: false,
   definitionId: '',
@@ -155,6 +175,18 @@ const linkerDef = computed<RelationshipDefinition | undefined>(() =>
 )
 // Which side is this entity on for the selected definition?
 const linkerRole = computed(() => (linkerDef.value?.parent_type_id === typeId.value ? 'parent' : 'child'))
+
+// The counterpart must be an entity of the OTHER endpoint's type; offer its
+// existing entities as autocomplete so the id is scoped and validated,
+// while still allowing a not-yet-materialised id to be typed.
+const counterpartTypeId = computed(() =>
+  linkerRole.value === 'parent' ? linkerDef.value?.child_type_id : linkerDef.value?.parent_type_id,
+)
+const counterpartEntities = useQuery({
+  queryKey: ['entities-of-type', counterpartTypeId],
+  queryFn: () => api.listEntities(counterpartTypeId.value!, { limit: 200 }),
+  enabled: computed(() => linker.open && !!counterpartTypeId.value),
+})
 
 const createLink = useMutation({
   mutationFn: () => {
@@ -237,63 +269,53 @@ const removeValue = useMutation({
   />
 
   <div v-else class="flex flex-col gap-2">
-    <article
-      v-for="row in rows"
-      :key="row.attribute.id"
-      class="rounded-lg border border-(--border) bg-(--surface) px-4 py-3"
-    >
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <div class="flex items-center gap-2.5">
-          <TypeChip :data-type="row.attribute.data_type" />
-          <span class="text-sm font-medium">{{ row.attribute.display_name }}</span>
-          <Badge v-if="row.attribute.required && !row.values.length" tone="danger">required, missing</Badge>
-          <Badge v-else-if="row.attribute.required" tone="accent">required</Badge>
-          <Badge v-if="row.attribute.multi_valued">multi</Badge>
-          <Badge v-if="row.attribute.unique" tone="warn">unique</Badge>
-          <span v-if="row.declaredIn.id !== typeId" class="text-[12px] text-(--text-muted)">
-            from {{ row.declaredIn.display_name }}
-          </span>
-        </div>
-        <Button
-          v-if="!row.values.length || row.attribute.multi_valued"
-          size="sm"
-          variant="ghost"
-          @click="openEditor(row.attribute)"
-        >
-          <Plus :size="14" /> {{ row.values.length ? 'Add value' : 'Set value' }}
-        </Button>
-      </div>
+    <div v-if="rows.length > 6" class="relative mb-1">
+      <Search :size="15" class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-(--text-muted)" />
+      <input
+        v-model="attrFilter"
+        type="text"
+        placeholder="Filter attributes…"
+        aria-label="Filter attributes"
+        class="h-9 w-full rounded-md border border-(--border-strong) bg-(--surface) pl-8 text-sm"
+      />
+    </div>
 
-      <ul v-if="row.values.length" class="mt-2 flex flex-col gap-1">
-        <li
-          v-for="v in row.values"
-          :key="v.id"
-          class="flex items-center justify-between gap-3 rounded-md bg-(--canvas) px-3 py-1.5"
-        >
-          <span class="mono min-w-0 flex-1 truncate text-[13px]">{{ renderValue(v.value) }}</span>
-          <span class="flex shrink-0 items-center gap-2 text-[12px] text-(--text-muted)">
-            <span :title="`Validated against definition v${v.definition_version}`">def v{{ v.definition_version }}</span>
-            <span v-if="v.definition_version < row.attribute.version" title="The definition has changed since this value was validated">
-              <Badge tone="warn">stale</Badge>
-            </span>
-            <span>{{ formatRelative(v.updated_at) }}</span>
-            <Button size="sm" variant="ghost" aria-label="Edit value" @click="openEditor(row.attribute, v)">
-              <Pencil :size="13" />
-            </Button>
-            <Button size="sm" variant="ghost" aria-label="Remove value" @click="confirmRemove = v">
-              <Trash2 :size="13" />
-            </Button>
-          </span>
-        </li>
-      </ul>
-      <p v-else class="mt-1.5 text-[13px] text-(--text-muted)">No value.</p>
-    </article>
+    <template v-if="ownedRows.length">
+      <p class="mt-1 text-[12px] font-medium tracking-wide text-(--text-muted) uppercase">Own attributes</p>
+      <EntityAttributeRow
+        v-for="row in ownedRows"
+        :key="row.attribute.id"
+        :attribute="row.attribute"
+        :declared-in="row.declaredIn"
+        :values="row.values"
+        :own-type-id="typeId"
+        @edit="openEditor"
+        @remove="(v) => (confirmRemove = v)"
+      />
+    </template>
+
+    <template v-if="inheritedRows.length">
+      <p class="mt-2 text-[12px] font-medium tracking-wide text-(--text-muted) uppercase">Inherited</p>
+      <EntityAttributeRow
+        v-for="row in inheritedRows"
+        :key="row.attribute.id"
+        :attribute="row.attribute"
+        :declared-in="row.declaredIn"
+        :values="row.values"
+        :own-type-id="typeId"
+        @edit="openEditor"
+        @remove="(v) => (confirmRemove = v)"
+      />
+    </template>
 
     <EmptyState
       v-if="!effective.isPending.value && !rows.length"
       title="This type has no attributes"
       body="Define attributes on the type (or an ancestor) first; then entities can hold values."
     />
+    <p v-else-if="noMatches" class="py-4 text-center text-[13px] text-(--text-muted)">
+      No attributes match “{{ attrFilter }}”.
+    </p>
   </div>
 
   <!-- Relationships -->
@@ -312,7 +334,7 @@ const removeValue = useMutation({
 
     <div class="flex flex-col gap-1.5">
       <div
-        v-for="l in links.data.value?.items"
+        v-for="l in visibleLinks"
         :key="l.relationship.id"
         class="flex items-center justify-between gap-3 rounded-lg border border-(--border) bg-(--surface) px-4 py-2.5 text-sm"
       >
@@ -328,8 +350,16 @@ const removeValue = useMutation({
         <Button size="sm" variant="ghost" aria-label="Unlink" @click="confirmUnlink = l"><Unlink :size="14" /></Button>
       </div>
 
+      <button
+        v-if="allLinks.length > LINK_PREVIEW"
+        class="self-start px-1 py-1 text-[13px] font-medium text-(--accent) hover:underline"
+        @click="showAllLinks = !showAllLinks"
+      >
+        {{ showAllLinks ? 'Show fewer' : `Show all ${allLinks.length}` }}
+      </button>
+
       <EmptyState
-        v-if="!links.isPending.value && !links.data.value?.items.length"
+        v-if="!links.isPending.value && !allLinks.length"
         title="No relationships"
         body="Links connect this entity to entities of related types, with their own attributes and version binding."
       />
@@ -346,12 +376,23 @@ const removeValue = useMutation({
             label="Relationship type"
             :options="(relDefs.data.value?.items ?? []).map((d) => ({ value: d.id, label: d.display_name }))"
           />
-          <Input
-            v-model="linker.counterpart"
-            :label="linkerRole === 'parent' ? 'Child entity ID' : 'Parent entity ID'"
-            mono
-            placeholder="order-1234"
-          />
+          <label class="block">
+            <span class="mb-1 block text-[13px] font-medium text-(--text-secondary)">
+              {{ linkerRole === 'parent' ? 'Child entity' : 'Parent entity' }}
+            </span>
+            <input
+              v-model="linker.counterpart"
+              list="counterpart-entities"
+              class="mono h-8.5 w-full rounded-md border border-(--border-strong) bg-(--surface) px-2.5 text-sm text-(--text) placeholder:text-(--text-muted)"
+              placeholder="order-1234"
+            />
+            <datalist id="counterpart-entities">
+              <option v-for="e in counterpartEntities.data.value?.items ?? []" :key="e.entity_id" :value="e.entity_id" />
+            </datalist>
+            <span class="mt-1 block text-[13px] text-(--text-muted)">
+              An entity of the {{ linkerRole === 'parent' ? 'child' : 'parent' }} type — pick an existing one or type an id.
+            </span>
+          </label>
           <Input
             v-if="linkerDef?.parent_version_policy === 'pinned'"
             v-model="linker.parentVersion"

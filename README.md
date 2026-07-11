@@ -208,9 +208,10 @@ FLEXITYPE_DB_HOST=localhost FLEXITYPE_DB_NAME=flexitype ./flexitype
 Configuration is environment-driven (`FLEXITYPE_PORT`, `FLEXITYPE_DB_*`,
 `FLEXITYPE_SERVICE_ACCOUNTS`, `FLEXITYPE_WEBHOOK_URL`/`_SECRET`,
 `FLEXITYPE_OUTBOX`, `FLEXITYPE_EVENT_RETENTION`, `FLEXITYPE_METRICS`,
-`FLEXITYPE_MIGRATE_ON_START`, `FLEXITYPE_LOG_LEVEL`). Tracing follows the
-standard `OTEL_EXPORTER_OTLP_ENDPOINT`. Liveness at `/healthz`, readiness
-(with a database probe) at `/readyz`.
+`FLEXITYPE_MIGRATE_ON_START`, `FLEXITYPE_LOG_LEVEL`) — every variable is
+tabulated in [docs/configuration.md](docs/configuration.md). Tracing
+follows the standard `OTEL_EXPORTER_OTLP_ENDPOINT`. Liveness at
+`/healthz`, readiness (with a database probe) at `/readyz`.
 
 Prometheus metrics are served at `/metrics` (unauthenticated;
 `FLEXITYPE_METRICS=false` to disable): `flexitype_http_requests_total` and

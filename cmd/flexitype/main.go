@@ -16,6 +16,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype"
 	"github.com/zkrebbekx/flexitype/application/outbox"
+	"github.com/zkrebbekx/flexitype/application/webhook"
 	"github.com/zkrebbekx/flexitype/pkg/config"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/health"
@@ -61,14 +62,17 @@ func run(log *logger.Logger) error {
 
 	// Client hooks for the standalone service come from the environment:
 	// a signed webhook endpoint is the zero-code integration; embedded
-	// deployments register richer hooks (pub/sub, funcs) in Go.
+	// deployments register richer hooks (pub/sub, funcs) in Go. With the
+	// outbox on, the env webhook becomes a managed subscription instead
+	// (retries, backoff, dead-lettering) — see the bootstrap below.
 	var opts []flexitype.Option
-	if url := os.Getenv("FLEXITYPE_WEBHOOK_URL"); url != "" {
+	envWebhookURL := os.Getenv("FLEXITYPE_WEBHOOK_URL")
+	if envWebhookURL != "" && !cfg.EnableOutbox {
 		opts = append(opts, flexitype.WithWebhook("env-webhook", events.WebhookConfig{
-			URL:    url,
+			URL:    envWebhookURL,
 			Secret: os.Getenv("FLEXITYPE_WEBHOOK_SECRET"),
 		}))
-		log.Info().Str("url", url).Msg("event webhook registered")
+		log.Info().Str("url", envWebhookURL).Msg("event webhook registered")
 	}
 	opts = append(opts, flexitype.WithRollbackObserver(func(_ context.Context, err error) {
 		log.Warn().Err(err).Msg("unit of work rolled back")
@@ -85,7 +89,13 @@ func run(log *logger.Logger) error {
 		opts = append(opts, flexitype.WithOutbox(outbox.WithErrorObserver(func(err error) {
 			log.Error().Err(err).Msg("outbox relay error")
 		})))
-		log.Info().Msg("transactional outbox enabled")
+		opts = append(opts, flexitype.WithDeliveryWorker(webhook.WithWorkerErrorObserver(func(err error) {
+			log.Error().Err(err).Msg("webhook delivery worker error")
+		})))
+		if cfg.EventRetention > 0 {
+			opts = append(opts, flexitype.WithEventRetention(cfg.EventRetention))
+		}
+		log.Info().Msg("transactional outbox enabled; event delivery API active")
 	}
 	if cfg.EnableSearchIndex {
 		opts = append(opts, flexitype.WithSearchIndex())
@@ -99,6 +109,14 @@ func run(log *logger.Logger) error {
 			return fmt.Errorf("apply migrations: %w", err)
 		}
 		log.Info().Msg("schema migrations applied")
+	}
+
+	if envWebhookURL != "" && cfg.EnableOutbox {
+		if err := svc.EnsureWebhookSubscription(ctx, "env-webhook", envWebhookURL,
+			os.Getenv("FLEXITYPE_WEBHOOK_SECRET")); err != nil {
+			return fmt.Errorf("bootstrap env webhook subscription: %w", err)
+		}
+		log.Info().Str("url", envWebhookURL).Msg("event webhook subscription ensured")
 	}
 
 	// Service accounts: no file means development mode with auth disabled.

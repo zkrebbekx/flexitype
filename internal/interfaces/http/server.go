@@ -109,6 +109,23 @@ func NewHandler(cfg ServerConfig) http.Handler {
 		api.Post("/search/reindex", s.reindexSearch)
 
 		api.Get("/activity", s.listActivity)
+
+		api.Route("/webhook-subscriptions", func(r chi.Router) {
+			r.Get("/", s.listSubscriptions)
+			r.Post("/", s.createSubscription)
+			r.Get("/{id}", s.getSubscription)
+			r.Patch("/{id}", s.updateSubscription)
+			r.Delete("/{id}", s.deleteSubscription)
+			r.Get("/{id}/deliveries", s.listSubscriptionDeliveries)
+		})
+		api.Post("/webhook-deliveries/{id}/redeliver", s.redeliverWebhook)
+
+		api.Get("/events", s.listEvents)
+		api.Get("/events/stream", s.streamEvents)
+		api.Route("/event-cursors/{consumer}", func(r chi.Router) {
+			r.Get("/", s.getCursor)
+			r.Put("/", s.commitCursor)
+		})
 	})
 
 	// Everything that is not the API or an operational endpoint is the

@@ -8,12 +8,15 @@ package flexitype
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
 	"github.com/zkrebbekx/flexitype/application"
+	"github.com/zkrebbekx/flexitype/application/feed"
 	"github.com/zkrebbekx/flexitype/application/outbox"
 	"github.com/zkrebbekx/flexitype/application/search"
+	"github.com/zkrebbekx/flexitype/application/webhook"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/infrastructure/memory"
@@ -34,6 +37,8 @@ type Service struct {
 	factory    application.Factory
 	relay      *outbox.Relay
 	indexer    *search.Indexer
+	worker     *webhook.Worker
+	pruner     *feed.Pruner
 }
 
 type options struct {
@@ -42,6 +47,8 @@ type options struct {
 	features    application.Features
 	outbox      bool
 	relayOpts   []outbox.RelayOption
+	workerOpts  []webhook.WorkerOption
+	retention   time.Duration
 	searchIndex bool
 }
 
@@ -88,12 +95,26 @@ func WithoutActivityLog() Option {
 
 // WithOutbox upgrades event delivery to at-least-once: envelopes persist
 // in the same transaction as the change and a relay dispatches them with
-// retries. Run the relay with Service.RunOutboxRelay.
+// retries. It also unlocks the standalone-consumer surface — webhook
+// subscriptions and the events feed. Run the delivery machinery with
+// Service.RunOutboxRelay.
 func WithOutbox(opts ...outbox.RelayOption) Option {
 	return func(o *options) {
 		o.outbox = true
 		o.relayOpts = opts
 	}
+}
+
+// WithDeliveryWorker customises the webhook delivery worker (attempt cap,
+// concurrency, HTTP client). Only meaningful with WithOutbox.
+func WithDeliveryWorker(opts ...webhook.WorkerOption) Option {
+	return func(o *options) { o.workerOpts = opts }
+}
+
+// WithEventRetention sets how long expanded events stay readable in the
+// feed before pruning (default 7 days). Only meaningful with WithOutbox.
+func WithEventRetention(d time.Duration) Option {
+	return func(o *options) { o.retention = d }
 }
 
 // WithSearchIndex enables the entity search projection: a dispatcher
@@ -124,6 +145,8 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	}
 
 	var relay *outbox.Relay
+	var worker *webhook.Worker
+	var pruner *feed.Pruner
 	cfg := application.FactoryConfig{
 		Transactor:      transactor,
 		NewRepositories: newRepos,
@@ -134,9 +157,24 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	}
 	if o.outbox {
 		store := postgres.NewOutboxStore(transactor)
-		relay = outbox.NewRelay(store, o.dispatcher, o.relayOpts...)
+		worker = webhook.NewWorker(postgres.NewDeliveryStore(pool), o.workerOpts...)
+		relay = outbox.NewRelay(store, o.dispatcher,
+			append([]outbox.RelayOption{outbox.WithAfterExpand(worker.Nudge)}, o.relayOpts...)...)
+
+		retention := o.retention
+		if retention <= 0 {
+			retention = 7 * 24 * time.Hour
+		}
+		feedStore := postgres.NewFeedStore(pool)
+		pruner = feed.NewPruner(feedStore, retention, nil)
+
 		cfg.Outbox = store
 		cfg.OutboxNudge = relay.Nudge
+		cfg.Subscriptions = postgres.NewSubscriptionStore(pool)
+		cfg.Deliveries = postgres.NewDeliveryStore(pool)
+		cfg.FeedStore = feedStore
+		cfg.CursorStore = postgres.NewCursorStore(pool)
+		cfg.Features.EventDelivery = true
 	}
 
 	return &Service{
@@ -146,6 +184,8 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		factory:    application.NewFactory(cfg),
 		relay:      relay,
 		indexer:    indexer,
+		worker:     worker,
+		pruner:     pruner,
 	}
 }
 
@@ -185,13 +225,34 @@ func NewInMemory(opts ...Option) *Service {
 	}
 }
 
-// RunOutboxRelay drains the event outbox until ctx ends. No-op without
-// WithOutbox. Run it as a goroutine next to the server.
+// RunOutboxRelay runs the event-delivery machinery until ctx ends: the
+// outbox relay (expansion + in-process dispatch), the webhook delivery
+// worker and the retention pruner. No-op without WithOutbox. Run it as a
+// goroutine next to the server; every replica runs it safely.
 func (s *Service) RunOutboxRelay(ctx context.Context) {
 	if s.relay == nil {
 		return
 	}
+	go s.worker.Run(ctx)
+	go s.pruner.Run(ctx)
 	s.relay.Run(ctx)
+}
+
+// EnsureWebhookSubscription upserts a webhook subscription by name — the
+// bootstrap path for environment-configured endpoints. Errors unless
+// WithOutbox is enabled.
+func (s *Service) EnsureWebhookSubscription(ctx context.Context, name, url, secret string, eventTypes ...string) error {
+	i := s.factory.New(ctx)
+	if i.Webhooks() == nil {
+		return domainerrors.NewValidation("webhook subscriptions require the outbox; enable it with WithOutbox")
+	}
+	_, err := i.Webhooks().Ensure(ctx, webhook.CreateInput{
+		Name:       name,
+		URL:        url,
+		Secret:     secret,
+		EventTypes: eventTypes,
+	})
+	return err
 }
 
 // ReindexSearch rebuilds every entity search document for a tenant.

@@ -20,10 +20,15 @@ type Store interface {
 	// of work's pre-commit handler.
 	Write(ctx context.Context, tx db.QueryExecer, envs []events.Envelope) error
 
-	// FetchPending claims up to limit undispatched envelopes. Concurrent
-	// relays must not claim the same rows (SKIP LOCKED semantics), so
-	// claiming and marking happen inside one transaction driven by fn.
-	FetchPending(ctx context.Context, limit int, fn func(envs []events.Envelope) []Result) error
+	// Expand claims up to limit undispatched envelopes and hands them to
+	// fn (in-process dispatch). For each success it assigns the next
+	// feed_seq, fans out one webhook-delivery row per matching
+	// subscription and marks the envelope dispatched — all in one
+	// transaction with no network I/O. Failures stay pending for the next
+	// pass. Implementations must serialize expansion (a single sequencer)
+	// so feed_seq is assigned in commit order, and must not claim rows
+	// another relay holds (SKIP LOCKED semantics).
+	Expand(ctx context.Context, limit int, fn func(envs []events.Envelope) []Result) error
 }
 
 // Result records one dispatch attempt.
@@ -36,12 +41,13 @@ type Result struct {
 // fetches pending envelopes, dispatches them and records outcomes. Failed
 // envelopes stay pending and retry on later passes.
 type Relay struct {
-	store      Store
-	dispatcher *events.Dispatcher
-	interval   time.Duration
-	batch      int
-	nudge      chan struct{}
-	onError    func(err error)
+	store       Store
+	dispatcher  *events.Dispatcher
+	interval    time.Duration
+	batch       int
+	nudge       chan struct{}
+	onError     func(err error)
+	afterExpand func()
 }
 
 // RelayOption customises a Relay.
@@ -61,6 +67,13 @@ func WithBatchSize(n int) RelayOption {
 // failures are recorded per envelope).
 func WithErrorObserver(fn func(err error)) RelayOption {
 	return func(r *Relay) { r.onError = fn }
+}
+
+// WithAfterExpand installs a hook invoked after a pass that expanded
+// envelopes — the delivery worker's nudge, keeping webhook latency in
+// milliseconds.
+func WithAfterExpand(fn func()) RelayOption {
+	return func(r *Relay) { r.afterExpand = fn }
 }
 
 // NewRelay builds a relay over the store and dispatcher.
@@ -105,12 +118,10 @@ func (r *Relay) Run(ctx context.Context) {
 
 // drain processes batches until the outbox is empty or ctx ends.
 func (r *Relay) drain(ctx context.Context) {
-	for {
-		if ctx.Err() != nil {
-			return
-		}
+	expanded := false
+	for ctx.Err() == nil {
 		processed := 0
-		err := r.store.FetchPending(ctx, r.batch, func(envs []events.Envelope) []Result {
+		err := r.store.Expand(ctx, r.batch, func(envs []events.Envelope) []Result {
 			processed = len(envs)
 			results := make([]Result, 0, len(envs))
 			for _, env := range envs {
@@ -125,10 +136,14 @@ func (r *Relay) drain(ctx context.Context) {
 			if r.onError != nil {
 				r.onError(err)
 			}
-			return
+			break
 		}
+		expanded = expanded || processed > 0
 		if processed < r.batch {
-			return
+			break
 		}
+	}
+	if expanded && r.afterExpand != nil {
+		r.afterExpand()
 	}
 }

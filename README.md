@@ -60,6 +60,12 @@ data resets on reload.
   at-least-once delivery for every hook (webhooks, pub/sub, the search
   indexer). `FLEXITYPE_OUTBOX=true` or `flexitype.WithOutbox()` +
   `Service.RunOutboxRelay`.
+- **Event delivery for other services** (with the outbox): managed webhook
+  subscriptions (`/api/v1/webhook-subscriptions`) with signed deliveries,
+  exponential backoff, dead-lettering and redrive; plus a cursor-paged
+  events feed (`/api/v1/events`), an SSE live tail and named
+  compare-and-swap cursors so replicated consumers read as one. Safe with
+  any number of flexitype replicas. Design: `docs/design/event-delivery.md`.
 - **Search index** (optional): an event-driven projection keeps one
   searchable document per entity, unlocking FQL `matches("free text")` and
   `POST /api/v1/search/reindex`; trigram indexes accelerate
@@ -175,9 +181,46 @@ FLEXITYPE_DB_HOST=localhost FLEXITYPE_DB_NAME=flexitype ./flexitype
 
 Configuration is environment-driven (`FLEXITYPE_PORT`, `FLEXITYPE_DB_*`,
 `FLEXITYPE_SERVICE_ACCOUNTS`, `FLEXITYPE_WEBHOOK_URL`/`_SECRET`,
+`FLEXITYPE_OUTBOX`, `FLEXITYPE_EVENT_RETENTION`,
 `FLEXITYPE_MIGRATE_ON_START`, `FLEXITYPE_LOG_LEVEL`). Tracing follows the
 standard `OTEL_EXPORTER_OTLP_ENDPOINT`. Liveness at `/healthz`, readiness
 (with a database probe) at `/readyz`.
+
+### Consuming events from another service
+
+With `FLEXITYPE_OUTBOX=true`, other services subscribe over the API — no
+broker, no SDK. Register an endpoint:
+
+```bash
+curl -X POST /api/v1/webhook-subscriptions -d '{
+  "name": "billing",
+  "url": "https://billing.internal/hooks/flexitype",
+  "secret": "s3cret",
+  "event_types": ["flexitype.attribute_value.set", "flexitype.attribute_value.updated"]
+}'
+```
+
+Every matching envelope arrives as a signed POST, retried with exponential
+backoff and dead-lettered (with API redrive) after ~3 days of failures.
+The receiving handler needs three things:
+
+1. **Return 2xx fast; process async.** Anything else retries.
+2. **Verify the signature** — `events.VerifyRequest(secrets,
+   r.Header.Get(events.HeaderTimestamp), body,
+   r.Header.Get(events.HeaderSignature), events.DefaultSignatureTolerance,
+   time.Now())` checks the HMAC and rejects replays.
+3. **Dedupe on the envelope `id`** (`INSERT ... ON CONFLICT DO NOTHING`
+   into a processed-events table). Delivery is at-least-once by design;
+   this one rule makes N flexitype replicas × M consumer replicas safe.
+
+Pull consumers use the ordered feed instead: `GET /api/v1/events?after=
+<cursor>` pages expanded events (`GET /api/v1/events/stream` is the SSE
+live tail, resuming via `Last-Event-ID`), and named cursors
+(`PUT /api/v1/event-cursors/{consumer}` with `{"position": n, "expected":
+m}`) commit progress with compare-and-swap, so replicated consumers read
+as one logical consumer. Cursors older than `FLEXITYPE_EVENT_RETENTION`
+(default 7 days) get `410 CURSOR_EXPIRED` — re-baseline instead of
+silently missing events. Full design: `docs/design/event-delivery.md`.
 
 ### Service accounts
 
@@ -221,6 +264,11 @@ GET        /api/v1/relationship-definitions/{id}/attribute-sets
 GET|POST   /api/v1/relationships               GET|DELETE /api/v1/relationships/{id}
 GET        /api/v1/entities/{typeDef}/{entity}/relationships
 GET        /api/v1/activity
+GET|POST   /api/v1/webhook-subscriptions       GET|PATCH|DELETE /api/v1/webhook-subscriptions/{id}
+GET        /api/v1/webhook-subscriptions/{id}/deliveries?status=
+POST       /api/v1/webhook-deliveries/{id}/redeliver
+GET        /api/v1/events?after=&types=        GET /api/v1/events/stream (SSE)
+GET|PUT    /api/v1/event-cursors/{consumer}
 ```
 
 Lists paginate with `?limit=` and an opaque `?cursor=`; errors carry stable

@@ -7,11 +7,13 @@ import (
 	"github.com/zkrebbekx/flexitype/application/activity"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
+	"github.com/zkrebbekx/flexitype/application/feed"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
+	"github.com/zkrebbekx/flexitype/application/webhook"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 )
@@ -26,6 +28,9 @@ type Features struct {
 	DisableActivity bool
 	// SearchIndex enables the entity search projection and FQL matches().
 	SearchIndex bool
+	// EventDelivery enables webhook subscriptions and the events feed.
+	// Requires the outbox (it is the durable log both are built on).
+	EventDelivery bool
 }
 
 // FactoryConfig carries the factory's composition-time dependencies.
@@ -61,6 +66,13 @@ type FactoryConfig struct {
 	// relay after commit.
 	Outbox      uow.EnvelopeSink
 	OutboxNudge func()
+
+	// Subscriptions/Deliveries power webhook-subscription management;
+	// FeedStore/CursorStore power the events feed. All require the outbox.
+	Subscriptions webhook.SubscriptionStore
+	Deliveries    webhook.DeliveryStore
+	FeedStore     feed.Store
+	CursorStore   feed.CursorStore
 }
 
 // factory is the common usecase factory: every request gets fresh
@@ -108,7 +120,7 @@ func (f *factory) New(context.Context) *Interactors {
 	}
 	unit := uow.New(f.cfg.Transactor, f.cfg.Dispatcher, activityLog, opts...)
 
-	return &Interactors{
+	i := &Interactors{
 		typeDefs:      apptypedef.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
 		attrs:         appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
 		values:        appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
@@ -118,4 +130,9 @@ func (f *factory) New(context.Context) *Interactors {
 		activity:      &ActivityInteractor{log: activityLog},
 		features:      f.cfg.Features,
 	}
+	if f.cfg.Features.EventDelivery {
+		i.webhooks = webhook.NewInteractor(unit, f.cfg.Subscriptions, f.cfg.Deliveries)
+		i.feed = feed.NewInteractor(f.cfg.FeedStore, f.cfg.CursorStore)
+	}
+	return i
 }

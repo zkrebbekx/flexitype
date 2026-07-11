@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
-import type { RelationshipKind, TypeDefinition, VersionPolicy } from '@/lib/api'
+import type { RelationshipDefinition, RelationshipKind, TypeDefinition, VersionPolicy } from '@/lib/api'
 import { useToasts } from '@/composables/useToasts'
 import Drawer from '@/components/ui/Drawer.vue'
 import Button from '@/components/ui/Button.vue'
@@ -10,11 +10,21 @@ import Input from '@/components/ui/Input.vue'
 import Select from '@/components/ui/Select.vue'
 import { ArrowLeftRight, ArrowRight } from 'lucide-vue-next'
 
-const props = defineProps<{ open: boolean; types: TypeDefinition[]; defaultParentId?: string }>()
+const props = defineProps<{
+  open: boolean
+  types: TypeDefinition[]
+  defaultParentId?: string
+  // When set, the drawer edits an existing definition instead of creating.
+  definition?: RelationshipDefinition
+}>()
 const emit = defineEmits<{ close: [] }>()
 
 const toasts = useToasts()
 const queryClient = useQueryClient()
+
+// Edit mode: endpoints, kind, internal name and inheritance are immutable,
+// so only the labels, display name, description and version bindings apply.
+const isEdit = computed(() => !!props.definition)
 
 const form = reactive({
   internal_name: '',
@@ -34,22 +44,24 @@ const error = ref('')
 const isSymmetric = computed(() => form.kind === 'symmetric')
 
 watch(
-  () => props.open,
-  (open) => {
+  () => [props.open, props.definition?.id],
+  ([open]) => {
     if (!open) return
     error.value = ''
-    form.internal_name = ''
-    form.display_name = ''
-    form.description = ''
-    form.kind = 'directed'
-    form.parent_type_id = props.defaultParentId ?? ''
-    form.child_type_id = ''
-    form.parent_label = ''
-    form.child_label = ''
-    form.extends_id = ''
-    form.parent_version_policy = 'latest'
-    form.child_version_policy = 'latest'
+    const d = props.definition
+    form.internal_name = d?.internal_name ?? ''
+    form.display_name = d?.display_name ?? ''
+    form.description = d?.description ?? ''
+    form.kind = d?.kind ?? 'directed'
+    form.parent_type_id = d?.parent_type_id ?? props.defaultParentId ?? ''
+    form.child_type_id = d?.child_type_id ?? ''
+    form.parent_label = d?.parent_label ?? ''
+    form.child_label = d?.child_label ?? ''
+    form.extends_id = d?.extends_id ?? ''
+    form.parent_version_policy = d?.parent_version_policy ?? 'latest'
+    form.child_version_policy = d?.child_version_policy ?? 'latest'
   },
+  { immediate: true },
 )
 
 // Symmetric pairs never pin (pinning is directional) and have no roles.
@@ -95,8 +107,18 @@ const KINDS = [
 ]
 
 const save = useMutation({
-  mutationFn: () =>
-    api.createRelationshipDefinition({
+  mutationFn: () => {
+    if (props.definition) {
+      return api.updateRelationshipDefinition(props.definition.id, {
+        display_name: form.display_name,
+        description: form.description || undefined,
+        parent_label: isSymmetric.value ? undefined : form.parent_label || undefined,
+        child_label: isSymmetric.value ? undefined : form.child_label || undefined,
+        parent_version_policy: form.parent_version_policy,
+        child_version_policy: form.child_version_policy,
+      })
+    }
+    return api.createRelationshipDefinition({
       internal_name: form.internal_name,
       display_name: form.display_name,
       description: form.description || undefined,
@@ -108,10 +130,11 @@ const save = useMutation({
       extends_id: form.extends_id || undefined,
       parent_version_policy: form.parent_version_policy,
       child_version_policy: form.child_version_policy,
-    }),
+    })
+  },
   onSuccess: (d) => {
     queryClient.invalidateQueries({ queryKey: ['relationship-definitions'] })
-    toasts.success(`Relationship "${d.display_name}" created`)
+    toasts.success(props.definition ? `Relationship "${d.display_name}" saved` : `Relationship "${d.display_name}" created`)
     emit('close')
   },
   onError: (e) => (error.value = friendlyError(e)),
@@ -121,13 +144,20 @@ const save = useMutation({
 <template>
   <Drawer
     :open="open"
-    title="New relationship type"
+    :title="isEdit ? 'Edit relationship type' : 'New relationship type'"
     subtitle="A named link between two types. It carries its own attributes, editable per link."
     @close="emit('close')"
   >
     <form class="flex flex-col gap-4" @submit.prevent="save.mutate()">
       <div class="grid grid-cols-2 gap-3">
-        <Input v-model="form.internal_name" label="Internal name" mono placeholder="uses" hint="snake_case; immutable" />
+        <Input
+          v-model="form.internal_name"
+          label="Internal name"
+          mono
+          placeholder="uses"
+          :hint="isEdit ? 'Immutable' : 'snake_case; immutable'"
+          :disabled="isEdit"
+        />
         <Input v-model="form.display_name" label="Display name" placeholder="Uses" />
       </div>
       <Input v-model="form.description" label="Description" placeholder="Optional" />
@@ -136,14 +166,15 @@ const save = useMutation({
         v-model="form.kind"
         label="Kind"
         :options="KINDS"
+        :disabled="isEdit"
         hint="Directed edges have roles and can pin versions; symmetric links are unordered peers (e.g. compatible_with)."
       />
 
       <div class="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
-        <Select v-model="form.parent_type_id" :label="isSymmetric ? 'Endpoint type A' : 'Parent type'" :options="typeOptions" />
+        <Select v-model="form.parent_type_id" :disabled="isEdit" :label="isSymmetric ? 'Endpoint type A' : 'Parent type'" :options="typeOptions" />
         <ArrowLeftRight v-if="isSymmetric" :size="16" class="mb-2.5 text-(--text-muted)" />
         <ArrowRight v-else :size="16" class="mb-2.5 text-(--text-muted)" />
-        <Select v-model="form.child_type_id" :label="isSymmetric ? 'Endpoint type B' : 'Child type'" :options="typeOptions" />
+        <Select v-model="form.child_type_id" :disabled="isEdit" :label="isSymmetric ? 'Endpoint type B' : 'Child type'" :options="typeOptions" />
       </div>
 
       <div v-if="!isSymmetric" class="grid grid-cols-2 gap-3">
@@ -157,6 +188,7 @@ const save = useMutation({
       </div>
 
       <Select
+        v-if="!isEdit"
         v-model="form.extends_id"
         label="Inherits from"
         :options="baseOptions"
@@ -169,7 +201,9 @@ const save = useMutation({
     <template #footer>
       <div class="flex justify-end gap-2">
         <Button @click="emit('close')">Cancel</Button>
-        <Button variant="primary" :disabled="save.isPending.value" @click="save.mutate()">Create relationship type</Button>
+        <Button variant="primary" :disabled="save.isPending.value" @click="save.mutate()">
+          {{ isEdit ? 'Save changes' : 'Create relationship type' }}
+        </Button>
       </div>
     </template>
   </Drawer>

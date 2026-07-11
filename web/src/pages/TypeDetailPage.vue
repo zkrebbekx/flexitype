@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
-import type { AttributeDefinition, Dependency } from '@/lib/api'
+import type { AttributeDefinition, Dependency, RelationshipDefinition } from '@/lib/api'
 import { ancestorsOf } from '@/lib/tree'
 import { formatRelative } from '@/lib/format'
 import { renderTyped } from '@/lib/values'
@@ -20,6 +20,7 @@ import SkeletonRows from '@/components/ui/SkeletonRows.vue'
 import AttributeDrawer from '@/components/AttributeDrawer.vue'
 import DependencyDrawer from '@/components/DependencyDrawer.vue'
 import RelationshipDefinitionDrawer from '@/components/RelationshipDefinitionDrawer.vue'
+import TypeDefinitionDrawer from '@/components/TypeDefinitionDrawer.vue'
 import { Plus, Archive, ArchiveRestore, ArrowRight, Pencil } from 'lucide-vue-next'
 
 const route = useRoute()
@@ -75,7 +76,8 @@ const ancestorChips = computed(() => {
 
 const relDefs = useQuery({
   queryKey: ['relationship-definitions', typeId],
-  queryFn: () => api.listRelationshipDefinitions({ type_definition_id: typeId.value, limit: 200 }),
+  queryFn: () =>
+    api.listRelationshipDefinitions({ type_definition_id: typeId.value, include_archived: true, limit: 200 }),
 })
 
 const tab = ref('attributes')
@@ -86,7 +88,43 @@ const tabs = computed(() => [
   { key: 'entities', label: 'Entities', count: entities.data.value?.page_info.total_count },
 ])
 
+// Relationship-definition drawer state (create + edit)
 const relDrawer = ref(false)
+const editingRel = ref<RelationshipDefinition>()
+function openRel(d?: RelationshipDefinition) {
+  editingRel.value = d
+  relDrawer.value = true
+}
+
+// Type-level edit / archive / restore
+const typeDrawer = ref(false)
+const confirmTypeArchive = ref(false)
+const archiveType = useMutation({
+  mutationFn: () => {
+    const t = type.data.value
+    if (!t) throw new Error('no type')
+    return t.archived_at ? api.restoreType(t.id) : api.archiveType(t.id)
+  },
+  onSuccess: (t) => {
+    queryClient.invalidateQueries({ queryKey: ['type', typeId] })
+    queryClient.invalidateQueries({ queryKey: ['types'] })
+    toasts.success(t.archived_at ? `"${t.display_name}" archived` : `"${t.display_name}" restored`)
+    confirmTypeArchive.value = false
+  },
+  onError: (e) => toasts.error(friendlyError(e)),
+})
+
+const confirmRelArchive = ref<RelationshipDefinition>()
+const archiveRel = useMutation({
+  mutationFn: (d: RelationshipDefinition) =>
+    d.archived_at ? api.restoreRelationshipDefinition(d.id) : api.archiveRelationshipDefinition(d.id),
+  onSuccess: (d) => {
+    queryClient.invalidateQueries({ queryKey: ['relationship-definitions'] })
+    toasts.success(d.archived_at ? `"${d.display_name}" archived` : `"${d.display_name}" restored`)
+    confirmRelArchive.value = undefined
+  },
+  onError: (e) => toasts.error(friendlyError(e)),
+})
 
 function typeName(id: string): string {
   return allTypes.data.value?.items.find((t) => t.id === id)?.display_name ?? id
@@ -184,6 +222,17 @@ function describeEffect(d: Dependency): string {
         </RouterLink>
       </span>
       <Badge v-if="type.data.value?.archived_at" tone="warn">archived</Badge>
+      <template v-if="type.data.value">
+        <Button size="sm" @click="typeDrawer = true"><Pencil :size="14" /> Edit</Button>
+        <Button
+          size="sm"
+          :variant="type.data.value.archived_at ? 'secondary' : 'danger'"
+          @click="type.data.value.archived_at ? archiveType.mutate() : (confirmTypeArchive = true)"
+        >
+          <component :is="type.data.value.archived_at ? ArchiveRestore : Archive" :size="14" />
+          {{ type.data.value.archived_at ? 'Restore' : 'Archive' }}
+        </Button>
+      </template>
     </template>
   </PageHeader>
 
@@ -346,7 +395,7 @@ function describeEffect(d: Dependency): string {
   <!-- Relationship types -->
   <section v-else-if="tab === 'relationships'" class="mt-4">
     <div class="mb-3 flex justify-end">
-      <Button variant="primary" size="sm" @click="relDrawer = true"><Plus :size="14" /> New relationship type</Button>
+      <Button variant="primary" size="sm" @click="openRel()"><Plus :size="14" /> New relationship type</Button>
     </div>
 
     <div class="flex flex-col gap-2">
@@ -354,12 +403,14 @@ function describeEffect(d: Dependency): string {
         v-for="d in relDefs.data.value?.items"
         :key="d.id"
         class="rounded-lg border border-(--border) bg-(--surface) p-3.5"
+        :class="{ 'opacity-55': d.archived_at }"
       >
         <div class="flex items-start justify-between gap-3">
           <div class="text-sm">
             <p class="flex flex-wrap items-center gap-1.5 font-medium">
               {{ d.display_name }}
               <span class="mono text-[12px] text-(--text-muted)">{{ d.internal_name }}</span>
+              <Badge v-if="d.archived_at" tone="warn">archived</Badge>
             </p>
             <p class="mt-1 flex items-center gap-1.5 text-[13px] text-(--text-secondary)">
               {{ typeName(d.parent_type_id) }}
@@ -372,6 +423,19 @@ function describeEffect(d: Dependency): string {
               <Badge v-if="d.extends_id" tone="accent">inherits</Badge>
             </p>
           </div>
+          <div class="flex shrink-0 items-center gap-1">
+            <Button v-if="!d.archived_at" size="sm" variant="ghost" aria-label="Edit relationship type" @click="openRel(d)">
+              <Pencil :size="14" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              :aria-label="d.archived_at ? 'Restore relationship type' : 'Archive relationship type'"
+              @click="d.archived_at ? archiveRel.mutate(d) : (confirmRelArchive = d)"
+            >
+              <component :is="d.archived_at ? ArchiveRestore : Archive" :size="14" />
+            </Button>
+          </div>
         </div>
       </article>
 
@@ -381,7 +445,7 @@ function describeEffect(d: Dependency): string {
         body="Relationship types link entities of two types — with their own attributes, constraints and version binding."
       >
         <template #action>
-          <Button variant="primary" @click="relDrawer = true"><Plus :size="15" /> New relationship type</Button>
+          <Button variant="primary" @click="openRel()"><Plus :size="15" /> New relationship type</Button>
         </template>
       </EmptyState>
     </div>
@@ -429,8 +493,10 @@ function describeEffect(d: Dependency): string {
     :open="relDrawer"
     :types="allTypes.data.value?.items ?? []"
     :default-parent-id="typeId"
+    :definition="editingRel"
     @close="relDrawer = false"
   />
+  <TypeDefinitionDrawer :open="typeDrawer" :type="type.data.value" @close="typeDrawer = false" />
   <DependencyDrawer
     :open="depDrawer"
     :type-id="typeId"
@@ -447,5 +513,25 @@ function describeEffect(d: Dependency): string {
     danger
     @close="confirmArchive = undefined"
     @confirm="confirmArchive && archiveAttr.mutate(confirmArchive)"
+  />
+
+  <Modal
+    :open="confirmTypeArchive"
+    title="Archive this type?"
+    :message="`“${type.data.value?.display_name}” is hidden from pickers and stops accepting new entities. Existing data is kept and the type can be restored at any time.`"
+    confirm-label="Archive"
+    danger
+    @close="confirmTypeArchive = false"
+    @confirm="archiveType.mutate()"
+  />
+
+  <Modal
+    :open="!!confirmRelArchive"
+    title="Archive relationship type?"
+    :message="`“${confirmRelArchive?.display_name}” stops accepting new links. Existing links are kept and it can be restored at any time.`"
+    confirm-label="Archive"
+    danger
+    @close="confirmRelArchive = undefined"
+    @confirm="confirmRelArchive && archiveRel.mutate(confirmRelArchive)"
   />
 </template>

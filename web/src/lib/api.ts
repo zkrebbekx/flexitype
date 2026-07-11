@@ -458,6 +458,8 @@ export const api = {
   ) => request<RelationshipDefinition>('PATCH', `/relationship-definitions/${id}`),
   archiveRelationshipDefinition: (id: string) =>
     request<RelationshipDefinition>('POST', `/relationship-definitions/${id}/archive`),
+  restoreRelationshipDefinition: (id: string) =>
+    request<RelationshipDefinition>('POST', `/relationship-definitions/${id}/restore`),
   relationshipAttributeSets: (id: string) =>
     request<{ attribute_set_ids: string[] }>('GET', `/relationship-definitions/${id}/attribute-sets`),
   link: (input: {

@@ -1,133 +1,207 @@
-# Flexitype
+# flexitype
 
-Flexitype is a flexible attribute model system inspired by PTC Windchill. It provides a robust way to define and manage attributes with various types and constraints, supporting complex relationships between attributes.
+Soft types and attributes for Go: define entity types, typed and constrained
+attributes, and attribute dependencies at **runtime** — then attach validated
+values to your own domain objects. Inspired by PLM-class flexible attribute
+systems, built as a production-grade DDD Go service.
+
+Runs two ways from one codebase:
+
+- **Embedded library** — wire it into your service over your own `*sqlx.DB`
+- **Standalone service** — a single binary with a versioned REST API,
+  service-account auth, OpenTelemetry and health endpoints
 
 ## Features
 
-- **Flexible Attribute Types**: Support for various attribute types including:
-  - Boolean
-  - String
-  - Integer
-  - Float
-  - Date
-  - Time
-  - Enum
-  - Decimal
-  - URL
-  - Email
-  - JSON
+- **Soft types**: `TypeDefinition` → `AttributeDefinition` → `AttributeValue`,
+  anchored to *your* entities via an opaque `entity_id`
+- **12 data types**: bool, string, integer, float, decimal (arbitrary
+  precision), date, time, datetime, enum, url, email, json
+- **Constraints**: min/max length, min/max value, RE2 pattern, one-of, plus
+  required / multi-valued / unique attribute flags
+- **Attribute dependencies**: cascading picklists and conditional validation —
+  when a source attribute matches conditions (equals / in / range / pattern /
+  dynamic time), the target's allowed values narrow, constraints tighten or
+  required flips; resolve the *effective schema* per entity for building UIs
+- **Dynamic values**: `now` / `today` / relative-time defaults and conditions
+- **Domain events**: aggregates return `[]events.Event`; a dispatcher fans a
+  stable JSON envelope out to **your** infrastructure — pub/sub brokers,
+  HMAC-signed webhooks, or plain funcs
+- **Activity log**: every change audited with JSON before/after descriptors,
+  written in the *same transaction* as the change
+- **Dataloaders throughout the repositories**: point lookups batch into
+  `ANY()` queries, identical filter+page queries deduplicate, per-parent
+  pagination collapses into one windowed query
+- **Multi-tenant** from day one; **definition versioning** with values pinned
+  to the version they were validated against
 
-- **Rich Constraints**: Each attribute can have multiple constraints:
-  - Required
-  - Min/Max Length
-  - Min/Max Value
-  - Pattern (Regex)
-  - Enum Values
-  - Multi-value
-  - Unique
-  - Custom Validation
+## Architecture
 
-- **Attribute Relationships**: Support for linked attributes where the value of one attribute can affect the constraints or allowed values of another.
-
-- **Query Language**: JIRA-like query language for searching and filtering attributes and their values.
-
-- **Multiple Interfaces**: Support for both HTTP and gRPC APIs.
-
-- **Extensible Storage**: Default PostgreSQL implementation with clean architecture allowing for custom storage implementations.
-
-## Getting Started
-
-### Prerequisites
-
-- Go 1.16 or later
-- PostgreSQL 12 or later
-
-### Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/zkrebbekx/flexitype.git
-   cd flexitype
-   ```
-
-2. Install dependencies:
-   ```bash
-   go mod download
-   ```
-
-3. Set up the database:
-   ```bash
-   createdb flexitype
-   psql -d flexitype -f migrations/000001_init.up.sql
-   ```
-
-4. Build and run the server:
-   ```bash
-   go build -o flexitype cmd/server/main.go
-   ./flexitype
-   ```
-
-### Configuration
-
-The server can be configured using command-line flags:
-
-```bash
-./flexitype -port 8080 \
-  -db-host localhost \
-  -db-port 5432 \
-  -db-user postgres \
-  -db-pass postgres \
-  -db-name flexitype \
-  -db-ssl disable
+```
+domain/          Aggregates, value objects, constraints, events, repo ports
+application/     Usecases (interactors), common factory, unit of work,
+                 activity log contract, actor/tenant context
+infrastructure/  PostgreSQL repositories (dataloader-backed), migrations,
+                 activity log, embedded migration runner
+internal/.../http REST API for the standalone service
+pkg/             Reusable primitives: ulid, db (Transactor + commit hooks),
+                 dataloader, events (dispatcher + hooks), logger, config,
+                 telemetry, health, shutdown, serviceaccount
+cmd/flexitype    Composition root for the standalone service
+flexitype.go     Embedding facade
 ```
 
-## API Documentation
+Every write flows through the **unit of work**: the usecase opens the
+transaction, repositories join it (`WithTx`, `GetForUpdate` row locks), and
+the common factory registers three commit handlers —
 
-### HTTP API
+1. **pre-commit** → activity-log rows written inside the transaction
+2. **post-commit** → domain events dispatched to your hooks (only after the
+   change is durable)
+3. **rollback** → observability hook
 
-The HTTP API is available at `http://localhost:8080/api/v1/` with the following endpoints:
+## Embedded usage
 
-- `GET /api/v1/attributes` - List all attributes
-- `POST /api/v1/attributes` - Create a new attribute
-- `GET /api/v1/attributes/{id}` - Get an attribute by ID
-- `PUT /api/v1/attributes/{id}` - Update an attribute
-- `DELETE /api/v1/attributes/{id}` - Delete an attribute
+```go
+import (
+    "github.com/jmoiron/sqlx"
+    _ "github.com/lib/pq"
 
-- `GET /api/v1/values` - List all attribute values
-- `POST /api/v1/values` - Create a new attribute value
-- `GET /api/v1/values/{id}` - Get an attribute value by ID
-- `PUT /api/v1/values/{id}` - Update an attribute value
-- `DELETE /api/v1/values/{id}` - Delete an attribute value
+    "github.com/zkrebbekx/flexitype"
+    "github.com/zkrebbekx/flexitype/pkg/events"
+)
 
-- `GET /api/v1/links` - List all type links
-- `POST /api/v1/links` - Create a new type link
-- `GET /api/v1/links/{id}` - Get a type link by ID
-- `PUT /api/v1/links/{id}` - Update a type link
-- `DELETE /api/v1/links/{id}` - Delete a type link
+pool, _ := sqlx.Connect("postgres", dsn)
 
-- `GET /api/v1/search?q={query}` - Search attributes and values
+svc := flexitype.New(pool,
+    // Route events into your broker (NATS, Kafka, SNS, ...).
+    flexitype.WithPublisher("nats", myNATSPublisher, nil),
+    // Or deliver signed webhooks.
+    flexitype.WithWebhook("billing", events.WebhookConfig{
+        URL:    "https://billing.internal/hooks/flexitype",
+        Secret: os.Getenv("HOOK_SECRET"),
+    }),
+    // Or just run a func.
+    flexitype.WithHandlerFunc("cache-invalidator", func(ctx context.Context, env events.Envelope) error {
+        cache.Invalidate(env.AggregateID)
+        return nil
+    }, events.WithEventTypes("flexitype.attribute_value.updated")),
+)
 
-### gRPC API
+_ = svc.Migrate(ctx) // embedded migrations, advisory-locked, idempotent
 
-The gRPC API is available on the same port as the HTTP API. See the proto files in the `api/proto` directory for the service definition.
+// One interactor set per request/unit of work (fresh dataloader caches).
+interactors := svc.Interactors(ctx)
+product, _ := interactors.TypeDefinitions().Create(ctx, typedef.CreateInput{
+    InternalName: "product",
+    DisplayName:  "Product",
+})
+```
 
-## Query Language
+Consumers on other stacks integrate via the standalone service's REST API and
+webhooks; every subscriber sees the same envelope:
 
-The search query language is similar to JIRA's query language. Examples:
+```json
+{
+  "id": "01J...",
+  "type": "flexitype.attribute_value.updated",
+  "aggregate_type": "attribute_value",
+  "aggregate_id": "01J...",
+  "tenant_id": "acme",
+  "actor": "service_account:ci-importer",
+  "occurred_at": "2026-07-11T10:00:00Z",
+  "recorded_at": "2026-07-11T10:00:00.003Z",
+  "schema_version": 1,
+  "payload": { "old_value": "SN-100", "new_value": "SN-200", "...": "..." }
+}
+```
 
-- `type = "string"` - Find all string attributes
-- `name ~ "user"` - Find attributes with names containing "user"
-- `constraints.required = true` - Find all required attributes
-- `value > 100` - Find attribute values greater than 100
+Webhook deliveries carry `X-Flexitype-Signature` (hex HMAC-SHA256 of the
+body); verify with `events.VerifySignature`.
 
-## Contributing
+## Standalone service
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+```bash
+go build -o flexitype ./cmd/flexitype
+FLEXITYPE_DB_HOST=localhost FLEXITYPE_DB_NAME=flexitype ./flexitype
+```
+
+Configuration is environment-driven (`FLEXITYPE_PORT`, `FLEXITYPE_DB_*`,
+`FLEXITYPE_SERVICE_ACCOUNTS`, `FLEXITYPE_WEBHOOK_URL`/`_SECRET`,
+`FLEXITYPE_MIGRATE_ON_START`, `FLEXITYPE_LOG_LEVEL`). Tracing follows the
+standard `OTEL_EXPORTER_OTLP_ENDPOINT`. Liveness at `/healthz`, readiness
+(with a database probe) at `/readyz`.
+
+### Service accounts
+
+Machine-to-machine auth via bearer tokens (`ft_<account>_<secret>`), accounts
+declared in a JSON file with SHA-256 secret hashes and `read`/`write`/`admin`
+scopes; each account is pinned to a tenant:
+
+```json
+[
+  {
+    "id": "ci",
+    "name": "CI Importer",
+    "tenant_id": "acme",
+    "scopes": ["read", "write"],
+    "secret_hash": "<hex sha256 of the secret>"
+  }
+]
+```
+
+No file configured → auth disabled (development mode).
+
+### REST API (v1)
+
+```
+GET|POST   /api/v1/type-definitions            PATCH /api/v1/type-definitions/{id}
+POST       /api/v1/type-definitions/{id}/archive|restore
+GET        /api/v1/type-definitions/{id}/attributes
+GET|POST   /api/v1/attributes                  PATCH /api/v1/attributes/{id}
+POST       /api/v1/attributes/{id}/archive|restore
+GET|POST   /api/v1/values                      GET|DELETE /api/v1/values/{id}
+GET        /api/v1/entities/{typeDef}/{entity}/values
+GET        /api/v1/entities/{typeDef}/{entity}/attributes/{attr}/effective-schema
+GET|POST   /api/v1/dependencies                PATCH|DELETE /api/v1/dependencies/{id}
+GET        /api/v1/activity
+```
+
+Lists paginate with `?limit=` and an opaque `?cursor=`; errors carry stable
+machine codes (`VALIDATION`, `NOT_FOUND`, `CONFLICT`, `ARCHIVED`,
+`DEPENDENCY_VIOLATION`).
+
+## Example: cascading picklist
+
+```bash
+# category: enum(bike, car)      subcategory: enum(mountain, road, sedan, suv)
+curl -X POST :8080/api/v1/dependencies -d '{
+  "source_attribute_id": "'$CATEGORY'",
+  "target_attribute_id": "'$SUBCATEGORY'",
+  "conditions": [{"kind": "equals", "value": {"type": "enum", "value": "bike"}}],
+  "effect": {"allowed_values": [
+    {"type": "enum", "value": "mountain"},
+    {"type": "enum", "value": "road"}
+  ]}
+}'
+
+# With category=bike set on product-9, the UI asks what subcategory may be:
+curl :8080/api/v1/entities/$TYPE/product-9/attributes/$SUBCATEGORY/effective-schema
+# → {"required":false,"restricted":true,"allowed_values":["mountain","road"], ...}
+```
+
+## Development
+
+```bash
+go build ./...   # everything compiles without a database
+go test ./...    # goconvey Given/When/Then suites
+go vet ./...
+```
+
+Storage is a single polymorphic value table with one typed, indexed column
+per storage class — no table-per-type explosion, uniqueness probes stay
+index-backed, and entity hydration is one composite-index scan.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+MIT

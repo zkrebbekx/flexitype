@@ -83,8 +83,14 @@ func (i *Interactor) CreateDefinition(ctx context.Context, in CreateDefinitionIn
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, parentType.TenantID(), "type_definition", in.ParentTypeID); err != nil {
+			return err
+		}
 		childType, err := typeDefs.Get(ctx, childTypeID)
 		if err != nil {
+			return err
+		}
+		if err := uow.EnsureTenant(ctx, childType.TenantID(), "type_definition", in.ChildTypeID); err != nil {
 			return err
 		}
 
@@ -95,6 +101,9 @@ func (i *Interactor) CreateDefinition(ctx context.Context, in CreateDefinitionIn
 				return domainerrors.NewValidation("extends: " + perr.Error())
 			}
 			if extends, err = defs.Get(ctx, extendsID); err != nil {
+				return err
+			}
+			if err := uow.EnsureTenant(ctx, extends.TenantID(), domainrelationship.DefinitionAggregateType, in.ExtendsID); err != nil {
 				return err
 			}
 		}
@@ -176,6 +185,9 @@ func (i *Interactor) UpdateDefinition(ctx context.Context, in UpdateDefinitionIn
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, def.TenantID(), domainrelationship.DefinitionAggregateType, in.ID); err != nil {
+			return err
+		}
 		before := def.Snapshot()
 
 		evts, err := def.Update(domainrelationship.UpdateDefinitionInput{
@@ -237,6 +249,9 @@ func (i *Interactor) transitionDefinition(ctx context.Context, rawID string, act
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, def.TenantID(), domainrelationship.DefinitionAggregateType, rawID); err != nil {
+			return err
+		}
 		before := def.Snapshot()
 
 		var evts []events.Event
@@ -280,6 +295,9 @@ func (i *Interactor) GetDefinition(ctx context.Context, rawID string) (*domainre
 	if err != nil {
 		return nil, err
 	}
+	if err := uow.EnsureTenant(ctx, def.TenantID(), domainrelationship.DefinitionAggregateType, rawID); err != nil {
+		return nil, err
+	}
 	snap := def.Snapshot()
 	return &snap, nil
 }
@@ -318,6 +336,9 @@ func (i *Interactor) ListDefinitions(ctx context.Context, in DefinitionListInput
 		// relationship its ancestors do, so match the whole chain.
 		t, terr := i.typeDefs.Get(ctx, typeID)
 		if terr != nil {
+			return nil, terr
+		}
+		if terr := uow.EnsureTenant(ctx, t.TenantID(), "type_definition", in.TypeDefinitionID); terr != nil {
 			return nil, terr
 		}
 		chain, terr := apptypedef.Chain(ctx, i.typeDefs, t)
@@ -360,6 +381,11 @@ func (i *Interactor) AttributeSets(ctx context.Context, rawID string) ([]string,
 		def, err := i.defs.Get(ctx, id)
 		if err != nil {
 			return nil, err
+		}
+		if depth == 0 {
+			if err := uow.EnsureTenant(ctx, def.TenantID(), domainrelationship.DefinitionAggregateType, rawID); err != nil {
+				return nil, err
+			}
 		}
 		if seen[def.ID().String()] {
 			return nil, domainerrors.NewValidation("relationship definition inheritance forms a cycle",
@@ -409,6 +435,9 @@ func (i *Interactor) Link(ctx context.Context, in LinkInput) (*domainrelationshi
 		// Lock the definition: link validity depends on its policies.
 		def, err := defs.GetForUpdate(ctx, defID)
 		if err != nil {
+			return err
+		}
+		if err := uow.EnsureTenant(ctx, def.TenantID(), domainrelationship.DefinitionAggregateType, in.DefinitionID); err != nil {
 			return err
 		}
 
@@ -472,6 +501,9 @@ func (i *Interactor) Unlink(ctx context.Context, rawID string) (*domainrelations
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, rel.TenantID(), domainrelationship.AggregateType, rawID); err != nil {
+			return err
+		}
 		before := rel.Snapshot()
 
 		evts, err := rel.Unlink(i.now())
@@ -506,6 +538,9 @@ func (i *Interactor) Get(ctx context.Context, rawID string) (*domainrelationship
 	}
 	rel, err := i.links.Get(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := uow.EnsureTenant(ctx, rel.TenantID(), domainrelationship.AggregateType, rawID); err != nil {
 		return nil, err
 	}
 	snap := rel.Snapshot()

@@ -72,6 +72,9 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, td.TenantID(), domaintypedef.AggregateType, in.TypeDefinitionID); err != nil {
+			return err
+		}
 		if td.IsArchived() {
 			return domainerrors.NewArchived(domaintypedef.AggregateType, td.ID().String())
 		}
@@ -182,6 +185,9 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, attr.TenantID(), domainattribute.AggregateType, in.ID); err != nil {
+			return err
+		}
 		before := attr.Snapshot()
 
 		evts, err := attr.Update(domainattribute.UpdateInput{
@@ -241,6 +247,9 @@ func (i *Interactor) transition(ctx context.Context, rawID string, action activi
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, attr.TenantID(), domainattribute.AggregateType, rawID); err != nil {
+			return err
+		}
 		before := attr.Snapshot()
 
 		var evts []events.Event
@@ -286,6 +295,9 @@ func (i *Interactor) ValidateValue(ctx context.Context, rawID string, rawValue j
 	if err != nil {
 		return err
 	}
+	if err := uow.EnsureTenant(ctx, def.TenantID(), domainattribute.AggregateType, rawID); err != nil {
+		return err
+	}
 	v, err := valueobjects.ParseValue(def.DataType(), rawValue)
 	if err != nil {
 		return domainerrors.NewValidation(err.Error())
@@ -303,6 +315,9 @@ func (i *Interactor) Get(ctx context.Context, rawID string) (*domainattribute.Sn
 	if err != nil {
 		return nil, err
 	}
+	if err := uow.EnsureTenant(ctx, attr.TenantID(), domainattribute.AggregateType, rawID); err != nil {
+		return nil, err
+	}
 	snap := attr.Snapshot()
 	return &snap, nil
 }
@@ -316,6 +331,14 @@ func (i *Interactor) ListByTypeDefinition(ctx context.Context, rawTypeDefID stri
 	page, err := args.Resolve()
 	if err != nil {
 		return nil, domainerrors.NewValidation(err.Error())
+	}
+
+	td, err := i.typeDefs.Get(ctx, typeDefID)
+	if err != nil {
+		return nil, err
+	}
+	if err := uow.EnsureTenant(ctx, td.TenantID(), "type_definition", rawTypeDefID); err != nil {
+		return nil, err
 	}
 
 	items, total, err := i.attrs.ListByTypeDefinition(ctx, typeDefID, page)

@@ -70,8 +70,14 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domaindepende
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, source.TenantID(), "attribute_definition", in.SourceAttributeID); err != nil {
+			return err
+		}
 		target, err := attrs.GetForUpdate(ctx, targetID)
 		if err != nil {
+			return err
+		}
+		if err := uow.EnsureTenant(ctx, target.TenantID(), "attribute_definition", in.TargetAttributeID); err != nil {
 			return err
 		}
 
@@ -140,6 +146,9 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domaindepende
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, d.TenantID(), domaindependency.AggregateType, in.ID); err != nil {
+			return err
+		}
 		before := d.Snapshot()
 
 		source, err := attrs.Get(ctx, d.SourceAttributeID())
@@ -195,6 +204,9 @@ func (i *Interactor) Archive(ctx context.Context, rawID string) (*domaindependen
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, d.TenantID(), domaindependency.AggregateType, rawID); err != nil {
+			return err
+		}
 		before := d.Snapshot()
 
 		evts, err := d.Archive(i.now())
@@ -230,6 +242,9 @@ func (i *Interactor) Get(ctx context.Context, rawID string) (*domaindependency.S
 	}
 	d, err := i.deps.Get(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := uow.EnsureTenant(ctx, d.TenantID(), domaindependency.AggregateType, rawID); err != nil {
 		return nil, err
 	}
 	snap := d.Snapshot()
@@ -312,6 +327,9 @@ func (i *Interactor) EffectiveSchema(ctx context.Context, rawAttrID, rawEntityID
 
 	def, err := i.attrs.Get(ctx, attrID)
 	if err != nil {
+		return nil, err
+	}
+	if err := uow.EnsureTenant(ctx, def.TenantID(), "attribute_definition", rawAttrID); err != nil {
 		return nil, err
 	}
 	targeting, err := i.deps.ListByTarget(ctx, attrID)

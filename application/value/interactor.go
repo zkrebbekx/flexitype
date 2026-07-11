@@ -76,6 +76,9 @@ func (i *Interactor) Set(ctx context.Context, in SetInput) (*domainvalue.Snapsho
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, def.TenantID(), "attribute_definition", in.AttributeDefinitionID); err != nil {
+			return err
+		}
 
 		// Resolve the entity's declared type and prove the attribute is in
 		// its inherited schema.
@@ -239,6 +242,9 @@ func (i *Interactor) Remove(ctx context.Context, rawID string) (*domainvalue.Sna
 		if err != nil {
 			return err
 		}
+		if err := uow.EnsureTenant(ctx, av.TenantID(), domainvalue.AggregateType, rawID); err != nil {
+			return err
+		}
 		before := av.Snapshot()
 
 		evts, err := av.Remove(i.now())
@@ -273,6 +279,9 @@ func (i *Interactor) Get(ctx context.Context, rawID string) (*domainvalue.Snapsh
 	}
 	av, err := i.values.Get(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := uow.EnsureTenant(ctx, av.TenantID(), domainvalue.AggregateType, rawID); err != nil {
 		return nil, err
 	}
 	snap := av.Snapshot()

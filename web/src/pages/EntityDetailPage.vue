@@ -67,9 +67,26 @@ function matchesFilter(row: Row): boolean {
     row.attribute.internal_name.toLowerCase().includes(q)
   )
 }
-const ownedRows = computed(() => rows.value.filter((r) => r.declaredIn.id === typeId.value && matchesFilter(r)))
-const inheritedRows = computed(() => rows.value.filter((r) => r.declaredIn.id !== typeId.value && matchesFilter(r)))
-const noMatches = computed(() => !!attrFilter.value.trim() && !ownedRows.value.length && !inheritedRows.value.length)
+// Group by the attribute's presentation group (server already ordered the
+// effective attributes by group then sort_order); ungrouped attributes fall
+// into a "General" section rendered first.
+const groupedRows = computed(() => {
+  const sections: { group: string; rows: Row[] }[] = []
+  const index = new Map<string, number>()
+  for (const r of rows.value) {
+    if (!matchesFilter(r)) continue
+    const g = r.attribute.group?.trim() || 'General'
+    let at = index.get(g)
+    if (at === undefined) {
+      at = sections.length
+      index.set(g, at)
+      sections.push({ group: g, rows: [] })
+    }
+    sections[at].rows.push(r)
+  }
+  return sections
+})
+const noMatches = computed(() => !!attrFilter.value.trim() && !groupedRows.value.length)
 
 // --- editing -----------------------------------------------------------------
 
@@ -280,24 +297,10 @@ const removeValue = useMutation({
       />
     </div>
 
-    <template v-if="ownedRows.length">
-      <p class="mt-1 text-[12px] font-medium tracking-wide text-(--text-muted) uppercase">Own attributes</p>
+    <template v-for="section in groupedRows" :key="section.group">
+      <p class="mt-1 text-[12px] font-medium tracking-wide text-(--text-muted) uppercase">{{ section.group }}</p>
       <EntityAttributeRow
-        v-for="row in ownedRows"
-        :key="row.attribute.id"
-        :attribute="row.attribute"
-        :declared-in="row.declaredIn"
-        :values="row.values"
-        :own-type-id="typeId"
-        @edit="openEditor"
-        @remove="(v) => (confirmRemove = v)"
-      />
-    </template>
-
-    <template v-if="inheritedRows.length">
-      <p class="mt-2 text-[12px] font-medium tracking-wide text-(--text-muted) uppercase">Inherited</p>
-      <EntityAttributeRow
-        v-for="row in inheritedRows"
+        v-for="row in section.rows"
         :key="row.attribute.id"
         :attribute="row.attribute"
         :declared-in="row.declaredIn"

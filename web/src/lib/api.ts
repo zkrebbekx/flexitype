@@ -113,6 +113,9 @@ export interface AttributeDefinition {
   unique: boolean
   constraints: Constraint[]
   default_value?: DefaultValue
+  group?: string
+  sort_order?: number
+  help_text?: string
   version: number
   created_at: string
   updated_at: string
@@ -362,6 +365,9 @@ export const api = {
     unique?: boolean
     constraints?: Constraint[]
     default_value?: DefaultValue
+    group?: string
+    sort_order?: number
+    help_text?: string
   }) => request<AttributeDefinition>('POST', '/attributes', input),
   updateAttribute: (
     id: string,
@@ -373,6 +379,9 @@ export const api = {
       unique?: boolean
       constraints?: Constraint[]
       default_value?: DefaultValue
+      group?: string
+      sort_order?: number
+      help_text?: string
     },
   ) => request<AttributeDefinition>('PATCH', `/attributes/${id}`, input),
   archiveAttribute: (id: string) => request<AttributeDefinition>('POST', `/attributes/${id}/archive`),

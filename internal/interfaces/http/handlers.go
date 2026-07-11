@@ -159,6 +159,9 @@ type attributeRequest struct {
 	Unique           bool            `json:"unique,omitempty"`
 	Constraints      json.RawMessage `json:"constraints,omitempty"`
 	DefaultValue     json.RawMessage `json:"default_value,omitempty"`
+	Group            string          `json:"group,omitempty"`
+	SortOrder        int             `json:"sort_order,omitempty"`
+	HelpText         string          `json:"help_text,omitempty"`
 }
 
 func (s *server) createAttribute(w http.ResponseWriter, r *http.Request) {
@@ -178,6 +181,9 @@ func (s *server) createAttribute(w http.ResponseWriter, r *http.Request) {
 		Unique:           req.Unique,
 		Constraints:      req.Constraints,
 		DefaultValue:     req.DefaultValue,
+		Group:            req.Group,
+		SortOrder:        req.SortOrder,
+		HelpText:         req.HelpText,
 	})
 	if err != nil {
 		writeError(w, s.log, err)
@@ -210,6 +216,9 @@ func (s *server) updateAttribute(w http.ResponseWriter, r *http.Request) {
 		Unique:       req.Unique,
 		Constraints:  req.Constraints,
 		DefaultValue: req.DefaultValue,
+		Group:        req.Group,
+		SortOrder:    req.SortOrder,
+		HelpText:     req.HelpText,
 	})
 	if err != nil {
 		writeError(w, s.log, err)

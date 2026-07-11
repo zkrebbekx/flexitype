@@ -881,6 +881,9 @@ components:
         required: { type: boolean }
         multi_valued: { type: boolean }
         unique: { type: boolean }
+        group: { type: string }
+        sort_order: { type: integer }
+        help_text: { type: string }
         constraints: { type: array, items: { type: object } }
         default_value: {}
         version: { type: integer }
@@ -899,6 +902,9 @@ components:
         required: { type: boolean }
         multi_valued: { type: boolean }
         unique: { type: boolean }
+        group: { type: string }
+        sort_order: { type: integer }
+        help_text: { type: string }
         constraints: { type: array, items: { type: object } }
         default_value: {}
     UpdateAttribute:
@@ -910,6 +916,9 @@ components:
         required: { type: boolean }
         multi_valued: { type: boolean }
         unique: { type: boolean }
+        group: { type: string }
+        sort_order: { type: integer }
+        help_text: { type: string }
         constraints: { type: array, items: { type: object } }
         default_value: {}
     Value:

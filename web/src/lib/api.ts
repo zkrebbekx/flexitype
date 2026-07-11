@@ -174,6 +174,22 @@ export interface EffectiveSchema {
   allowed_values?: unknown[]
 }
 
+export interface MissingAttribute {
+  attribute_definition_id: string
+  internal_name: string
+  display_name: string
+  group?: string
+}
+
+export interface Completeness {
+  entity_id: string
+  type_definition_id: string
+  required: number
+  filled: number
+  score: number
+  missing: MissingAttribute[]
+}
+
 export type VersionPolicy = 'latest' | 'pinned'
 
 export type RelationshipKind = 'directed' | 'symmetric'
@@ -402,6 +418,11 @@ export const api = {
     request<EffectiveSchema>(
       'GET',
       `/entities/${typeId}/${encodeURIComponent(entityId)}/attributes/${attributeId}/effective-schema`,
+    ),
+  entityCompleteness: (typeId: string, entityId: string) =>
+    request<Completeness>(
+      'GET',
+      `/entities/${typeId}/${encodeURIComponent(entityId)}/completeness`,
     ),
   setValue: (input: { attribute_definition_id: string; entity_id: string; type_definition_id?: string; value: unknown }) =>
     request<AttributeValue>('POST', '/values', input),

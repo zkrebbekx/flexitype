@@ -78,6 +78,14 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Get("/{id}/effective-attributes", s.effectiveAttributes)
 			r.Get("/{id}/children", s.typeChildren)
 			r.Get("/{id}/completeness", s.typeCompleteness)
+			r.Get("/{id}/match-rules", s.listMatchRules)
+			r.Post("/{id}/match-rules", s.createMatchRule)
+		})
+
+		api.Route("/match-rules", func(r chi.Router) {
+			r.Delete("/{ruleID}", s.deleteMatchRule)
+			r.Get("/{ruleID}/scan", s.scanMatchRule)
+			r.Post("/{ruleID}/dismiss", s.dismissMatch)
 		})
 
 		api.Route("/attributes", func(r chi.Router) {

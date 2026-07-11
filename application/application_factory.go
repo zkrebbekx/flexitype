@@ -10,6 +10,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/feed"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
+	appdedup "github.com/zkrebbekx/flexitype/application/dedup"
 	appsavedview "github.com/zkrebbekx/flexitype/application/savedview"
 	appschema "github.com/zkrebbekx/flexitype/application/schema"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
@@ -81,6 +82,10 @@ type FactoryConfig struct {
 
 	// SavedViews persists saved entity views; nil disables the feature.
 	SavedViews appsavedview.Store
+
+	// MatchRules persists duplicate-detection rules and dismissals; nil
+	// disables the feature.
+	MatchRules appdedup.Store
 }
 
 // factory is the common usecase factory: every request gets fresh
@@ -141,6 +146,9 @@ func (f *factory) New(context.Context) *Interactors {
 	i.schema = appschema.NewInteractor(i.typeDefs, i.attrs, i.relationships, i.deps)
 	if f.cfg.SavedViews != nil {
 		i.savedViews = appsavedview.NewInteractor(f.cfg.SavedViews)
+	}
+	if f.cfg.MatchRules != nil {
+		i.dedup = appdedup.NewInteractor(f.cfg.MatchRules, repos.TypeDefinitions, repos.Attributes, repos.Values, f.cfg.Now)
 	}
 	if f.cfg.Features.EventDelivery {
 		i.webhooks = webhook.NewInteractor(unit, f.cfg.Subscriptions, f.cfg.Deliveries, f.cfg.WebhookURLPolicy)

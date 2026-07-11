@@ -20,7 +20,8 @@ import Input from '@/components/ui/Input.vue'
 import Modal from '@/components/ui/Modal.vue'
 import QueryBar from '@/components/QueryBar.vue'
 import ImportWizard from '@/components/ImportWizard.vue'
-import { Bookmark, Download, Trash2, Upload } from 'lucide-vue-next'
+import DuplicatesDrawer from '@/components/DuplicatesDrawer.vue'
+import { Bookmark, Copy, Download, Trash2, Upload } from 'lucide-vue-next'
 
 const types = useQuery({ queryKey: ['types-all'], queryFn: () => api.listTypes({ limit: 200 }) })
 const typeId = ref('')
@@ -204,10 +205,18 @@ const suggestSchema = computed<SuggestSchema>(() => ({
 // --- import / export ---------------------------------------------------------
 
 const importOpen = ref(false)
+const duplicatesOpen = ref(false)
 const importAttributes = computed(() =>
   (effective.data.value?.items ?? [])
     .filter((e) => !e.attribute.archived_at)
     .map((e) => ({ internal_name: e.attribute.internal_name, display_name: e.attribute.display_name })),
+)
+// Duplicate rules target attributes owned by this type (not inherited),
+// since a rule pins a concrete attribute id on the type.
+const ownAttributes = computed(() =>
+  (effective.data.value?.items ?? [])
+    .filter((e) => !e.attribute.archived_at && e.declared_in.id === typeId.value)
+    .map((e) => ({ id: e.attribute.id, internal_name: e.attribute.internal_name, display_name: e.attribute.display_name })),
 )
 function onImported() {
   queryClient.invalidateQueries({ queryKey: ['entities', typeId] })
@@ -251,6 +260,7 @@ function exportCurrent() {
       <Button v-if="typeId" size="sm" @click="openSave"><Bookmark :size="14" /> Save view</Button>
       <Button v-if="typeId" size="sm" @click="importOpen = true"><Upload :size="14" /> Import</Button>
       <Button v-if="typeId" size="sm" @click="exportCurrent"><Download :size="14" /> Export</Button>
+      <Button v-if="typeId" size="sm" @click="duplicatesOpen = true"><Copy :size="14" /> Duplicates</Button>
       <Button
         v-if="selectedViewId"
         size="sm"
@@ -363,5 +373,13 @@ function exportCurrent() {
     :attributes="importAttributes"
     @close="importOpen = false"
     @imported="onImported"
+  />
+
+  <DuplicatesDrawer
+    :open="duplicatesOpen"
+    :type-id="typeId"
+    :type-name="selectedType?.display_name ?? 'entities'"
+    :attributes="ownAttributes"
+    @close="duplicatesOpen = false"
   />
 </template>

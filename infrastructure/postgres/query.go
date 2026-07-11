@@ -217,6 +217,11 @@ func (r *queryRepository) valueScope(c *compiler, alias, attrDefID string, link 
 
 // columnExpr renders the typed column for comparisons. Decimals persist in
 // value_text and compare numerically only through a cast.
+//
+// Textual types never reach an ordering comparison or min/max here — the
+// binder restricts both to IsOrdered() types — so no collation pin is
+// needed for SQL/memory parity; text only meets = / != / in, where
+// PostgreSQL compares bytes regardless of collation.
 func columnExpr(alias string, dt valueobjects.DataType) string {
 	if dt == valueobjects.DataTypeDecimal {
 		return "(" + alias + ".value_text)::numeric"

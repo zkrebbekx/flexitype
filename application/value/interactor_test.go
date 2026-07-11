@@ -15,6 +15,7 @@ import (
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	domainrelationship "github.com/zkrebbekx/flexitype/domain/relationship"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -272,6 +273,29 @@ func (r *fakeDepRepo) Save(_ context.Context, d *domaindependency.Dependency) er
 	return nil
 }
 
+// fakeLinksRepo is an unused stub: these tests exercise Set/Remove, which
+// never touch relationships. Entity-lifecycle cascade is covered by the
+// memory-backed bulk_ops test.
+type fakeLinksRepo struct{}
+
+func (r *fakeLinksRepo) WithTx(db.QueryExecer) domainrelationship.Repository { return r }
+func (r *fakeLinksRepo) Get(context.Context, valueobjects.RelationshipID) (*domainrelationship.Relationship, error) {
+	return nil, nil
+}
+func (r *fakeLinksRepo) GetForUpdate(context.Context, valueobjects.RelationshipID) (*domainrelationship.Relationship, error) {
+	return nil, nil
+}
+func (r *fakeLinksRepo) FindLive(context.Context, valueobjects.RelationshipDefinitionID, valueobjects.EntityID, valueobjects.EntityID) (*domainrelationship.Relationship, error) {
+	return nil, nil
+}
+func (r *fakeLinksRepo) ListByEntity(context.Context, domainrelationship.EntityLinksKey) ([]*domainrelationship.Relationship, error) {
+	return nil, nil
+}
+func (r *fakeLinksRepo) List(context.Context, domainrelationship.Filter, db.Page) ([]*domainrelationship.Relationship, int, error) {
+	return nil, 0, nil
+}
+func (r *fakeLinksRepo) Save(context.Context, *domainrelationship.Relationship) error { return nil }
+
 type fakeActivityLog struct {
 	entries []activity.Entry
 }
@@ -320,7 +344,7 @@ func TestSetValueUsecase(t *testing.T) {
 		})
 
 		unit := uow.New(&fakeTransactor{}, dispatcher, log)
-		interactor := NewInteractor(unit, typeDefs, attrs, values, deps)
+		interactor := NewInteractor(unit, typeDefs, attrs, values, deps, &fakeLinksRepo{})
 		ctx := context.Background()
 
 		serial := mustAttr(domainattribute.NewInput{

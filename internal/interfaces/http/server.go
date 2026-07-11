@@ -86,6 +86,7 @@ func NewHandler(cfg ServerConfig) http.Handler {
 		api.Route("/values", func(r chi.Router) {
 			r.Get("/", s.listValues)
 			r.Post("/", s.setValue)
+			r.Post("/batch", s.setValuesBatch)
 			r.Get("/{id}", s.getValue)
 			r.Delete("/{id}", s.removeValue)
 		})
@@ -95,6 +96,8 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Get("/values", s.listEntityValues)
 			r.Get("/relationships", s.listEntityRelationships)
 			r.Get("/attributes/{attributeID}/effective-schema", s.effectiveSchema)
+			// Cascade: archive the entity's values and unlink its relationships.
+			r.Delete("/", s.removeEntity)
 		})
 
 		api.Route("/dependencies", func(r chi.Router) {

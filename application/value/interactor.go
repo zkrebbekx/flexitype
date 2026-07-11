@@ -15,11 +15,16 @@ import (
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	domainrelationship "github.com/zkrebbekx/flexitype/domain/relationship"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
+
+// maxBatchItems caps one batch write so a single request can't hold a
+// transaction open unboundedly.
+const maxBatchItems = 1000
 
 // Interactor implements the attribute-value usecases.
 type Interactor struct {
@@ -28,12 +33,13 @@ type Interactor struct {
 	attrs    domainattribute.Repository
 	values   domainvalue.Repository
 	deps     domaindependency.Repository
+	links    domainrelationship.Repository
 	now      func() time.Time
 }
 
 // NewInteractor wires the attribute-value usecases.
-func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, deps domaindependency.Repository) *Interactor {
-	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, deps: deps, now: time.Now}
+func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, deps domaindependency.Repository, links domainrelationship.Repository) *Interactor {
+	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, deps: deps, links: links, now: time.Now}
 }
 
 // SetInput holds data for writing one attribute value. Value is the raw
@@ -53,20 +59,39 @@ type SetInput struct {
 // uniqueness), then inserts a new value or updates the existing one for
 // single-valued attributes.
 func (i *Interactor) Set(ctx context.Context, in SetInput) (*domainvalue.Snapshot, error) {
+	var snap domainvalue.Snapshot
+	err := i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
+		s, err := i.setWithin(ctx, tx, c, in)
+		if err != nil {
+			return err
+		}
+		snap = s
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &snap, nil
+}
+
+// setWithin performs one value write inside an existing unit of work,
+// collecting its events and activity into c. Set and SetBatch share it so a
+// batch runs every write in one transaction with identical validation.
+func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Collector, in SetInput) (domainvalue.Snapshot, error) {
+	var snap domainvalue.Snapshot
 	defID, err := valueobjects.ParseAttributeDefinitionID(in.AttributeDefinitionID)
 	if err != nil {
-		return nil, domainerrors.NewValidation(err.Error())
+		return snap, domainerrors.NewValidation(err.Error())
 	}
 	entityID, err := valueobjects.ParseEntityID(in.EntityID)
 	if err != nil {
-		return nil, domainerrors.NewValidation(err.Error())
+		return snap, domainerrors.NewValidation(err.Error())
 	}
 	if len(in.Value) == 0 || string(in.Value) == "null" {
-		return nil, domainerrors.NewValidation("value is required")
+		return snap, domainerrors.NewValidation("value is required")
 	}
 
-	var snap domainvalue.Snapshot
-	err = i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
+	err = func() error {
 		attrs := i.attrs.WithTx(tx)
 		values := i.values.WithTx(tx)
 
@@ -179,11 +204,146 @@ func (i *Interactor) Set(ctx context.Context, in SetInput) (*domainvalue.Snapsho
 			After:    snap,
 		})
 		return nil
+	}()
+	return snap, err
+}
+
+// batchItemError points at which batch item failed while preserving the
+// underlying error (and its domain code) via Unwrap, so the HTTP layer maps
+// the status correctly.
+type batchItemError struct {
+	index int
+	err   error
+}
+
+func (e *batchItemError) Error() string { return fmt.Sprintf("item %d: %s", e.index, e.err.Error()) }
+func (e *batchItemError) Unwrap() error { return e.err }
+
+// BatchSetInput sets several values in one transaction.
+type BatchSetInput struct {
+	Items []SetInput
+}
+
+// BatchSetOutput returns the written snapshots in input order.
+type BatchSetOutput struct {
+	Items []domainvalue.Snapshot
+}
+
+// SetBatch writes many values atomically: either every item is applied and
+// its events fire, or the whole batch rolls back. The failing item's error
+// (and its domain code) is preserved so callers get the real reason.
+func (i *Interactor) SetBatch(ctx context.Context, in BatchSetInput) (*BatchSetOutput, error) {
+	if len(in.Items) == 0 {
+		return nil, domainerrors.NewValidation("at least one item is required")
+	}
+	if len(in.Items) > maxBatchItems {
+		return nil, domainerrors.NewValidation("batch exceeds the maximum item count", "max", maxBatchItems)
+	}
+
+	out := &BatchSetOutput{Items: make([]domainvalue.Snapshot, 0, len(in.Items))}
+	err := i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
+		out.Items = out.Items[:0]
+		for idx, item := range in.Items {
+			s, err := i.setWithin(ctx, tx, c, item)
+			if err != nil {
+				return &batchItemError{index: idx, err: err}
+			}
+			out.Items = append(out.Items, s)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &snap, nil
+	return out, nil
+}
+
+// RemoveEntityOutput reports what an entity removal cascaded.
+type RemoveEntityOutput struct {
+	EntityID          string
+	ValuesRemoved     int
+	RelationshipsGone int
+}
+
+// RemoveEntity archives every live value of an entity and unlinks every
+// live relationship touching it, in one unit of work with one event stream.
+// An entity with no values and no links is reported NotFound.
+func (i *Interactor) RemoveEntity(ctx context.Context, rawTypeDefID, rawEntityID string) (*RemoveEntityOutput, error) {
+	typeDefID, err := valueobjects.ParseTypeDefinitionID(rawTypeDefID)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	entityID, err := valueobjects.ParseEntityID(rawEntityID)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	tenant := uow.TenantFromContext(ctx)
+
+	out := &RemoveEntityOutput{EntityID: rawEntityID}
+	err = i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
+		out.ValuesRemoved, out.RelationshipsGone = 0, 0
+		values := i.values.WithTx(tx)
+		links := i.links.WithTx(tx)
+
+		vals, err := values.ListByEntity(ctx, domainvalue.EntityKey{
+			TenantID: tenant, TypeDefinitionID: typeDefID, EntityID: entityID,
+		})
+		if err != nil {
+			return fmt.Errorf("list entity values: %w", err)
+		}
+		rels, err := links.ListByEntity(ctx, domainrelationship.EntityLinksKey{
+			TenantID: tenant, EntityID: entityID,
+		})
+		if err != nil {
+			return fmt.Errorf("list entity links: %w", err)
+		}
+		if len(vals) == 0 && len(rels) == 0 {
+			return domainerrors.NewNotFound("entity", rawEntityID)
+		}
+
+		for _, av := range vals {
+			before := av.Snapshot()
+			evts, err := av.Remove(i.now())
+			if err != nil {
+				return err
+			}
+			if err := values.Save(ctx, av); err != nil {
+				return fmt.Errorf("archive value: %w", err)
+			}
+			c.CollectEvents(evts...)
+			c.RecordChange(activity.Change{
+				Entity:   domainvalue.AggregateType,
+				EntityID: av.ID().String(),
+				Action:   activity.ActionRemoved,
+				Before:   before,
+			})
+			out.ValuesRemoved++
+		}
+
+		for _, rel := range rels {
+			before := rel.Snapshot()
+			evts, err := rel.Unlink(i.now())
+			if err != nil {
+				return err
+			}
+			if err := links.Save(ctx, rel); err != nil {
+				return fmt.Errorf("unlink relationship: %w", err)
+			}
+			c.CollectEvents(evts...)
+			c.RecordChange(activity.Change{
+				Entity:   domainrelationship.AggregateType,
+				EntityID: rel.ID().String(),
+				Action:   activity.ActionRemoved,
+				Before:   before,
+			})
+			out.RelationshipsGone++
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // checkDependencies resolves the effective schema for the target attribute

@@ -322,6 +322,47 @@ func (s *server) setValue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snap)
 }
 
+type batchSetValueRequest struct {
+	Items []setValueRequest `json:"items"`
+}
+
+func (s *server) setValuesBatch(w http.ResponseWriter, r *http.Request) {
+	var req batchSetValueRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	items := make([]appvalue.SetInput, 0, len(req.Items))
+	for _, it := range req.Items {
+		items = append(items, appvalue.SetInput{
+			AttributeDefinitionID: it.AttributeDefinitionID,
+			EntityID:              it.EntityID,
+			TypeDefinitionID:      it.TypeDefinitionID,
+			Value:                 it.Value,
+		})
+	}
+	out, err := application.FromContext(r.Context()).Values().SetBatch(r.Context(), appvalue.BatchSetInput{Items: items})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out.Items})
+}
+
+func (s *server) removeEntity(w http.ResponseWriter, r *http.Request) {
+	out, err := application.FromContext(r.Context()).Values().RemoveEntity(
+		r.Context(), chi.URLParam(r, "typeDefinitionID"), chi.URLParam(r, "entityID"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entity_id":          out.EntityID,
+		"values_removed":     out.ValuesRemoved,
+		"relationships_gone": out.RelationshipsGone,
+	})
+}
+
 func (s *server) getValue(w http.ResponseWriter, r *http.Request) {
 	snap, err := application.FromContext(r.Context()).Values().Get(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {

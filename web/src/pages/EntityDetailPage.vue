@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
 import type { AttributeDefinition, AttributeValue, EffectiveSchema, EntityLink, RelationshipDefinition } from '@/lib/api'
@@ -20,6 +20,7 @@ import Input from '@/components/ui/Input.vue'
 import { ArrowLeftRight, ArrowRight, Link2, Pencil, Plus, Trash2, Unlink } from 'lucide-vue-next'
 
 const route = useRoute()
+const router = useRouter()
 const typeId = computed(() => String(route.params.typeId))
 const entityId = computed(() => String(route.params.entityId))
 const toasts = useToasts()
@@ -107,6 +108,25 @@ const setValue = useMutation({
     editor.open = false
   },
   onError: (e) => (editor.error = friendlyError(e)),
+})
+
+// --- entity lifecycle ----------------------------------------------------------
+
+const confirmDelete = ref(false)
+const deleteEntity = useMutation({
+  mutationFn: () => api.deleteEntity(typeId.value, entityId.value),
+  onSuccess: (res) => {
+    toasts.success(
+      `Entity deleted (${res.values_removed} value${res.values_removed === 1 ? '' : 's'}, ` +
+        `${res.relationships_gone} relationship${res.relationships_gone === 1 ? '' : 's'})`,
+    )
+    confirmDelete.value = false
+    router.push('/entities')
+  },
+  onError: (e) => {
+    confirmDelete.value = false
+    toasts.error(friendlyError(e))
+  },
 })
 
 // --- relationships -------------------------------------------------------------
@@ -201,6 +221,11 @@ const removeValue = useMutation({
       { label: entityId },
     ]"
   >
+    <template #actions>
+      <Button variant="danger" @click="confirmDelete = true">
+        <Trash2 :size="14" /> Delete entity
+      </Button>
+    </template>
     Every attribute this {{ type.data.value?.display_name?.toLowerCase() ?? 'type' }} can hold, with its current values.
   </PageHeader>
 
@@ -407,5 +432,15 @@ const removeValue = useMutation({
     danger
     @close="confirmRemove = undefined"
     @confirm="confirmRemove && removeValue.mutate(confirmRemove)"
+  />
+
+  <Modal
+    :open="confirmDelete"
+    title="Delete this entity?"
+    :message="`This archives every value of “${entityId}” and unlinks all its relationships in one step. Soft delete: the data stays in the audit trail.`"
+    confirm-label="Delete entity"
+    danger
+    @close="confirmDelete = false"
+    @confirm="deleteEntity.mutate()"
   />
 </template>

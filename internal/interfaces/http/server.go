@@ -149,6 +149,17 @@ func NewHandler(cfg ServerConfig) http.Handler {
 
 		api.Get("/media/{objectKey}", s.downloadMedia)
 
+		api.Route("/changesets", func(r chi.Router) {
+			r.Get("/", s.listChangeSets)
+			r.Post("/", s.createChangeSet)
+			r.Get("/{id}", s.getChangeSet)
+			r.Post("/{id}/mutations", s.addChangeSetMutation)
+			r.Post("/{id}/submit", s.submitChangeSet)
+			r.Post("/{id}/approve", s.approveChangeSet)
+			r.Post("/{id}/reject", s.rejectChangeSet)
+			r.Post("/{id}/publish", s.publishChangeSet)
+		})
+
 		api.Route("/dependencies", func(r chi.Router) {
 			r.Get("/", s.listDependencies)
 			r.Post("/", s.createDependency)

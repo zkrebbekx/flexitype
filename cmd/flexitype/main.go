@@ -272,6 +272,9 @@ func run(log *logger.Logger) error {
 		},
 	})
 
+	// Publish approved change-sets whose scheduled time has arrived.
+	go svc.RunChangeSetScheduler(relayCtx, time.Minute)
+
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info().Int("port", cfg.Port).Msg("flexitype listening")

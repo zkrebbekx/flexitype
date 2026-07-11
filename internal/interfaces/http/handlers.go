@@ -560,8 +560,27 @@ func (s *server) listEntitiesOfType(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listEntityValues(w http.ResponseWriter, r *http.Request) {
-	snaps, err := application.FromContext(r.Context()).Values().ListByEntity(r.Context(),
-		chi.URLParam(r, "typeDefinitionID"), chi.URLParam(r, "entityID"))
+	typeID, entityID := chi.URLParam(r, "typeDefinitionID"), chi.URLParam(r, "entityID")
+	app := application.FromContext(r.Context())
+
+	// A ?changeset= preview overlays a draft's mutations without touching
+	// live data; live reads (no param) stay unchanged.
+	if csID := r.URL.Query().Get("changeset"); csID != "" {
+		cs, err := app.ChangeSets().Get(r.Context(), csID)
+		if err != nil {
+			writeError(w, s.log, err)
+			return
+		}
+		snaps, err := app.Values().Preview(r.Context(), typeID, entityID, cs.Mutations)
+		if err != nil {
+			writeError(w, s.log, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": snaps, "changeset": csID})
+		return
+	}
+
+	snaps, err := app.Values().ListByEntity(r.Context(), typeID, entityID)
 	if err != nil {
 		writeError(w, s.log, err)
 		return

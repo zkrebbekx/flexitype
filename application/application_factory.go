@@ -6,6 +6,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/activity"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
+	appchangeset "github.com/zkrebbekx/flexitype/application/changeset"
 	appdedup "github.com/zkrebbekx/flexitype/application/dedup"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	"github.com/zkrebbekx/flexitype/application/feed"
@@ -92,6 +93,9 @@ type FactoryConfig struct {
 	// Revisions persists entity revisions; nil disables the feature.
 	Revisions apprevision.Store
 
+	// ChangeSets persists change-management drafts; nil disables the feature.
+	ChangeSets appchangeset.Store
+
 	// BlobStore backs media attribute values; nil disables media uploads.
 	BlobStore blob.Store
 }
@@ -163,6 +167,9 @@ func (f *factory) New(context.Context) *Interactors {
 	}
 	if f.cfg.Revisions != nil {
 		i.revisions = apprevision.NewInteractor(f.cfg.Revisions, repos.TypeDefinitions, repos.Attributes, repos.Values, i.values, f.cfg.Now)
+	}
+	if f.cfg.ChangeSets != nil {
+		i.changesets = appchangeset.NewInteractor(f.cfg.ChangeSets, i.values, f.cfg.Now)
 	}
 	if f.cfg.Features.EventDelivery {
 		i.webhooks = webhook.NewInteractor(unit, f.cfg.Subscriptions, f.cfg.Deliveries, f.cfg.WebhookURLPolicy)

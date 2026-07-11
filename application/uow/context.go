@@ -6,6 +6,7 @@ package uow
 import (
 	"context"
 
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 )
 
@@ -68,4 +69,14 @@ func TenantFromContext(ctx context.Context) valueobjects.TenantID {
 		return t
 	}
 	return valueobjects.DefaultTenant
+}
+
+// EnsureTenant hides cross-tenant resources: a caller asking for another
+// tenant's aggregate by ID gets NotFound — never confirmation it exists.
+// Every interactor calls this after loading an aggregate by raw ID.
+func EnsureTenant(ctx context.Context, owner valueobjects.TenantID, entity, id string) error {
+	if owner == TenantFromContext(ctx) {
+		return nil
+	}
+	return domainerrors.NewNotFound(entity, id)
 }

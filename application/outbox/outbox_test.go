@@ -28,7 +28,7 @@ func (s *fakeStore) Write(_ context.Context, _ db.QueryExecer, envs []events.Env
 	return nil
 }
 
-func (s *fakeStore) FetchPending(_ context.Context, limit int, fn func(envs []events.Envelope) []Result) error {
+func (s *fakeStore) Expand(_ context.Context, limit int, fn func(envs []events.Envelope) []Result) error {
 	s.mu.Lock()
 	batch := s.pending
 	if len(batch) > limit {

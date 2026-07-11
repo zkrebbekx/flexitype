@@ -34,6 +34,9 @@ type Config struct {
 	// EnableSearchIndex maintains the entity search projection and unlocks
 	// FQL matches().
 	EnableSearchIndex bool
+	// EventRetention is how long expanded events stay readable in the
+	// events feed before pruning (outbox mode only).
+	EventRetention time.Duration
 }
 
 // Database holds PostgreSQL pool settings.
@@ -69,6 +72,7 @@ func Load() (Config, error) {
 		EnableActivity:      envBool("FLEXITYPE_FEATURE_ACTIVITY", true),
 		EnableOutbox:        envBool("FLEXITYPE_OUTBOX", false),
 		EnableSearchIndex:   envBool("FLEXITYPE_FEATURE_SEARCH_INDEX", false),
+		EventRetention:      envDuration("FLEXITYPE_EVENT_RETENTION", 7*24*time.Hour),
 		Database: Database{
 			Host:            envStr("FLEXITYPE_DB_HOST", "localhost"),
 			Port:            envInt("FLEXITYPE_DB_PORT", 5432),

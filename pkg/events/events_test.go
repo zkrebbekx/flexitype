@@ -134,6 +134,7 @@ func TestWebhookHandler(t *testing.T) {
 		type delivery struct {
 			body      []byte
 			signature string
+			timestamp string
 			eventType string
 		}
 		var deliveries []delivery
@@ -143,6 +144,7 @@ func TestWebhookHandler(t *testing.T) {
 			deliveries = append(deliveries, delivery{
 				body:      body,
 				signature: r.Header.Get(HeaderSignature),
+				timestamp: r.Header.Get(HeaderTimestamp),
 				eventType: r.Header.Get(HeaderEventType),
 			})
 			w.WriteHeader(http.StatusNoContent)
@@ -158,9 +160,14 @@ func TestWebhookHandler(t *testing.T) {
 			Convey("Then the receiver gets a verifiable signed envelope", func() {
 				So(err, ShouldBeNil)
 				So(deliveries, ShouldHaveLength, 1)
-				So(deliveries[0].eventType, ShouldEqual, "flexitype.test.happened")
-				So(VerifySignature("s3cret", deliveries[0].body, deliveries[0].signature), ShouldBeTrue)
-				So(VerifySignature("wrong", deliveries[0].body, deliveries[0].signature), ShouldBeFalse)
+				d0 := deliveries[0]
+				So(d0.eventType, ShouldEqual, "flexitype.test.happened")
+				So(VerifySignature("s3cret", d0.timestamp, d0.body, d0.signature), ShouldBeTrue)
+				So(VerifySignature("wrong", d0.timestamp, d0.body, d0.signature), ShouldBeFalse)
+				So(VerifyRequest([]string{"old", "s3cret"}, d0.timestamp, d0.body, d0.signature,
+					DefaultSignatureTolerance, time.Now()), ShouldBeTrue)
+				So(VerifyRequest([]string{"s3cret"}, d0.timestamp, d0.body, d0.signature,
+					DefaultSignatureTolerance, time.Now().Add(time.Hour)), ShouldBeFalse)
 			})
 		})
 

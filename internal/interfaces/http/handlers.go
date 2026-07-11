@@ -645,9 +645,10 @@ func (s *server) listEntityRelationships(w http.ResponseWriter, r *http.Request)
 func (s *server) features(w http.ResponseWriter, r *http.Request) {
 	f := application.FromContext(r.Context()).Features()
 	writeJSON(w, http.StatusOK, map[string]bool{
-		"search":       !f.DisableSearch,
-		"activity":     !f.DisableActivity,
-		"search_index": f.SearchIndex,
+		"search":         !f.DisableSearch,
+		"activity":       !f.DisableActivity,
+		"search_index":   f.SearchIndex,
+		"event_delivery": f.EventDelivery,
 	})
 }
 

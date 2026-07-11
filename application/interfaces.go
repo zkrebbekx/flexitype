@@ -12,11 +12,13 @@ import (
 	"github.com/zkrebbekx/flexitype/application/activity"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
+	appfeed "github.com/zkrebbekx/flexitype/application/feed"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
+	appwebhook "github.com/zkrebbekx/flexitype/application/webhook"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainrelationship "github.com/zkrebbekx/flexitype/domain/relationship"
@@ -82,6 +84,8 @@ type Interactors struct {
 	relationships *apprelationship.Interactor
 	query         *appquery.Interactor
 	activity      *ActivityInteractor
+	webhooks      *appwebhook.Interactor
+	feed          *appfeed.Interactor
 	features      Features
 }
 
@@ -108,6 +112,14 @@ func (i *Interactors) Query() *appquery.Interactor { return i.query }
 
 // Activity returns the audit-log read usecases.
 func (i *Interactors) Activity() *ActivityInteractor { return i.activity }
+
+// Webhooks returns the webhook-subscription usecases; nil unless event
+// delivery is enabled (requires the outbox).
+func (i *Interactors) Webhooks() *appwebhook.Interactor { return i.webhooks }
+
+// Feed returns the events-feed usecases; nil unless event delivery is
+// enabled (requires the outbox).
+func (i *Interactors) Feed() *appfeed.Interactor { return i.feed }
 
 // ActivityInteractor serves the audit-log read side.
 type ActivityInteractor struct {

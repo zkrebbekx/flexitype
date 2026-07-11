@@ -73,6 +73,9 @@ type FactoryConfig struct {
 	Deliveries    webhook.DeliveryStore
 	FeedStore     feed.Store
 	CursorStore   feed.CursorStore
+
+	// WebhookURLPolicy governs which subscription URLs are accepted.
+	WebhookURLPolicy webhook.URLPolicy
 }
 
 // factory is the common usecase factory: every request gets fresh
@@ -131,7 +134,7 @@ func (f *factory) New(context.Context) *Interactors {
 		features:      f.cfg.Features,
 	}
 	if f.cfg.Features.EventDelivery {
-		i.webhooks = webhook.NewInteractor(unit, f.cfg.Subscriptions, f.cfg.Deliveries)
+		i.webhooks = webhook.NewInteractor(unit, f.cfg.Subscriptions, f.cfg.Deliveries, f.cfg.WebhookURLPolicy)
 		i.feed = feed.NewInteractor(f.cfg.FeedStore, f.cfg.CursorStore)
 	}
 	return i

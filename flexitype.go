@@ -26,6 +26,7 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
+	"github.com/zkrebbekx/flexitype/pkg/safedial"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 )
 
@@ -42,14 +43,15 @@ type Service struct {
 }
 
 type options struct {
-	dispatcher  *events.Dispatcher
-	onRollback  func(ctx context.Context, err error)
-	features    application.Features
-	outbox      bool
-	relayOpts   []outbox.RelayOption
-	workerOpts  []webhook.WorkerOption
-	retention   time.Duration
-	searchIndex bool
+	dispatcher          *events.Dispatcher
+	onRollback          func(ctx context.Context, err error)
+	features            application.Features
+	outbox              bool
+	relayOpts           []outbox.RelayOption
+	workerOpts          []webhook.WorkerOption
+	retention           time.Duration
+	webhookAllowPrivate bool
+	searchIndex         bool
 }
 
 // Option customises an embedded Service.
@@ -117,6 +119,13 @@ func WithEventRetention(d time.Duration) Option {
 	return func(o *options) { o.retention = d }
 }
 
+// WithWebhookAllowPrivate lets webhook subscriptions target private,
+// loopback and link-local hosts over http — for on-prem deployments whose
+// consumers live on internal networks. Off by default (SSRF guard).
+func WithWebhookAllowPrivate() Option {
+	return func(o *options) { o.webhookAllowPrivate = true }
+}
+
 // WithSearchIndex enables the entity search projection: a dispatcher
 // subscriber keeps one searchable document per entity, unlocking FQL
 // matches(). Pair with WithOutbox for at-least-once index maintenance.
@@ -157,7 +166,13 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	}
 	if o.outbox {
 		store := postgres.NewOutboxStore(transactor)
-		worker = webhook.NewWorker(postgres.NewDeliveryStore(pool), o.workerOpts...)
+		policy := webhook.URLPolicy{AllowPrivate: o.webhookAllowPrivate}
+		workerOpts := append([]webhook.WorkerOption{
+			webhook.WithHTTPClient(safedial.NewClient(safedial.Options{
+				AllowPrivate: o.webhookAllowPrivate, Timeout: 10 * time.Second,
+			})),
+		}, o.workerOpts...)
+		worker = webhook.NewWorker(postgres.NewDeliveryStore(pool), workerOpts...)
 		relay = outbox.NewRelay(store, o.dispatcher,
 			append([]outbox.RelayOption{outbox.WithAfterExpand(worker.Nudge)}, o.relayOpts...)...)
 
@@ -171,6 +186,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		cfg.Outbox = store
 		cfg.OutboxNudge = relay.Nudge
 		cfg.Subscriptions = postgres.NewSubscriptionStore(pool)
+		cfg.WebhookURLPolicy = policy
 		cfg.Deliveries = postgres.NewDeliveryStore(pool)
 		cfg.FeedStore = feedStore
 		cfg.CursorStore = postgres.NewCursorStore(pool)

@@ -19,7 +19,8 @@ import Button from '@/components/ui/Button.vue'
 import Input from '@/components/ui/Input.vue'
 import Modal from '@/components/ui/Modal.vue'
 import QueryBar from '@/components/QueryBar.vue'
-import { Bookmark, Trash2 } from 'lucide-vue-next'
+import ImportWizard from '@/components/ImportWizard.vue'
+import { Bookmark, Download, Trash2, Upload } from 'lucide-vue-next'
 
 const types = useQuery({ queryKey: ['types-all'], queryFn: () => api.listTypes({ limit: 200 }) })
 const typeId = ref('')
@@ -199,6 +200,34 @@ const suggestSchema = computed<SuggestSchema>(() => ({
   types: types.data.value?.items ?? [],
   searchIndex: features.data.value?.search_index === true,
 }))
+
+// --- import / export ---------------------------------------------------------
+
+const importOpen = ref(false)
+const importAttributes = computed(() =>
+  (effective.data.value?.items ?? [])
+    .filter((e) => !e.attribute.archived_at)
+    .map((e) => ({ internal_name: e.attribute.internal_name, display_name: e.attribute.display_name })),
+)
+function onImported() {
+  queryClient.invalidateQueries({ queryKey: ['entities', typeId] })
+  queryClient.invalidateQueries({ queryKey: ['query', typeId] })
+}
+
+// Export the current view: the active FQL filter narrows the rows; the type's
+// effective attributes are the columns. Streams a CSV download.
+function exportCurrent() {
+  const url = api.exportEntitiesUrl(typeId.value, {
+    attributes: importAttributes.value.map((a) => a.internal_name),
+    query: activeQuery.value || undefined,
+  })
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${selectedType.value?.internal_name ?? 'export'}.csv`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
 </script>
 
 <template>
@@ -220,6 +249,8 @@ const suggestSchema = computed<SuggestSchema>(() => ({
     </div>
     <div class="flex items-center gap-1.5 pb-1">
       <Button v-if="typeId" size="sm" @click="openSave"><Bookmark :size="14" /> Save view</Button>
+      <Button v-if="typeId" size="sm" @click="importOpen = true"><Upload :size="14" /> Import</Button>
+      <Button v-if="typeId" size="sm" @click="exportCurrent"><Download :size="14" /> Export</Button>
       <Button
         v-if="selectedViewId"
         size="sm"
@@ -324,4 +355,13 @@ const suggestSchema = computed<SuggestSchema>(() => ({
       </div>
     </template>
   </Modal>
+
+  <ImportWizard
+    :open="importOpen"
+    :type-id="typeId"
+    :type-name="selectedType?.display_name ?? 'entities'"
+    :attributes="importAttributes"
+    @close="importOpen = false"
+    @imported="onImported"
+  />
 </template>

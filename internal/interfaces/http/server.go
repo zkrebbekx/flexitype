@@ -112,6 +112,8 @@ func NewHandler(cfg ServerConfig) http.Handler {
 		})
 
 		api.Get("/entities/{typeDefinitionID}", s.listEntitiesOfType)
+		api.Post("/entities/{typeDefinitionID}/import", s.importEntities)
+		api.Get("/entities/{typeDefinitionID}/export", s.exportEntities)
 		api.Route("/entities/{typeDefinitionID}/{entityID}", func(r chi.Router) {
 			r.Get("/values", s.listEntityValues)
 			r.Get("/relationships", s.listEntityRelationships)

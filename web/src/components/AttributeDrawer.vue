@@ -39,6 +39,7 @@ const form = reactive({
   unique: false,
   localizable: false,
   scopable: false,
+  computedFormula: '',
   minLength: '',
   maxLength: '',
   minValue: '',
@@ -76,6 +77,7 @@ watch(
     form.unique = a?.unique ?? false
     form.localizable = a?.localizable ?? false
     form.scopable = a?.scopable ?? false
+    form.computedFormula = a?.computed?.formula ?? ''
     form.group = a?.group ?? ''
     form.sortOrder = a?.sort_order != null ? String(a.sort_order) : ''
     form.helpText = a?.help_text ?? ''
@@ -124,6 +126,9 @@ function addMember() {
 const save = useMutation({
   mutationFn: async () => {
     const constraints = buildConstraints()
+    const computed = form.computedFormula.trim()
+      ? ({ kind: 'formula', formula: form.computedFormula.trim() } as const)
+      : undefined
     const presentation = {
       group: form.group || undefined,
       sort_order: form.sortOrder ? Number(form.sortOrder) : undefined,
@@ -138,6 +143,7 @@ const save = useMutation({
         unique: form.unique,
         localizable: form.localizable,
         scopable: form.scopable,
+        computed,
         constraints,
         ...presentation,
       })
@@ -153,6 +159,7 @@ const save = useMutation({
       unique: form.unique,
       localizable: form.localizable,
       scopable: form.scopable,
+      computed,
       constraints,
       ...presentation,
     })
@@ -239,6 +246,17 @@ async function tryValue() {
         <Toggle v-model="form.unique" label="Unique" hint="No two entities may share a value" :disabled="form.multi_valued" />
         <Toggle v-model="form.localizable" label="Localizable" hint="A value per locale (en_AU, de_DE)" />
         <Toggle v-model="form.scopable" label="Scopable" hint="A value per channel (web, print, …)" />
+      </fieldset>
+
+      <fieldset class="flex flex-col gap-2 rounded-md border border-(--border) p-3">
+        <legend class="px-1 text-[13px] font-medium text-(--text-secondary)">Computed</legend>
+        <Input
+          v-model="form.computedFormula"
+          mono
+          label="Formula"
+          placeholder="(price - cost) / price"
+          hint="Read-only, derived from other numeric attributes; recomputes automatically. Leave blank for a normal attribute."
+        />
       </fieldset>
 
       <fieldset class="flex flex-col gap-3 rounded-md border border-(--border) p-3">

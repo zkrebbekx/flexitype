@@ -70,6 +70,9 @@ type SetInput struct {
 	Locale  string
 	Channel string
 	Value   json.RawMessage
+	// Internal marks a write from the computed-attribute materializer,
+	// which is the only writer allowed to set a read-only computed value.
+	Internal bool
 }
 
 // Set writes a value for an entity attribute: it locks the definition,
@@ -146,6 +149,12 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 					"the attribute is not part of the entity type's inherited schema",
 					"attribute", def.InternalName(), "entity_type", entityType.String())
 			}
+		}
+
+		// Computed attributes are read-only: only the materializer (Internal)
+		// may write their derived value.
+		if def.IsComputed() && !in.Internal {
+			return domainerrors.NewValidation("attribute is computed (read-only)", "attribute", def.InternalName())
 		}
 
 		v, err := valueobjects.ParseValue(def.DataType(), in.Value)

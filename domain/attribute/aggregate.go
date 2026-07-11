@@ -28,6 +28,7 @@ type Definition struct {
 	unique           bool
 	localizable      bool
 	scopable         bool
+	computed         *Computed
 	constraints      Constraints
 	defaultValue     *valueobjects.Default
 	group            string
@@ -53,8 +54,11 @@ type NewInput struct {
 	// Localizable lets an attribute hold a value per locale; Scopable, a
 	// value per channel. Together the value identity is (entity, attribute,
 	// locale, channel).
-	Localizable  bool
-	Scopable     bool
+	Localizable bool
+	Scopable    bool
+	// Computed, when set, makes the attribute read-only and derived (a
+	// formula or a relationship rollup); it is materialized, not written.
+	Computed     *Computed
 	Constraints  Constraints
 	DefaultValue *valueobjects.Default
 	// Presentation metadata (optional): the section this attribute belongs
@@ -88,6 +92,11 @@ func New(in NewInput, now time.Time) (*Definition, []events.Event, error) {
 	if err := validateRules(in.DataType, in.MultiValued, in.Unique, in.Constraints, in.DefaultValue); err != nil {
 		return nil, nil, err
 	}
+	if in.Computed != nil {
+		if _, err := in.Computed.Validate(); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	a := &Definition{
 		id:               valueobjects.NewAttributeDefinitionID(),
@@ -102,6 +111,7 @@ func New(in NewInput, now time.Time) (*Definition, []events.Event, error) {
 		unique:           in.Unique,
 		localizable:      in.Localizable,
 		scopable:         in.Scopable,
+		computed:         in.Computed,
 		constraints:      in.Constraints,
 		defaultValue:     in.DefaultValue,
 		group:            in.Group,
@@ -134,6 +144,7 @@ type UpdateInput struct {
 	Unique       bool
 	Localizable  bool
 	Scopable     bool
+	Computed     *Computed
 	Constraints  Constraints
 	DefaultValue *valueobjects.Default
 	Group        string
@@ -153,6 +164,11 @@ func (a *Definition) Update(in UpdateInput, now time.Time) ([]events.Event, erro
 	if err := validateRules(a.dataType, in.MultiValued, in.Unique, in.Constraints, in.DefaultValue); err != nil {
 		return nil, err
 	}
+	if in.Computed != nil {
+		if _, err := in.Computed.Validate(); err != nil {
+			return nil, err
+		}
+	}
 
 	a.displayName = in.DisplayName
 	a.description = in.Description
@@ -161,6 +177,7 @@ func (a *Definition) Update(in UpdateInput, now time.Time) ([]events.Event, erro
 	a.unique = in.Unique
 	a.localizable = in.Localizable
 	a.scopable = in.Scopable
+	a.computed = in.Computed
 	a.constraints = in.Constraints
 	a.defaultValue = in.DefaultValue
 	a.group = in.Group
@@ -310,6 +327,12 @@ func (a *Definition) Localizable() bool { return a.localizable }
 // Scopable reports whether the attribute holds a value per channel.
 func (a *Definition) Scopable() bool { return a.scopable }
 
+// IsComputed reports whether the attribute is derived (read-only).
+func (a *Definition) IsComputed() bool { return a.computed != nil }
+
+// Computed returns the derivation spec, or nil for a regular attribute.
+func (a *Definition) Computed() *Computed { return a.computed }
+
 // Constraints returns the validation rules.
 func (a *Definition) Constraints() Constraints { return a.constraints }
 
@@ -346,6 +369,7 @@ type Snapshot struct {
 	Unique           bool                               `json:"unique"`
 	Localizable      bool                               `json:"localizable,omitempty"`
 	Scopable         bool                               `json:"scopable,omitempty"`
+	Computed         *Computed                          `json:"computed,omitempty"`
 	Constraints      Constraints                        `json:"constraints"`
 	DefaultValue     *valueobjects.Default              `json:"default_value,omitempty"`
 	Group            string                             `json:"group,omitempty"`
@@ -372,6 +396,7 @@ func (a *Definition) Snapshot() Snapshot {
 		Unique:           a.unique,
 		Localizable:      a.localizable,
 		Scopable:         a.scopable,
+		Computed:         a.computed,
 		Constraints:      a.constraints,
 		DefaultValue:     a.defaultValue,
 		Group:            a.group,
@@ -400,6 +425,7 @@ func Rehydrate(s Snapshot) *Definition {
 		unique:           s.Unique,
 		localizable:      s.Localizable,
 		scopable:         s.Scopable,
+		computed:         s.Computed,
 		constraints:      s.Constraints,
 		defaultValue:     s.DefaultValue,
 		group:            s.Group,

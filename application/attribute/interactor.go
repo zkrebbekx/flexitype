@@ -45,6 +45,7 @@ type CreateInput struct {
 	Unique           bool
 	Localizable      bool
 	Scopable         bool
+	Computed         json.RawMessage
 	Constraints      json.RawMessage
 	DefaultValue     json.RawMessage
 	Group            string
@@ -64,6 +65,10 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 		return nil, domainerrors.NewValidation(err.Error())
 	}
 	constraints, defaultValue, err := decodeRules(in.Constraints, in.DefaultValue)
+	if err != nil {
+		return nil, err
+	}
+	computed, err := decodeComputed(in.Computed)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +113,22 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 		}
 		hierarchy = append(hierarchy, descendants...)
 
+		// A computed formula must not create a dependency cycle with the
+		// type's other computed attributes.
+		if computed != nil && computed.Kind == domainattribute.ComputedFormula {
+			refs, verr := computed.Validate()
+			if verr != nil {
+				return verr
+			}
+			deps, derr := i.computedDeps(ctx, attrs, hierarchy)
+			if derr != nil {
+				return derr
+			}
+			if cerr := checkFormulaCycle(in.InternalName, refs, deps); cerr != nil {
+				return cerr
+			}
+		}
+
 		for _, link := range hierarchy {
 			existing, err := attrs.GetByInternalName(ctx, link.ID(), in.InternalName)
 			if err != nil && !domainerrors.IsNotFound(err) {
@@ -135,6 +156,7 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 			Unique:           in.Unique,
 			Localizable:      in.Localizable,
 			Scopable:         in.Scopable,
+			Computed:         computed,
 			Constraints:      constraints,
 			DefaultValue:     defaultValue,
 			Group:            in.Group,
@@ -174,6 +196,7 @@ type UpdateInput struct {
 	Unique       bool
 	Localizable  bool
 	Scopable     bool
+	Computed     json.RawMessage
 	Constraints  json.RawMessage
 	DefaultValue json.RawMessage
 	Group        string
@@ -188,6 +211,10 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 		return nil, domainerrors.NewValidation(err.Error())
 	}
 	constraints, defaultValue, err := decodeRules(in.Constraints, in.DefaultValue)
+	if err != nil {
+		return nil, err
+	}
+	computed, err := decodeComputed(in.Computed)
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +240,7 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			Unique:       in.Unique,
 			Localizable:  in.Localizable,
 			Scopable:     in.Scopable,
+			Computed:     computed,
 			Constraints:  constraints,
 			DefaultValue: defaultValue,
 			Group:        in.Group,
@@ -445,4 +473,74 @@ func decodeRules(rawConstraints, rawDefault json.RawMessage) (domainattribute.Co
 		defaultValue = &d
 	}
 	return constraints, defaultValue, nil
+}
+
+// computedDeps maps each computed-formula attribute in the hierarchy to the
+// attribute names its formula reads, for cycle detection.
+func (i *Interactor) computedDeps(ctx context.Context, attrs domainattribute.Repository, hierarchy []*domaintypedef.TypeDefinition) (map[string][]string, error) {
+	deps := map[string][]string{}
+	for _, link := range hierarchy {
+		list, _, err := attrs.ListByTypeDefinition(ctx, link.ID(), db.Page{Limit: 500})
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range list {
+			c := a.Computed()
+			if c == nil || c.Kind != domainattribute.ComputedFormula {
+				continue
+			}
+			refs, verr := c.Validate()
+			if verr != nil {
+				return nil, verr
+			}
+			deps[a.InternalName()] = refs
+		}
+	}
+	return deps, nil
+}
+
+// decodeComputed parses the optional computed-attribute spec.
+func decodeComputed(raw json.RawMessage) (*domainattribute.Computed, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var c domainattribute.Computed
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil, domainerrors.NewValidation("invalid computed spec", "error", err.Error())
+	}
+	return &c, nil
+}
+
+// checkFormulaCycle rejects a computed formula whose references would form a
+// dependency cycle among the type's computed attributes. deps maps each
+// existing computed attribute's internal name to the names its formula
+// reads; the candidate (name → refs) is added before the search.
+func checkFormulaCycle(name string, refs []string, deps map[string][]string) error {
+	graph := make(map[string][]string, len(deps)+1)
+	for k, v := range deps {
+		graph[k] = v
+	}
+	graph[name] = refs
+
+	// A cycle exists iff `name` is reachable from itself following edges.
+	var visit func(cur string, seen map[string]bool) bool
+	visit = func(cur string, seen map[string]bool) bool {
+		for _, ref := range graph[cur] {
+			if ref == name {
+				return true
+			}
+			if seen[ref] {
+				continue
+			}
+			seen[ref] = true
+			if visit(ref, seen) {
+				return true
+			}
+		}
+		return false
+	}
+	if visit(name, map[string]bool{name: true}) {
+		return domainerrors.NewValidation("computed formula introduces a dependency cycle", "attribute", name)
+	}
+	return nil
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/admin"
+	"github.com/zkrebbekx/flexitype/application/computed"
 	"github.com/zkrebbekx/flexitype/application/feed"
 	"github.com/zkrebbekx/flexitype/application/outbox"
 	"github.com/zkrebbekx/flexitype/application/search"
@@ -212,11 +213,16 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 
 	cfg.BlobStore = o.blobs
 
+	factory := application.NewFactory(cfg)
+	// Computed attributes materialize via an event subscriber, so their
+	// derived values are ordinary (FQL-queryable) values.
+	o.dispatcher.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
+
 	return &Service{
 		pool:       pool,
 		transactor: transactor,
 		dispatcher: o.dispatcher,
-		factory:    application.NewFactory(cfg),
+		factory:    factory,
 		relay:      relay,
 		indexer:    indexer,
 		worker:     worker,
@@ -253,23 +259,25 @@ func NewInMemory(opts ...Option) *Service {
 	}
 
 	transactor := store.Transactor()
+	factory := application.NewFactory(application.FactoryConfig{
+		Transactor:      transactor,
+		NewRepositories: newRepos,
+		Dispatcher:      o.dispatcher,
+		ActivityLog:     store.ActivityLog(),
+		OnRollback:      o.onRollback,
+		Features:        o.features,
+		SavedViews:      savedViews,
+		MatchRules:      matchRules,
+		Revisions:       revisions,
+		BlobStore:       o.blobs,
+	})
+	o.dispatcher.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
 	return &Service{
 		transactor: transactor,
 		dispatcher: o.dispatcher,
-		factory: application.NewFactory(application.FactoryConfig{
-			Transactor:      transactor,
-			NewRepositories: newRepos,
-			Dispatcher:      o.dispatcher,
-			ActivityLog:     store.ActivityLog(),
-			OnRollback:      o.onRollback,
-			Features:        o.features,
-			SavedViews:      savedViews,
-			MatchRules:      matchRules,
-			Revisions:       revisions,
-			BlobStore:       o.blobs,
-		}),
-		indexer: indexer,
-		blobs:   o.blobs,
+		factory:    factory,
+		indexer:    indexer,
+		blobs:      o.blobs,
 	}
 }
 

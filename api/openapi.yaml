@@ -1,0 +1,801 @@
+openapi: 3.1.0
+info:
+  title: flexitype API
+  description: >
+    Runtime-defined soft types, attributes, dependencies, relationships and
+    a query language (FQL), plus event delivery. All endpoints are tenant
+    scoped via the authenticated service account. See docs/api-stability.md
+    for compatibility guarantees.
+  version: v1
+  license:
+    name: MIT
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: types
+  - name: attributes
+  - name: values
+  - name: entities
+  - name: dependencies
+  - name: relationships
+  - name: query
+  - name: activity
+  - name: event-delivery
+  - name: ops
+
+paths:
+  /features:
+    get:
+      tags: [ops]
+      summary: Report enabled capabilities
+      responses:
+        "200":
+          description: Feature flags
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: boolean }
+
+  /type-definitions:
+    get:
+      tags: [types]
+      summary: List type definitions
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/IncludeArchived"
+      responses:
+        "200":
+          $ref: "#/components/responses/TypeDefinitionPage"
+    post:
+      tags: [types]
+      summary: Create a type definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTypeDefinition" }
+      responses:
+        "201": { $ref: "#/components/responses/TypeDefinition" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /type-definitions/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [types]
+      summary: Get a type definition
+      responses:
+        "200": { $ref: "#/components/responses/TypeDefinition" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [types]
+      summary: Update a type definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateDisplay" }
+      responses:
+        "200": { $ref: "#/components/responses/TypeDefinition" }
+        "404": { $ref: "#/components/responses/Error" }
+  /type-definitions/{id}/archive:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [types]
+      summary: Archive a type definition
+      responses:
+        "200": { $ref: "#/components/responses/TypeDefinition" }
+  /type-definitions/{id}/restore:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [types]
+      summary: Restore an archived type definition
+      responses:
+        "200": { $ref: "#/components/responses/TypeDefinition" }
+  /type-definitions/{id}/attributes:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [types]
+      summary: List a type's own attributes
+      responses:
+        "200": { $ref: "#/components/responses/AttributePage" }
+  /type-definitions/{id}/effective-attributes:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [types]
+      summary: List a type's inherited (effective) attributes
+      responses:
+        "200":
+          description: Effective attributes with their declaring type
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EffectiveAttribute" }
+  /type-definitions/{id}/children:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [types]
+      summary: List direct subtypes
+      responses:
+        "200":
+          description: Direct subtypes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TypeDefinition" }
+
+  /attributes:
+    get:
+      tags: [attributes]
+      summary: List attribute definitions
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: type_definition_id
+          in: query
+          schema: { type: string }
+        - $ref: "#/components/parameters/IncludeArchived"
+      responses:
+        "200": { $ref: "#/components/responses/AttributePage" }
+    post:
+      tags: [attributes]
+      summary: Create an attribute definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAttribute" }
+      responses:
+        "201": { $ref: "#/components/responses/Attribute" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /attributes/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [attributes]
+      summary: Get an attribute definition
+      responses:
+        "200": { $ref: "#/components/responses/Attribute" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [attributes]
+      summary: Update an attribute definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateAttribute" }
+      responses:
+        "200": { $ref: "#/components/responses/Attribute" }
+  /attributes/{id}/archive:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [attributes]
+      summary: Archive an attribute definition
+      responses:
+        "200": { $ref: "#/components/responses/Attribute" }
+  /attributes/{id}/restore:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [attributes]
+      summary: Restore an attribute definition
+      responses:
+        "200": { $ref: "#/components/responses/Attribute" }
+  /attributes/{id}/validate-value:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [attributes]
+      summary: Validate a candidate value against an attribute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { value: {} } }
+      responses:
+        "200": { description: Value is valid }
+        "422": { $ref: "#/components/responses/Error" }
+
+  /values:
+    get:
+      tags: [values]
+      summary: List attribute values
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200": { $ref: "#/components/responses/ValuePage" }
+    post:
+      tags: [values]
+      summary: Set an entity's attribute value
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetValue" }
+      responses:
+        "201": { $ref: "#/components/responses/Value" }
+        "422": { $ref: "#/components/responses/Error" }
+  /values/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [values]
+      summary: Get a stored value
+      responses:
+        "200": { $ref: "#/components/responses/Value" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [values]
+      summary: Remove a value
+      responses:
+        "200": { $ref: "#/components/responses/Value" }
+
+  /entities/{typeDefinitionID}:
+    get:
+      tags: [entities]
+      summary: List entities of a type
+      parameters:
+        - name: typeDefinitionID
+          in: path
+          required: true
+          schema: { type: string }
+        - name: include_descendants
+          in: query
+          schema: { type: boolean }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Entity summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/EntitySummary" }
+                  page_info: { $ref: "#/components/schemas/PageInfo" }
+  /entities/{typeDefinitionID}/{entityID}/values:
+    get:
+      tags: [entities]
+      summary: List an entity's live values
+      parameters:
+        - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
+        - { name: entityID, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Live values
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Value" }
+  /entities/{typeDefinitionID}/{entityID}/relationships:
+    get:
+      tags: [entities]
+      summary: List an entity's relationships
+      parameters:
+        - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
+        - { name: entityID, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Entity links }
+  /entities/{typeDefinitionID}/{entityID}/attributes/{attributeID}/effective-schema:
+    get:
+      tags: [entities]
+      summary: Resolve the effective schema of one attribute for one entity
+      parameters:
+        - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
+        - { name: entityID, in: path, required: true, schema: { type: string } }
+        - { name: attributeID, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "Effective schema (allowed values, required, restricted)" }
+
+  /dependencies:
+    get:
+      tags: [dependencies]
+      summary: List dependencies
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200": { description: Dependency page }
+    post:
+      tags: [dependencies]
+      summary: Create a dependency
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        "201": { description: Created dependency }
+        "422": { $ref: "#/components/responses/Error" }
+  /dependencies/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [dependencies]
+      summary: Get a dependency
+      responses: { "200": { description: Dependency }, "404": { $ref: "#/components/responses/Error" } }
+    patch:
+      tags: [dependencies]
+      summary: Update a dependency
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Updated dependency } }
+    delete:
+      tags: [dependencies]
+      summary: Archive a dependency
+      responses: { "200": { description: Archived dependency } }
+
+  /relationship-definitions:
+    get:
+      tags: [relationships]
+      summary: List relationship definitions
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { name: type_definition_id, in: query, schema: { type: string } }
+        - $ref: "#/components/parameters/IncludeArchived"
+      responses: { "200": { description: Relationship-definition page } }
+    post:
+      tags: [relationships]
+      summary: Create a relationship definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRelationshipDefinition" }
+      responses:
+        "201": { description: Created relationship definition }
+        "422": { $ref: "#/components/responses/Error" }
+  /relationship-definitions/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get: { tags: [relationships], summary: Get a relationship definition, responses: { "200": { description: Relationship definition }, "404": { $ref: "#/components/responses/Error" } } }
+    patch:
+      tags: [relationships]
+      summary: Update a relationship definition
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Updated } }
+  /relationship-definitions/{id}/archive:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post: { tags: [relationships], summary: Archive, responses: { "200": { description: Archived } } }
+  /relationship-definitions/{id}/restore:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post: { tags: [relationships], summary: Restore, responses: { "200": { description: Restored } } }
+  /relationship-definitions/{id}/attribute-sets:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get: { tags: [relationships], summary: List the inherited attribute-set chain, responses: { "200": { description: Attribute set ids } } }
+
+  /relationships:
+    get:
+      tags: [relationships]
+      summary: List relationships
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses: { "200": { description: Relationship page } }
+    post:
+      tags: [relationships]
+      summary: Link two entities
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Link" }
+      responses:
+        "201": { description: Created link }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /relationships/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get: { tags: [relationships], summary: Get a relationship, responses: { "200": { description: Relationship }, "404": { $ref: "#/components/responses/Error" } } }
+    delete: { tags: [relationships], summary: Unlink, responses: { "200": { description: Unlinked } } }
+
+  /query:
+    get:
+      tags: [query]
+      summary: Run an FQL query
+      parameters:
+        - { name: type, in: query, required: true, schema: { type: string }, description: Root type internal name }
+        - { name: q, in: query, required: true, schema: { type: string }, description: FQL expression }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Matching entities
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/EntitySummary" } }
+                  page_info: { $ref: "#/components/schemas/PageInfo" }
+        "422": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+  /query/validate:
+    post:
+      tags: [query]
+      summary: Validate an FQL query without running it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { type: { type: string }, q: { type: string } } }
+      responses:
+        "200": { description: Valid, content: { application/json: { schema: { type: object, properties: { valid: { type: boolean } } } } } }
+        "422": { $ref: "#/components/responses/Error" }
+
+  /search/reindex:
+    post:
+      tags: [ops]
+      summary: Rebuild the entity search projection
+      responses:
+        "200": { description: Reindexed count, content: { application/json: { schema: { type: object, properties: { reindexed: { type: integer } } } } } }
+        "501": { $ref: "#/components/responses/Error" }
+
+  /activity:
+    get:
+      tags: [activity]
+      summary: List the audit log
+      parameters:
+        - { name: entity, in: query, schema: { type: string } }
+        - { name: entity_id, in: query, schema: { type: string } }
+        - { name: actor, in: query, schema: { type: string } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200": { description: Activity page }
+        "501": { $ref: "#/components/responses/Error" }
+
+  /webhook-subscriptions:
+    get:
+      tags: [event-delivery]
+      summary: List webhook subscriptions
+      responses:
+        "200": { description: Subscriptions }
+        "501": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [event-delivery]
+      summary: Register a webhook subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSubscription" }
+      responses:
+        "201": { $ref: "#/components/responses/Subscription" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /webhook-subscriptions/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get: { tags: [event-delivery], summary: Get a subscription, responses: { "200": { $ref: "#/components/responses/Subscription" }, "404": { $ref: "#/components/responses/Error" } } }
+    patch:
+      tags: [event-delivery]
+      summary: Update a subscription (or rotate its secret)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateSubscription" }
+      responses: { "200": { $ref: "#/components/responses/Subscription" } }
+    delete: { tags: [event-delivery], summary: Delete a subscription, responses: { "204": { description: Deleted } } }
+  /webhook-subscriptions/{id}/deliveries:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [event-delivery]
+      summary: List a subscription's delivery log
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, inflight, delivered, dead] } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses: { "200": { description: Delivery page } }
+  /webhook-deliveries/{id}/redeliver:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [event-delivery]
+      summary: Requeue a dead or delivered delivery
+      responses:
+        "200": { description: Requeued }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /events:
+    get:
+      tags: [event-delivery]
+      summary: Page the ordered event feed
+      parameters:
+        - { name: after, in: query, schema: { type: integer, format: int64 }, description: Feed cursor (feed_seq) }
+        - { name: types, in: query, schema: { type: string }, description: Comma-separated event types }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { description: Feed page }
+        "410": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+  /events/stream:
+    get:
+      tags: [event-delivery]
+      summary: Server-sent events tail of the feed
+      description: >
+        Streams text/event-stream. Resume with the Last-Event-ID header
+        carrying the last feed_seq seen.
+      responses:
+        "200": { description: SSE stream, content: { text/event-stream: {} } }
+  /event-cursors/{consumer}:
+    parameters: [{ name: consumer, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [event-delivery]
+      summary: Read a named consumer cursor
+      responses: { "200": { description: Cursor position } }
+    put:
+      tags: [event-delivery]
+      summary: Commit a named cursor (compare-and-swap)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { position: { type: integer, format: int64 }, expected: { type: integer, format: int64 } } }
+      responses:
+        "200": { description: Committed }
+        "409": { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Service-account token, `ft_<account>_<secret>`. Omit auth in
+        development mode (no service-account file configured).
+
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 500 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    IncludeArchived:
+      name: include_archived
+      in: query
+      schema: { type: boolean }
+
+  responses:
+    Error:
+      description: Error with a stable machine code
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TypeDefinition:
+      description: A type definition
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/TypeDefinition" }
+    TypeDefinitionPage:
+      description: A page of type definitions
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              items: { type: array, items: { $ref: "#/components/schemas/TypeDefinition" } }
+              page_info: { $ref: "#/components/schemas/PageInfo" }
+    Attribute:
+      description: An attribute definition
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Attribute" }
+    AttributePage:
+      description: A page of attribute definitions
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              items: { type: array, items: { $ref: "#/components/schemas/Attribute" } }
+              page_info: { $ref: "#/components/schemas/PageInfo" }
+    Value:
+      description: A stored attribute value
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Value" }
+    ValuePage:
+      description: A page of values
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              items: { type: array, items: { $ref: "#/components/schemas/Value" } }
+              page_info: { $ref: "#/components/schemas/PageInfo" }
+    Subscription:
+      description: A webhook subscription (secrets never returned)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Subscription" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [VALIDATION, NOT_FOUND, CONFLICT, ARCHIVED, DEPENDENCY_VIOLATION, FEATURE_DISABLED, CURSOR_CONFLICT, CURSOR_EXPIRED, UNAUTHENTICATED, FORBIDDEN, INTERNAL]
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
+    PageInfo:
+      type: object
+      properties:
+        total_count: { type: integer }
+        has_next_page: { type: boolean }
+        has_previous_page: { type: boolean }
+        next_cursor: { type: string }
+    DataType:
+      type: string
+      enum: [bool, string, integer, float, decimal, date, time, datetime, enum, url, email, json]
+    TypeDefinition:
+      type: object
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        internal_name: { type: string }
+        display_name: { type: string }
+        description: { type: string }
+        extends_id: { type: string }
+        kind: { type: string }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        archived_at: { type: string, format: date-time }
+    CreateTypeDefinition:
+      type: object
+      required: [internal_name, display_name]
+      properties:
+        internal_name: { type: string }
+        display_name: { type: string }
+        description: { type: string }
+        extends_id: { type: string, description: Parent type for inheritance; immutable }
+    UpdateDisplay:
+      type: object
+      required: [display_name]
+      properties:
+        display_name: { type: string }
+        description: { type: string }
+    Attribute:
+      type: object
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        type_definition_id: { type: string }
+        internal_name: { type: string }
+        display_name: { type: string }
+        description: { type: string }
+        data_type: { $ref: "#/components/schemas/DataType" }
+        required: { type: boolean }
+        multi_valued: { type: boolean }
+        unique: { type: boolean }
+        constraints: { type: array, items: { type: object } }
+        default_value: {}
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        archived_at: { type: string, format: date-time }
+    CreateAttribute:
+      type: object
+      required: [type_definition_id, internal_name, display_name, data_type]
+      properties:
+        type_definition_id: { type: string }
+        internal_name: { type: string }
+        display_name: { type: string }
+        description: { type: string }
+        data_type: { $ref: "#/components/schemas/DataType" }
+        required: { type: boolean }
+        multi_valued: { type: boolean }
+        unique: { type: boolean }
+        constraints: { type: array, items: { type: object } }
+        default_value: {}
+    UpdateAttribute:
+      type: object
+      required: [display_name]
+      properties:
+        display_name: { type: string }
+        description: { type: string }
+        required: { type: boolean }
+        multi_valued: { type: boolean }
+        unique: { type: boolean }
+        constraints: { type: array, items: { type: object } }
+        default_value: {}
+    Value:
+      type: object
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        type_definition_id: { type: string }
+        attribute_definition_id: { type: string }
+        entity_id: { type: string }
+        value: {}
+        definition_version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        archived_at: { type: string, format: date-time }
+    SetValue:
+      type: object
+      required: [attribute_definition_id, entity_id, value]
+      properties:
+        attribute_definition_id: { type: string }
+        entity_id: { type: string }
+        type_definition_id: { type: string, description: Entity's declared type; defaults to the attribute's type }
+        value:
+          description: The value; typed per the attribute's data_type
+    EntitySummary:
+      type: object
+      properties:
+        entity_id: { type: string }
+        type_definition_id: { type: string }
+        value_count: { type: integer }
+        last_updated_at: { type: string, format: date-time }
+    EffectiveAttribute:
+      type: object
+      properties:
+        attribute: { $ref: "#/components/schemas/Attribute" }
+        declared_in: { $ref: "#/components/schemas/TypeDefinition" }
+    CreateRelationshipDefinition:
+      type: object
+      required: [internal_name, display_name, parent_type_id, child_type_id]
+      properties:
+        internal_name: { type: string }
+        display_name: { type: string }
+        description: { type: string }
+        kind: { type: string, enum: [directed, symmetric] }
+        parent_type_id: { type: string }
+        child_type_id: { type: string }
+        parent_label: { type: string }
+        child_label: { type: string }
+        extends_id: { type: string }
+        parent_version_policy: { type: string, enum: [latest, pinned] }
+        child_version_policy: { type: string, enum: [latest, pinned] }
+    Link:
+      type: object
+      required: [relationship_definition_id, parent_entity_id, child_entity_id]
+      properties:
+        relationship_definition_id: { type: string }
+        parent_entity_id: { type: string }
+        child_entity_id: { type: string }
+        parent_type_version: { type: integer }
+        child_type_version: { type: integer }
+    Subscription:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        url: { type: string }
+        event_types: { type: array, items: { type: string } }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateSubscription:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string }
+        url: { type: string, format: uri, description: Public https endpoint (SSRF-guarded) }
+        secret: { type: string }
+        event_types: { type: array, items: { type: string }, description: Empty means all events }
+        active: { type: boolean }
+    UpdateSubscription:
+      type: object
+      properties:
+        url: { type: string, format: uri }
+        event_types: { type: array, items: { type: string } }
+        active: { type: boolean }
+        rotate_secret: { type: string }

@@ -537,6 +537,113 @@ paths:
         "200": { description: Committed }
         "409": { $ref: "#/components/responses/Error" }
 
+  /tenants:
+    get:
+      tags: [provisioning]
+      summary: List tenants (admin scope)
+      description: >
+        Requires the admin scope. Returns 501 when provisioning is not
+        enabled for the deployment.
+      responses:
+        "200":
+          description: Tenants
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { items: { type: array, items: { $ref: "#/components/schemas/Tenant" } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [provisioning]
+      summary: Create a tenant (admin scope)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties: { name: { type: string, description: "lowercase [a-z0-9_-], 2-64 chars" } }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/Tenant" } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /tenants/{name}:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    patch:
+      tags: [provisioning]
+      summary: Activate or deactivate a tenant (admin scope)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [active], properties: { active: { type: boolean } } }
+      responses:
+        "200": { description: Updated }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /service-accounts:
+    get:
+      tags: [provisioning]
+      summary: List a tenant's service accounts (admin scope)
+      parameters: [{ name: tenant_name, in: query, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Service accounts (no secrets)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { items: { type: array, items: { $ref: "#/components/schemas/ServiceAccount" } } }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [provisioning]
+      summary: Create a service account (admin scope)
+      description: The bearer token is returned once and is never recoverable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant_name, name, scopes]
+              properties:
+                tenant_name: { type: string }
+                name: { type: string, description: "lowercase [a-z0-9_-], 2-64 chars" }
+                scopes: { type: array, items: { type: string, enum: [read, write, admin] } }
+      responses:
+        "201":
+          description: Created (token shown once)
+          content: { application/json: { schema: { $ref: "#/components/schemas/AccountWithToken" } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /service-accounts/{id}/rotate:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [provisioning]
+      summary: Rotate a service account's secret (admin scope)
+      description: Returns a new token once; the previous secret stops working immediately.
+      responses:
+        "200":
+          description: Rotated (new token shown once)
+          content: { application/json: { schema: { $ref: "#/components/schemas/AccountWithToken" } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /service-accounts/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    delete:
+      tags: [provisioning]
+      summary: Revoke a service account (admin scope)
+      description: The token stops working within the auth cache TTL.
+      responses:
+        "204": { description: Revoked }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -799,3 +906,30 @@ components:
         event_types: { type: array, items: { type: string } }
         active: { type: boolean }
         rotate_secret: { type: string }
+    Tenant:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ServiceAccount:
+      type: object
+      description: A machine identity; secrets are never returned here.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        name: { type: string }
+        scopes: { type: array, items: { type: string, enum: [read, write, admin] } }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AccountWithToken:
+      type: object
+      description: A created or rotated account paired with its one-time token.
+      properties:
+        account: { $ref: "#/components/schemas/ServiceAccount" }
+        token:
+          type: string
+          description: Bearer token, shown exactly once; not recoverable afterward.

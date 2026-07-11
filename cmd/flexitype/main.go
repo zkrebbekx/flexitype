@@ -148,15 +148,35 @@ func run(log *logger.Logger) error {
 		log.Info().Str("url", envWebhookURL).Msg("event webhook subscription ensured")
 	}
 
-	// Service accounts: no file means development mode with auth disabled.
-	var accounts *serviceaccount.Store
-	if cfg.ServiceAccountsPath != "" {
-		accounts, err = serviceaccount.LoadFile(cfg.ServiceAccountsPath)
-		if err != nil {
-			return fmt.Errorf("load service accounts: %w", err)
+	// Authentication: provisioning mode authenticates against the database
+	// (accounts created at runtime via the admin API); otherwise a JSON
+	// file is the account source; with neither, auth is disabled
+	// (development). A file and provisioning are mutually exclusive.
+	var accounts serviceaccount.Authenticator
+	switch {
+	case cfg.EnableProvisioning:
+		accounts = svc.NewAccountLookup(cfg.AuthCacheTTL)
+		log.Info().Msg("provisioning enabled; database-backed authentication active")
+		// Seed the first admin credential if the store is empty. The token
+		// is logged exactly once — capture it, it is not recoverable.
+		if cfg.BootstrapAdmin {
+			token, berr := svc.BootstrapAdmin(ctx, "default", "bootstrap-admin")
+			if berr != nil {
+				return fmt.Errorf("bootstrap admin: %w", berr)
+			}
+			if token != "" {
+				log.Warn().Str("token", token).
+					Msg("bootstrap admin account created — store this token now, it will not be shown again")
+			}
 		}
+	case cfg.ServiceAccountsPath != "":
+		fileStore, ferr := serviceaccount.LoadFile(cfg.ServiceAccountsPath)
+		if ferr != nil {
+			return fmt.Errorf("load service accounts: %w", ferr)
+		}
+		accounts = fileStore
 		log.Info().Str("path", cfg.ServiceAccountsPath).Msg("service accounts loaded")
-	} else {
+	default:
 		log.Warn().Msg("no service accounts configured; authentication disabled")
 	}
 
@@ -172,10 +192,11 @@ func run(log *logger.Logger) error {
 	}
 
 	handler := svc.APIHandler(flexitype.APIConfig{
-		Logger:   log,
-		Health:   healthChecker,
-		Accounts: accounts,
-		Metrics:  appMetrics,
+		Logger:             log,
+		Health:             healthChecker,
+		Accounts:           accounts,
+		Metrics:            appMetrics,
+		EnableProvisioning: cfg.EnableProvisioning,
 	})
 
 	server := &http.Server{

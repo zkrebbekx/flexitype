@@ -58,6 +58,13 @@ func (a Account) Tenant() valueobjects.TenantID {
 	return t
 }
 
+// Authenticator resolves a bearer token to an account. Both the
+// file-backed Store and a database-backed store satisfy it, so the auth
+// middleware works the same over either.
+type Authenticator interface {
+	Authenticate(token string) (Account, error)
+}
+
 // Store holds the configured accounts.
 type Store struct {
 	accounts map[string]Account
@@ -106,26 +113,51 @@ func HashSecret(secret string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// SplitToken parses "ft_<id>_<secret>" into its id and secret. Both must
+// be non-empty; the id never contains an underscore (it is a ULID), so the
+// split is on the first underscore and secrets may contain any character.
+func SplitToken(token string) (id, secret string, err error) {
+	rest, ok := strings.CutPrefix(token, TokenPrefix)
+	if !ok {
+		return "", "", fmt.Errorf("malformed token")
+	}
+	id, secret, ok = strings.Cut(rest, "_")
+	if !ok || id == "" || secret == "" {
+		return "", "", fmt.Errorf("malformed token")
+	}
+	return id, secret, nil
+}
+
+// VerifySecret compares a raw secret against a stored hash in constant
+// time.
+func VerifySecret(secret, storedHash string) error {
+	if subtle.ConstantTimeCompare([]byte(HashSecret(secret)), []byte(storedHash)) != 1 {
+		return fmt.Errorf("invalid credentials")
+	}
+	return nil
+}
+
+// VerifyOnlyTiming burns a hash comparison so an unknown account is
+// timing-indistinguishable from a wrong secret, then reports the account as
+// unknown.
+func VerifyOnlyTiming(secret string) error {
+	subtle.ConstantTimeCompare([]byte(HashSecret(secret)), []byte(HashSecret(secret)))
+	return fmt.Errorf("unknown service account")
+}
+
 // Authenticate resolves a bearer token to its account using constant-time
 // hash comparison.
 func (s *Store) Authenticate(token string) (Account, error) {
-	rest, ok := strings.CutPrefix(token, TokenPrefix)
-	if !ok {
-		return Account{}, fmt.Errorf("malformed token")
+	id, secret, err := SplitToken(token)
+	if err != nil {
+		return Account{}, err
 	}
-	id, secret, ok := strings.Cut(rest, "_")
-	if !ok || id == "" || secret == "" {
-		return Account{}, fmt.Errorf("malformed token")
-	}
-
 	account, exists := s.accounts[id]
 	if !exists {
-		// Burn comparable time so unknown accounts are indistinguishable.
-		subtle.ConstantTimeCompare([]byte(HashSecret(secret)), []byte(HashSecret(secret)))
-		return Account{}, fmt.Errorf("unknown service account")
+		return Account{}, VerifyOnlyTiming(secret)
 	}
-	if subtle.ConstantTimeCompare([]byte(HashSecret(secret)), []byte(account.SecretHash)) != 1 {
-		return Account{}, fmt.Errorf("invalid credentials")
+	if err := VerifySecret(secret, account.SecretHash); err != nil {
+		return Account{}, err
 	}
 	return account, nil
 }

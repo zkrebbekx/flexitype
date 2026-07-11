@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/zkrebbekx/flexitype/application"
+	"github.com/zkrebbekx/flexitype/application/admin"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
@@ -20,7 +21,9 @@ type ServerConfig struct {
 	Factory  application.Factory
 	Logger   *logger.Logger
 	Health   *health.Service
-	Accounts *serviceaccount.Store // nil disables auth (development)
+	Accounts serviceaccount.Authenticator // nil disables auth (development)
+	// Admin, when set, enables the tenant/service-account provisioning API.
+	Admin *admin.Interactor
 	// Reindex rebuilds the search projection; nil when the index is off.
 	Reindex func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
 	// Metrics, when set, records HTTP SLIs and serves /metrics.
@@ -30,7 +33,7 @@ type ServerConfig struct {
 // NewHandler builds the service's HTTP handler: versioned API plus
 // operational endpoints, instrumented with OpenTelemetry.
 func NewHandler(cfg ServerConfig) http.Handler {
-	s := &server{factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex}
+	s := &server{factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex, admin: cfg.Admin}
 
 	r := chi.NewRouter()
 	r.Use(recoverer(cfg.Logger))
@@ -142,6 +145,19 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Get("/", s.getCursor)
 			r.Put("/", s.commitCursor)
 		})
+
+		// Provisioning control plane (admin-scoped; each handler checks).
+		api.Route("/tenants", func(r chi.Router) {
+			r.Get("/", s.listTenants)
+			r.Post("/", s.createTenant)
+			r.Patch("/{name}", s.setTenantActive)
+		})
+		api.Route("/service-accounts", func(r chi.Router) {
+			r.Get("/", s.listServiceAccounts)
+			r.Post("/", s.createServiceAccount)
+			r.Post("/{id}/rotate", s.rotateServiceAccount)
+			r.Delete("/{id}", s.revokeServiceAccount)
+		})
 	})
 
 	// Everything that is not the API or an operational endpoint is the
@@ -156,4 +172,5 @@ type server struct {
 	factory application.Factory
 	log     *logger.Logger
 	reindex func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
+	admin   *admin.Interactor
 }

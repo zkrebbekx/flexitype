@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -23,14 +24,46 @@ func withInteractors(factory application.Factory) func(http.Handler) http.Handle
 	}
 }
 
+type scopesKey struct{}
+
+// scopesFromContext returns the authenticated account's scopes. In
+// development mode (auth disabled) it returns admin so every surface is
+// reachable.
+func scopesFromContext(ctx context.Context) []serviceaccount.Scope {
+	if s, ok := ctx.Value(scopesKey{}).([]serviceaccount.Scope); ok {
+		return s
+	}
+	return []serviceaccount.Scope{serviceaccount.ScopeAdmin}
+}
+
+// hasScope reports whether the request's account holds a scope (admin
+// implies all).
+func hasScope(ctx context.Context, want serviceaccount.Scope) bool {
+	for _, s := range scopesFromContext(ctx) {
+		if s == want || s == serviceaccount.ScopeAdmin {
+			return true
+		}
+	}
+	return false
+}
+
+// requireAdmin gates the provisioning endpoints on the admin scope.
+func (s *server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if !hasScope(r.Context(), serviceaccount.ScopeAdmin) {
+		writeForbidden(w, "missing scope admin")
+		return false
+	}
+	return true
+}
+
 // authenticate resolves the bearer token to a service account, stamping
-// actor and tenant onto the request context. A nil store disables
-// authentication (development mode) and runs as the system actor on the
-// default tenant.
-func authenticate(store *serviceaccount.Store, log *logger.Logger) func(http.Handler) http.Handler {
+// actor, tenant and scopes onto the request context. A nil authenticator
+// disables authentication (development mode) and runs as the system actor
+// on the default tenant with admin scope.
+func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if store == nil {
+			if auth == nil {
 				next.ServeHTTP(w, r.WithContext(uow.WithActor(r.Context(), uow.Actor{
 					Name: "dev",
 					Kind: uow.ActorSystem,
@@ -43,7 +76,7 @@ func authenticate(store *serviceaccount.Store, log *logger.Logger) func(http.Han
 				writeUnauthorized(w, "missing bearer token")
 				return
 			}
-			account, err := store.Authenticate(token)
+			account, err := auth.Authenticate(token)
 			if err != nil {
 				log.Warn().Err(err).Msg("authentication failed")
 				writeUnauthorized(w, "invalid credentials")
@@ -65,6 +98,7 @@ func authenticate(store *serviceaccount.Store, log *logger.Logger) func(http.Han
 				Kind: uow.ActorServiceAccount,
 			})
 			ctx = uow.WithTenant(ctx, account.Tenant())
+			ctx = context.WithValue(ctx, scopesKey{}, account.Scopes)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

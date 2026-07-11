@@ -14,6 +14,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/zkrebbekx/flexitype/application"
+	"github.com/zkrebbekx/flexitype/application/admin"
 	"github.com/zkrebbekx/flexitype/application/feed"
 	"github.com/zkrebbekx/flexitype/application/outbox"
 	"github.com/zkrebbekx/flexitype/application/search"
@@ -314,12 +315,64 @@ func (s *Service) Dispatcher() *events.Dispatcher { return s.dispatcher }
 
 // APIConfig configures the mountable REST API for embedded deployments.
 type APIConfig struct {
-	Logger   *logger.Logger
-	Health   *health.Service
-	Accounts *serviceaccount.Store // nil disables auth
+	Logger *logger.Logger
+	Health *health.Service
+	// Accounts authenticates bearer tokens; nil disables auth (development).
+	Accounts serviceaccount.Authenticator
 	// Metrics, when set, records HTTP SLIs and serves /metrics. With the
 	// outbox on, delivery-depth gauges are registered automatically.
 	Metrics *metrics.Metrics
+	// EnableProvisioning turns on the admin-scoped tenant/service-account
+	// API (database-backed only).
+	EnableProvisioning bool
+}
+
+// NewAccountLookup returns a database-backed authenticator over this
+// service's pool, with a short success cache so revocation propagates
+// within ttl. nil for in-memory services.
+func (s *Service) NewAccountLookup(ttl time.Duration) serviceaccount.Authenticator {
+	if s.pool == nil {
+		return nil
+	}
+	return serviceaccount.NewCachingAuthenticator(postgres.NewAccountLookup(s.pool), ttl)
+}
+
+// AdminInteractor returns the provisioning usecases over this service's
+// pool, or nil for in-memory services.
+func (s *Service) AdminInteractor() *admin.Interactor {
+	if s.pool == nil {
+		return nil
+	}
+	return admin.NewInteractor(postgres.NewAdminStore(s.pool))
+}
+
+// BootstrapAdmin seeds the provisioning tables with a tenant and an
+// admin-scoped service account when no accounts exist yet, returning the
+// one-time token so an operator can call the admin API. It is idempotent:
+// once any account exists it returns an empty token and does nothing. This
+// is the only way to get the first credential into a database-backed
+// deployment.
+func (s *Service) BootstrapAdmin(ctx context.Context, tenantName, accountName string) (string, error) {
+	if s.pool == nil {
+		return "", domainerrors.NewValidation("provisioning requires a database-backed service")
+	}
+	a := s.AdminInteractor()
+
+	if existing, err := a.ListAccounts(ctx, tenantName); err == nil && len(existing) > 0 {
+		return "", nil // already bootstrapped
+	}
+	if _, err := a.CreateTenant(ctx, tenantName); err != nil && !domainerrors.IsConflict(err) {
+		return "", err
+	}
+	out, err := a.CreateAccount(ctx, admin.CreateAccountInput{
+		TenantName: tenantName,
+		Name:       accountName,
+		Scopes:     []string{"admin"},
+	})
+	if err != nil {
+		return "", err
+	}
+	return out.Token, nil
 }
 
 // APIHandler returns flexitype's versioned REST API as an http.Handler you
@@ -342,6 +395,9 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 		Health:   cfg.Health,
 		Accounts: cfg.Accounts,
 		Metrics:  cfg.Metrics,
+	}
+	if cfg.EnableProvisioning {
+		server.Admin = s.AdminInteractor()
 	}
 	if s.indexer != nil {
 		server.Reindex = s.ReindexSearch

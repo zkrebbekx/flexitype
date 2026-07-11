@@ -42,6 +42,15 @@ type Config struct {
 	WebhookAllowPrivate bool
 	// EnableMetrics serves Prometheus SLIs at /metrics.
 	EnableMetrics bool
+	// EnableProvisioning turns on the admin-scoped tenant/service-account
+	// API and database-backed authentication.
+	EnableProvisioning bool
+	// AuthCacheTTL bounds how long a database-backed auth result is cached
+	// (and thus how quickly revocation takes effect).
+	AuthCacheTTL time.Duration
+	// BootstrapAdmin seeds a first admin account when provisioning is on
+	// and the account store is empty.
+	BootstrapAdmin bool
 	// PubSubProject, when set, publishes every event to Google Cloud
 	// Pub/Sub in addition to any webhook subscriptions.
 	PubSubProject string
@@ -88,6 +97,9 @@ func Load() (Config, error) {
 		EventRetention:      envDuration("FLEXITYPE_EVENT_RETENTION", 7*24*time.Hour),
 		WebhookAllowPrivate: envBool("FLEXITYPE_WEBHOOK_ALLOW_PRIVATE", false),
 		EnableMetrics:       envBool("FLEXITYPE_METRICS", true),
+		EnableProvisioning:  envBool("FLEXITYPE_PROVISIONING", false),
+		AuthCacheTTL:        envDuration("FLEXITYPE_AUTH_CACHE_TTL", 30*time.Second),
+		BootstrapAdmin:      envBool("FLEXITYPE_BOOTSTRAP_ADMIN", false),
 		PubSubProject:       os.Getenv("FLEXITYPE_PUBSUB_PROJECT"),
 		PubSubTopic:         envStr("FLEXITYPE_PUBSUB_TOPIC", "flexitype-events"),
 		PubSubOrdering:      envBool("FLEXITYPE_PUBSUB_ORDERING", false),

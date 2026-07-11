@@ -21,16 +21,10 @@ import (
 
 // pageArgs reads ?limit= and ?cursor=.
 func pageArgs(r *http.Request) db.PageArgs {
-	var args db.PageArgs
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
-			args.Limit = &n
-		}
-	}
-	if raw := r.URL.Query().Get("cursor"); raw != "" {
-		args.Cursor = &raw
-	}
-	return args
+	// A malformed limit is deferred to Resolve, so every list endpoint
+	// rejects it uniformly with a VALIDATION error (matching the feed),
+	// rather than silently falling back to the default.
+	return db.ParsePageArgs(r.URL.Query().Get("limit"), r.URL.Query().Get("cursor"))
 }
 
 func boolQuery(r *http.Request, key string) bool {

@@ -559,6 +559,11 @@ components:
     Cursor:
       name: cursor
       in: query
+      description: >
+        Opaque forward-only pagination cursor from a previous page's
+        page_info.next_cursor. List endpoints page by offset, so results
+        can shift under concurrent inserts; the events feed uses stable
+        monotonic cursors instead.
       schema: { type: string }
     IncludeArchived:
       name: include_archived

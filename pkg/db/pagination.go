@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/base64"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -18,14 +19,42 @@ type Page struct {
 }
 
 // PageArgs are raw client pagination arguments: a page size and an opaque
-// cursor. Cursors are base64-encoded "offset:<n>" strings.
+// cursor. Cursors are base64-encoded "offset:<n>" strings — list
+// endpoints therefore page by offset (skip/duplicate anomalies are
+// possible under concurrent inserts); the events feed uses stable
+// monotonic feed_seq cursors instead.
 type PageArgs struct {
 	Limit  *int
 	Cursor *string
+	// parseErr carries a malformed-limit error from ParsePageArgs so
+	// Resolve reports it uniformly, the same as a malformed cursor.
+	parseErr error
+}
+
+// ParsePageArgs parses raw ?limit=&cursor= query strings, deferring any
+// malformed-limit error to Resolve so every list endpoint rejects bad
+// pagination input the same way. Empty strings mean "unset".
+func ParsePageArgs(limit, cursor string) PageArgs {
+	var a PageArgs
+	if limit != "" {
+		n, err := strconv.Atoi(limit)
+		if err != nil {
+			a.parseErr = fmt.Errorf("limit must be an integer")
+		} else {
+			a.Limit = &n
+		}
+	}
+	if cursor != "" {
+		a.Cursor = &cursor
+	}
+	return a
 }
 
 // Resolve converts client args into a clamped limit/offset Page.
 func (a PageArgs) Resolve() (Page, error) {
+	if a.parseErr != nil {
+		return Page{}, a.parseErr
+	}
 	limit := defaultPageSize
 	if a.Limit != nil {
 		limit = *a.Limit

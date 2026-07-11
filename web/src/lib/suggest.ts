@@ -10,6 +10,8 @@ export interface SuggestSchema {
   /** relationship internal name → its (inherited) link attributes */
   linkAttributes: Record<string, AttributeDefinition[]>
   types: TypeDefinition[]
+  /** matches() is only offered when the search index is enabled. */
+  searchIndex?: boolean
 }
 
 export interface Suggestion {
@@ -222,6 +224,14 @@ function candidates(a: analysis, schema: SuggestSchema): Suggestion[] {
       }
     }
     out.push(...FUNCTIONS)
+    if (schema.searchIndex) {
+      out.push({
+        label: 'matches("…")',
+        insert: 'matches(',
+        detail: 'full-text search across the entity',
+        kind: 'function',
+      })
+    }
     out.push(
       { label: 'child(rel) { … }', insert: 'child(', detail: 'traverse to child-side entities', kind: 'function' },
       { label: 'parent(rel) { … }', insert: 'parent(', detail: 'traverse to parent-side entities', kind: 'function' },

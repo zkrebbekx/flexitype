@@ -27,7 +27,10 @@ const typeOptions = computed(() => [
 
 const features = useQuery({
   queryKey: ['features'],
-  queryFn: () => fetch('/api/v1/features').then((r) => r.json() as Promise<{ search: boolean; activity: boolean }>),
+  queryFn: () =>
+    fetch('/api/v1/features').then(
+      (r) => r.json() as Promise<{ search: boolean; activity: boolean; search_index?: boolean }>,
+    ),
   staleTime: Infinity,
 })
 
@@ -103,6 +106,7 @@ const suggestSchema = computed<SuggestSchema>(() => ({
   relationships: relDefs.data.value?.items ?? [],
   linkAttributes: linkAttrs.data.value ?? {},
   types: types.data.value?.items ?? [],
+  searchIndex: features.data.value?.search_index === true,
 }))
 </script>
 

@@ -1,12 +1,14 @@
 package http
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/zkrebbekx/flexitype/application"
+	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
@@ -18,12 +20,14 @@ type ServerConfig struct {
 	Logger   *logger.Logger
 	Health   *health.Service
 	Accounts *serviceaccount.Store // nil disables auth (development)
+	// Reindex rebuilds the search projection; nil when the index is off.
+	Reindex func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
 }
 
 // NewHandler builds the service's HTTP handler: versioned API plus
 // operational endpoints, instrumented with OpenTelemetry.
 func NewHandler(cfg ServerConfig) http.Handler {
-	s := &server{factory: cfg.Factory, log: cfg.Logger}
+	s := &server{factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex}
 
 	r := chi.NewRouter()
 	r.Use(recoverer(cfg.Logger))
@@ -102,6 +106,7 @@ func NewHandler(cfg ServerConfig) http.Handler {
 		api.Get("/features", s.features)
 		api.Get("/query", s.runQuery)
 		api.Post("/query/validate", s.validateQuery)
+		api.Post("/search/reindex", s.reindexSearch)
 
 		api.Get("/activity", s.listActivity)
 	})
@@ -117,4 +122,5 @@ func NewHandler(cfg ServerConfig) http.Handler {
 type server struct {
 	factory application.Factory
 	log     *logger.Logger
+	reindex func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
 }

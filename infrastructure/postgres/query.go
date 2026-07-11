@@ -186,6 +186,13 @@ func (r *queryRepository) compile(c *compiler, node query.BoundNode, e entityRef
 		}
 		return fmt.Sprintf("EXISTS (%s AND %s)", scope, pred), nil
 
+	case *query.BoundMatches:
+		s := c.alias("s")
+		return fmt.Sprintf(`EXISTS (SELECT 1 FROM flexitype_entity_search %s
+		 WHERE %s.tenant_id = %s AND %s.entity_id = %s
+		   AND %s.text_vector @@ plainto_tsquery('simple', %s))`,
+			s, s, e.tenant, s, e.entity, s, c.arg(n.Query)), nil
+
 	case *query.BoundTraversal:
 		return r.compileTraversal(c, n, e)
 

@@ -9,6 +9,12 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/events"
 )
 
+// EnvelopeSink persists envelopes inside the business transaction — the
+// outbox's write side.
+type EnvelopeSink interface {
+	Write(ctx context.Context, tx db.QueryExecer, envs []events.Envelope) error
+}
+
 // Collector accumulates the domain events and audit changes a usecase
 // produces inside one unit of work. The registered commit handlers drain it:
 // pre-commit writes the activity log, post-commit dispatches the events.
@@ -41,6 +47,8 @@ type unitOfWork struct {
 	tx         db.Transactor
 	dispatcher *events.Dispatcher
 	log        activity.Log
+	sink       EnvelopeSink // non-nil switches post-commit dispatch to outbox writes
+	afterWrite func()       // relay nudge, called post-commit in outbox mode
 	onRollback func(ctx context.Context, err error)
 	now        func() time.Time
 }
@@ -57,6 +65,17 @@ func WithRollbackObserver(fn func(ctx context.Context, err error)) Option {
 // WithNow overrides the clock (tests).
 func WithNow(now func() time.Time) Option {
 	return func(u *unitOfWork) { u.now = now }
+}
+
+// WithOutbox switches event delivery to at-least-once: envelopes are
+// written through sink inside the business transaction (pre-commit), and
+// afterWrite (the relay nudge) fires post-commit instead of direct
+// dispatch.
+func WithOutbox(sink EnvelopeSink, afterWrite func()) Option {
+	return func(u *unitOfWork) {
+		u.sink = sink
+		u.afterWrite = afterWrite
+	}
 }
 
 // New builds a UnitOfWork around a pool-level transactor with the standard
@@ -84,6 +103,26 @@ func (u *unitOfWork) Execute(ctx context.Context, fn func(tx db.Transactor, c *C
 	actor := ActorFromContext(ctx)
 	tenant := TenantFromContext(ctx)
 
+	// Pre-commit (outbox mode): persist the event envelopes in the same
+	// transaction, so a committed change implies its events are queued.
+	if u.sink != nil {
+		tx.OnPreCommit(func(ctx context.Context) error {
+			if len(collector.events) == 0 {
+				return nil
+			}
+			meta := events.Metadata{TenantID: tenant.String(), Actor: actor.String()}
+			envs := make([]events.Envelope, 0, len(collector.events))
+			for _, evt := range collector.events {
+				env, err := events.NewEnvelope(evt, meta, u.now())
+				if err != nil {
+					return err
+				}
+				envs = append(envs, env)
+			}
+			return u.sink.Write(ctx, tx, envs)
+		})
+	}
+
 	// Pre-commit: persist the activity log in the same transaction, so an
 	// audit row exists if and only if the change committed.
 	tx.OnPreCommit(func(ctx context.Context) error {
@@ -102,9 +141,16 @@ func (u *unitOfWork) Execute(ctx context.Context, fn func(tx db.Transactor, c *C
 	})
 
 	// Post-commit: fan events out to subscribers only once the change is
-	// durable.
+	// durable. In outbox mode the envelopes are already queued — just wake
+	// the relay.
 	tx.OnPostCommit(func(ctx context.Context) error {
 		if len(collector.events) == 0 {
+			return nil
+		}
+		if u.sink != nil {
+			if u.afterWrite != nil {
+				u.afterWrite()
+			}
 			return nil
 		}
 		return u.dispatcher.Dispatch(ctx, events.Metadata{

@@ -15,6 +15,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/zkrebbekx/flexitype"
+	"github.com/zkrebbekx/flexitype/application/outbox"
 	"github.com/zkrebbekx/flexitype/pkg/config"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/health"
@@ -80,6 +81,16 @@ func run(log *logger.Logger) error {
 		opts = append(opts, flexitype.WithoutActivityLog())
 		log.Info().Msg("activity history disabled")
 	}
+	if cfg.EnableOutbox {
+		opts = append(opts, flexitype.WithOutbox(outbox.WithErrorObserver(func(err error) {
+			log.Error().Err(err).Msg("outbox relay error")
+		})))
+		log.Info().Msg("transactional outbox enabled")
+	}
+	if cfg.EnableSearchIndex {
+		opts = append(opts, flexitype.WithSearchIndex())
+		log.Info().Msg("search index enabled")
+	}
 
 	svc := flexitype.New(pool, opts...)
 
@@ -136,6 +147,16 @@ func run(log *logger.Logger) error {
 		Name:     "database",
 		Priority: 10,
 		Handler:  func(context.Context) error { return pool.Close() },
+	})
+
+	// The outbox relay drains committed events to hooks; it stops with the
+	// serve context during shutdown.
+	relayCtx, relayCancel := context.WithCancel(ctx)
+	go svc.RunOutboxRelay(relayCtx)
+	shutdownHandler.RegisterTask(shutdown.Task{
+		Name:     "outbox-relay",
+		Priority: 60,
+		Handler:  func(context.Context) error { relayCancel(); return nil },
 	})
 
 	errCh := make(chan error, 1)

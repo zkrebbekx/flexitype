@@ -145,6 +145,13 @@ type StringMatch struct {
 	Pos   int
 }
 
+// Matches is matches("text"): full-text search over the entity's search
+// document. Requires the search-index feature.
+type Matches struct {
+	Query string
+	Pos   int
+}
+
 // Direction of a relationship traversal, from the current entity's side.
 type Direction string
 
@@ -188,3 +195,6 @@ func (n *StringMatch) Position() int { return n.Pos }
 
 // Position implements Node.
 func (n *Traversal) Position() int { return n.Pos }
+
+// Position implements Node.
+func (n *Matches) Position() int { return n.Pos }

@@ -12,6 +12,10 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/zkrebbekx/flexitype/application"
+	"github.com/zkrebbekx/flexitype/application/outbox"
+	"github.com/zkrebbekx/flexitype/application/search"
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	httpapi "github.com/zkrebbekx/flexitype/internal/interfaces/http"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -27,12 +31,17 @@ type Service struct {
 	transactor db.Transactor
 	dispatcher *events.Dispatcher
 	factory    application.Factory
+	relay      *outbox.Relay
+	indexer    *search.Indexer
 }
 
 type options struct {
-	dispatcher *events.Dispatcher
-	onRollback func(ctx context.Context, err error)
-	features   application.Features
+	dispatcher  *events.Dispatcher
+	onRollback  func(ctx context.Context, err error)
+	features    application.Features
+	outbox      bool
+	relayOpts   []outbox.RelayOption
+	searchIndex bool
 }
 
 // Option customises an embedded Service.
@@ -76,6 +85,26 @@ func WithoutActivityLog() Option {
 	return func(o *options) { o.features.DisableActivity = true }
 }
 
+// WithOutbox upgrades event delivery to at-least-once: envelopes persist
+// in the same transaction as the change and a relay dispatches them with
+// retries. Run the relay with Service.RunOutboxRelay.
+func WithOutbox(opts ...outbox.RelayOption) Option {
+	return func(o *options) {
+		o.outbox = true
+		o.relayOpts = opts
+	}
+}
+
+// WithSearchIndex enables the entity search projection: a dispatcher
+// subscriber keeps one searchable document per entity, unlocking FQL
+// matches(). Pair with WithOutbox for at-least-once index maintenance.
+func WithSearchIndex() Option {
+	return func(o *options) {
+		o.searchIndex = true
+		o.features.SearchIndex = true
+	}
+}
+
 // New wires an embedded flexitype over your connection pool. The pool is
 // shared, never owned: closing it remains your call.
 func New(pool *sqlx.DB, opts ...Option) *Service {
@@ -85,21 +114,56 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	}
 
 	transactor := db.NewTransactor(pool)
-	factory := application.NewFactory(application.FactoryConfig{
+	newRepos := func() application.Repositories { return postgres.NewRepositories(pool) }
+
+	var indexer *search.Indexer
+	if o.searchIndex {
+		indexer = search.NewIndexer(newRepos, postgres.NewSearchStore(pool))
+		o.dispatcher.Register(indexer, events.WithEventTypes(search.EventTypes()...))
+	}
+
+	var relay *outbox.Relay
+	cfg := application.FactoryConfig{
 		Transactor:      transactor,
-		NewRepositories: func() application.Repositories { return postgres.NewRepositories(pool) },
+		NewRepositories: newRepos,
 		Dispatcher:      o.dispatcher,
 		ActivityLog:     postgres.NewActivityLog(pool),
 		OnRollback:      o.onRollback,
 		Features:        o.features,
-	})
+	}
+	if o.outbox {
+		store := postgres.NewOutboxStore(transactor)
+		relay = outbox.NewRelay(store, o.dispatcher, o.relayOpts...)
+		cfg.Outbox = store
+		cfg.OutboxNudge = relay.Nudge
+	}
 
 	return &Service{
 		pool:       pool,
 		transactor: transactor,
 		dispatcher: o.dispatcher,
-		factory:    factory,
+		factory:    application.NewFactory(cfg),
+		relay:      relay,
+		indexer:    indexer,
 	}
+}
+
+// RunOutboxRelay drains the event outbox until ctx ends. No-op without
+// WithOutbox. Run it as a goroutine next to the server.
+func (s *Service) RunOutboxRelay(ctx context.Context) {
+	if s.relay == nil {
+		return
+	}
+	s.relay.Run(ctx)
+}
+
+// ReindexSearch rebuilds every entity search document for a tenant.
+// Errors unless WithSearchIndex is enabled.
+func (s *Service) ReindexSearch(ctx context.Context, tenant valueobjects.TenantID) (int, error) {
+	if s.indexer == nil {
+		return 0, domainerrors.NewValidation("the search index is disabled; enable it with WithSearchIndex")
+	}
+	return s.indexer.Reindex(ctx, tenant)
 }
 
 // Migrate applies flexitype's embedded schema migrations. Safe to call on
@@ -137,10 +201,14 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 	if cfg.Health == nil {
 		cfg.Health = health.NewService("flexitype", "embedded")
 	}
-	return httpapi.NewHandler(httpapi.ServerConfig{
+	server := httpapi.ServerConfig{
 		Factory:  s.factory,
 		Logger:   cfg.Logger,
 		Health:   cfg.Health,
 		Accounts: cfg.Accounts,
-	})
+	}
+	if s.indexer != nil {
+		server.Reindex = s.ReindexSearch
+	}
+	return httpapi.NewHandler(server)
 }

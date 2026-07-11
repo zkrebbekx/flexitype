@@ -32,6 +32,11 @@ Runs two ways from one codebase:
 - **Dataloaders throughout the repositories**: point lookups batch into
   `ANY()` queries, identical filter+page queries deduplicate, per-parent
   pagination collapses into one windowed query
+- **Type inheritance**: single-inheritance hierarchies (`MountainBike
+  extends Bike extends Product`) — subtypes inherit every attribute,
+  constraint and dependency; no shadowing anywhere in a hierarchy; values
+  anchor to the entity's declared type; uniqueness applies hierarchy-wide;
+  dependencies and relationships work across levels
 - **Relationships between types**: user-defined relationship types with a
   parent side and a child side, their own attributes and constraints (the
   full attribute machinery applies to links), definition inheritance, and
@@ -167,6 +172,8 @@ No file configured → auth disabled (development mode).
 GET|POST   /api/v1/type-definitions            PATCH /api/v1/type-definitions/{id}
 POST       /api/v1/type-definitions/{id}/archive|restore
 GET        /api/v1/type-definitions/{id}/attributes
+GET        /api/v1/type-definitions/{id}/effective-attributes
+GET        /api/v1/type-definitions/{id}/children
 GET|POST   /api/v1/attributes                  PATCH /api/v1/attributes/{id}
 POST       /api/v1/attributes/{id}/archive|restore
 GET|POST   /api/v1/values                      GET|DELETE /api/v1/values/{id}

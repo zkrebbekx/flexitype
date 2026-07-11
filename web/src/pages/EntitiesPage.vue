@@ -12,7 +12,12 @@ import Pagination from '@/components/ui/Pagination.vue'
 
 const types = useQuery({ queryKey: ['types-all'], queryFn: () => api.listTypes({ limit: 200 }) })
 const typeId = ref('')
+const includeSubtypes = ref(false)
 const cursor = ref<string>()
+
+function typeName(id: string): string {
+  return types.data.value?.items.find((t) => t.id === id)?.display_name ?? id
+}
 
 const typeOptions = computed(() => [
   { value: '', label: 'Select a type…' },
@@ -20,8 +25,13 @@ const typeOptions = computed(() => [
 ])
 
 const entities = useQuery({
-  queryKey: ['entities', typeId, cursor],
-  queryFn: () => api.listEntities(typeId.value, { cursor: cursor.value, limit: 25 }),
+  queryKey: ['entities', typeId, includeSubtypes, cursor],
+  queryFn: () =>
+    api.listEntities(typeId.value, {
+      cursor: cursor.value,
+      include_descendants: includeSubtypes.value,
+      limit: 25,
+    }),
   enabled: computed(() => !!typeId.value),
 })
 </script>
@@ -31,8 +41,14 @@ const entities = useQuery({
     Your domain objects, seen through the values they hold. Pick a type to browse.
   </PageHeader>
 
-  <div class="mb-4 max-w-xs">
-    <Select v-model="typeId" label="Type" :options="typeOptions" @update:model-value="cursor = undefined" />
+  <div class="mb-4 flex max-w-lg items-end gap-4">
+    <div class="flex-1">
+      <Select v-model="typeId" label="Type" :options="typeOptions" @update:model-value="cursor = undefined" />
+    </div>
+    <label class="flex items-center gap-1.5 pb-2 text-[13px] text-(--text-muted)">
+      <input v-model="includeSubtypes" type="checkbox" class="accent-(--accent)" @change="cursor = undefined" />
+      Include subtypes
+    </label>
   </div>
 
   <template v-if="typeId">
@@ -55,11 +71,14 @@ const entities = useQuery({
           >
             <td class="px-3 py-2.5">
               <RouterLink
-                :to="`/entities/${typeId}/${encodeURIComponent(e.entity_id)}`"
+                :to="`/entities/${e.type_definition_id || typeId}/${encodeURIComponent(e.entity_id)}`"
                 class="mono font-medium text-(--accent) hover:underline"
               >
                 {{ e.entity_id }}
               </RouterLink>
+              <Badge v-if="e.type_definition_id && e.type_definition_id !== typeId" class="ml-2" tone="accent">
+                {{ typeName(e.type_definition_id) }}
+              </Badge>
             </td>
             <td class="tnum px-3 py-2.5 text-(--text-secondary)">{{ e.value_count }}</td>
             <td class="px-3 py-2.5 text-(--text-muted)">{{ formatRelative(e.last_updated_at) }}</td>

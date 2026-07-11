@@ -27,10 +27,17 @@ type AttributeValue struct {
 	archivedAt        *time.Time
 }
 
-// New validates v against the definition and creates the value.
-func New(def *attribute.Definition, entityID valueobjects.EntityID, v valueobjects.Value, now time.Time) (*AttributeValue, []events.Event, error) {
+// New validates v against the definition and creates the value. entityType
+// is the entity's declared (most-derived) type: with inheritance it may be
+// a descendant of the attribute's declaring type, and the value anchors to
+// it so per-entity hydration stays a single lookup (see
+// docs/design/type-inheritance.md). The caller proves the ancestry.
+func New(def *attribute.Definition, entityType valueobjects.TypeDefinitionID, entityID valueobjects.EntityID, v valueobjects.Value, now time.Time) (*AttributeValue, []events.Event, error) {
 	if entityID.IsZero() {
 		return nil, nil, domainerrors.NewValidation("entity ID is required")
+	}
+	if entityType.IsZero() {
+		return nil, nil, domainerrors.NewValidation("entity type is required")
 	}
 	if v.IsZero() {
 		return nil, nil, domainerrors.NewValidation("value is required")
@@ -42,7 +49,7 @@ func New(def *attribute.Definition, entityID valueobjects.EntityID, v valueobjec
 	av := &AttributeValue{
 		id:                valueobjects.NewAttributeValueID(),
 		tenantID:          def.TenantID(),
-		typeDefinitionID:  def.TypeDefinitionID(),
+		typeDefinitionID:  entityType,
 		attributeDefID:    def.ID(),
 		entityID:          entityID,
 		value:             v,

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -70,14 +71,15 @@ func (r relDefRow) snapshot() domainrelationship.DefinitionSnapshot {
 // relDefListFilter is the cleansed JSON dataloader key for definition List
 // queries; unique keys become UNION ALL arms.
 type relDefListFilter struct {
-	Tenant          string `json:"tenant"`
-	TypeID          string `json:"type_definition_id,omitempty"`
-	IncludeArchived bool   `json:"include_archived,omitempty"`
-	Limit           int    `json:"limit"`
-	Offset          int    `json:"offset"`
+	Tenant          string   `json:"tenant"`
+	TypeIDs         []string `json:"type_definition_ids,omitempty"`
+	IncludeArchived bool     `json:"include_archived,omitempty"`
+	Limit           int      `json:"limit"`
+	Offset          int      `json:"offset"`
 }
 
 func (f relDefListFilter) key() string {
+	sort.Strings(f.TypeIDs)
 	b, _ := json.Marshal(f)
 	return string(b)
 }
@@ -88,9 +90,9 @@ func (f relDefListFilter) arm(key string) (string, []any) {
 	if !f.IncludeArchived {
 		where = append(where, "archived_at IS NULL")
 	}
-	if f.TypeID != "" {
-		where = append(where, "(parent_type_id = ? OR child_type_id = ?)")
-		args = append(args, f.TypeID, f.TypeID)
+	if len(f.TypeIDs) > 0 {
+		where = append(where, "(parent_type_id = ANY(?) OR child_type_id = ANY(?))")
+		args = append(args, pq.Array(f.TypeIDs), pq.Array(f.TypeIDs))
 	}
 	args = append(args, f.Limit, f.Offset)
 
@@ -224,8 +226,8 @@ func (r *relationshipDefinitionRepository) List(ctx context.Context, filter doma
 		Limit:           page.Limit,
 		Offset:          page.Offset,
 	}
-	if !filter.TypeDefinitionID.IsZero() {
-		f.TypeID = filter.TypeDefinitionID.String()
+	for _, id := range filter.TypeDefinitionIDs {
+		f.TypeIDs = append(f.TypeIDs, id.String())
 	}
 	key := f.key()
 

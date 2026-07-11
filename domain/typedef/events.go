@@ -25,11 +25,12 @@ const (
 
 // Created is emitted when a type definition is created.
 type Created struct {
-	TypeDefinitionID valueobjects.TypeDefinitionID `json:"type_definition_id"`
-	TenantID         valueobjects.TenantID         `json:"tenant_id"`
-	InternalName     string                        `json:"internal_name"`
-	DisplayName      string                        `json:"display_name"`
-	OccurredAt       time.Time                     `json:"occurred_at"`
+	TypeDefinitionID valueobjects.TypeDefinitionID  `json:"type_definition_id"`
+	TenantID         valueobjects.TenantID          `json:"tenant_id"`
+	InternalName     string                         `json:"internal_name"`
+	DisplayName      string                         `json:"display_name"`
+	ExtendsID        *valueobjects.TypeDefinitionID `json:"extends_id,omitempty"`
+	OccurredAt       time.Time                      `json:"occurred_at"`
 }
 
 // EventType identifies the event on the wire.

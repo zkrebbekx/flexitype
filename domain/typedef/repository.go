@@ -40,6 +40,10 @@ type Repository interface {
 	// filter (batched per filter+page).
 	List(ctx context.Context, filter Filter, page db.Page) ([]*TypeDefinition, int, error)
 
+	// ListChildren loads the direct subtypes of a type (batched across
+	// parents — hierarchy walks and tree rendering hit this hard).
+	ListChildren(ctx context.Context, parentID valueobjects.TypeDefinitionID) ([]*TypeDefinition, error)
+
 	// Save upserts the aggregate.
 	Save(ctx context.Context, t *TypeDefinition) error
 }

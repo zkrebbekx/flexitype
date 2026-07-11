@@ -63,6 +63,7 @@ type typeDefinitionRequest struct {
 	InternalName string `json:"internal_name,omitempty"`
 	DisplayName  string `json:"display_name"`
 	Description  string `json:"description,omitempty"`
+	ExtendsID    string `json:"extends_id,omitempty"`
 }
 
 func (s *server) createTypeDefinition(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +76,7 @@ func (s *server) createTypeDefinition(w http.ResponseWriter, r *http.Request) {
 		InternalName: req.InternalName,
 		DisplayName:  req.DisplayName,
 		Description:  req.Description,
+		ExtendsID:    req.ExtendsID,
 	})
 	if err != nil {
 		writeError(w, s.log, err)
@@ -248,6 +250,24 @@ func (s *server) validateAttributeValue(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]bool{"valid": true})
 }
 
+func (s *server) effectiveAttributes(w http.ResponseWriter, r *http.Request) {
+	items, err := application.FromContext(r.Context()).TypeDefinitions().EffectiveAttributes(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *server) typeChildren(w http.ResponseWriter, r *http.Request) {
+	items, err := application.FromContext(r.Context()).TypeDefinitions().Children(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *server) listAttributesByTypeDefinition(w http.ResponseWriter, r *http.Request) {
 	out, err := application.FromContext(r.Context()).Attributes().ListByTypeDefinition(r.Context(), chi.URLParam(r, "id"), pageArgs(r))
 	if err != nil {
@@ -277,6 +297,7 @@ func (s *server) listAttributes(w http.ResponseWriter, r *http.Request) {
 type setValueRequest struct {
 	AttributeDefinitionID string          `json:"attribute_definition_id"`
 	EntityID              string          `json:"entity_id"`
+	TypeDefinitionID      string          `json:"type_definition_id,omitempty"`
 	Value                 json.RawMessage `json:"value"`
 }
 
@@ -289,6 +310,7 @@ func (s *server) setValue(w http.ResponseWriter, r *http.Request) {
 	snap, err := application.FromContext(r.Context()).Values().Set(r.Context(), appvalue.SetInput{
 		AttributeDefinitionID: req.AttributeDefinitionID,
 		EntityID:              req.EntityID,
+		TypeDefinitionID:      req.TypeDefinitionID,
 		Value:                 req.Value,
 	})
 	if err != nil {
@@ -332,7 +354,7 @@ func (s *server) listValues(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listEntitiesOfType(w http.ResponseWriter, r *http.Request) {
-	out, err := application.FromContext(r.Context()).Values().ListEntities(r.Context(), chi.URLParam(r, "typeDefinitionID"), pageArgs(r))
+	out, err := application.FromContext(r.Context()).Values().ListEntities(r.Context(), chi.URLParam(r, "typeDefinitionID"), boolQuery(r, "include_descendants"), pageArgs(r))
 	if err != nil {
 		writeError(w, s.log, err)
 		return

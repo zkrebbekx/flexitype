@@ -426,24 +426,33 @@ func (r *attributeValueRepository) List(ctx context.Context, filter domainvalue.
 	return out, result.Total, nil
 }
 
-func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valueobjects.TenantID, typeDefID valueobjects.TypeDefinitionID, page db.Page) ([]domainvalue.EntitySummary, int, error) {
-	var rows []struct {
-		EntityID      string    `db:"entity_id"`
-		ValueCount    int       `db:"value_count"`
-		LastUpdatedAt time.Time `db:"last_updated_at"`
-		TotalCount    int       `db:"total_count"`
+func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valueobjects.TenantID, typeDefIDs []valueobjects.TypeDefinitionID, page db.Page) ([]domainvalue.EntitySummary, int, error) {
+	ids := make([]string, 0, len(typeDefIDs))
+	for _, id := range typeDefIDs {
+		ids = append(ids, id.String())
 	}
+
+	var rows []struct {
+		EntityID         string    `db:"entity_id"`
+		TypeDefinitionID ulid.ID   `db:"type_definition_id"`
+		ValueCount       int       `db:"value_count"`
+		LastUpdatedAt    time.Time `db:"last_updated_at"`
+		TotalCount       int       `db:"total_count"`
+	}
+	// An entity's rows all carry its declared type, so grouping by both
+	// keeps one row per entity while surfacing the subtype.
 	err := r.q.SelectContext(ctx, &rows, bind(
 		`SELECT entity_id,
+		        type_definition_id,
 		        count(*)        AS value_count,
 		        max(updated_at) AS last_updated_at,
 		        count(*) OVER () AS total_count
 		 FROM flexitype_attribute_value
-		 WHERE tenant_id = ? AND type_definition_id = ? AND archived_at IS NULL
-		 GROUP BY entity_id
+		 WHERE tenant_id = ? AND type_definition_id = ANY(?) AND archived_at IS NULL
+		 GROUP BY entity_id, type_definition_id
 		 ORDER BY max(updated_at) DESC, entity_id
 		 LIMIT ? OFFSET ?`),
-		tenant.String(), typeDefID.String(), page.Limit, page.Offset,
+		tenant.String(), pq.Array(ids), page.Limit, page.Offset,
 	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list entities: %w", err)
@@ -453,9 +462,10 @@ func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valu
 	total := 0
 	for _, row := range rows {
 		out = append(out, domainvalue.EntitySummary{
-			EntityID:      valueobjects.EntityID(row.EntityID),
-			ValueCount:    row.ValueCount,
-			LastUpdatedAt: row.LastUpdatedAt,
+			EntityID:         valueobjects.EntityID(row.EntityID),
+			TypeDefinitionID: valueobjects.TypeDefinitionID{ID: row.TypeDefinitionID},
+			ValueCount:       row.ValueCount,
+			LastUpdatedAt:    row.LastUpdatedAt,
 		})
 		total = row.TotalCount
 	}

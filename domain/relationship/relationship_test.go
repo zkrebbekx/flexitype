@@ -13,7 +13,7 @@ import (
 
 func newEntityType(t *testing.T, name string) *typedef.TypeDefinition {
 	t.Helper()
-	td, _, err := typedef.New(valueobjects.DefaultTenant, name, name, "", time.Now())
+	td, _, err := typedef.New(typedef.NewInput{TenantID: valueobjects.DefaultTenant, InternalName: name, DisplayName: name}, time.Now())
 	if err != nil {
 		t.Fatalf("new type: %v", err)
 	}

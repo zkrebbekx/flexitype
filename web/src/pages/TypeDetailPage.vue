@@ -4,6 +4,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
 import type { AttributeDefinition, Dependency } from '@/lib/api'
+import { ancestorsOf } from '@/lib/tree'
 import { formatRelative } from '@/lib/format'
 import { renderTyped } from '@/lib/values'
 import { useToasts } from '@/composables/useToasts'
@@ -38,7 +39,7 @@ const dependencies = useQuery({
   queryKey: ['dependencies', typeId],
   queryFn: () => api.listDependencies({ limit: 200 }),
   select: (page) => {
-    const ids = new Set((attributes.data.value?.items ?? []).map((a) => a.id))
+    const ids = new Set((effective.data.value?.items ?? []).map((e) => e.attribute.id))
     return page.items.filter((d) => ids.has(d.source_attribute_id) || ids.has(d.target_attribute_id))
   },
 })
@@ -50,6 +51,26 @@ const entities = useQuery({
 
 const allTypes = useQuery({ queryKey: ['types-all'], queryFn: () => api.listTypes({ limit: 200 }) })
 
+const effective = useQuery({
+  queryKey: ['effective-attributes', typeId],
+  queryFn: () => api.effectiveAttributes(typeId.value),
+})
+
+const children = useQuery({
+  queryKey: ['type-children', typeId],
+  queryFn: () => api.typeChildren(typeId.value),
+})
+
+// Inherited = effective minus own declarations.
+const inherited = computed(() =>
+  (effective.data.value?.items ?? []).filter((e) => e.declared_in.id !== typeId.value),
+)
+
+const ancestorChips = computed(() => {
+  const all = allTypes.data.value?.items ?? []
+  return ancestorsOf(all, typeId.value)
+})
+
 const relDefs = useQuery({
   queryKey: ['relationship-definitions', typeId],
   queryFn: () => api.listRelationshipDefinitions({ type_definition_id: typeId.value, limit: 200 }),
@@ -57,7 +78,7 @@ const relDefs = useQuery({
 
 const tab = ref('attributes')
 const tabs = computed(() => [
-  { key: 'attributes', label: 'Attributes', count: attributes.data.value?.items.filter((a) => !a.archived_at).length },
+  { key: 'attributes', label: 'Attributes', count: effective.data.value?.items.length },
   { key: 'dependencies', label: 'Dependencies', count: dependencies.data.value?.length },
   { key: 'relationships', label: 'Relationships', count: relDefs.data.value?.items.length },
   { key: 'entities', label: 'Entities', count: entities.data.value?.page_info.total_count },
@@ -108,7 +129,7 @@ const archiveDep = useMutation({
 })
 
 function attrName(id: string): string {
-  return attributes.data.value?.items.find((a) => a.id === id)?.display_name ?? id
+  return (effective.data.value?.items ?? []).find((e) => e.attribute.id === id)?.attribute.display_name ?? id
 }
 
 function describeDependency(d: Dependency): string {
@@ -147,6 +168,19 @@ function describeEffect(d: Dependency): string {
   >
     <span class="mono">{{ type.data.value?.internal_name }}</span> · v{{ type.data.value?.version }}
     <template #actions>
+      <span v-if="ancestorChips.length" class="flex items-center gap-1 text-[13px] text-(--text-muted)">
+        extends
+        <template v-for="(a, i) in ancestorChips" :key="a.id">
+          <RouterLink :to="`/types/${a.id}`"><Badge tone="accent">{{ a.display_name }}</Badge></RouterLink>
+          <span v-if="i < ancestorChips.length - 1">→</span>
+        </template>
+      </span>
+      <span v-if="children.data.value?.items.length" class="flex items-center gap-1 text-[13px] text-(--text-muted)">
+        subtypes
+        <RouterLink v-for="c in children.data.value?.items" :key="c.id" :to="`/types/${c.id}`">
+          <Badge>{{ c.display_name }}</Badge>
+        </RouterLink>
+      </span>
       <Badge v-if="type.data.value?.archived_at" tone="warn">archived</Badge>
     </template>
   </PageHeader>
@@ -220,8 +254,8 @@ function describeEffect(d: Dependency): string {
 
       <EmptyState
         v-if="!attributes.isPending.value && !attributes.data.value?.items.length"
-        title="No attributes yet"
-        body="Attributes are the typed, constrained fields entities of this type can hold."
+        title="No attributes declared on this type"
+        body="Attributes are the typed, constrained fields entities of this type can hold. Inherited attributes appear below."
         class="m-4"
       >
         <template #action>
@@ -229,6 +263,35 @@ function describeEffect(d: Dependency): string {
         </template>
       </EmptyState>
     </div>
+
+    <template v-if="inherited.length">
+      <h3 class="mt-6 mb-2 text-sm font-semibold text-(--text-secondary)">Inherited</h3>
+      <div class="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
+        <table class="w-full text-sm">
+          <tbody>
+            <tr v-for="e in inherited" :key="e.attribute.id" class="border-b border-(--border) last:border-0">
+              <td class="px-3 py-2.5">
+                <span class="font-medium">{{ e.attribute.display_name }}</span>
+                <span class="mono ml-2 text-[12px] text-(--text-muted)">{{ e.attribute.internal_name }}</span>
+              </td>
+              <td class="px-3 py-2.5"><TypeChip :data-type="e.attribute.data_type" /></td>
+              <td class="px-3 py-2.5">
+                <span class="flex flex-wrap gap-1">
+                  <Badge v-if="e.attribute.required" tone="accent">required</Badge>
+                  <Badge v-if="e.attribute.unique" tone="warn">unique</Badge>
+                </span>
+              </td>
+              <td class="px-3 py-2.5 text-right text-[13px] text-(--text-muted)">
+                from
+                <RouterLink :to="`/types/${e.declared_in.id}`" class="text-(--accent) hover:underline">
+                  {{ e.declared_in.display_name }}
+                </RouterLink>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
   </section>
 
   <!-- Dependencies -->
@@ -365,7 +428,7 @@ function describeEffect(d: Dependency): string {
   <DependencyDrawer
     :open="depDrawer"
     :type-id="typeId"
-    :attributes="attributes.data.value?.items ?? []"
+    :attributes="(effective.data.value?.items ?? []).map((e) => e.attribute)"
     :dependency="editingDep"
     @close="depDrawer = false"
   />

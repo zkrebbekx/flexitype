@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
@@ -75,12 +76,43 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 			return domainerrors.NewArchived(domaintypedef.AggregateType, td.ID().String())
 		}
 
-		existing, err := attrs.GetByInternalName(ctx, typeDefID, in.InternalName)
-		if err != nil && !domainerrors.IsNotFound(err) {
-			return fmt.Errorf("check internal name: %w", err)
+		// Lock the hierarchy root so concurrent attribute creates on
+		// different levels of one hierarchy serialize, then enforce
+		// no-shadowing across the whole chain (ancestors and descendants —
+		// see docs/design/type-inheritance.md).
+		root, err := apptypedef.Root(ctx, typeDefs, td)
+		if err != nil {
+			return err
 		}
-		if existing != nil {
-			return domainerrors.NewConflict("internal name already in use", "internal_name", in.InternalName)
+		if !root.ID().Equals(td.ID()) {
+			if _, err := typeDefs.GetForUpdate(ctx, root.ID()); err != nil {
+				return err
+			}
+		}
+
+		hierarchy, err := apptypedef.Chain(ctx, typeDefs, td)
+		if err != nil {
+			return err
+		}
+		descendants, err := apptypedef.Descendants(ctx, typeDefs, td)
+		if err != nil {
+			return err
+		}
+		hierarchy = append(hierarchy, descendants...)
+
+		for _, link := range hierarchy {
+			existing, err := attrs.GetByInternalName(ctx, link.ID(), in.InternalName)
+			if err != nil && !domainerrors.IsNotFound(err) {
+				return fmt.Errorf("check internal name: %w", err)
+			}
+			if existing != nil {
+				if link.ID().Equals(td.ID()) {
+					return domainerrors.NewConflict("internal name already in use", "internal_name", in.InternalName)
+				}
+				return domainerrors.NewConflict(
+					"internal name would shadow an attribute declared elsewhere in the type hierarchy",
+					"internal_name", in.InternalName, "declared_in", link.InternalName())
+			}
 		}
 
 		attr, evts, err := domainattribute.New(domainattribute.NewInput{

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
+import { buildTypeTree } from '@/lib/tree'
 import { formatRelative } from '@/lib/format'
 import { useToasts } from '@/composables/useToasts'
 import PageHeader from '@/components/ui/PageHeader.vue'
@@ -23,12 +24,23 @@ const includeArchived = ref(false)
 
 const types = useQuery({
   queryKey: ['types', cursor, includeArchived],
-  queryFn: () => api.listTypes({ cursor: cursor.value, include_archived: includeArchived.value, limit: 25 }),
+  queryFn: () => api.listTypes({ cursor: cursor.value, include_archived: includeArchived.value, limit: 200 }),
 })
 
+// The flat page renders as an indented hierarchy; subtypes sit under their
+// parents with connector glyphs.
+const tree = computed(() => buildTypeTree(types.data.value?.items ?? []))
+
 const drawerOpen = ref(false)
-const form = reactive({ internal_name: '', display_name: '', description: '' })
+const form = reactive({ internal_name: '', display_name: '', description: '', extends_id: '' })
 const formError = ref('')
+
+const extendsOptions = computed(() => [
+  { value: '', label: 'No parent (root type)' },
+  ...(types.data.value?.items ?? [])
+    .filter((t) => !t.archived_at)
+    .map((t) => ({ value: t.id, label: t.display_name })),
+])
 
 const create = useMutation({
   mutationFn: () =>
@@ -36,6 +48,7 @@ const create = useMutation({
       internal_name: form.internal_name,
       display_name: form.display_name,
       description: form.description || undefined,
+      extends_id: form.extends_id || undefined,
     }),
   onSuccess: (t) => {
     queryClient.invalidateQueries({ queryKey: ['types'] })
@@ -44,6 +57,7 @@ const create = useMutation({
     form.internal_name = ''
     form.display_name = ''
     form.description = ''
+    form.extends_id = ''
   },
   onError: (e) => (formError.value = friendlyError(e)),
 })
@@ -74,22 +88,33 @@ const create = useMutation({
       <tbody>
         <SkeletonRows v-if="types.isPending.value" :rows="5" :cols="4" />
         <tr
-          v-for="t in types.data.value?.items"
+          v-for="node in tree"
           v-else
-          :key="t.id"
+          :key="node.type.id"
           class="border-b border-(--border) last:border-0 hover:bg-(--canvas)"
-          :class="{ 'opacity-55': t.archived_at }"
+          :class="{ 'opacity-55': node.type.archived_at }"
         >
           <td class="px-3 py-2.5">
-            <RouterLink :to="`/types/${t.id}`" class="font-medium text-(--accent) hover:underline">
-              {{ t.display_name }}
-            </RouterLink>
-            <Badge v-if="t.archived_at" tone="warn" class="ml-2">archived</Badge>
-            <p v-if="t.description" class="mt-0.5 text-[12.5px] text-(--text-muted)">{{ t.description }}</p>
+            <span class="flex items-center">
+              <span
+                v-if="node.depth > 0"
+                class="mono text-(--text-muted)"
+                :style="{ paddingLeft: `${(node.depth - 1) * 1.25}rem` }"
+                aria-hidden="true"
+              >{{ node.isLast ? '└─ ' : '├─ ' }}</span>
+              <RouterLink :to="`/types/${node.type.id}`" class="font-medium text-(--accent) hover:underline">
+                {{ node.type.display_name }}
+              </RouterLink>
+              <Badge v-if="node.childCount" class="ml-2">{{ node.childCount }} subtype{{ node.childCount > 1 ? 's' : '' }}</Badge>
+              <Badge v-if="node.type.archived_at" tone="warn" class="ml-2">archived</Badge>
+            </span>
+            <p v-if="node.type.description" class="mt-0.5 text-[12.5px] text-(--text-muted)" :style="{ paddingLeft: `${node.depth * 1.25}rem` }">
+              {{ node.type.description }}
+            </p>
           </td>
-          <td class="mono px-3 py-2.5 text-(--text-secondary)">{{ t.internal_name }}</td>
-          <td class="tnum px-3 py-2.5 text-(--text-secondary)">v{{ t.version }}</td>
-          <td class="px-3 py-2.5 text-(--text-muted)">{{ formatRelative(t.updated_at) }}</td>
+          <td class="mono px-3 py-2.5 text-(--text-secondary)">{{ node.type.internal_name }}</td>
+          <td class="tnum px-3 py-2.5 text-(--text-secondary)">v{{ node.type.version }}</td>
+          <td class="px-3 py-2.5 text-(--text-muted)">{{ formatRelative(node.type.updated_at) }}</td>
         </tr>
       </tbody>
     </table>
@@ -124,6 +149,12 @@ const create = useMutation({
       />
       <Input v-model="form.display_name" label="Display name" placeholder="Product" />
       <Input v-model="form.description" label="Description" placeholder="Optional" />
+      <Select
+        v-model="form.extends_id"
+        label="Extends"
+        :options="extendsOptions"
+        hint="A subtype inherits every attribute, constraint and dependency of its parent. Immutable once created."
+      />
       <p v-if="formError" class="rounded-md bg-(--danger-soft) px-3 py-2 text-[13px] text-(--danger)">{{ formError }}</p>
     </form>
     <template #footer>

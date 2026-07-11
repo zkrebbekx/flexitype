@@ -107,9 +107,6 @@ func New(in NewInput, now time.Time) (*Dependency, []events.Event, error) {
 	if in.Source.ID().Equals(in.Target.ID()) {
 		return nil, nil, domainerrors.NewValidation("source and target attributes must differ")
 	}
-	if !in.Source.TypeDefinitionID().Equals(in.Target.TypeDefinitionID()) {
-		return nil, nil, domainerrors.NewValidation("source and target must belong to the same type definition")
-	}
 	if err := validateRule(in.Source, in.Target, in.Conditions, in.Effect); err != nil {
 		return nil, nil, err
 	}

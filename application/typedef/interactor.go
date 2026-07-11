@@ -8,6 +8,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/activity"
 	"github.com/zkrebbekx/flexitype/application/uow"
+	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -20,12 +21,13 @@ import (
 type Interactor struct {
 	uow      uow.UnitOfWork
 	typeDefs domaintypedef.Repository
+	attrs    domainattribute.Repository
 	now      func() time.Time
 }
 
 // NewInteractor wires the type-definition usecases.
-func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository) *Interactor {
-	return &Interactor{uow: u, typeDefs: typeDefs, now: time.Now}
+func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository) *Interactor {
+	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, now: time.Now}
 }
 
 // CreateInput holds data for creating a type definition.
@@ -33,6 +35,9 @@ type CreateInput struct {
 	InternalName string
 	DisplayName  string
 	Description  string
+	// ExtendsID makes the new type a subtype of an existing one; immutable
+	// after creation.
+	ExtendsID string
 }
 
 // Create creates a type definition, guarding internal-name uniqueness
@@ -52,7 +57,29 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domaintypedef
 			return domainerrors.NewConflict("internal name already in use", "internal_name", in.InternalName)
 		}
 
-		td, evts, err := domaintypedef.New(tenant, in.InternalName, in.DisplayName, in.Description, i.now())
+		var extends *domaintypedef.TypeDefinition
+		if in.ExtendsID != "" {
+			extendsID, perr := valueobjects.ParseTypeDefinitionID(in.ExtendsID)
+			if perr != nil {
+				return domainerrors.NewValidation("extends: " + perr.Error())
+			}
+			if extends, err = repo.Get(ctx, extendsID); err != nil {
+				return err
+			}
+			// The chain walk both validates depth and proves the parent's
+			// lineage is acyclic before we hang a new subtype off it.
+			if _, err := Ancestors(ctx, repo, extends); err != nil {
+				return err
+			}
+		}
+
+		td, evts, err := domaintypedef.New(domaintypedef.NewInput{
+			TenantID:     tenant,
+			InternalName: in.InternalName,
+			DisplayName:  in.DisplayName,
+			Description:  in.Description,
+			Extends:      extends,
+		}, i.now())
 		if err != nil {
 			return err
 		}
@@ -208,6 +235,61 @@ func (i *Interactor) GetByInternalName(ctx context.Context, internalName string)
 	}
 	snap := td.Snapshot()
 	return &snap, nil
+}
+
+// EffectiveAttribute pairs an attribute with the type that declares it —
+// the shape the console renders "Declared here" vs "Inherited from X"
+// from.
+type EffectiveAttribute struct {
+	Attribute  domainattribute.Snapshot `json:"attribute"`
+	DeclaredIn domaintypedef.Snapshot   `json:"declared_in"`
+}
+
+// EffectiveAttributes resolves a type's full inherited attribute set: own
+// attributes first, then each ancestor's, root last. Per-type loads batch
+// through the windowed dataloader into one query.
+func (i *Interactor) EffectiveAttributes(ctx context.Context, rawID string) ([]EffectiveAttribute, error) {
+	id, err := valueobjects.ParseTypeDefinitionID(rawID)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	t, err := i.typeDefs.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	chain, err := Chain(ctx, i.typeDefs, t)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []EffectiveAttribute
+	for _, link := range chain {
+		attrs, _, err := i.attrs.ListByTypeDefinition(ctx, link.ID(), db.Page{Limit: 500})
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range attrs {
+			out = append(out, EffectiveAttribute{Attribute: a.Snapshot(), DeclaredIn: link.Snapshot()})
+		}
+	}
+	return out, nil
+}
+
+// Children returns a type's direct subtypes.
+func (i *Interactor) Children(ctx context.Context, rawID string) ([]domaintypedef.Snapshot, error) {
+	id, err := valueobjects.ParseTypeDefinitionID(rawID)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	children, err := i.typeDefs.ListChildren(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domaintypedef.Snapshot, 0, len(children))
+	for _, c := range children {
+		out = append(out, c.Snapshot())
+	}
+	return out, nil
 }
 
 // ListInput holds filter and pagination arguments for List.

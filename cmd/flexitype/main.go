@@ -28,8 +28,10 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/telemetry"
 )
 
-// version is the service's reported version (health + traces).
-const version = "1.0.0"
+// version is the service's reported version (health + traces). It is
+// stamped at build time via -ldflags "-X main.version=$(git describe)";
+// "dev" is the unstamped default for `go run` / `go build`.
+var version = "dev"
 
 func main() {
 	log := logger.New(logger.Config{
@@ -201,14 +203,27 @@ func run(log *logger.Logger) error {
 		})
 	}
 
-	// The outbox relay drains committed events to hooks; it stops with the
-	// serve context during shutdown.
+	// The outbox relay, delivery worker and pruner drain committed events
+	// to hooks. On shutdown (priority 60, before pub/sub at 40 and the
+	// pool at 10) we cancel their context and wait for them to fully stop,
+	// so no publish or query fires against an already-closed client.
 	relayCtx, relayCancel := context.WithCancel(ctx)
-	go svc.RunOutboxRelay(relayCtx)
+	relayDone := make(chan struct{})
+	go func() {
+		defer close(relayDone)
+		svc.RunOutboxRelay(relayCtx)
+	}()
 	shutdownHandler.RegisterTask(shutdown.Task{
 		Name:     "outbox-relay",
 		Priority: 60,
-		Handler:  func(context.Context) error { relayCancel(); return nil },
+		Handler: func(ctx context.Context) error {
+			relayCancel()
+			select {
+			case <-relayDone:
+			case <-ctx.Done():
+			}
+			return nil
+		},
 	})
 
 	errCh := make(chan error, 1)

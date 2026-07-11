@@ -4,10 +4,22 @@
 
 # flexitype
 
+[![CI](https://github.com/zkrebbekx/flexitype/actions/workflows/ci.yml/badge.svg)](https://github.com/zkrebbekx/flexitype/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/zkrebbekx/flexitype?sort=semver)](https://github.com/zkrebbekx/flexitype/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/zkrebbekx/flexitype.svg)](https://pkg.go.dev/github.com/zkrebbekx/flexitype)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Soft types and attributes for Go: define entity types, typed and constrained
 attributes, and attribute dependencies at **runtime** — then attach validated
 values to your own domain objects. Inspired by PLM-class flexible attribute
 systems, built as a production-grade DDD Go service.
+
+> **Versioning.** Releases are tagged (`vX.Y.Z`) with a
+> [CHANGELOG](CHANGELOG.md); pin a version rather than tracking `main`. The
+> project is pre-1.0 — see [API stability](docs/api-stability.md) for what
+> that guarantees. Embed with `go get github.com/zkrebbekx/flexitype@vX.Y.Z`,
+> or grab a standalone binary from
+> [Releases](https://github.com/zkrebbekx/flexitype/releases).
 
 Runs two ways from one codebase:
 

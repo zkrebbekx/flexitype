@@ -4,9 +4,10 @@ import { RouterLink } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
 import { buildTypeTree } from '@/lib/tree'
-import { formatRelative } from '@/lib/format'
 import { useToasts } from '@/composables/useToasts'
+import { usePagedCursor } from '@/composables/usePagedCursor'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import RelativeTime from '@/components/ui/RelativeTime.vue'
 import Button from '@/components/ui/Button.vue'
 import Input from '@/components/ui/Input.vue'
 import Select from '@/components/ui/Select.vue'
@@ -21,7 +22,7 @@ import { Plus } from 'lucide-vue-next'
 const toasts = useToasts()
 const queryClient = useQueryClient()
 
-const cursor = ref<string>()
+const { cursor, canPrevious, next: pageNext, previous: pagePrev, reset: pageReset } = usePagedCursor()
 const includeArchived = ref(false)
 
 const types = useQuery({
@@ -116,7 +117,7 @@ const create = useMutation({
           </td>
           <td class="mono px-3 py-2.5 text-(--text-secondary)">{{ node.type.internal_name }}</td>
           <td class="tnum px-3 py-2.5 text-(--text-secondary)">v{{ node.type.version }}</td>
-          <td class="px-3 py-2.5 text-(--text-muted)">{{ formatRelative(node.type.updated_at) }}</td>
+          <td class="px-3 py-2.5 text-(--text-muted)"><RelativeTime :iso="node.type.updated_at" /></td>
         </tr>
       </tbody>
     </table>
@@ -138,8 +139,10 @@ const create = useMutation({
   <Pagination
     :page-info="types.data.value?.page_info"
     :loading="types.isFetching.value"
-    @next="(c) => (cursor = c)"
-    @reset="cursor = undefined"
+    :can-previous="canPrevious"
+    @next="pageNext"
+    @previous="pagePrev"
+    @reset="pageReset"
   />
 
   <Drawer :open="drawerOpen" title="New type" @close="drawerOpen = false">

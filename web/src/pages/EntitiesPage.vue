@@ -4,8 +4,9 @@ import { RouterLink } from 'vue-router'
 import { useQuery } from '@tanstack/vue-query'
 import { api } from '@/lib/api'
 import type { SuggestSchema } from '@/lib/suggest'
-import { formatRelative } from '@/lib/format'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import RelativeTime from '@/components/ui/RelativeTime.vue'
+import { usePagedCursor } from '@/composables/usePagedCursor'
 import Select from '@/components/ui/Select.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
@@ -17,7 +18,7 @@ import QueryBar from '@/components/QueryBar.vue'
 const types = useQuery({ queryKey: ['types-all'], queryFn: () => api.listTypes({ limit: 200 }) })
 const typeId = ref('')
 const includeSubtypes = ref(false)
-const cursor = ref<string>()
+const { cursor, canPrevious, next: pageNext, previous: pagePrev, reset: pageReset } = usePagedCursor()
 
 function typeName(id: string): string {
   return types.data.value?.items.find((t) => t.id === id)?.display_name ?? id
@@ -71,7 +72,7 @@ const rowsPending = computed(() => (activeQuery.value ? queryResults.isPending.v
 const rowsError = computed(() => (activeQuery.value ? queryResults.error.value : entities.error.value))
 
 function runQuery(q: string) {
-  cursor.value = undefined
+  pageReset()
   activeQuery.value = q.trim()
 }
 
@@ -121,10 +122,10 @@ const suggestSchema = computed<SuggestSchema>(() => ({
 
   <div class="mb-2 flex max-w-lg items-end gap-4">
     <div class="flex-1">
-      <Select v-model="typeId" label="Type" :options="typeOptions" @update:model-value="((cursor = undefined), (activeQuery = ''), (queryText = ''))" />
+      <Select v-model="typeId" label="Type" :options="typeOptions" @update:model-value="() => (pageReset(), (activeQuery = ''), (queryText = ''))" />
     </div>
     <label v-if="!activeQuery" class="flex items-center gap-1.5 pb-2 text-[13px] text-(--text-muted)">
-      <input v-model="includeSubtypes" type="checkbox" class="accent-(--accent)" @change="cursor = undefined" />
+      <input v-model="includeSubtypes" type="checkbox" class="accent-(--accent)" @change="pageReset" />
       Include subtypes
     </label>
   </div>
@@ -138,7 +139,7 @@ const suggestSchema = computed<SuggestSchema>(() => ({
     />
     <p v-if="activeQuery" class="mt-1 text-[12px] text-(--text-muted)">
       Showing matches for the query above (latest live values only; archived entities and attributes excluded).
-      <button class="text-(--accent) hover:underline" @click="((activeQuery = ''), (queryText = ''), (cursor = undefined))">
+      <button class="text-(--accent) hover:underline" @click="() => ((activeQuery = ''), (queryText = ''), pageReset())">
         Clear
       </button>
     </p>
@@ -174,7 +175,7 @@ const suggestSchema = computed<SuggestSchema>(() => ({
               </Badge>
             </td>
             <td class="tnum px-3 py-2.5 text-(--text-secondary)">{{ e.value_count }}</td>
-            <td class="px-3 py-2.5 text-(--text-muted)">{{ formatRelative(e.last_updated_at) }}</td>
+            <td class="px-3 py-2.5 text-(--text-muted)"><RelativeTime :iso="e.last_updated_at" /></td>
           </tr>
         </tbody>
       </table>
@@ -190,8 +191,10 @@ const suggestSchema = computed<SuggestSchema>(() => ({
     <Pagination
       :page-info="rows?.page_info"
       :loading="activeQuery ? queryResults.isFetching.value : entities.isFetching.value"
-      @next="(c) => (cursor = c)"
-      @reset="cursor = undefined"
+      :can-previous="canPrevious"
+      @next="pageNext"
+      @previous="pagePrev"
+      @reset="pageReset"
     />
   </template>
 

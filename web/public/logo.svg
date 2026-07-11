@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- flexitype mark: a rigid rounded square dissolving into modular,
+       linked fragments at its top-right corner. -->
+  <path d="M40 9 H20 A11 11 0 0 0 9 20 v24 a11 11 0 0 0 11 11 h24 a11 11 0 0 0 11 -11 V30"
+        stroke="#4f46e5" stroke-width="6.5" stroke-linecap="round"/>
+  <path d="M50 14 L58 8 M50 19 L55 23" stroke="#94a3b8" stroke-width="1.6" stroke-linecap="round"/>
+  <rect x="43" y="11" width="10" height="10" rx="3" fill="#4f46e5"/>
+  <rect x="55" y="2.5" width="7.5" height="7.5" rx="2.4" fill="#94a3b8"/>
+  <rect x="53.5" y="21.5" width="5.5" height="5.5" rx="1.8" fill="#4f46e5"/>
+</svg>

@@ -190,6 +190,29 @@ export interface Completeness {
   missing: MissingAttribute[]
 }
 
+export interface ImportError {
+  row: number
+  column?: string
+  attribute?: string
+  reason: string
+}
+
+export interface ImportReport {
+  rows_total: number
+  rows_valid: number
+  rows_written: number
+  dry_run: boolean
+  mode: string
+  errors: ImportError[]
+}
+
+export interface ImportMapping {
+  key_column: string
+  mapping: Record<string, string>
+  mode: 'best_effort' | 'transactional'
+  dry_run: boolean
+}
+
 export type VersionPolicy = 'latest' | 'pinned'
 
 export type RelationshipKind = 'directed' | 'symmetric'
@@ -424,6 +447,26 @@ export const api = {
       'GET',
       `/entities/${typeId}/${encodeURIComponent(entityId)}/completeness`,
     ),
+  importEntities: async (typeId: string, file: File, mapping: ImportMapping): Promise<ImportReport> => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('mapping', JSON.stringify(mapping))
+    const res = await fetch(`/api/v1/entities/${typeId}/import`, { method: 'POST', body: form })
+    const text = await res.text()
+    const parsed = text ? JSON.parse(text) : undefined
+    if (!res.ok) {
+      const err = (parsed as { error?: { code?: string; message?: string; details?: Record<string, unknown> } })?.error
+      throw new ApiError(res.status, (err?.code as ErrorCode) ?? 'INTERNAL', err?.message ?? `import failed (${res.status})`, err?.details)
+    }
+    return parsed as ImportReport
+  },
+  exportEntitiesUrl: (typeId: string, opts: { attributes?: string[]; query?: string; entity_ids?: string[] } = {}) => {
+    const p: Record<string, string> = {}
+    if (opts.attributes?.length) p.attributes = opts.attributes.join(',')
+    if (opts.query) p.query = opts.query
+    if (opts.entity_ids?.length) p.entity_ids = opts.entity_ids.join(',')
+    return `/api/v1/entities/${typeId}/export${qs(p)}`
+  },
   setValue: (input: { attribute_definition_id: string; entity_id: string; type_definition_id?: string; value: unknown }) =>
     request<AttributeValue>('POST', '/values', input),
   setValuesBatch: (

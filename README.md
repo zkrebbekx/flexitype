@@ -214,6 +214,14 @@ curl -X POST /api/v1/webhook-subscriptions -d '{
 }'
 ```
 
+Subscription URLs must be **public https** endpoints: the service rejects
+private, loopback and link-local targets at registration and again at dial
+time (the delivery worker resolves the host and blocks non-public
+addresses, defeating DNS rebinding) — an SSRF guard. On-prem deployments
+whose consumers live on internal networks set
+`FLEXITYPE_WEBHOOK_ALLOW_PRIVATE=true` (or `flexitype.WithWebhookAllowPrivate()`)
+to allow http and private hosts.
+
 Every matching envelope arrives as a signed POST, retried with exponential
 backoff and dead-lettered (with API redrive) after ~3 days of failures.
 The receiving handler needs three things:

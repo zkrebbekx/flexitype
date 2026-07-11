@@ -19,6 +19,7 @@ import ErrorState from '@/components/ui/ErrorState.vue'
 import SkeletonRows from '@/components/ui/SkeletonRows.vue'
 import AttributeDrawer from '@/components/AttributeDrawer.vue'
 import DependencyDrawer from '@/components/DependencyDrawer.vue'
+import RelationshipDefinitionDrawer from '@/components/RelationshipDefinitionDrawer.vue'
 import { Plus, Archive, ArchiveRestore, ArrowRight, Pencil } from 'lucide-vue-next'
 
 const route = useRoute()

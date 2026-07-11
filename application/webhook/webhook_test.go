@@ -19,6 +19,7 @@ import (
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
+	"github.com/zkrebbekx/flexitype/pkg/safedial"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
@@ -204,7 +205,7 @@ func TestSubscriptionInteractor(t *testing.T) {
 		store := newFakeSubscriptionStore()
 		log := &recordedActivity{}
 		unit := uow.New(&fakeTransactor{}, events.NewDispatcher(), log)
-		i := NewInteractor(unit, store, &fakeDeliveryStore{})
+		i := NewInteractor(unit, store, &fakeDeliveryStore{}, URLPolicy{AllowPrivate: true})
 		ctx := context.Background()
 
 		Convey("When a subscription is created", func() {
@@ -258,6 +259,47 @@ func TestSubscriptionInteractor(t *testing.T) {
 				_, err = i.Create(ctx, CreateInput{Name: "ok-name", URL: "not-a-url"})
 				So(domainerrors.IsValidation(err), ShouldBeTrue)
 			})
+		})
+	})
+}
+
+func TestSubscriptionURLPolicy(t *testing.T) {
+	Convey("Given the default (secure) URL policy", t, func() {
+		store := newFakeSubscriptionStore()
+		unit := uow.New(&fakeTransactor{}, events.NewDispatcher(), &recordedActivity{})
+		i := NewInteractor(unit, store, &fakeDeliveryStore{}, URLPolicy{})
+		ctx := context.Background()
+
+		Convey("Then non-https and private-host subscriptions are rejected", func() {
+			for _, url := range []string{
+				"http://public.example/hook",     // not https
+				"https://localhost/hook",         // loopback name
+				"https://127.0.0.1/hook",         // loopback IP
+				"https://10.0.0.5/hook",          // private
+				"https://169.254.169.254/latest", // metadata
+				"https://192.168.1.1:8443/hook",  // private w/ port
+			} {
+				_, err := i.Create(ctx, CreateInput{Name: "hook", URL: url})
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
+			}
+		})
+
+		Convey("Then a public https subscription is accepted", func() {
+			_, err := i.Create(ctx, CreateInput{Name: "hook", URL: "https://hooks.example.com/x"})
+			So(err, ShouldBeNil)
+		})
+	})
+
+	Convey("Given the allow-private policy (on-prem)", t, func() {
+		store := newFakeSubscriptionStore()
+		unit := uow.New(&fakeTransactor{}, events.NewDispatcher(), &recordedActivity{})
+		i := NewInteractor(unit, store, &fakeDeliveryStore{}, URLPolicy{AllowPrivate: true})
+
+		Convey("Then private http subscriptions are accepted", func() {
+			_, err := i.Create(context.Background(), CreateInput{
+				Name: "internal", URL: "http://consumer.internal:8080/hook",
+			})
+			So(err, ShouldBeNil)
 		})
 	})
 }
@@ -318,7 +360,10 @@ func TestWorker(t *testing.T) {
 		defer receiver.Close()
 
 		store := &fakeDeliveryStore{}
-		worker := NewWorker(store, WithMaxAttempts(3))
+		// The httptest server binds loopback, which the default SSRF-guarded
+		// client would block; allow private for the delivery-mechanics tests.
+		worker := NewWorker(store, WithMaxAttempts(3),
+			WithHTTPClient(safedial.NewClient(safedial.Options{AllowPrivate: true})))
 		ctx := context.Background()
 
 		Convey("When a delivery succeeds", func() {

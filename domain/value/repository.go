@@ -2,6 +2,7 @@ package value
 
 import (
 	"context"
+	"time"
 
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -22,6 +23,14 @@ type Filter struct {
 	AttributeDefinitionID valueobjects.AttributeDefinitionID
 	EntityID              valueobjects.EntityID
 	IncludeArchived       bool
+}
+
+// EntitySummary is one row of the entity browser: a distinct entity with
+// its live value count and most recent change.
+type EntitySummary struct {
+	EntityID      valueobjects.EntityID
+	ValueCount    int
+	LastUpdatedAt time.Time
 }
 
 // Repository is the persistence port for attribute values. Reads are
@@ -58,6 +67,11 @@ type Repository interface {
 
 	// List returns a page of values and the total count for the filter.
 	List(ctx context.Context, filter Filter, page db.Page) ([]*AttributeValue, int, error)
+
+	// ListEntities returns a page of distinct entities holding live values
+	// of a type definition, most recently changed first, plus the total
+	// distinct-entity count.
+	ListEntities(ctx context.Context, tenant valueobjects.TenantID, typeDefID valueobjects.TypeDefinitionID, page db.Page) ([]EntitySummary, int, error)
 
 	// Save upserts the aggregate.
 	Save(ctx context.Context, av *AttributeValue) error

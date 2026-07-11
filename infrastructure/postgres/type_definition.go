@@ -3,25 +3,28 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/graph-gophers/dataloader/v7"
 	"github.com/lib/pq"
 
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
-	"github.com/zkrebbekx/flexitype/pkg/dataloader"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
-const typeDefColumns = `id, tenant_id, internal_name, display_name, description, version, created_at, updated_at, archived_at`
+const typeDefColumns = `id, tenant_id, kind, internal_name, display_name, description, version, created_at, updated_at, archived_at`
 
 type typeDefRow struct {
 	ID           ulid.ID      `db:"id"`
 	TenantID     string       `db:"tenant_id"`
+	Kind         string       `db:"kind"`
 	InternalName string       `db:"internal_name"`
 	DisplayName  string       `db:"display_name"`
 	Description  string       `db:"description"`
@@ -35,6 +38,7 @@ func (r typeDefRow) snapshot() domaintypedef.Snapshot {
 	return domaintypedef.Snapshot{
 		ID:           valueobjects.TypeDefinitionID{ID: r.ID},
 		TenantID:     valueobjects.TenantID(r.TenantID),
+		Kind:         domaintypedef.Kind(r.Kind),
 		InternalName: r.InternalName,
 		DisplayName:  r.DisplayName,
 		Description:  r.Description,
@@ -45,20 +49,55 @@ func (r typeDefRow) snapshot() domaintypedef.Snapshot {
 	}
 }
 
-// nameKey batches GetByInternalName lookups.
+// nameKey batches by-internal-name lookups. Scope is the tenant for type
+// definitions and the type definition ID for attributes.
 type nameKey struct {
-	Tenant string
-	Name   string
+	Scope string
+	Name  string
 }
 
-// typeDefListKey batches List queries; InternalNames is the sorted,
-// NUL-joined name filter so equal filters collide in the loader cache.
-type typeDefListKey struct {
-	Tenant          string
-	InternalNames   string
-	IncludeArchived bool
-	Limit           int
-	Offset          int
+// typeDefListFilter is the cleansed, JSON-marshalled dataloader key for
+// List queries: identical filters collapse to one key, and each unique key
+// becomes one UNION ALL arm of the batch statement.
+type typeDefListFilter struct {
+	Tenant               string   `json:"tenant"`
+	InternalNames        []string `json:"internal_names,omitempty"`
+	IncludeArchived      bool     `json:"include_archived,omitempty"`
+	IncludeAttributeSets bool     `json:"include_attribute_sets,omitempty"`
+	Limit                int      `json:"limit"`
+	Offset               int      `json:"offset"`
+}
+
+func (f typeDefListFilter) key() string {
+	sort.Strings(f.InternalNames)
+	b, _ := json.Marshal(f)
+	return string(b)
+}
+
+// arm renders this filter as one UNION ALL arm with ? placeholders; the
+// loader key rides along as a column so rows demultiplex after one round
+// trip.
+func (f typeDefListFilter) arm(key string) (string, []any) {
+	where := []string{"tenant_id = ?"}
+	args := []any{key, f.Tenant}
+	if !f.IncludeArchived {
+		where = append(where, "archived_at IS NULL")
+	}
+	if !f.IncludeAttributeSets {
+		where = append(where, "kind = 'entity'")
+	}
+	if len(f.InternalNames) > 0 {
+		where = append(where, "internal_name = ANY(?)")
+		args = append(args, pq.Array(f.InternalNames))
+	}
+	args = append(args, f.Limit, f.Offset)
+
+	query := `(SELECT ?::text AS loader_key, ` + typeDefColumns + `, count(*) OVER () AS total_count
+	 FROM flexitype_type_definition
+	 WHERE ` + strings.Join(where, " AND ") + `
+	 ORDER BY id
+	 LIMIT ? OFFSET ?)`
+	return query, args
 }
 
 type typeDefinitionRepository struct {
@@ -66,16 +105,16 @@ type typeDefinitionRepository struct {
 	inTx   bool
 	byID   *dataloader.Loader[string, domaintypedef.Snapshot]
 	byName *dataloader.Loader[nameKey, domaintypedef.Snapshot]
-	byList *dataloader.Loader[typeDefListKey, dataloader.PagedResult[domaintypedef.Snapshot]]
+	byList *dataloader.Loader[string, pagedResult[domaintypedef.Snapshot]]
 }
 
 // NewTypeDefinitionRepository builds a dataloader-backed repository over
 // the pool.
 func NewTypeDefinitionRepository(q db.QueryExecer) domaintypedef.Repository {
 	r := &typeDefinitionRepository{q: q}
-	r.byID = dataloader.NewZeroLoader(r.batchByID, loaderConfig())
-	r.byName = dataloader.NewZeroLoader(r.batchByName, loaderConfig())
-	r.byList = dataloader.NewSliceLoader(r.batchList, loaderConfig())
+	r.byID = newLoader(r.batchByID)
+	r.byName = newLoader(r.batchByName)
+	r.byList = newLoader(r.batchList)
 	return r
 }
 
@@ -87,7 +126,7 @@ func (r *typeDefinitionRepository) WithTx(tx db.QueryExecer) domaintypedef.Repos
 
 func (r *typeDefinitionRepository) batchByID(ctx context.Context, ids []string) (map[string]domaintypedef.Snapshot, error) {
 	var rows []typeDefRow
-	query := fmt.Sprintf(`SELECT %s FROM flexitype_type_definition WHERE id = ANY($1)`, typeDefColumns)
+	query := bind(`SELECT ` + typeDefColumns + ` FROM flexitype_type_definition WHERE id = ANY(?)`)
 	if err := r.q.SelectContext(ctx, &rows, query, pq.Array(ids)); err != nil {
 		return nil, fmt.Errorf("batch type definitions by id: %w", err)
 	}
@@ -99,17 +138,14 @@ func (r *typeDefinitionRepository) batchByID(ctx context.Context, ids []string) 
 }
 
 func (r *typeDefinitionRepository) batchByName(ctx context.Context, keys []nameKey) (map[nameKey]domaintypedef.Snapshot, error) {
-	args := make([]any, 0, len(keys)*2)
 	tuples := make([]string, 0, len(keys))
-	for i, k := range keys {
-		tuples = append(tuples, fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2))
-		args = append(args, k.Tenant, k.Name)
+	args := make([]any, 0, len(keys)*2)
+	for _, k := range keys {
+		tuples = append(tuples, "(?, ?)")
+		args = append(args, k.Scope, k.Name)
 	}
-	query := fmt.Sprintf(
-		`SELECT %s FROM flexitype_type_definition
-		 WHERE archived_at IS NULL AND (tenant_id, internal_name) IN (%s)`,
-		typeDefColumns, strings.Join(tuples, ", "),
-	)
+	query := bind(`SELECT ` + typeDefColumns + ` FROM flexitype_type_definition
+	 WHERE archived_at IS NULL AND (tenant_id, internal_name) IN (` + strings.Join(tuples, ", ") + `)`)
 
 	var rows []typeDefRow
 	if err := r.q.SelectContext(ctx, &rows, query, args...); err != nil {
@@ -117,66 +153,49 @@ func (r *typeDefinitionRepository) batchByName(ctx context.Context, keys []nameK
 	}
 	out := make(map[nameKey]domaintypedef.Snapshot, len(rows))
 	for _, row := range rows {
-		out[nameKey{Tenant: row.TenantID, Name: row.InternalName}] = row.snapshot()
+		out[nameKey{Scope: row.TenantID, Name: row.InternalName}] = row.snapshot()
 	}
 	return out, nil
 }
 
-func (r *typeDefinitionRepository) batchList(ctx context.Context, keys []typeDefListKey) (map[typeDefListKey]dataloader.PagedResult[domaintypedef.Snapshot], error) {
-	out := make(map[typeDefListKey]dataloader.PagedResult[domaintypedef.Snapshot], len(keys))
+// batchList runs every unique filter key as one UNION ALL statement.
+func (r *typeDefinitionRepository) batchList(ctx context.Context, keys []string) (map[string]pagedResult[domaintypedef.Snapshot], error) {
+	arms := make([]string, 0, len(keys))
+	var args []any
 	for _, key := range keys {
-		items, total, err := r.queryList(ctx, key)
-		if err != nil {
-			return nil, err
+		var f typeDefListFilter
+		if err := json.Unmarshal([]byte(key), &f); err != nil {
+			return nil, fmt.Errorf("decode list key: %w", err)
 		}
-		out[key] = dataloader.PagedResult[domaintypedef.Snapshot]{Items: items, Total: total}
+		arm, armArgs := f.arm(key)
+		arms = append(arms, arm)
+		args = append(args, armArgs...)
 	}
-	return out, nil
-}
-
-func (r *typeDefinitionRepository) queryList(ctx context.Context, key typeDefListKey) ([]domaintypedef.Snapshot, int, error) {
-	where := []string{"tenant_id = $1"}
-	args := []any{key.Tenant}
-	if !key.IncludeArchived {
-		where = append(where, "archived_at IS NULL")
-	}
-	if key.InternalNames != "" {
-		args = append(args, pq.Array(strings.Split(key.InternalNames, "\x00")))
-		where = append(where, fmt.Sprintf("internal_name = ANY($%d)", len(args)))
-	}
-	args = append(args, key.Limit, key.Offset)
-
-	query := fmt.Sprintf(
-		`SELECT %s, count(*) OVER () AS total_count
-		 FROM flexitype_type_definition
-		 WHERE %s
-		 ORDER BY id
-		 LIMIT $%d OFFSET $%d`,
-		typeDefColumns, strings.Join(where, " AND "), len(args)-1, len(args),
-	)
 
 	var rows []struct {
+		LoaderKey string `db:"loader_key"`
 		typeDefRow
 		TotalCount int `db:"total_count"`
 	}
-	if err := r.q.SelectContext(ctx, &rows, query, args...); err != nil {
-		return nil, 0, fmt.Errorf("list type definitions: %w", err)
+	if err := r.q.SelectContext(ctx, &rows, bind(strings.Join(arms, "\nUNION ALL\n")), args...); err != nil {
+		return nil, fmt.Errorf("batch list type definitions: %w", err)
 	}
 
-	items := make([]domaintypedef.Snapshot, 0, len(rows))
-	total := 0
+	out := make(map[string]pagedResult[domaintypedef.Snapshot], len(keys))
 	for _, row := range rows {
-		items = append(items, row.snapshot())
-		total = row.TotalCount
+		pr := out[row.LoaderKey]
+		pr.Items = append(pr.Items, row.snapshot())
+		pr.Total = row.TotalCount
+		out[row.LoaderKey] = pr
 	}
-	return items, total, nil
+	return out, nil
 }
 
 func (r *typeDefinitionRepository) Get(ctx context.Context, id valueobjects.TypeDefinitionID) (*domaintypedef.TypeDefinition, error) {
 	if r.inTx {
 		return r.getDirect(ctx, id, false)
 	}
-	snap, err := r.byID.Load(ctx, id.String())
+	snap, err := load(ctx, r.byID, id.String())
 	if err != nil {
 		return nil, err
 	}
@@ -194,12 +213,12 @@ func (r *typeDefinitionRepository) GetForUpdate(ctx context.Context, id valueobj
 }
 
 func (r *typeDefinitionRepository) getDirect(ctx context.Context, id valueobjects.TypeDefinitionID, forUpdate bool) (*domaintypedef.TypeDefinition, error) {
-	query := fmt.Sprintf(`SELECT %s FROM flexitype_type_definition WHERE id = $1`, typeDefColumns)
+	query := `SELECT ` + typeDefColumns + ` FROM flexitype_type_definition WHERE id = ?`
 	if forUpdate {
 		query += " FOR UPDATE"
 	}
 	var row typeDefRow
-	if err := r.q.GetContext(ctx, &row, query, id.String()); err != nil {
+	if err := r.q.GetContext(ctx, &row, bind(query), id.String()); err != nil {
 		if isNoRows(err) {
 			return nil, domainerrors.NewNotFound(domaintypedef.AggregateType, id.String())
 		}
@@ -210,11 +229,8 @@ func (r *typeDefinitionRepository) getDirect(ctx context.Context, id valueobject
 
 func (r *typeDefinitionRepository) GetByInternalName(ctx context.Context, tenant valueobjects.TenantID, internalName string) (*domaintypedef.TypeDefinition, error) {
 	if r.inTx {
-		query := fmt.Sprintf(
-			`SELECT %s FROM flexitype_type_definition
-			 WHERE tenant_id = $1 AND internal_name = $2 AND archived_at IS NULL`,
-			typeDefColumns,
-		)
+		query := bind(`SELECT ` + typeDefColumns + ` FROM flexitype_type_definition
+		 WHERE tenant_id = ? AND internal_name = ? AND archived_at IS NULL`)
 		var row typeDefRow
 		if err := r.q.GetContext(ctx, &row, query, tenant.String(), internalName); err != nil {
 			if isNoRows(err) {
@@ -225,7 +241,7 @@ func (r *typeDefinitionRepository) GetByInternalName(ctx context.Context, tenant
 		return domaintypedef.Rehydrate(row.snapshot()), nil
 	}
 
-	snap, err := r.byName.Load(ctx, nameKey{Tenant: tenant.String(), Name: internalName})
+	snap, err := load(ctx, r.byName, nameKey{Scope: tenant.String(), Name: internalName})
 	if err != nil {
 		return nil, err
 	}
@@ -236,26 +252,29 @@ func (r *typeDefinitionRepository) GetByInternalName(ctx context.Context, tenant
 }
 
 func (r *typeDefinitionRepository) List(ctx context.Context, filter domaintypedef.Filter, page db.Page) ([]*domaintypedef.TypeDefinition, int, error) {
-	key := typeDefListKey{
-		Tenant:          filter.TenantID.String(),
-		InternalNames:   joinSorted(filter.InternalNames),
-		IncludeArchived: filter.IncludeArchived,
-		Limit:           page.Limit,
-		Offset:          page.Offset,
+	f := typeDefListFilter{
+		Tenant:               filter.TenantID.String(),
+		InternalNames:        filter.InternalNames,
+		IncludeArchived:      filter.IncludeArchived,
+		IncludeAttributeSets: filter.IncludeAttributeSets,
+		Limit:                page.Limit,
+		Offset:               page.Offset,
 	}
+	key := f.key()
 
-	var result dataloader.PagedResult[domaintypedef.Snapshot]
+	var result pagedResult[domaintypedef.Snapshot]
 	var err error
 	if r.inTx {
-		var items []domaintypedef.Snapshot
-		var total int
-		items, total, err = r.queryList(ctx, key)
-		result = dataloader.PagedResult[domaintypedef.Snapshot]{Items: items, Total: total}
+		fetched, ferr := r.batchList(ctx, []string{key})
+		if ferr != nil {
+			return nil, 0, ferr
+		}
+		result = fetched[key]
 	} else {
-		result, err = r.byList.Load(ctx, key)
-	}
-	if err != nil {
-		return nil, 0, err
+		result, err = load(ctx, r.byList, key)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 
 	out := make([]*domaintypedef.TypeDefinition, 0, len(result.Items))
@@ -267,18 +286,18 @@ func (r *typeDefinitionRepository) List(ctx context.Context, filter domaintypede
 
 func (r *typeDefinitionRepository) Save(ctx context.Context, t *domaintypedef.TypeDefinition) error {
 	s := t.Snapshot()
-	_, err := r.q.ExecContext(ctx,
+	_, err := r.q.ExecContext(ctx, bind(
 		`INSERT INTO flexitype_type_definition
-		   (id, tenant_id, internal_name, display_name, description, version, created_at, updated_at, archived_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		   (id, tenant_id, kind, internal_name, display_name, description, version, created_at, updated_at, archived_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   display_name = EXCLUDED.display_name,
 		   description  = EXCLUDED.description,
 		   version      = EXCLUDED.version,
 		   updated_at   = EXCLUDED.updated_at,
-		   archived_at  = EXCLUDED.archived_at`,
-		s.ID.String(), s.TenantID.String(), s.InternalName, s.DisplayName, s.Description,
-		s.Version, s.CreatedAt, s.UpdatedAt, nullableTime(s.ArchivedAt),
+		   archived_at  = EXCLUDED.archived_at`),
+		s.ID.String(), s.TenantID.String(), string(s.Kind), s.InternalName, s.DisplayName,
+		s.Description, s.Version, s.CreatedAt, s.UpdatedAt, nullableTime(s.ArchivedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("save type definition: %w", err)

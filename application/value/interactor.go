@@ -273,6 +273,50 @@ func (i *Interactor) ListByEntity(ctx context.Context, rawTypeDefID, rawEntityID
 	return snaps, nil
 }
 
+// EntitySummaryOutput is one entity-browser row.
+type EntitySummaryOutput struct {
+	EntityID      string    `json:"entity_id"`
+	ValueCount    int       `json:"value_count"`
+	LastUpdatedAt time.Time `json:"last_updated_at"`
+}
+
+// EntityListOutput is one page of the entity browser.
+type EntityListOutput struct {
+	Items    []EntitySummaryOutput
+	PageInfo db.PageInfo
+}
+
+// ListEntities pages the distinct entities holding live values of a type
+// definition — the observability entry point for the admin console.
+func (i *Interactor) ListEntities(ctx context.Context, rawTypeDefID string, args db.PageArgs) (*EntityListOutput, error) {
+	typeDefID, err := valueobjects.ParseTypeDefinitionID(rawTypeDefID)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	page, err := args.Resolve()
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+
+	items, total, err := i.values.ListEntities(ctx, uow.TenantFromContext(ctx), typeDefID, page)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &EntityListOutput{
+		Items:    make([]EntitySummaryOutput, 0, len(items)),
+		PageInfo: db.BuildPageInfo(page, len(items), total),
+	}
+	for _, e := range items {
+		out.Items = append(out.Items, EntitySummaryOutput{
+			EntityID:      e.EntityID.String(),
+			ValueCount:    e.ValueCount,
+			LastUpdatedAt: e.LastUpdatedAt,
+		})
+	}
+	return out, nil
+}
+
 // ListInput holds filter and pagination arguments for List.
 type ListInput struct {
 	TypeDefinitionID      string

@@ -14,12 +14,25 @@ import (
 
 var internalNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,62}$`)
 
+// Kind distinguishes ordinary entity types from the hidden attribute-set
+// types owned by relationship definitions.
+type Kind string
+
+const (
+	// KindEntity is a normal, user-facing type definition.
+	KindEntity Kind = "entity"
+	// KindRelationshipAttributes is the hidden companion type that holds a
+	// relationship definition's attributes.
+	KindRelationshipAttributes Kind = "relationship_attributes"
+)
+
 // TypeDefinition is the aggregate root for a soft type. All state is
 // private; mutations go through methods that enforce invariants and return
 // the domain events they produce.
 type TypeDefinition struct {
 	id           valueobjects.TypeDefinitionID
 	tenantID     valueobjects.TenantID
+	kind         Kind
 	internalName string
 	displayName  string
 	description  string
@@ -48,6 +61,7 @@ func New(tenant valueobjects.TenantID, internalName, displayName, description st
 	t := &TypeDefinition{
 		id:           valueobjects.NewTypeDefinitionID(),
 		tenantID:     tenant,
+		kind:         KindEntity,
 		internalName: internalName,
 		displayName:  displayName,
 		description:  description,
@@ -121,8 +135,24 @@ func (t *TypeDefinition) Restore(now time.Time) ([]events.Event, error) {
 	}}, nil
 }
 
+// NewAttributeSet creates the hidden companion type a relationship
+// definition owns for its attributes. It never appears in entity-type
+// listings.
+func NewAttributeSet(tenant valueobjects.TenantID, internalName, displayName string, now time.Time) (*TypeDefinition, []events.Event, error) {
+	t, evts, err := New(tenant, internalName, displayName, "", now)
+	if err != nil {
+		return nil, nil, err
+	}
+	t.kind = KindRelationshipAttributes
+	return t, evts, nil
+}
+
 // ID returns the aggregate identifier.
 func (t *TypeDefinition) ID() valueobjects.TypeDefinitionID { return t.id }
+
+// Kind returns whether this is an entity type or a relationship attribute
+// set.
+func (t *TypeDefinition) Kind() Kind { return t.kind }
 
 // TenantID returns the owning tenant.
 func (t *TypeDefinition) TenantID() valueobjects.TenantID { return t.tenantID }
@@ -156,6 +186,7 @@ func (t *TypeDefinition) IsArchived() bool { return t.archivedAt != nil }
 type Snapshot struct {
 	ID           valueobjects.TypeDefinitionID `json:"id"`
 	TenantID     valueobjects.TenantID         `json:"tenant_id"`
+	Kind         Kind                          `json:"kind"`
 	InternalName string                        `json:"internal_name"`
 	DisplayName  string                        `json:"display_name"`
 	Description  string                        `json:"description,omitempty"`
@@ -170,6 +201,7 @@ func (t *TypeDefinition) Snapshot() Snapshot {
 	return Snapshot{
 		ID:           t.id,
 		TenantID:     t.tenantID,
+		Kind:         t.kind,
 		InternalName: t.internalName,
 		DisplayName:  t.displayName,
 		Description:  t.description,
@@ -183,9 +215,14 @@ func (t *TypeDefinition) Snapshot() Snapshot {
 // Rehydrate rebuilds the aggregate from a persisted snapshot. Repository
 // use only — it bypasses invariant checks.
 func Rehydrate(s Snapshot) *TypeDefinition {
+	kind := s.Kind
+	if kind == "" {
+		kind = KindEntity
+	}
 	return &TypeDefinition{
 		id:           s.ID,
 		tenantID:     s.TenantID,
+		kind:         kind,
 		internalName: s.InternalName,
 		displayName:  s.DisplayName,
 		description:  s.Description,

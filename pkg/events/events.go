@@ -8,12 +8,20 @@ import (
 	"time"
 )
 
+// Type is a strongly-typed event name. Domain packages export their event
+// types as constants (e.g. value.EventUpdated) so subscribers never pass
+// raw strings around.
+type Type string
+
+// String returns the wire form of the event type.
+func (t Type) String() string { return string(t) }
+
 // Event is the contract every domain event satisfies. Domain aggregate
 // methods return []Event; usecases dispatch them after commit.
 type Event interface {
 	// EventType is the stable, versionless event name, e.g.
 	// "flexitype.attribute_definition.created".
-	EventType() string
+	EventType() Type
 
 	// AggregateType names the aggregate that emitted the event, e.g.
 	// "attribute_definition".

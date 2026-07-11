@@ -12,6 +12,9 @@ type Filter struct {
 	TenantID        valueobjects.TenantID
 	InternalNames   []string
 	IncludeArchived bool
+	// IncludeAttributeSets includes the hidden relationship attribute-set
+	// types; entity listings leave it false.
+	IncludeAttributeSets bool
 }
 
 // Repository is the persistence port for type definitions. Read paths are

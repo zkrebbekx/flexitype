@@ -11,6 +11,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
+	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -70,7 +71,7 @@ func (s *server) createTypeDefinition(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	snap, err := s.factory.New(r.Context()).TypeDefinitions().Create(r.Context(), apptypedef.CreateInput{
+	snap, err := application.FromContext(r.Context()).TypeDefinitions().Create(r.Context(), apptypedef.CreateInput{
 		InternalName: req.InternalName,
 		DisplayName:  req.DisplayName,
 		Description:  req.Description,
@@ -83,7 +84,7 @@ func (s *server) createTypeDefinition(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) getTypeDefinition(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.factory.New(r.Context()).TypeDefinitions().Get(r.Context(), chi.URLParam(r, "id"))
+	snap, err := application.FromContext(r.Context()).TypeDefinitions().Get(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, s.log, err)
 		return
@@ -97,7 +98,7 @@ func (s *server) updateTypeDefinition(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	snap, err := s.factory.New(r.Context()).TypeDefinitions().Update(r.Context(), apptypedef.UpdateInput{
+	snap, err := application.FromContext(r.Context()).TypeDefinitions().Update(r.Context(), apptypedef.UpdateInput{
 		ID:          chi.URLParam(r, "id"),
 		DisplayName: req.DisplayName,
 		Description: req.Description,
@@ -110,7 +111,7 @@ func (s *server) updateTypeDefinition(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) archiveTypeDefinition(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.factory.New(r.Context()).TypeDefinitions().Archive(r.Context(), chi.URLParam(r, "id"))
+	snap, err := application.FromContext(r.Context()).TypeDefinitions().Archive(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, s.log, err)
 		return
@@ -119,7 +120,7 @@ func (s *server) archiveTypeDefinition(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) restoreTypeDefinition(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.factory.New(r.Context()).TypeDefinitions().Restore(r.Context(), chi.URLParam(r, "id"))
+	snap, err := application.FromContext(r.Context()).TypeDefinitions().Restore(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, s.log, err)
 		return
@@ -128,7 +129,7 @@ func (s *server) restoreTypeDefinition(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listTypeDefinitions(w http.ResponseWriter, r *http.Request) {
-	out, err := s.factory.New(r.Context()).TypeDefinitions().List(r.Context(), apptypedef.ListInput{
+	out, err := application.FromContext(r.Context()).TypeDefinitions().List(r.Context(), apptypedef.ListInput{
 		InternalNames:   csvQuery(r, "internal_name"),
 		IncludeArchived: boolQuery(r, "include_archived"),
 		Page:            pageArgs(r),
@@ -161,7 +162,7 @@ func (s *server) createAttribute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	snap, err := s.factory.New(r.Context()).Attributes().Create(r.Context(), appattribute.CreateInput{
+	snap, err := application.FromContext(r.Context()).Attributes().Create(r.Context(), appattribute.CreateInput{
 		TypeDefinitionID: req.TypeDefinitionID,
 		InternalName:     req.InternalName,
 		DisplayName:      req.DisplayName,
@@ -181,7 +182,7 @@ func (s *server) createAttribute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) getAttribute(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.factory.New(r.Context()).Attributes().Get(r.Context(), chi.URLParam(r, "id"))
+	snap, err := application.FromContext(r.Context()).Attributes().Get(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, s.log, err)
 		return
@@ -195,7 +196,7 @@ func (s *server) updateAttribute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	snap, err := s.factory.New(r.Context()).Attributes().Update(r.Context(), appattribute.UpdateInput{
+	snap, err := application.FromContext(r.Context()).Attributes().Update(r.Context(), appattribute.UpdateInput{
 		ID:           chi.URLParam(r, "id"),
 		DisplayName:  req.DisplayName,
 		Description:  req.Description,
@@ -213,7 +214,7 @@ func (s *server) updateAttribute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) archiveAttribute(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.factory.New(r.Context()).Attributes().Archive(r.Context(), chi.URLParam(r, "id"))
+	snap, err := application.FromContext(r.Context()).Attributes().Archive(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, s.log, err)
 		return
@@ -222,7 +223,7 @@ func (s *server) archiveAttribute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) restoreAttribute(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.factory.New(r.Context()).Attributes().Restore(r.Context(), chi.URLParam(r, "id"))
+	snap, err := application.FromContext(r.Context()).Attributes().Restore(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, s.log, err)
 		return
@@ -230,8 +231,25 @@ func (s *server) restoreAttribute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snap)
 }
 
+type validateValueRequest struct {
+	Value json.RawMessage `json:"value"`
+}
+
+func (s *server) validateAttributeValue(w http.ResponseWriter, r *http.Request) {
+	var req validateValueRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	if err := application.FromContext(r.Context()).Attributes().ValidateValue(r.Context(), chi.URLParam(r, "id"), req.Value); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"valid": true})
+}
+
 func (s *server) listAttributesByTypeDefinition(w http.ResponseWriter, r *http.Request) {
-	out, err := s.factory.New(r.Context()).Attributes().ListByTypeDefinition(r.Context(), chi.URLParam(r, "id"), pageArgs(r))
+	out, err := application.FromContext(r.Context()).Attributes().ListByTypeDefinition(r.Context(), chi.URLParam(r, "id"), pageArgs(r))
 	if err != nil {
 		writeError(w, s.log, err)
 		return
@@ -240,7 +258,7 @@ func (s *server) listAttributesByTypeDefinition(w http.ResponseWriter, r *http.R
 }
 
 func (s *server) listAttributes(w http.ResponseWriter, r *http.Request) {
-	out, err := s.factory.New(r.Context()).Attributes().List(r.Context(), appattribute.ListInput{
+	out, err := application.FromContext(r.Context()).Attributes().List(r.Context(), appattribute.ListInput{
 		TypeDefinitionID: r.URL.Query().Get("type_definition_id"),
 		InternalNames:    csvQuery(r, "internal_name"),
 		DataTypes:        csvQuery(r, "data_type"),
@@ -268,7 +286,7 @@ func (s *server) setValue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	snap, err := s.factory.New(r.Context()).Values().Set(r.Context(), appvalue.SetInput{
+	snap, err := application.FromContext(r.Context()).Values().Set(r.Context(), appvalue.SetInput{
 		AttributeDefinitionID: req.AttributeDefinitionID,
 		EntityID:              req.EntityID,
 		Value:                 req.Value,
@@ -281,7 +299,7 @@ func (s *server) setValue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) getValue(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.factory.New(r.Context()).Values().Get(r.Context(), chi.URLParam(r, "id"))
+	snap, err := application.FromContext(r.Context()).Values().Get(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, s.log, err)
 		return
@@ -290,7 +308,7 @@ func (s *server) getValue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) removeValue(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.factory.New(r.Context()).Values().Remove(r.Context(), chi.URLParam(r, "id"))
+	snap, err := application.FromContext(r.Context()).Values().Remove(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, s.log, err)
 		return
@@ -299,7 +317,7 @@ func (s *server) removeValue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listValues(w http.ResponseWriter, r *http.Request) {
-	out, err := s.factory.New(r.Context()).Values().List(r.Context(), appvalue.ListInput{
+	out, err := application.FromContext(r.Context()).Values().List(r.Context(), appvalue.ListInput{
 		TypeDefinitionID:      r.URL.Query().Get("type_definition_id"),
 		AttributeDefinitionID: r.URL.Query().Get("attribute_definition_id"),
 		EntityID:              r.URL.Query().Get("entity_id"),
@@ -313,8 +331,17 @@ func (s *server) listValues(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, listResponse{Items: out.Items, PageInfo: out.PageInfo})
 }
 
+func (s *server) listEntitiesOfType(w http.ResponseWriter, r *http.Request) {
+	out, err := application.FromContext(r.Context()).Values().ListEntities(r.Context(), chi.URLParam(r, "typeDefinitionID"), pageArgs(r))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, listResponse{Items: out.Items, PageInfo: out.PageInfo})
+}
+
 func (s *server) listEntityValues(w http.ResponseWriter, r *http.Request) {
-	snaps, err := s.factory.New(r.Context()).Values().ListByEntity(r.Context(),
+	snaps, err := application.FromContext(r.Context()).Values().ListByEntity(r.Context(),
 		chi.URLParam(r, "typeDefinitionID"), chi.URLParam(r, "entityID"))
 	if err != nil {
 		writeError(w, s.log, err)
@@ -324,7 +351,7 @@ func (s *server) listEntityValues(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) effectiveSchema(w http.ResponseWriter, r *http.Request) {
-	out, err := s.factory.New(r.Context()).Dependencies().EffectiveSchema(r.Context(),
+	out, err := application.FromContext(r.Context()).Dependencies().EffectiveSchema(r.Context(),
 		chi.URLParam(r, "attributeID"), chi.URLParam(r, "entityID"))
 	if err != nil {
 		writeError(w, s.log, err)
@@ -349,7 +376,7 @@ func (s *server) createDependency(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	snap, err := s.factory.New(r.Context()).Dependencies().Create(r.Context(), appdependency.CreateInput{
+	snap, err := application.FromContext(r.Context()).Dependencies().Create(r.Context(), appdependency.CreateInput{
 		SourceAttributeID: req.SourceAttributeID,
 		TargetAttributeID: req.TargetAttributeID,
 		Conditions:        req.Conditions,
@@ -364,7 +391,7 @@ func (s *server) createDependency(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) getDependency(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.factory.New(r.Context()).Dependencies().Get(r.Context(), chi.URLParam(r, "id"))
+	snap, err := application.FromContext(r.Context()).Dependencies().Get(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, s.log, err)
 		return
@@ -378,7 +405,7 @@ func (s *server) updateDependency(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	snap, err := s.factory.New(r.Context()).Dependencies().Update(r.Context(), appdependency.UpdateInput{
+	snap, err := application.FromContext(r.Context()).Dependencies().Update(r.Context(), appdependency.UpdateInput{
 		ID:          chi.URLParam(r, "id"),
 		Conditions:  req.Conditions,
 		Effect:      req.Effect,
@@ -392,7 +419,7 @@ func (s *server) updateDependency(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) archiveDependency(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.factory.New(r.Context()).Dependencies().Archive(r.Context(), chi.URLParam(r, "id"))
+	snap, err := application.FromContext(r.Context()).Dependencies().Archive(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, s.log, err)
 		return
@@ -401,7 +428,7 @@ func (s *server) archiveDependency(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listDependencies(w http.ResponseWriter, r *http.Request) {
-	out, err := s.factory.New(r.Context()).Dependencies().List(r.Context(), appdependency.ListInput{
+	out, err := application.FromContext(r.Context()).Dependencies().List(r.Context(), appdependency.ListInput{
 		SourceAttributeID: r.URL.Query().Get("source_attribute_id"),
 		TargetAttributeID: r.URL.Query().Get("target_attribute_id"),
 		IncludeArchived:   boolQuery(r, "include_archived"),
@@ -414,10 +441,185 @@ func (s *server) listDependencies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, listResponse{Items: out.Items, PageInfo: out.PageInfo})
 }
 
+// --- relationships ------------------------------------------------------------
+
+type relationshipDefinitionRequest struct {
+	InternalName        string `json:"internal_name,omitempty"`
+	DisplayName         string `json:"display_name"`
+	Description         string `json:"description,omitempty"`
+	ParentTypeID        string `json:"parent_type_id,omitempty"`
+	ChildTypeID         string `json:"child_type_id,omitempty"`
+	ExtendsID           string `json:"extends_id,omitempty"`
+	ParentVersionPolicy string `json:"parent_version_policy,omitempty"`
+	ChildVersionPolicy  string `json:"child_version_policy,omitempty"`
+}
+
+func (s *server) createRelationshipDefinition(w http.ResponseWriter, r *http.Request) {
+	var req relationshipDefinitionRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	snap, err := application.FromContext(r.Context()).Relationships().CreateDefinition(r.Context(), apprelationship.CreateDefinitionInput{
+		InternalName:        req.InternalName,
+		DisplayName:         req.DisplayName,
+		Description:         req.Description,
+		ParentTypeID:        req.ParentTypeID,
+		ChildTypeID:         req.ChildTypeID,
+		ExtendsID:           req.ExtendsID,
+		ParentVersionPolicy: req.ParentVersionPolicy,
+		ChildVersionPolicy:  req.ChildVersionPolicy,
+	})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, snap)
+}
+
+func (s *server) getRelationshipDefinition(w http.ResponseWriter, r *http.Request) {
+	snap, err := application.FromContext(r.Context()).Relationships().GetDefinition(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+func (s *server) updateRelationshipDefinition(w http.ResponseWriter, r *http.Request) {
+	var req relationshipDefinitionRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	snap, err := application.FromContext(r.Context()).Relationships().UpdateDefinition(r.Context(), apprelationship.UpdateDefinitionInput{
+		ID:                  chi.URLParam(r, "id"),
+		DisplayName:         req.DisplayName,
+		Description:         req.Description,
+		ParentVersionPolicy: req.ParentVersionPolicy,
+		ChildVersionPolicy:  req.ChildVersionPolicy,
+	})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+func (s *server) archiveRelationshipDefinition(w http.ResponseWriter, r *http.Request) {
+	snap, err := application.FromContext(r.Context()).Relationships().ArchiveDefinition(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+func (s *server) restoreRelationshipDefinition(w http.ResponseWriter, r *http.Request) {
+	snap, err := application.FromContext(r.Context()).Relationships().RestoreDefinition(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+func (s *server) relationshipAttributeSets(w http.ResponseWriter, r *http.Request) {
+	sets, err := application.FromContext(r.Context()).Relationships().AttributeSets(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"attribute_set_ids": sets})
+}
+
+func (s *server) listRelationshipDefinitions(w http.ResponseWriter, r *http.Request) {
+	out, err := application.FromContext(r.Context()).Relationships().ListDefinitions(r.Context(), apprelationship.DefinitionListInput{
+		TypeDefinitionID: r.URL.Query().Get("type_definition_id"),
+		IncludeArchived:  boolQuery(r, "include_archived"),
+		Page:             pageArgs(r),
+	})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, listResponse{Items: out.Items, PageInfo: out.PageInfo})
+}
+
+type linkRequest struct {
+	RelationshipDefinitionID string `json:"relationship_definition_id"`
+	ParentEntityID           string `json:"parent_entity_id"`
+	ChildEntityID            string `json:"child_entity_id"`
+	ParentTypeVersion        *int   `json:"parent_type_version,omitempty"`
+	ChildTypeVersion         *int   `json:"child_type_version,omitempty"`
+}
+
+func (s *server) createRelationship(w http.ResponseWriter, r *http.Request) {
+	var req linkRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	snap, err := application.FromContext(r.Context()).Relationships().Link(r.Context(), apprelationship.LinkInput{
+		DefinitionID:  req.RelationshipDefinitionID,
+		ParentEntity:  req.ParentEntityID,
+		ChildEntity:   req.ChildEntityID,
+		ParentVersion: req.ParentTypeVersion,
+		ChildVersion:  req.ChildTypeVersion,
+	})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, snap)
+}
+
+func (s *server) getRelationship(w http.ResponseWriter, r *http.Request) {
+	snap, err := application.FromContext(r.Context()).Relationships().Get(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+func (s *server) unlinkRelationship(w http.ResponseWriter, r *http.Request) {
+	snap, err := application.FromContext(r.Context()).Relationships().Unlink(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+func (s *server) listRelationships(w http.ResponseWriter, r *http.Request) {
+	out, err := application.FromContext(r.Context()).Relationships().List(r.Context(), apprelationship.ListInput{
+		DefinitionID:    r.URL.Query().Get("relationship_definition_id"),
+		ParentEntityID:  r.URL.Query().Get("parent_entity_id"),
+		ChildEntityID:   r.URL.Query().Get("child_entity_id"),
+		IncludeArchived: boolQuery(r, "include_archived"),
+		Page:            pageArgs(r),
+	})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, listResponse{Items: out.Items, PageInfo: out.PageInfo})
+}
+
+func (s *server) listEntityRelationships(w http.ResponseWriter, r *http.Request) {
+	links, err := application.FromContext(r.Context()).Relationships().ListByEntity(r.Context(), chi.URLParam(r, "entityID"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": links})
+}
+
 // --- activity ----------------------------------------------------------------
 
 func (s *server) listActivity(w http.ResponseWriter, r *http.Request) {
-	out, err := s.factory.New(r.Context()).Activity().List(r.Context(), application.ActivityListInput{
+	out, err := application.FromContext(r.Context()).Activity().List(r.Context(), application.ActivityListInput{
 		Entity:   r.URL.Query().Get("entity"),
 		EntityID: r.URL.Query().Get("entity_id"),
 		Actor:    r.URL.Query().Get("actor"),

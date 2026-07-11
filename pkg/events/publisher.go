@@ -19,7 +19,7 @@ type Publisher interface {
 type TopicFunc func(env Envelope) string
 
 // DefaultTopic routes each event to a topic named after its event type.
-func DefaultTopic(env Envelope) string { return env.Type }
+func DefaultTopic(env Envelope) string { return env.Type.String() }
 
 // publisherHandler bridges the dispatcher to a consumer Publisher.
 type publisherHandler struct {

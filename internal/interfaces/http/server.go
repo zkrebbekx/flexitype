@@ -34,6 +34,9 @@ func NewHandler(cfg ServerConfig) http.Handler {
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(authenticate(cfg.Accounts, cfg.Logger))
+		// Interactors after auth: the set is built with the request's actor
+		// and tenant already on the context.
+		api.Use(withInteractors(cfg.Factory))
 
 		api.Route("/type-definitions", func(r chi.Router) {
 			r.Get("/", s.listTypeDefinitions)
@@ -52,6 +55,7 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Patch("/{id}", s.updateAttribute)
 			r.Post("/{id}/archive", s.archiveAttribute)
 			r.Post("/{id}/restore", s.restoreAttribute)
+			r.Post("/{id}/validate-value", s.validateAttributeValue)
 		})
 
 		api.Route("/values", func(r chi.Router) {
@@ -61,8 +65,10 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Delete("/{id}", s.removeValue)
 		})
 
+		api.Get("/entities/{typeDefinitionID}", s.listEntitiesOfType)
 		api.Route("/entities/{typeDefinitionID}/{entityID}", func(r chi.Router) {
 			r.Get("/values", s.listEntityValues)
+			r.Get("/relationships", s.listEntityRelationships)
 			r.Get("/attributes/{attributeID}/effective-schema", s.effectiveSchema)
 		})
 
@@ -74,8 +80,29 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Delete("/{id}", s.archiveDependency)
 		})
 
+		api.Route("/relationship-definitions", func(r chi.Router) {
+			r.Get("/", s.listRelationshipDefinitions)
+			r.Post("/", s.createRelationshipDefinition)
+			r.Get("/{id}", s.getRelationshipDefinition)
+			r.Patch("/{id}", s.updateRelationshipDefinition)
+			r.Post("/{id}/archive", s.archiveRelationshipDefinition)
+			r.Post("/{id}/restore", s.restoreRelationshipDefinition)
+			r.Get("/{id}/attribute-sets", s.relationshipAttributeSets)
+		})
+
+		api.Route("/relationships", func(r chi.Router) {
+			r.Get("/", s.listRelationships)
+			r.Post("/", s.createRelationship)
+			r.Get("/{id}", s.getRelationship)
+			r.Delete("/{id}", s.unlinkRelationship)
+		})
+
 		api.Get("/activity", s.listActivity)
 	})
+
+	// Everything that is not the API or an operational endpoint is the
+	// admin console SPA.
+	r.NotFound(spaHandler(cfg.Logger))
 
 	return otelhttp.NewHandler(r, "flexitype.http")
 }

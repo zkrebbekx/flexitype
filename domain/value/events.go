@@ -4,10 +4,22 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/events"
 )
 
 // AggregateType is the event aggregate identifier for attribute values.
 const AggregateType = "attribute_value"
+
+// The event types this package emits, for use with
+// events.WithEventTypes and subscriber routing.
+const (
+	// EventSet identifies value set events.
+	EventSet events.Type = "flexitype.attribute_value.set"
+	// EventUpdated identifies value updated events.
+	EventUpdated events.Type = "flexitype.attribute_value.updated"
+	// EventRemoved identifies value removed events.
+	EventRemoved events.Type = "flexitype.attribute_value.removed"
+)
 
 // Set is emitted when a value is first written for an entity attribute.
 type Set struct {
@@ -22,7 +34,7 @@ type Set struct {
 }
 
 // EventType identifies the event on the wire.
-func (e Set) EventType() string { return "flexitype.attribute_value.set" }
+func (e Set) EventType() events.Type { return EventSet }
 
 // AggregateType names the emitting aggregate.
 func (e Set) AggregateType() string { return AggregateType }
@@ -48,7 +60,7 @@ type Updated struct {
 }
 
 // EventType identifies the event on the wire.
-func (e Updated) EventType() string { return "flexitype.attribute_value.updated" }
+func (e Updated) EventType() events.Type { return EventUpdated }
 
 // AggregateType names the emitting aggregate.
 func (e Updated) AggregateType() string { return AggregateType }
@@ -71,7 +83,7 @@ type Removed struct {
 }
 
 // EventType identifies the event on the wire.
-func (e Removed) EventType() string { return "flexitype.attribute_value.removed" }
+func (e Removed) EventType() events.Type { return EventRemoved }
 
 // AggregateType names the emitting aggregate.
 func (e Removed) AggregateType() string { return AggregateType }

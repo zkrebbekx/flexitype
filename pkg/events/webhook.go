@@ -62,7 +62,7 @@ func (w *webhookHandler) Handle(ctx context.Context, env Envelope) error {
 		return fmt.Errorf("build webhook request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(HeaderEventType, env.Type)
+	req.Header.Set(HeaderEventType, env.Type.String())
 	req.Header.Set(HeaderEventID, env.ID)
 	for k, v := range w.cfg.Headers {
 		req.Header.Set(k, v)

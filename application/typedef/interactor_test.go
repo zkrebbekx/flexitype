@@ -195,7 +195,7 @@ func TestCreateTypeDefinitionUsecase(t *testing.T) {
 			Convey("Then the domain event dispatched after commit with envelope metadata", func() {
 				So(dispatched, ShouldHaveLength, 1)
 				env := dispatched[0]
-				So(env.Type, ShouldEqual, "flexitype.type_definition.created")
+				So(env.Type, ShouldEqual, domaintypedef.EventCreated)
 				So(env.TenantID, ShouldEqual, "acme")
 				So(env.Actor, ShouldEqual, "service_account:ci-importer")
 				So(env.AggregateID, ShouldEqual, snap.ID.String())
@@ -254,7 +254,7 @@ func TestCreateTypeDefinitionUsecase(t *testing.T) {
 				So(string(log.entries[0].Before), ShouldNotContainSubstring, `"archived_at"`)
 				So(string(log.entries[0].After), ShouldContainSubstring, `"archived_at"`)
 				So(dispatched, ShouldHaveLength, 1)
-				So(dispatched[0].Type, ShouldEqual, "flexitype.type_definition.archived")
+				So(dispatched[0].Type, ShouldEqual, domaintypedef.EventArchived)
 			})
 		})
 	})

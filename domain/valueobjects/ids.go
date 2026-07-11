@@ -142,6 +142,73 @@ func (id DependencyID) Equals(other DependencyID) bool {
 	return id.String() == other.String()
 }
 
+// RelationshipDefinitionID identifies a relationship definition.
+type RelationshipDefinitionID struct {
+	ulid.ID
+}
+
+// NewRelationshipDefinitionID mints a new RelationshipDefinitionID.
+func NewRelationshipDefinitionID() RelationshipDefinitionID {
+	return RelationshipDefinitionID{ulid.New()}
+}
+
+// ParseRelationshipDefinitionID parses a string into a
+// RelationshipDefinitionID.
+func ParseRelationshipDefinitionID(s string) (RelationshipDefinitionID, error) {
+	id, err := ulid.Parse(s)
+	if err != nil {
+		return RelationshipDefinitionID{}, fmt.Errorf("invalid relationship definition ID: %w", err)
+	}
+	return RelationshipDefinitionID{id}, nil
+}
+
+// MustParseRelationshipDefinitionID parses s, panicking on error.
+func MustParseRelationshipDefinitionID(s string) RelationshipDefinitionID {
+	id, err := ParseRelationshipDefinitionID(s)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+// Equals checks if two RelationshipDefinitionIDs are equal.
+func (id RelationshipDefinitionID) Equals(other RelationshipDefinitionID) bool {
+	return id.String() == other.String()
+}
+
+// RelationshipID identifies one relationship instance (a link).
+type RelationshipID struct {
+	ulid.ID
+}
+
+// NewRelationshipID mints a new RelationshipID.
+func NewRelationshipID() RelationshipID {
+	return RelationshipID{ulid.New()}
+}
+
+// ParseRelationshipID parses a string into a RelationshipID.
+func ParseRelationshipID(s string) (RelationshipID, error) {
+	id, err := ulid.Parse(s)
+	if err != nil {
+		return RelationshipID{}, fmt.Errorf("invalid relationship ID: %w", err)
+	}
+	return RelationshipID{id}, nil
+}
+
+// MustParseRelationshipID parses s, panicking on error.
+func MustParseRelationshipID(s string) RelationshipID {
+	id, err := ParseRelationshipID(s)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+// Equals checks if two RelationshipIDs are equal.
+func (id RelationshipID) Equals(other RelationshipID) bool {
+	return id.String() == other.String()
+}
+
 // DefaultTenant is the tenant used when a caller does not segment data.
 const DefaultTenant = TenantID("default")
 

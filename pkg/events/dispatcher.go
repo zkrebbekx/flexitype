@@ -39,10 +39,10 @@ func (h HandlerFunc) Handle(ctx context.Context, env Envelope) error { return h.
 // registration pairs a handler with its event-type filter.
 type registration struct {
 	handler Handler
-	types   map[string]struct{} // empty = all types
+	types   map[Type]struct{} // empty = all types
 }
 
-func (r registration) wants(eventType string) bool {
+func (r registration) wants(eventType Type) bool {
 	if len(r.types) == 0 {
 		return true
 	}
@@ -53,12 +53,13 @@ func (r registration) wants(eventType string) bool {
 // RegisterOption customises a handler registration.
 type RegisterOption func(*registration)
 
-// WithEventTypes restricts a handler to the given event types. Without this
+// WithEventTypes restricts a handler to the given event types — pass the
+// constants domain packages export (e.g. value.EventUpdated). Without this
 // option the handler receives every event.
-func WithEventTypes(types ...string) RegisterOption {
+func WithEventTypes(types ...Type) RegisterOption {
 	return func(r *registration) {
 		if r.types == nil {
-			r.types = make(map[string]struct{}, len(types))
+			r.types = make(map[Type]struct{}, len(types))
 		}
 		for _, t := range types {
 			r.types[t] = struct{}{}

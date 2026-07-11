@@ -7,6 +7,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/activity"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
+	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
@@ -79,10 +80,11 @@ func (f *factory) New(context.Context) *Interactors {
 	unit := uow.New(f.cfg.Transactor, f.cfg.Dispatcher, f.cfg.ActivityLog, opts...)
 
 	return &Interactors{
-		typeDefs: apptypedef.NewInteractor(unit, repos.TypeDefinitions),
-		attrs:    appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
-		values:   appvalue.NewInteractor(unit, repos.Attributes, repos.Values, repos.Dependencies),
-		deps:     appdependency.NewInteractor(unit, repos.Attributes, repos.Values, repos.Dependencies),
-		activity: &ActivityInteractor{log: f.cfg.ActivityLog},
+		typeDefs:      apptypedef.NewInteractor(unit, repos.TypeDefinitions),
+		attrs:         appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
+		values:        appvalue.NewInteractor(unit, repos.Attributes, repos.Values, repos.Dependencies),
+		deps:          appdependency.NewInteractor(unit, repos.Attributes, repos.Values, repos.Dependencies),
+		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),
+		activity:      &ActivityInteractor{log: f.cfg.ActivityLog},
 	}
 }

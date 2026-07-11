@@ -1,0 +1,14 @@
+import { createRouter, createWebHistory } from 'vue-router'
+
+export const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    { path: '/', redirect: '/types' },
+    { path: '/types', component: () => import('./pages/TypesPage.vue') },
+    { path: '/types/:id', component: () => import('./pages/TypeDetailPage.vue') },
+    { path: '/entities', component: () => import('./pages/EntitiesPage.vue') },
+    { path: '/entities/:typeId/:entityId', component: () => import('./pages/EntityDetailPage.vue') },
+    { path: '/activity', component: () => import('./pages/ActivityPage.vue') },
+    { path: '/:pathMatch(.*)*', component: () => import('./pages/NotFoundPage.vue') },
+  ],
+})

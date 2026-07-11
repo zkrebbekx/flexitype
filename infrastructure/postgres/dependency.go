@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/graph-gophers/dataloader/v7"
 	"github.com/lib/pq"
 
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
-	"github.com/zkrebbekx/flexitype/pkg/dataloader"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
@@ -63,14 +63,44 @@ func (r dependencyRow) snapshot() (domaindependency.Snapshot, error) {
 	}, nil
 }
 
-// dependencyListKey batches List queries.
-type dependencyListKey struct {
-	Tenant          string
-	SourceID        string
-	TargetID        string
-	IncludeArchived bool
-	Limit           int
-	Offset          int
+// dependencyListFilter is the cleansed JSON dataloader key for dependency
+// List queries; unique keys become UNION ALL arms.
+type dependencyListFilter struct {
+	Tenant          string `json:"tenant"`
+	SourceID        string `json:"source_attribute_id,omitempty"`
+	TargetID        string `json:"target_attribute_id,omitempty"`
+	IncludeArchived bool   `json:"include_archived,omitempty"`
+	Limit           int    `json:"limit"`
+	Offset          int    `json:"offset"`
+}
+
+func (f dependencyListFilter) key() string {
+	b, _ := json.Marshal(f)
+	return string(b)
+}
+
+func (f dependencyListFilter) arm(key string) (string, []any) {
+	where := []string{"tenant_id = ?"}
+	args := []any{key, f.Tenant}
+	if !f.IncludeArchived {
+		where = append(where, "archived_at IS NULL")
+	}
+	if f.SourceID != "" {
+		where = append(where, "source_attribute_id = ?")
+		args = append(args, f.SourceID)
+	}
+	if f.TargetID != "" {
+		where = append(where, "target_attribute_id = ?")
+		args = append(args, f.TargetID)
+	}
+	args = append(args, f.Limit, f.Offset)
+
+	query := `(SELECT ?::text AS loader_key, ` + dependencyColumns + `, count(*) OVER () AS total_count
+	 FROM flexitype_attribute_value_dependency
+	 WHERE ` + strings.Join(where, " AND ") + `
+	 ORDER BY id
+	 LIMIT ? OFFSET ?)`
+	return query, args
 }
 
 type dependencyRepository struct {
@@ -79,17 +109,17 @@ type dependencyRepository struct {
 	byID     *dataloader.Loader[string, domaindependency.Snapshot]
 	byTarget *dataloader.Loader[string, []domaindependency.Snapshot]
 	bySource *dataloader.Loader[string, []domaindependency.Snapshot]
-	byList   *dataloader.Loader[dependencyListKey, dataloader.PagedResult[domaindependency.Snapshot]]
+	byList   *dataloader.Loader[string, pagedResult[domaindependency.Snapshot]]
 }
 
 // NewDependencyRepository builds a dataloader-backed repository over the
 // pool.
 func NewDependencyRepository(q db.QueryExecer) domaindependency.Repository {
 	r := &dependencyRepository{q: q}
-	r.byID = dataloader.NewZeroLoader(r.batchByID, loaderConfig())
-	r.byTarget = dataloader.NewSliceLoader(r.batchByColumn("target_attribute_id"), loaderConfig())
-	r.bySource = dataloader.NewSliceLoader(r.batchByColumn("source_attribute_id"), loaderConfig())
-	r.byList = dataloader.NewSliceLoader(r.batchList, loaderConfig())
+	r.byID = newLoader(r.batchByID)
+	r.byTarget = newLoader(r.batchByColumn("target_attribute_id"))
+	r.bySource = newLoader(r.batchByColumn("source_attribute_id"))
+	r.byList = newLoader(r.batchList)
 	return r
 }
 
@@ -100,7 +130,7 @@ func (r *dependencyRepository) WithTx(tx db.QueryExecer) domaindependency.Reposi
 
 func (r *dependencyRepository) batchByID(ctx context.Context, ids []string) (map[string]domaindependency.Snapshot, error) {
 	var rows []dependencyRow
-	query := fmt.Sprintf(`SELECT %s FROM flexitype_attribute_value_dependency WHERE id = ANY($1)`, dependencyColumns)
+	query := bind(`SELECT ` + dependencyColumns + ` FROM flexitype_attribute_value_dependency WHERE id = ANY(?)`)
 	if err := r.q.SelectContext(ctx, &rows, query, pq.Array(ids)); err != nil {
 		return nil, fmt.Errorf("batch dependencies by id: %w", err)
 	}
@@ -117,14 +147,11 @@ func (r *dependencyRepository) batchByID(ctx context.Context, ids []string) (map
 
 // batchByColumn builds a batch loader keyed on one attribute column
 // (source or target) — both sides share the same query shape.
-func (r *dependencyRepository) batchByColumn(column string) dataloader.BatchFunc[string, []domaindependency.Snapshot] {
+func (r *dependencyRepository) batchByColumn(column string) mapBatchFunc[string, []domaindependency.Snapshot] {
 	return func(ctx context.Context, ids []string) (map[string][]domaindependency.Snapshot, error) {
-		query := fmt.Sprintf(
-			`SELECT %s FROM flexitype_attribute_value_dependency
-			 WHERE %s = ANY($1) AND archived_at IS NULL
-			 ORDER BY id`,
-			dependencyColumns, column,
-		)
+		query := bind(`SELECT ` + dependencyColumns + ` FROM flexitype_attribute_value_dependency
+		 WHERE ` + column + ` = ANY(?) AND archived_at IS NULL
+		 ORDER BY id`)
 		var rows []dependencyRow
 		if err := r.q.SelectContext(ctx, &rows, query, pq.Array(ids)); err != nil {
 			return nil, fmt.Errorf("batch dependencies by %s: %w", column, err)
@@ -146,69 +173,48 @@ func (r *dependencyRepository) batchByColumn(column string) dataloader.BatchFunc
 	}
 }
 
-func (r *dependencyRepository) batchList(ctx context.Context, keys []dependencyListKey) (map[dependencyListKey]dataloader.PagedResult[domaindependency.Snapshot], error) {
-	out := make(map[dependencyListKey]dataloader.PagedResult[domaindependency.Snapshot], len(keys))
+// batchList runs every unique filter key as one UNION ALL statement.
+func (r *dependencyRepository) batchList(ctx context.Context, keys []string) (map[string]pagedResult[domaindependency.Snapshot], error) {
+	arms := make([]string, 0, len(keys))
+	var args []any
 	for _, key := range keys {
-		items, total, err := r.queryList(ctx, key)
-		if err != nil {
-			return nil, err
+		var f dependencyListFilter
+		if err := json.Unmarshal([]byte(key), &f); err != nil {
+			return nil, fmt.Errorf("decode list key: %w", err)
 		}
-		out[key] = dataloader.PagedResult[domaindependency.Snapshot]{Items: items, Total: total}
+		arm, armArgs := f.arm(key)
+		arms = append(arms, arm)
+		args = append(args, armArgs...)
 	}
-	return out, nil
-}
-
-func (r *dependencyRepository) queryList(ctx context.Context, key dependencyListKey) ([]domaindependency.Snapshot, int, error) {
-	where := []string{"tenant_id = $1"}
-	args := []any{key.Tenant}
-	if !key.IncludeArchived {
-		where = append(where, "archived_at IS NULL")
-	}
-	if key.SourceID != "" {
-		args = append(args, key.SourceID)
-		where = append(where, fmt.Sprintf("source_attribute_id = $%d", len(args)))
-	}
-	if key.TargetID != "" {
-		args = append(args, key.TargetID)
-		where = append(where, fmt.Sprintf("target_attribute_id = $%d", len(args)))
-	}
-	args = append(args, key.Limit, key.Offset)
-
-	query := fmt.Sprintf(
-		`SELECT %s, count(*) OVER () AS total_count
-		 FROM flexitype_attribute_value_dependency
-		 WHERE %s
-		 ORDER BY id
-		 LIMIT $%d OFFSET $%d`,
-		dependencyColumns, strings.Join(where, " AND "), len(args)-1, len(args),
-	)
 
 	var rows []struct {
+		LoaderKey string `db:"loader_key"`
 		dependencyRow
 		TotalCount int `db:"total_count"`
 	}
-	if err := r.q.SelectContext(ctx, &rows, query, args...); err != nil {
-		return nil, 0, fmt.Errorf("list dependencies: %w", err)
+	if err := r.q.SelectContext(ctx, &rows, bind(strings.Join(arms, "\nUNION ALL\n")), args...); err != nil {
+		return nil, fmt.Errorf("batch list dependencies: %w", err)
 	}
 
-	items := make([]domaindependency.Snapshot, 0, len(rows))
-	total := 0
+	out := make(map[string]pagedResult[domaindependency.Snapshot], len(keys))
 	for _, row := range rows {
 		snap, err := row.snapshot()
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
-		items = append(items, snap)
-		total = row.TotalCount
+		pr := out[row.LoaderKey]
+		pr.Items = append(pr.Items, snap)
+		pr.Total = row.TotalCount
+		out[row.LoaderKey] = pr
 	}
-	return items, total, nil
+	return out, nil
 }
 
 func (r *dependencyRepository) Get(ctx context.Context, id valueobjects.DependencyID) (*domaindependency.Dependency, error) {
 	if r.inTx {
 		return r.getDirect(ctx, id, false)
 	}
-	snap, err := r.byID.Load(ctx, id.String())
+	snap, err := load(ctx, r.byID, id.String())
 	if err != nil {
 		return nil, err
 	}
@@ -226,12 +232,12 @@ func (r *dependencyRepository) GetForUpdate(ctx context.Context, id valueobjects
 }
 
 func (r *dependencyRepository) getDirect(ctx context.Context, id valueobjects.DependencyID, forUpdate bool) (*domaindependency.Dependency, error) {
-	query := fmt.Sprintf(`SELECT %s FROM flexitype_attribute_value_dependency WHERE id = $1`, dependencyColumns)
+	query := `SELECT ` + dependencyColumns + ` FROM flexitype_attribute_value_dependency WHERE id = ?`
 	if forUpdate {
 		query += " FOR UPDATE"
 	}
 	var row dependencyRow
-	if err := r.q.GetContext(ctx, &row, query, id.String()); err != nil {
+	if err := r.q.GetContext(ctx, &row, bind(query), id.String()); err != nil {
 		if isNoRows(err) {
 			return nil, domainerrors.NewNotFound(domaindependency.AggregateType, id.String())
 		}
@@ -254,15 +260,15 @@ func (r *dependencyRepository) ListBySource(ctx context.Context, sourceID valueo
 
 func (r *dependencyRepository) listByColumn(ctx context.Context, loader *dataloader.Loader[string, []domaindependency.Snapshot], column, id string) ([]*domaindependency.Dependency, error) {
 	var snaps []domaindependency.Snapshot
-	var err error
 	if r.inTx {
-		fetched, ferr := r.batchByColumn(column)(ctx, []string{id})
-		if ferr != nil {
-			return nil, ferr
+		fetched, err := r.batchByColumn(column)(ctx, []string{id})
+		if err != nil {
+			return nil, err
 		}
 		snaps = fetched[id]
 	} else {
-		snaps, err = loader.Load(ctx, id)
+		var err error
+		snaps, err = load(ctx, loader, id)
 		if err != nil {
 			return nil, err
 		}
@@ -276,31 +282,33 @@ func (r *dependencyRepository) listByColumn(ctx context.Context, loader *dataloa
 }
 
 func (r *dependencyRepository) List(ctx context.Context, filter domaindependency.Filter, page db.Page) ([]*domaindependency.Dependency, int, error) {
-	key := dependencyListKey{
+	f := dependencyListFilter{
 		Tenant:          filter.TenantID.String(),
 		IncludeArchived: filter.IncludeArchived,
 		Limit:           page.Limit,
 		Offset:          page.Offset,
 	}
 	if !filter.SourceAttributeID.IsZero() {
-		key.SourceID = filter.SourceAttributeID.String()
+		f.SourceID = filter.SourceAttributeID.String()
 	}
 	if !filter.TargetAttributeID.IsZero() {
-		key.TargetID = filter.TargetAttributeID.String()
+		f.TargetID = filter.TargetAttributeID.String()
 	}
+	key := f.key()
 
-	var result dataloader.PagedResult[domaindependency.Snapshot]
+	var result pagedResult[domaindependency.Snapshot]
 	var err error
 	if r.inTx {
-		var items []domaindependency.Snapshot
-		var total int
-		items, total, err = r.queryList(ctx, key)
-		result = dataloader.PagedResult[domaindependency.Snapshot]{Items: items, Total: total}
+		fetched, ferr := r.batchList(ctx, []string{key})
+		if ferr != nil {
+			return nil, 0, ferr
+		}
+		result = fetched[key]
 	} else {
-		result, err = r.byList.Load(ctx, key)
-	}
-	if err != nil {
-		return nil, 0, err
+		result, err = load(ctx, r.byList, key)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 
 	out := make([]*domaindependency.Dependency, 0, len(result.Items))
@@ -322,18 +330,18 @@ func (r *dependencyRepository) Save(ctx context.Context, d *domaindependency.Dep
 		return fmt.Errorf("encode effect: %w", err)
 	}
 
-	_, err = r.q.ExecContext(ctx,
+	_, err = r.q.ExecContext(ctx, bind(
 		`INSERT INTO flexitype_attribute_value_dependency
 		   (id, tenant_id, source_attribute_id, target_attribute_id, conditions, effect,
 		    description, version, created_at, updated_at, archived_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   conditions  = EXCLUDED.conditions,
 		   effect      = EXCLUDED.effect,
 		   description = EXCLUDED.description,
 		   version     = EXCLUDED.version,
 		   updated_at  = EXCLUDED.updated_at,
-		   archived_at = EXCLUDED.archived_at`,
+		   archived_at = EXCLUDED.archived_at`),
 		s.ID.String(), s.TenantID.String(), s.SourceAttributeID.String(),
 		s.TargetAttributeID.String(), jsonbParam(conditions), jsonbParam(effect),
 		s.Description, s.Version, s.CreatedAt, s.UpdatedAt, nullableTime(s.ArchivedAt),

@@ -10,6 +10,7 @@ import Input from '@/components/ui/Input.vue'
 import Select from '@/components/ui/Select.vue'
 import DiffView from '@/components/ui/DiffView.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import SkeletonRows from '@/components/ui/SkeletonRows.vue'
 import Pagination from '@/components/ui/Pagination.vue'
 import { ChevronDown, ChevronRight } from 'lucide-vue-next'
@@ -94,8 +95,9 @@ const ENTITY_KINDS = [
         </template>
       </tbody>
     </table>
+    <ErrorState v-if="activity.isError.value" :error="activity.error.value" class="m-4" @retry="activity.refetch()" />
     <EmptyState
-      v-if="!activity.isPending.value && !activity.data.value?.items.length"
+      v-else-if="!activity.isPending.value && !activity.data.value?.items.length"
       title="No activity matches these filters"
       class="m-4"
     />

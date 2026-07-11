@@ -13,6 +13,7 @@ import Select from '@/components/ui/Select.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Drawer from '@/components/ui/Drawer.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import SkeletonRows from '@/components/ui/SkeletonRows.vue'
 import Pagination from '@/components/ui/Pagination.vue'
 import { Plus } from 'lucide-vue-next'
@@ -120,8 +121,10 @@ const create = useMutation({
       </tbody>
     </table>
 
+    <ErrorState v-if="types.isError.value" :error="types.error.value" class="m-4" @retry="types.refetch()" />
+
     <EmptyState
-      v-if="!types.isPending.value && !types.data.value?.items.length"
+      v-else-if="!types.isPending.value && !types.data.value?.items.length"
       title="No types yet"
       body="A type definition is the class an entity belongs to — 'product', 'part', 'ticket'. Create one, then attach attributes."
       class="m-4"

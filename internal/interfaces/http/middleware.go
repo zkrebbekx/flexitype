@@ -63,6 +63,20 @@ func (s *server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 // actor, tenant and scopes onto the request context. A nil authenticator
 // disables authentication (development mode) and runs as the system actor
 // on the default tenant with admin scope.
+// accessFor derives the principal's field-level permissions. An admin (or
+// an account with no field restrictions) gets full access; otherwise the
+// declared per-attribute levels apply.
+func accessFor(account serviceaccount.Account) uow.Access {
+	if account.HasScope(serviceaccount.ScopeAdmin) || len(account.FieldPermissions) == 0 {
+		return uow.Access{Admin: true}
+	}
+	attr := make(map[string]uow.Perm, len(account.FieldPermissions))
+	for name, level := range account.FieldPermissions {
+		attr[name] = uow.Perm(level)
+	}
+	return uow.Access{Attr: attr}
+}
+
 func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -102,6 +116,7 @@ func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(ht
 			})
 			ctx = uow.WithTenant(ctx, account.Tenant())
 			ctx = context.WithValue(ctx, scopesKey{}, account.Scopes)
+			ctx = uow.WithAccess(ctx, accessFor(account))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

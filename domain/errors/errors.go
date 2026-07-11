@@ -23,6 +23,9 @@ const (
 	CodeArchived Code = "ARCHIVED"
 	// CodeDependency marks values rejected by an attribute dependency.
 	CodeDependency Code = "DEPENDENCY_VIOLATION"
+	// CodeForbidden marks an action the principal is not permitted to take
+	// (e.g. writing a field their permission set denies).
+	CodeForbidden Code = "FORBIDDEN"
 )
 
 // Error is a typed domain error with structured details.
@@ -49,6 +52,11 @@ func NewNotFound(entity, id string) *Error {
 		Message: fmt.Sprintf("%s %s not found", entity, id),
 		Details: map[string]any{"entity": entity, "id": id},
 	}
+}
+
+// NewForbidden builds a CodeForbidden error.
+func NewForbidden(message string, kv ...any) *Error {
+	return &Error{Code: CodeForbidden, Message: message, Details: details(kv)}
 }
 
 // NewConflict builds a CodeConflict error.

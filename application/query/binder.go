@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
+	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domainrelationship "github.com/zkrebbekx/flexitype/domain/relationship"
@@ -33,6 +34,7 @@ type scope struct {
 type binder struct {
 	tenant      valueobjects.TenantID
 	searchIndex bool
+	access      uow.Access
 	typeDefs    domaintypedef.Repository
 	attrs       domainattribute.Repository
 	relDefs     domainrelationship.DefinitionRepository
@@ -75,6 +77,13 @@ func (b *binder) scopeFor(ctx context.Context, root *domaintypedef.TypeDefinitio
 		}
 		for _, a := range attrs {
 			if a.IsArchived() {
+				continue
+			}
+			// Field-level access control: an attribute the principal may not
+			// read is invisible to the binder, so filtering on it fails as an
+			// unknown attribute rather than leaking its existence (oracle
+			// attacks). Admins and unauthenticated development see all.
+			if !b.access.CanRead(a.InternalName()) {
 				continue
 			}
 			s.attrs[a.InternalName()] = a.Snapshot()

@@ -50,6 +50,8 @@ func writeError(w http.ResponseWriter, log *logger.Logger, err error) {
 			status = http.StatusConflict
 		case domainerrors.CodeArchived:
 			status = http.StatusGone
+		case domainerrors.CodeForbidden:
+			status = http.StatusForbidden
 		}
 	} else if log != nil {
 		log.Error().Err(err).Msg("request failed")

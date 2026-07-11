@@ -35,6 +35,10 @@ type Account struct {
 	TenantID string `json:"tenant_id"`
 	// Scopes list what the account may do.
 	Scopes []Scope `json:"scopes"`
+	// FieldPermissions restricts read/write on specific attributes by
+	// internal name: "none" | "read" | "write". Unlisted attributes are
+	// fully accessible; an admin-scoped account ignores this entirely.
+	FieldPermissions map[string]string `json:"field_permissions,omitempty"`
 	// SecretHash is hex(SHA-256(secret)).
 	SecretHash string `json:"secret_hash"`
 }

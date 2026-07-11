@@ -193,6 +193,10 @@ export interface RelationshipDefinition {
   extends_id?: string
   parent_version_policy: VersionPolicy
   child_version_policy: VersionPolicy
+  min_children?: number | null
+  max_children?: number | null
+  min_parents?: number | null
+  max_parents?: number | null
   version: number
   created_at: string
   updated_at: string
@@ -453,6 +457,10 @@ export const api = {
     extends_id?: string
     parent_version_policy?: VersionPolicy
     child_version_policy?: VersionPolicy
+    min_children?: number | null
+    max_children?: number | null
+    min_parents?: number | null
+    max_parents?: number | null
   }) => request<RelationshipDefinition>('POST', '/relationship-definitions', input),
   updateRelationshipDefinition: (
     id: string,
@@ -463,6 +471,10 @@ export const api = {
       child_label?: string
       parent_version_policy?: VersionPolicy
       child_version_policy?: VersionPolicy
+      min_children?: number | null
+      max_children?: number | null
+      min_parents?: number | null
+      max_parents?: number | null
     },
   ) => request<RelationshipDefinition>('PATCH', `/relationship-definitions/${id}`),
   archiveRelationshipDefinition: (id: string) =>

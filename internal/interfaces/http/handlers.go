@@ -455,6 +455,15 @@ func (s *server) deleteSavedView(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *server) relationshipRequirements(w http.ResponseWriter, r *http.Request) {
+	reqs, err := application.FromContext(r.Context()).Relationships().RelationshipRequirements(r.Context(), chi.URLParam(r, "entityID"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": reqs})
+}
+
 func (s *server) exportSchema(w http.ResponseWriter, r *http.Request) {
 	bundle, err := application.FromContext(r.Context()).Schema().Export(r.Context())
 	if err != nil {
@@ -649,6 +658,10 @@ type relationshipDefinitionRequest struct {
 	ExtendsID           string `json:"extends_id,omitempty"`
 	ParentVersionPolicy string `json:"parent_version_policy,omitempty"`
 	ChildVersionPolicy  string `json:"child_version_policy,omitempty"`
+	MinChildren         *int   `json:"min_children,omitempty"`
+	MaxChildren         *int   `json:"max_children,omitempty"`
+	MinParents          *int   `json:"min_parents,omitempty"`
+	MaxParents          *int   `json:"max_parents,omitempty"`
 }
 
 func (s *server) createRelationshipDefinition(w http.ResponseWriter, r *http.Request) {
@@ -669,6 +682,10 @@ func (s *server) createRelationshipDefinition(w http.ResponseWriter, r *http.Req
 		ExtendsID:           req.ExtendsID,
 		ParentVersionPolicy: req.ParentVersionPolicy,
 		ChildVersionPolicy:  req.ChildVersionPolicy,
+		MinChildren:         req.MinChildren,
+		MaxChildren:         req.MaxChildren,
+		MinParents:          req.MinParents,
+		MaxParents:          req.MaxParents,
 	})
 	if err != nil {
 		writeError(w, s.log, err)
@@ -700,6 +717,10 @@ func (s *server) updateRelationshipDefinition(w http.ResponseWriter, r *http.Req
 		ChildLabel:          req.ChildLabel,
 		ParentVersionPolicy: req.ParentVersionPolicy,
 		ChildVersionPolicy:  req.ChildVersionPolicy,
+		MinChildren:         req.MinChildren,
+		MaxChildren:         req.MaxChildren,
+		MinParents:          req.MinParents,
+		MaxParents:          req.MaxParents,
 	})
 	if err != nil {
 		writeError(w, s.log, err)

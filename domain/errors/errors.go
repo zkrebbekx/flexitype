@@ -95,6 +95,15 @@ func CodeOf(err error) Code {
 	return ""
 }
 
+// DetailsOf returns the structured details of a domain error, or nil.
+func DetailsOf(err error) map[string]any {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Details
+	}
+	return nil
+}
+
 // IsNotFound reports whether err carries CodeNotFound.
 func IsNotFound(err error) bool { return CodeOf(err) == CodeNotFound }
 

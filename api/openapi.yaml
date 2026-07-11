@@ -1015,6 +1015,10 @@ components:
         extends_id: { type: string }
         parent_version_policy: { type: string, enum: [latest, pinned] }
         child_version_policy: { type: string, enum: [latest, pinned] }
+        min_children: { type: integer, nullable: true }
+        max_children: { type: integer, nullable: true }
+        min_parents: { type: integer, nullable: true }
+        max_parents: { type: integer, nullable: true }
     Link:
       type: object
       required: [relationship_definition_id, parent_entity_id, child_entity_id]

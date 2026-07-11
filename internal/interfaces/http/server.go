@@ -115,6 +115,7 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Get("/values", s.listEntityValues)
 			r.Get("/relationships", s.listEntityRelationships)
 			r.Get("/attributes/{attributeID}/effective-schema", s.effectiveSchema)
+			r.Get("/relationship-requirements", s.relationshipRequirements)
 			// Cascade: archive the entity's values and unlink its relationships.
 			r.Delete("/", s.removeEntity)
 		})

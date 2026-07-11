@@ -51,6 +51,11 @@ type CreateDefinitionInput struct {
 	ExtendsID           string
 	ParentVersionPolicy string
 	ChildVersionPolicy  string
+	// Cardinality bounds (nil = unbounded).
+	MinChildren *int
+	MaxChildren *int
+	MinParents  *int
+	MaxParents  *int
 }
 
 // CreateDefinition creates a relationship definition together with its
@@ -134,6 +139,10 @@ func (i *Interactor) CreateDefinition(ctx context.Context, in CreateDefinitionIn
 			Extends:             extends,
 			ParentVersionPolicy: domainrelationship.VersionPolicy(in.ParentVersionPolicy),
 			ChildVersionPolicy:  domainrelationship.VersionPolicy(in.ChildVersionPolicy),
+			MinChildren:         in.MinChildren,
+			MaxChildren:         in.MaxChildren,
+			MinParents:          in.MinParents,
+			MaxParents:          in.MaxParents,
 		}, i.now())
 		if err != nil {
 			return err
@@ -168,6 +177,10 @@ type UpdateDefinitionInput struct {
 	ChildLabel          string
 	ParentVersionPolicy string
 	ChildVersionPolicy  string
+	MinChildren         *int
+	MaxChildren         *int
+	MinParents          *int
+	MaxParents          *int
 }
 
 // UpdateDefinition mutates a relationship definition.
@@ -197,6 +210,10 @@ func (i *Interactor) UpdateDefinition(ctx context.Context, in UpdateDefinitionIn
 			ChildLabel:          in.ChildLabel,
 			ParentVersionPolicy: domainrelationship.VersionPolicy(in.ParentVersionPolicy),
 			ChildVersionPolicy:  domainrelationship.VersionPolicy(in.ChildVersionPolicy),
+			MinChildren:         in.MinChildren,
+			MaxChildren:         in.MaxChildren,
+			MinParents:          in.MinParents,
+			MaxParents:          in.MaxParents,
 		}, i.now())
 		if err != nil {
 			return err
@@ -411,8 +428,100 @@ type LinkInput struct {
 	ChildVersion  *int
 }
 
-// Link creates a relationship between two entities, enforcing the
-// definition's version policies and one-live-link-per-pair.
+// Requirement is one unmet relationship-cardinality minimum for an entity.
+type Requirement struct {
+	DefinitionID   string `json:"definition_id"`
+	DefinitionName string `json:"definition_name"`
+	Side           string `json:"side"` // "children" or "parents"
+	Required       int    `json:"required"`
+	Current        int    `json:"current"`
+}
+
+// RelationshipRequirements reports the definitions whose minimum-cardinality
+// is unmet for an entity — mirroring the dependency Restricted pattern for
+// relationships. rawTypeID is the entity's declared type; both sides of
+// every definition touching it are checked.
+func (i *Interactor) RelationshipRequirements(ctx context.Context, entityID string) ([]Requirement, error) {
+	entity, err := valueobjects.ParseEntityID(entityID)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	tenant := uow.TenantFromContext(ctx)
+	defs, _, err := i.defs.List(ctx, domainrelationship.DefinitionFilter{TenantID: tenant}, db.Page{Limit: 500})
+	if err != nil {
+		return nil, err
+	}
+
+	out := []Requirement{}
+	for _, def := range defs {
+		asParent, asChild, err := i.links.CountLiveLinks(ctx, def.ID(), entity)
+		if err != nil {
+			return nil, err
+		}
+		if def.IsSymmetric() {
+			if m := def.MinChildren(); m != nil && asParent+asChild < *m {
+				out = append(out, Requirement{def.ID().String(), def.DisplayName(), "links", *m, asParent + asChild})
+			}
+			continue
+		}
+		if m := def.MinChildren(); m != nil && asParent < *m {
+			out = append(out, Requirement{def.ID().String(), def.DisplayName(), "children", *m, asParent})
+		}
+		if m := def.MinParents(); m != nil && asChild < *m {
+			out = append(out, Requirement{def.ID().String(), def.DisplayName(), "parents", *m, asChild})
+		}
+	}
+	return out, nil
+}
+
+// enforceCardinality rejects a link that would push either endpoint past
+// its per-side maximum. For symmetric definitions the children bounds apply
+// to the total links touching each entity (unordered peers).
+func enforceCardinality(
+	ctx context.Context,
+	links domainrelationship.Repository,
+	def *domainrelationship.Definition,
+	defID valueobjects.RelationshipDefinitionID,
+	parent, child valueobjects.EntityID,
+) error {
+	pAsParent, pAsChild, err := links.CountLiveLinks(ctx, defID, parent)
+	if err != nil {
+		return err
+	}
+	cAsParent, cAsChild, err := links.CountLiveLinks(ctx, defID, child)
+	if err != nil {
+		return err
+	}
+
+	if def.IsSymmetric() {
+		if limit := def.MaxChildren(); limit != nil {
+			if pAsParent+pAsChild >= *limit {
+				return cardinalityError("max_links", *limit, parent.String())
+			}
+			if cAsParent+cAsChild >= *limit {
+				return cardinalityError("max_links", *limit, child.String())
+			}
+		}
+		return nil
+	}
+
+	if m := def.MaxChildren(); m != nil && pAsParent >= *m {
+		return cardinalityError("max_children", *m, parent.String())
+	}
+	if m := def.MaxParents(); m != nil && cAsChild >= *m {
+		return cardinalityError("max_parents", *m, child.String())
+	}
+	return nil
+}
+
+func cardinalityError(constraint string, limit int, entity string) error {
+	return domainerrors.NewValidation(
+		"relationship cardinality exceeded",
+		"constraint", constraint, "limit", limit, "entity", entity)
+}
+
+// Link creates a live link between two entities under a definition,
+// enforcing the one-live-link-per-pair guard and cardinality bounds.
 func (i *Interactor) Link(ctx context.Context, in LinkInput) (*domainrelationship.Snapshot, error) {
 	defID, err := valueobjects.ParseRelationshipDefinitionID(in.DefinitionID)
 	if err != nil {
@@ -454,6 +563,12 @@ func (i *Interactor) Link(ctx context.Context, in LinkInput) (*domainrelationshi
 		if existing != nil {
 			return domainerrors.NewConflict("these entities are already linked under this definition",
 				"relationship_id", existing.ID().String())
+		}
+
+		// Enforce cardinality under the definition lock (which serializes
+		// concurrent links, so max can't be exceeded by a race).
+		if err := enforceCardinality(ctx, links, def, defID, parent, child); err != nil {
+			return err
 		}
 
 		rel, evts, err := domainrelationship.Link(domainrelationship.LinkInput{

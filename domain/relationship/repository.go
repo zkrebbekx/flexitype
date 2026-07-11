@@ -75,6 +75,11 @@ type Repository interface {
 	// either side (batched across entities — the inspector hot path).
 	ListByEntity(ctx context.Context, key EntityLinksKey) ([]*Relationship, error)
 
+	// CountLiveLinks returns how many live links of a definition have the
+	// entity as parent and as child. Used under the definition lock to
+	// enforce cardinality.
+	CountLiveLinks(ctx context.Context, defID valueobjects.RelationshipDefinitionID, entity valueobjects.EntityID) (asParent, asChild int, err error)
+
 	// List returns a page of relationships and the total count for the
 	// filter.
 	List(ctx context.Context, filter Filter, page db.Page) ([]*Relationship, int, error)

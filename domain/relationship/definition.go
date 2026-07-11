@@ -62,6 +62,10 @@ type Definition struct {
 	extendsID           *valueobjects.RelationshipDefinitionID
 	parentVersionPolicy VersionPolicy
 	childVersionPolicy  VersionPolicy
+	minChildren         *int
+	maxChildren         *int
+	minParents          *int
+	maxParents          *int
 	version             int
 	createdAt           time.Time
 	updatedAt           time.Time
@@ -91,6 +95,14 @@ type NewDefinitionInput struct {
 	Extends             *Definition
 	ParentVersionPolicy VersionPolicy
 	ChildVersionPolicy  VersionPolicy
+	// Cardinality bounds (nil = unbounded). MinChildren/MaxChildren limit
+	// how many children one parent may have; MinParents/MaxParents limit
+	// how many parents one child may have. Symmetric definitions use the
+	// children bounds as a single per-entity cap.
+	MinChildren *int
+	MaxChildren *int
+	MinParents  *int
+	MaxParents  *int
 }
 
 // NewDefinition creates a relationship Definition.
@@ -179,6 +191,10 @@ func NewDefinition(in NewDefinitionInput, now time.Time) (*Definition, []events.
 		extendsID:           extendsID,
 		parentVersionPolicy: in.ParentVersionPolicy,
 		childVersionPolicy:  in.ChildVersionPolicy,
+		minChildren:         in.MinChildren,
+		maxChildren:         in.MaxChildren,
+		minParents:          in.MinParents,
+		maxParents:          in.MaxParents,
 		version:             1,
 		createdAt:           now,
 		updatedAt:           now,
@@ -203,6 +219,10 @@ type UpdateDefinitionInput struct {
 	ChildLabel          string
 	ParentVersionPolicy VersionPolicy
 	ChildVersionPolicy  VersionPolicy
+	MinChildren         *int
+	MaxChildren         *int
+	MinParents          *int
+	MaxParents          *int
 }
 
 // Update mutates the definition, bumping the version.
@@ -232,7 +252,9 @@ func (d *Definition) Update(in UpdateDefinitionInput, now time.Time) ([]events.E
 	}
 	if d.displayName == in.DisplayName && d.description == in.Description &&
 		d.parentLabel == in.ParentLabel && d.childLabel == in.ChildLabel &&
-		d.parentVersionPolicy == in.ParentVersionPolicy && d.childVersionPolicy == in.ChildVersionPolicy {
+		d.parentVersionPolicy == in.ParentVersionPolicy && d.childVersionPolicy == in.ChildVersionPolicy &&
+		intPtrEq(d.minChildren, in.MinChildren) && intPtrEq(d.maxChildren, in.MaxChildren) &&
+		intPtrEq(d.minParents, in.MinParents) && intPtrEq(d.maxParents, in.MaxParents) {
 		return nil, nil
 	}
 
@@ -242,6 +264,10 @@ func (d *Definition) Update(in UpdateDefinitionInput, now time.Time) ([]events.E
 	d.childLabel = in.ChildLabel
 	d.parentVersionPolicy = in.ParentVersionPolicy
 	d.childVersionPolicy = in.ChildVersionPolicy
+	d.minChildren = in.MinChildren
+	d.maxChildren = in.MaxChildren
+	d.minParents = in.MinParents
+	d.maxParents = in.MaxParents
 	d.version++
 	d.updatedAt = now
 
@@ -329,6 +355,18 @@ func (d *Definition) ExtendsID() *valueobjects.RelationshipDefinitionID { return
 // ParentVersionPolicy returns how links bind to the parent type's version.
 func (d *Definition) ParentVersionPolicy() VersionPolicy { return d.parentVersionPolicy }
 
+// MinChildren returns the minimum children per parent (nil = unbounded).
+func (d *Definition) MinChildren() *int { return d.minChildren }
+
+// MaxChildren returns the maximum children per parent (nil = unbounded).
+func (d *Definition) MaxChildren() *int { return d.maxChildren }
+
+// MinParents returns the minimum parents per child (nil = unbounded).
+func (d *Definition) MinParents() *int { return d.minParents }
+
+// MaxParents returns the maximum parents per child (nil = unbounded).
+func (d *Definition) MaxParents() *int { return d.maxParents }
+
 // ChildVersionPolicy returns how links bind to the child type's version.
 func (d *Definition) ChildVersionPolicy() VersionPolicy { return d.childVersionPolicy }
 
@@ -363,6 +401,10 @@ type DefinitionSnapshot struct {
 	ExtendsID           *valueobjects.RelationshipDefinitionID `json:"extends_id,omitempty"`
 	ParentVersionPolicy VersionPolicy                          `json:"parent_version_policy"`
 	ChildVersionPolicy  VersionPolicy                          `json:"child_version_policy"`
+	MinChildren         *int                                   `json:"min_children,omitempty"`
+	MaxChildren         *int                                   `json:"max_children,omitempty"`
+	MinParents          *int                                   `json:"min_parents,omitempty"`
+	MaxParents          *int                                   `json:"max_parents,omitempty"`
 	Version             int                                    `json:"version"`
 	CreatedAt           time.Time                              `json:"created_at"`
 	UpdatedAt           time.Time                              `json:"updated_at"`
@@ -386,6 +428,10 @@ func (d *Definition) Snapshot() DefinitionSnapshot {
 		ExtendsID:           d.extendsID,
 		ParentVersionPolicy: d.parentVersionPolicy,
 		ChildVersionPolicy:  d.childVersionPolicy,
+		MinChildren:         d.minChildren,
+		MaxChildren:         d.maxChildren,
+		MinParents:          d.minParents,
+		MaxParents:          d.maxParents,
 		Version:             d.version,
 		CreatedAt:           d.createdAt,
 		UpdatedAt:           d.updatedAt,
@@ -419,6 +465,10 @@ func RehydrateDefinition(s DefinitionSnapshot) *Definition {
 		extendsID:           s.ExtendsID,
 		parentVersionPolicy: s.ParentVersionPolicy,
 		childVersionPolicy:  s.ChildVersionPolicy,
+		minChildren:         s.MinChildren,
+		maxChildren:         s.MaxChildren,
+		minParents:          s.MinParents,
+		maxParents:          s.MaxParents,
 		version:             s.Version,
 		createdAt:           s.CreatedAt,
 		updatedAt:           s.UpdatedAt,

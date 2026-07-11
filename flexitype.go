@@ -181,6 +181,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		SavedViews:      postgres.NewSavedViewStore(pool),
 		MatchRules:      postgres.NewMatchStore(pool),
 		Revisions:       postgres.NewRevisionStore(pool),
+		ChangeSets:      postgres.NewChangeSetStore(pool),
 	}
 	if o.outbox {
 		store := postgres.NewOutboxStore(transactor)
@@ -247,6 +248,7 @@ func NewInMemory(opts ...Option) *Service {
 	savedViews := memory.NewSavedViewStore()
 	matchRules := memory.NewMatchStore()
 	revisions := memory.NewRevisionStore()
+	changesets := memory.NewChangeSetStore()
 	// The playground gets a working, process-local media store by default.
 	if o.blobs == nil {
 		o.blobs = blob.NewMemoryStore()
@@ -269,6 +271,7 @@ func NewInMemory(opts ...Option) *Service {
 		SavedViews:      savedViews,
 		MatchRules:      matchRules,
 		Revisions:       revisions,
+		ChangeSets:      changesets,
 		BlobStore:       o.blobs,
 	})
 	o.dispatcher.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
@@ -299,6 +302,29 @@ func (s *Service) RunOutboxRelay(ctx context.Context) {
 	go func() { defer wg.Done(); s.pruner.Run(ctx) }()
 	s.relay.Run(ctx)
 	wg.Wait()
+}
+
+// RunChangeSetScheduler publishes approved change-sets whose publish_at has
+// arrived, on the given interval, until ctx ends. Run it as a goroutine next
+// to the server; every replica runs it safely (a published set is skipped by
+// the others). A zero interval defaults to one minute.
+func (s *Service) RunChangeSetScheduler(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cs := s.factory.New(ctx).ChangeSets()
+			if cs != nil {
+				_, _ = cs.PublishDue(ctx)
+			}
+		}
+	}
 }
 
 // EnsureWebhookSubscription upserts a webhook subscription by name — the

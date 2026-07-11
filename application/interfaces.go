@@ -11,6 +11,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/activity"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
+	appchangeset "github.com/zkrebbekx/flexitype/application/changeset"
 	appdedup "github.com/zkrebbekx/flexitype/application/dedup"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	appfeed "github.com/zkrebbekx/flexitype/application/feed"
@@ -94,6 +95,7 @@ type Interactors struct {
 	savedViews    *appsavedview.Interactor
 	dedup         *appdedup.Interactor
 	revisions     *apprevision.Interactor
+	changesets    *appchangeset.Interactor
 	features      Features
 }
 
@@ -142,6 +144,10 @@ func (i *Interactors) Dedup() *appdedup.Interactor { return i.dedup }
 // Revisions returns the entity-revision usecases; nil unless a revision
 // store is configured.
 func (i *Interactors) Revisions() *apprevision.Interactor { return i.revisions }
+
+// ChangeSets returns the change-management usecases; nil unless a
+// change-set store is configured.
+func (i *Interactors) ChangeSets() *appchangeset.Interactor { return i.changesets }
 
 // ActivityInteractor serves the audit-log read side.
 type ActivityInteractor struct {

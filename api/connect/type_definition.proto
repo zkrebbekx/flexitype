@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package flexitype;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+option go_package = "github.com/zkrebbekx/flexitype/internal/api/connect/pb";
+
+// TypeDefinition represents a type definition in the system
+message TypeDefinition {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  int64 version = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  google.protobuf.Timestamp archived_at = 7;
+}
+
+// TypeDefinitionList represents a list of type definitions
+message TypeDefinitionList {
+  repeated TypeDefinition definitions = 1;
+}
+
+// CreateTypeDefinitionRequest represents a request to create a type definition
+message CreateTypeDefinitionRequest {
+  string name = 1;
+  string description = 2;
+}
+
+// UpdateTypeDefinitionRequest represents a request to update a type definition
+message UpdateTypeDefinitionRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  int64 version = 4;
+}
+
+// GetTypeDefinitionRequest represents a request to get a type definition
+message GetTypeDefinitionRequest {
+  string id = 1;
+}
+
+// ArchiveTypeDefinitionRequest represents a request to archive a type definition
+message ArchiveTypeDefinitionRequest {
+  string id = 1;
+}
+
+// ListTypeDefinitionsRequest represents a request to list type definitions
+message ListTypeDefinitionsRequest {
+  int64 version = 1;
+  bool latest_version = 2;
+  repeated string ids = 3;
+}
+
+// ListTypeDefinitionsResponse represents a response to list type definitions
+message ListTypeDefinitionsResponse {
+  repeated TypeDefinition type_definitions = 1;
+}
+
+// TypeDefinitionService provides operations for managing type definitions
+service TypeDefinitionService {
+  // CreateTypeDefinition creates a new type definition
+  rpc CreateTypeDefinition(CreateTypeDefinitionRequest) returns (TypeDefinition) {}
+  
+  // UpdateTypeDefinition updates an existing type definition
+  rpc UpdateTypeDefinition(UpdateTypeDefinitionRequest) returns (TypeDefinition) {}
+  
+  // GetTypeDefinition retrieves a type definition by ID
+  rpc GetTypeDefinition(GetTypeDefinitionRequest) returns (TypeDefinition) {}
+  
+  // ArchiveTypeDefinition archives a type definition
+  rpc ArchiveTypeDefinition(ArchiveTypeDefinitionRequest) returns (google.protobuf.Empty) {}
+  
+  // ListTypeDefinitions lists type definitions based on filter criteria
+  rpc ListTypeDefinitions(ListTypeDefinitionsRequest) returns (ListTypeDefinitionsResponse) {}
+} 

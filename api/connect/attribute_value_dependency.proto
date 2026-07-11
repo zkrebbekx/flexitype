@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package flexitype;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+option go_package = "github.com/zkrebbekx/flexitype/internal/api/connect/pb";
+
+// Attribute Value Dependency
+message AttributeValueDependency {
+  string id = 1;
+  string source_attribute_id = 2;
+  string target_attribute_id = 3;
+  string dependency_type = 4;
+  string description = 5;
+  int64 version = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  google.protobuf.Timestamp archived_at = 9;
+}
+
+// AttributeValueDependencyList represents a list of attribute value dependencies
+message AttributeValueDependencyList {
+  repeated AttributeValueDependency dependencies = 1;
+}
+
+// CreateAttributeValueDependencyRequest represents a request to create a dependency
+message CreateAttributeValueDependencyRequest {
+  string source_attribute_definition_id = 1;
+  string target_attribute_definition_id = 2;
+  string source_conditions = 3;
+  string target_values = 4;
+  string validation_rules = 5;
+}
+
+// UpdateAttributeValueDependencyRequest represents a request to update a dependency
+message UpdateAttributeValueDependencyRequest {
+  string id = 1;
+  string source_attribute_definition_id = 2;
+  string target_attribute_definition_id = 3;
+  string source_conditions = 4;
+  string target_values = 5;
+  string validation_rules = 6;
+  int32 version = 7;
+}
+
+// Request/Response messages for Attribute Value Dependency
+message GetAttributeValueDependencyRequest {
+  string id = 1;
+}
+
+message ArchiveAttributeValueDependencyRequest {
+  string id = 1;
+}
+
+message ListAttributeValueDependenciesRequest {
+  int64 version = 1;
+  bool latest_version = 2;
+  repeated string ids = 3;
+  string source_attribute_id = 4;
+  string target_attribute_id = 5;
+}
+
+message ListAttributeValueDependenciesResponse {
+  repeated AttributeValueDependency attribute_value_dependencies = 1;
+}
+
+// GetDependentValuesRequest represents a request to get dependent values
+message GetDependentValuesRequest {
+  string source_attribute_definition_id = 1;
+  string source_value = 2;
+}
+
+// AttributeValueDependencyService provides operations for managing attribute value dependencies
+service AttributeValueDependencyService {
+  // CreateAttributeValueDependency creates a new dependency
+  rpc CreateAttributeValueDependency(CreateAttributeValueDependencyRequest) returns (AttributeValueDependency) {}
+  
+  // UpdateAttributeValueDependency updates an existing dependency
+  rpc UpdateAttributeValueDependency(UpdateAttributeValueDependencyRequest) returns (AttributeValueDependency) {}
+  
+  // GetAttributeValueDependency retrieves a dependency by ID
+  rpc GetAttributeValueDependency(GetAttributeValueDependencyRequest) returns (AttributeValueDependency) {}
+  
+  // ArchiveAttributeValueDependency archives a dependency
+  rpc ArchiveAttributeValueDependency(ArchiveAttributeValueDependencyRequest) returns (google.protobuf.Empty) {}
+  
+  // ListAttributeValueDependencies lists dependencies based on filter criteria
+  rpc ListAttributeValueDependencies(ListAttributeValueDependenciesRequest) returns (ListAttributeValueDependenciesResponse) {}
+  
+  // GetDependentValues retrieves dependent values for a source value
+  rpc GetDependentValues(GetDependentValuesRequest) returns (AttributeValueDependencyList) {}
+} 

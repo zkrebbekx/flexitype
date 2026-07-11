@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package flexitype;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+option go_package = "github.com/zkrebbekx/flexitype/internal/api/connect/pb";
+
+// AttributeValue represents a value for an attribute
+message AttributeValue {
+  string id = 1;
+  string attribute_id = 2;
+  string value = 3;
+  int64 version = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  google.protobuf.Timestamp archived_at = 7;
+}
+
+// AttributeValueList represents a list of attribute values
+message AttributeValueList {
+  repeated AttributeValue values = 1;
+}
+
+// CreateAttributeValueRequest represents a request to create an attribute value
+message CreateAttributeValueRequest {
+  string attribute_definition_id = 1;
+  string value = 2;
+}
+
+// UpdateAttributeValueRequest represents a request to update an attribute value
+message UpdateAttributeValueRequest {
+  string id = 1;
+  string attribute_definition_id = 2;
+  string value = 3;
+  int32 version = 4;
+}
+
+// GetAttributeValueRequest represents a request to get an attribute value
+message GetAttributeValueRequest {
+  string id = 1;
+}
+
+// ArchiveAttributeValueRequest represents a request to archive an attribute value
+message ArchiveAttributeValueRequest {
+  string id = 1;
+}
+
+// ListAttributeValuesRequest represents a request to list attribute values
+message ListAttributeValuesRequest {
+  int64 version = 1;
+  bool latest_version = 2;
+  repeated string ids = 3;
+  string attribute_id = 4;
+}
+
+// ListAttributeValuesResponse represents a response to list attribute values
+message ListAttributeValuesResponse {
+  repeated AttributeValue attribute_values = 1;
+}
+
+// GetAttributeValuesByAttributeIDRequest represents a request to get values by attribute ID
+message GetAttributeValuesByAttributeIDRequest {
+  string attribute_definition_id = 1;
+}
+
+// AttributeValueService provides operations for managing attribute values
+service AttributeValueService {
+  // CreateAttributeValue creates a new attribute value
+  rpc CreateAttributeValue(CreateAttributeValueRequest) returns (AttributeValue) {}
+  
+  // UpdateAttributeValue updates an existing attribute value
+  rpc UpdateAttributeValue(UpdateAttributeValueRequest) returns (AttributeValue) {}
+  
+  // GetAttributeValue retrieves an attribute value by ID
+  rpc GetAttributeValue(GetAttributeValueRequest) returns (AttributeValue) {}
+  
+  // ArchiveAttributeValue archives an attribute value
+  rpc ArchiveAttributeValue(ArchiveAttributeValueRequest) returns (google.protobuf.Empty) {}
+  
+  // ListAttributeValues lists attribute values based on filter criteria
+  rpc ListAttributeValues(ListAttributeValuesRequest) returns (ListAttributeValuesResponse) {}
+  
+  // GetAttributeValuesByAttributeID retrieves values for a specific attribute
+  rpc GetAttributeValuesByAttributeID(GetAttributeValuesByAttributeIDRequest) returns (AttributeValueList) {}
+} 

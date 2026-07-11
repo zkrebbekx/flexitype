@@ -109,7 +109,7 @@ The HTTP API is available at `http://localhost:8080/api/v1/` with the following 
 
 ### gRPC API
 
-The gRPC API is available on the same port as the HTTP API. See the proto files in the `api/proto` directory for the service definition.
+The gRPC API is available on the same port as the HTTP API. See the proto files in the `api/connect` directory for the service definition.
 
 ## Query Language
 

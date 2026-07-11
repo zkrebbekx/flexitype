@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package flexitype;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+option go_package = "github.com/zkrebbekx/flexitype/internal/api/connect/pb";
+
+// Attribute represents an attribute definition
+message Attribute {
+  string id = 1;
+  string type_definition_id = 2;
+  string name = 3;
+  string description = 4;
+  string data_type = 5;
+  bool required = 6;
+  string validation_rules = 7;
+  int64 version = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  google.protobuf.Timestamp archived_at = 11;
+}
+
+// AttributeList represents a list of attributes
+message AttributeList {
+  repeated Attribute attributes = 1;
+}
+
+// CreateAttributeRequest represents a request to create an attribute
+message CreateAttributeRequest {
+  string type_definition_id = 1;
+  string name = 2;
+  string description = 3;
+  string data_type = 4;
+  bool required = 5;
+  string validation_rules = 6;
+}
+
+// UpdateAttributeRequest represents a request to update an attribute
+message UpdateAttributeRequest {
+  string id = 1;
+  string type_definition_id = 2;
+  string name = 3;
+  string description = 4;
+  string data_type = 5;
+  bool required = 6;
+  string validation_rules = 7;
+  int32 version = 8;
+}
+
+// GetAttributeRequest represents a request to get an attribute
+message GetAttributeRequest {
+  string id = 1;
+}
+
+// ArchiveAttributeRequest represents a request to archive an attribute
+message ArchiveAttributeRequest {
+  string id = 1;
+}
+
+// ListAttributesRequest represents a request to list attributes
+message ListAttributesRequest {
+  int64 version = 1;
+  bool latest_version = 2;
+  repeated string ids = 3;
+  string type_definition_id = 4;
+}
+
+// ListAttributesResponse represents a response to list attributes
+message ListAttributesResponse {
+  repeated Attribute attributes = 1;
+}
+
+// GetAttributesByTypeDefinitionIDRequest represents a request to get attributes by type definition ID
+message GetAttributesByTypeDefinitionIDRequest {
+  string type_definition_id = 1;
+}
+
+// AttributeService provides operations for managing attributes
+service AttributeService {
+  // CreateAttribute creates a new attribute
+  rpc CreateAttribute(CreateAttributeRequest) returns (Attribute) {}
+  
+  // UpdateAttribute updates an existing attribute
+  rpc UpdateAttribute(UpdateAttributeRequest) returns (Attribute) {}
+  
+  // GetAttribute retrieves an attribute by ID
+  rpc GetAttribute(GetAttributeRequest) returns (Attribute) {}
+  
+  // ArchiveAttribute archives an attribute
+  rpc ArchiveAttribute(ArchiveAttributeRequest) returns (google.protobuf.Empty) {}
+  
+  // ListAttributes lists attributes based on filter criteria
+  rpc ListAttributes(ListAttributesRequest) returns (ListAttributesResponse) {}
+  
+  // GetAttributesByTypeDefinitionID retrieves attributes for a specific type definition
+  rpc GetAttributesByTypeDefinitionID(GetAttributesByTypeDefinitionIDRequest) returns (AttributeList) {}
+} 

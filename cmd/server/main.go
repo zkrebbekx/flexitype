@@ -2,79 +2,86 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"flag"
-	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
-	"github.com/zkrebbekx/flexitype/internal/api/http"
-	"github.com/zkrebbekx/flexitype/internal/domain/service"
-	"github.com/zkrebbekx/flexitype/internal/infrastructure/postgres"
-)
-
-var (
-	port     = flag.Int("port", 8080, "HTTP server port")
-	dbHost   = flag.String("db-host", "localhost", "Database host")
-	dbPort   = flag.Int("db-port", 5432, "Database port")
-	dbUser   = flag.String("db-user", "postgres", "Database user")
-	dbPass   = flag.String("db-pass", "postgres", "Database password")
-	dbName   = flag.String("db-name", "flexitype", "Database name")
-	dbSSL    = flag.String("db-ssl", "disable", "Database SSL mode")
+	"connectrpc.com/connect"
+	"github.com/zkrebbekx/flexitype/internal/api/connect"
+	"github.com/zkrebbekx/flexitype/internal/domain/attribute"
+	"github.com/zkrebbekx/flexitype/internal/domain/attribute_value"
+	"github.com/zkrebbekx/flexitype/internal/domain/attribute_value_dependency"
+	"github.com/zkrebbekx/flexitype/internal/domain/type_definition"
+	"github.com/zkrebbekx/flexitype/internal/postgres"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 func main() {
-	flag.Parse()
+	// Create a context that will be canceled when we receive an interrupt signal
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// Create database connection
-	db, err := sqlx.Connect("postgres", fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		*dbHost, *dbPort, *dbUser, *dbPass, *dbName, *dbSSL,
-	))
+	// Initialize database connection
+	db, err := postgres.NewDB()
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer db.Close()
 
-	// Set connection pool settings
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(25)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	// Initialize repositories
+	typeDefinitionRepo := postgres.NewTypeDefinitionRepository(db)
+	attributeRepo := postgres.NewAttributeRepository(db)
+	attributeValueRepo := postgres.NewAttributeValueRepository(db)
+	attributeValueDependencyRepo := postgres.NewAttributeValueDependencyRepository(db)
 
-	// Create repository and service
-	repo := postgres.NewPostgresRepository(db)
-	svc := service.NewService(repo)
+	// Initialize services
+	typeDefinitionService := type_definition.NewService(typeDefinitionRepo)
+	attributeService := attribute.NewService(attributeRepo)
+	attributeValueService := attribute_value.NewService(attributeValueRepo)
+	attributeValueDependencyService := attribute_value_dependency.NewService(attributeValueDependencyRepo)
 
-	// Create HTTP server
-	server := http.NewServer(svc, fmt.Sprintf(":%d", *port))
+	// Initialize Connect service
+	connectService := connect.NewService(
+		typeDefinitionService,
+		attributeService,
+		attributeValueService,
+		attributeValueDependencyService,
+	)
+
+	// Create HTTP server with Connect handlers
+	mux := http.NewServeMux()
+	path, handler := pb.NewFlexitypeServiceHandler(connectService)
+	mux.Handle(path, handler)
+
+	// Create server with h2c support for HTTP/2 without TLS
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: h2c.NewHandler(mux, &http2.Server{}),
+	}
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("Starting server on port %d", *port)
-		if err := server.Start(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
+		log.Printf("Starting server on :8080")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
 		}
 	}()
 
 	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	<-ctx.Done()
 
 	// Create shutdown context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Shutdown server
-	log.Println("Shutting down server...")
-	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+	// Attempt graceful shutdown
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Server forced to shutdown: %v", err)
 	}
 
 	log.Println("Server exiting")

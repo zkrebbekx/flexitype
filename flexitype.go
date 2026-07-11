@@ -27,6 +27,7 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
+	"github.com/zkrebbekx/flexitype/pkg/metrics"
 	"github.com/zkrebbekx/flexitype/pkg/safedial"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 )
@@ -316,6 +317,9 @@ type APIConfig struct {
 	Logger   *logger.Logger
 	Health   *health.Service
 	Accounts *serviceaccount.Store // nil disables auth
+	// Metrics, when set, records HTTP SLIs and serves /metrics. With the
+	// outbox on, delivery-depth gauges are registered automatically.
+	Metrics *metrics.Metrics
 }
 
 // APIHandler returns flexitype's versioned REST API as an http.Handler you
@@ -327,11 +331,17 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 	if cfg.Health == nil {
 		cfg.Health = health.NewService("flexitype", "embedded")
 	}
+	if cfg.Metrics != nil && s.pool != nil && s.worker != nil {
+		// Delivery-depth gauges are only meaningful when the outbox tables
+		// exist (outbox enabled over a real pool).
+		cfg.Metrics.RegisterDeliveryCollector(postgres.NewDeliveryStats(s.pool))
+	}
 	server := httpapi.ServerConfig{
 		Factory:  s.factory,
 		Logger:   cfg.Logger,
 		Health:   cfg.Health,
 		Accounts: cfg.Accounts,
+		Metrics:  cfg.Metrics,
 	}
 	if s.indexer != nil {
 		server.Reindex = s.ReindexSearch

@@ -213,6 +213,33 @@ export interface ImportMapping {
   dry_run: boolean
 }
 
+export type MatchStrategy = 'exact' | 'case_insensitive' | 'trigram'
+
+export interface MatchRule {
+  id: string
+  tenant_id: string
+  type_definition_id: string
+  attribute_definition_id: string
+  strategy: MatchStrategy
+  threshold: number
+  created_at: string
+}
+
+export interface MatchCandidate {
+  entity_a: string
+  entity_b: string
+  value_a: string
+  value_b: string
+  score: number
+}
+
+export interface MatchScan {
+  rule_id: string
+  strategy: MatchStrategy
+  candidates: MatchCandidate[]
+  truncated: boolean
+}
+
 export type VersionPolicy = 'latest' | 'pinned'
 
 export type RelationshipKind = 'directed' | 'symmetric'
@@ -460,6 +487,14 @@ export const api = {
     }
     return parsed as ImportReport
   },
+  listMatchRules: (typeId: string) =>
+    request<{ items: MatchRule[] }>('GET', `/type-definitions/${typeId}/match-rules`),
+  createMatchRule: (typeId: string, input: { attribute_definition_id: string; strategy: MatchStrategy; threshold?: number }) =>
+    request<MatchRule>('POST', `/type-definitions/${typeId}/match-rules`, input),
+  deleteMatchRule: (ruleId: string) => request<void>('DELETE', `/match-rules/${ruleId}`),
+  scanMatchRule: (ruleId: string) => request<MatchScan>('GET', `/match-rules/${ruleId}/scan`),
+  dismissMatch: (ruleId: string, entity_a: string, entity_b: string) =>
+    request<void>('POST', `/match-rules/${ruleId}/dismiss`, { entity_a, entity_b }),
   exportEntitiesUrl: (typeId: string, opts: { attributes?: string[]; query?: string; entity_ids?: string[] } = {}) => {
     const p: Record<string, string> = {}
     if (opts.attributes?.length) p.attributes = opts.attributes.join(',')

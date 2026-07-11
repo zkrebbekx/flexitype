@@ -11,6 +11,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/activity"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
+	appdedup "github.com/zkrebbekx/flexitype/application/dedup"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	appfeed "github.com/zkrebbekx/flexitype/application/feed"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
@@ -90,6 +91,7 @@ type Interactors struct {
 	feed          *appfeed.Interactor
 	schema        *appschema.Interactor
 	savedViews    *appsavedview.Interactor
+	dedup         *appdedup.Interactor
 	features      Features
 }
 
@@ -130,6 +132,10 @@ func (i *Interactors) Schema() *appschema.Interactor { return i.schema }
 
 // SavedViews returns the saved-view usecases; nil if the feature is off.
 func (i *Interactors) SavedViews() *appsavedview.Interactor { return i.savedViews }
+
+// Dedup returns the duplicate-detection usecases; nil unless a match store
+// is configured.
+func (i *Interactors) Dedup() *appdedup.Interactor { return i.dedup }
 
 // ActivityInteractor serves the audit-log read side.
 type ActivityInteractor struct {

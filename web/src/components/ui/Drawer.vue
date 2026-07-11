@@ -1,31 +1,14 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { ref, toRef, useId } from 'vue'
 import { X } from 'lucide-vue-next'
+import { useFocusTrap } from '@/composables/useFocusTrap'
 
 const props = defineProps<{ open: boolean; title: string; subtitle?: string }>()
 const emit = defineEmits<{ close: [] }>()
 
 const panel = ref<HTMLElement>()
-let previousFocus: HTMLElement | null = null
-
-watch(
-  () => props.open,
-  (open) => {
-    if (open) {
-      previousFocus = document.activeElement as HTMLElement
-      queueMicrotask(() => panel.value?.querySelector<HTMLElement>('input, select, button')?.focus())
-    } else {
-      previousFocus?.focus()
-    }
-  },
-)
-
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && props.open) emit('close')
-}
-
-onMounted(() => document.addEventListener('keydown', onKeydown))
-onUnmounted(() => document.removeEventListener('keydown', onKeydown))
+const titleId = useId()
+useFocusTrap(toRef(props, 'open'), panel, () => emit('close'))
 </script>
 
 <template>
@@ -39,12 +22,12 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
         ref="panel"
         role="dialog"
         aria-modal="true"
-        :aria-label="title"
+        :aria-labelledby="titleId"
         class="fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col border-l border-(--border) bg-(--surface) shadow-xl"
       >
         <header class="flex items-start justify-between gap-4 border-b border-(--border) px-5 py-4">
           <div>
-            <h2 class="text-base font-semibold">{{ title }}</h2>
+            <h2 :id="titleId" class="text-base font-semibold">{{ title }}</h2>
             <p v-if="subtitle" class="mt-0.5 text-[13px] text-(--text-muted)">{{ subtitle }}</p>
           </div>
           <button

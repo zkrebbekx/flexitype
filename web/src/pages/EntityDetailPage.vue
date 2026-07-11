@@ -337,7 +337,7 @@ const removeValue = useMutation({
   </section>
 
   <!-- Link editor -->
-  <Modal :open="linker.open" title="Link entity" message="" @close="linker.open = false" @confirm="createLink.mutate()">
+  <Modal :open="linker.open" role="dialog" title="Link entity" @close="linker.open = false" @confirm="createLink.mutate()">
     <template #actions>
       <div class="w-full">
         <div class="flex flex-col gap-3">
@@ -389,8 +389,8 @@ const removeValue = useMutation({
   <!-- Value editor -->
   <Modal
     :open="editor.open"
+    role="dialog"
     :title="`${editor.attribute?.display_name ?? ''} on ${entityId}`"
-    message=""
     @close="editor.open = false"
     @confirm="setValue.mutate()"
   >

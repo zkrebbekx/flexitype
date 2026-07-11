@@ -38,6 +38,7 @@ export type ErrorCode =
   | 'DEPENDENCY_VIOLATION'
   | 'UNAUTHENTICATED'
   | 'FORBIDDEN'
+  | 'RATE_LIMITED'
   | 'INTERNAL'
 
 export class ApiError extends Error {

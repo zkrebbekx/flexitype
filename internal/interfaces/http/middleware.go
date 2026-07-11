@@ -3,12 +3,15 @@ package http
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
+	"github.com/zkrebbekx/flexitype/pkg/metrics"
+	"github.com/zkrebbekx/flexitype/pkg/ratelimit"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 )
 
@@ -100,6 +103,40 @@ func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(ht
 			ctx = uow.WithTenant(ctx, account.Tenant())
 			ctx = context.WithValue(ctx, scopesKey{}, account.Scopes)
 			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// rateLimit throttles requests per service account using a token bucket.
+// It runs after authenticate, so the account and tenant are on the context;
+// unauthenticated (development) requests key on a single shared bucket. A
+// rejected request gets 429 with a Retry-After header and is counted per
+// tenant. A nil limiter disables throttling.
+func rateLimit(limiter *ratelimit.Limiter, m *metrics.Metrics) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if limiter == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			tenant := uow.TenantFromContext(r.Context()).String()
+			m.CountTenantRequest(tenant)
+
+			// Key on the account when authenticated; otherwise per tenant.
+			key := uow.ActorFromContext(r.Context()).ID
+			if key == "" {
+				key = tenant
+			}
+			if ok, retry := limiter.Allow(key); !ok {
+				m.CountRateLimitReject(tenant)
+				w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
+				var body errorBody
+				body.Error.Code = "RATE_LIMITED"
+				body.Error.Message = "rate limit exceeded; retry later"
+				writeJSON(w, http.StatusTooManyRequests, body)
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }

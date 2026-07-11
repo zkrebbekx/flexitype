@@ -29,6 +29,7 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
 	"github.com/zkrebbekx/flexitype/pkg/metrics"
+	"github.com/zkrebbekx/flexitype/pkg/ratelimit"
 	"github.com/zkrebbekx/flexitype/pkg/safedial"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 )
@@ -325,6 +326,9 @@ type APIConfig struct {
 	// EnableProvisioning turns on the admin-scoped tenant/service-account
 	// API (database-backed only).
 	EnableProvisioning bool
+	// RateLimiter, when set, throttles API requests per service account
+	// (429 + Retry-After). Build one with ratelimit.New.
+	RateLimiter *ratelimit.Limiter
 }
 
 // NewAccountLookup returns a database-backed authenticator over this
@@ -390,11 +394,12 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 		cfg.Metrics.RegisterDeliveryCollector(postgres.NewDeliveryStats(s.pool))
 	}
 	server := httpapi.ServerConfig{
-		Factory:  s.factory,
-		Logger:   cfg.Logger,
-		Health:   cfg.Health,
-		Accounts: cfg.Accounts,
-		Metrics:  cfg.Metrics,
+		Factory:     s.factory,
+		Logger:      cfg.Logger,
+		Health:      cfg.Health,
+		Accounts:    cfg.Accounts,
+		Metrics:     cfg.Metrics,
+		RateLimiter: cfg.RateLimiter,
 	}
 	if cfg.EnableProvisioning {
 		server.Admin = s.AdminInteractor()

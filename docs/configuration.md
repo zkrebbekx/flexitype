@@ -90,6 +90,20 @@ is off. See `api/openapi.yaml` for the full contract.
 | `FLEXITYPE_PUBSUB_ORDERING` | `false` | Stamp per-aggregate ordering keys (the topic's subscriptions must enable message ordering). |
 | `PUBSUB_EMULATOR_HOST` | _(unset)_ | Standard Pub/Sub emulator override for local development. |
 
+## Rate limiting
+
+Per-service-account throttling with a token bucket. Off by default; set a
+rate to enable. A throttled request gets `429` with a `Retry-After` header.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `FLEXITYPE_RATE_LIMIT_RPS` | `0` | Sustained requests per second per account (0 disables rate limiting). |
+| `FLEXITYPE_RATE_LIMIT_BURST` | `200` | Token-bucket ceiling — how many requests a single account may burst before throttling. |
+
+When metrics are on, `flexitype_tenant_requests_total{tenant}` counts
+authenticated requests and `flexitype_ratelimit_rejected_total{tenant}`
+counts throttled ones.
+
 ## Observability
 
 | Variable | Default | Description |

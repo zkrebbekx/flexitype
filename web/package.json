@@ -7,9 +7,10 @@
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "node scripts/check-components.mjs && vitest run",
     "test:watch": "vitest",
-    "typecheck": "vue-tsc -b"
+    "typecheck": "vue-tsc -b",
+    "check:components": "node scripts/check-components.mjs"
   },
   "dependencies": {
     "@tanstack/vue-query": "^5.62.0",

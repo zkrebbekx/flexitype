@@ -30,7 +30,7 @@ describe('api client', () => {
   })
 
   it('serialises query filters and pagination', async () => {
-    const spy = vi.fn(async () => new Response(JSON.stringify({ items: [], page_info: {} }), { status: 200 }))
+    const spy = vi.fn(async (..._args: unknown[]) => new Response(JSON.stringify({ items: [], page_info: {} }), { status: 200 }))
     vi.stubGlobal('fetch', spy)
     await api.listAttributes({ type_definition_id: 'td', include_archived: true, limit: 10, cursor: 'abc' })
     const url = spy.mock.calls[0]![0] as string

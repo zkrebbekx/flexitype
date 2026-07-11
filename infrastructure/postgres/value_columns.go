@@ -31,7 +31,7 @@ func valueColumnName(dt valueobjects.DataType) string {
 		return "value_float"
 	case valueobjects.DataTypeDate, valueobjects.DataTypeTime, valueobjects.DataTypeDateTime:
 		return "value_time"
-	case valueobjects.DataTypeJSON:
+	case valueobjects.DataTypeJSON, valueobjects.DataTypeMedia:
 		return "value_json"
 	default:
 		return "value_text"
@@ -50,7 +50,7 @@ func columnsFromValue(v valueobjects.Value) valueColumns {
 		c.Float = sql.NullFloat64{Float64: v.Float(), Valid: true}
 	case valueobjects.DataTypeDate, valueobjects.DataTypeTime, valueobjects.DataTypeDateTime:
 		c.Time = sql.NullTime{Time: v.Time(), Valid: true}
-	case valueobjects.DataTypeJSON:
+	case valueobjects.DataTypeJSON, valueobjects.DataTypeMedia:
 		c.JSON = v.JSON()
 	default:
 		c.Text = sql.NullString{String: v.Text(), Valid: true}
@@ -70,7 +70,7 @@ func valueArg(v valueobjects.Value) any {
 		return v.Float()
 	case valueobjects.DataTypeDate, valueobjects.DataTypeTime, valueobjects.DataTypeDateTime:
 		return v.Time()
-	case valueobjects.DataTypeJSON:
+	case valueobjects.DataTypeJSON, valueobjects.DataTypeMedia:
 		// JSON travels as text: lib/pq maps []byte to bytea, which
 		// PostgreSQL rejects for jsonb comparisons.
 		return string(v.JSON())
@@ -106,6 +106,8 @@ func valueFromColumns(dt valueobjects.DataType, c valueColumns) (valueobjects.Va
 		return valueobjects.NewDateTimeValue(c.Time.Time), nil
 	case valueobjects.DataTypeJSON:
 		return valueobjects.NewJSONValue(json.RawMessage(c.JSON))
+	case valueobjects.DataTypeMedia:
+		return valueobjects.NewMediaValue(json.RawMessage(c.JSON))
 	default:
 		return valueobjects.Value{}, fmt.Errorf("unknown stored data type %q", dt)
 	}

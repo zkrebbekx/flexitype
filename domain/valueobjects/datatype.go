@@ -19,6 +19,10 @@ const (
 	DataTypeURL      DataType = "url"
 	DataTypeEmail    DataType = "email"
 	DataTypeJSON     DataType = "json"
+	// DataTypeMedia stores a reference to a file/image in object storage:
+	// the value is metadata (object key, mime, size, checksum, filename),
+	// never the bytes.
+	DataTypeMedia DataType = "media"
 )
 
 var dataTypes = map[DataType]struct{}{
@@ -34,6 +38,7 @@ var dataTypes = map[DataType]struct{}{
 	DataTypeURL:      {},
 	DataTypeEmail:    {},
 	DataTypeJSON:     {},
+	DataTypeMedia:    {},
 }
 
 // ParseDataType validates a data type name.

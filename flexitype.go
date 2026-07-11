@@ -24,6 +24,7 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/memory"
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	httpapi "github.com/zkrebbekx/flexitype/internal/interfaces/http"
+	"github.com/zkrebbekx/flexitype/pkg/blob"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/health"
@@ -44,6 +45,7 @@ type Service struct {
 	indexer    *search.Indexer
 	worker     *webhook.Worker
 	pruner     *feed.Pruner
+	blobs      blob.Store
 }
 
 type options struct {
@@ -56,6 +58,14 @@ type options struct {
 	retention           time.Duration
 	webhookAllowPrivate bool
 	searchIndex         bool
+	blobs               blob.Store
+}
+
+// WithBlobStore backs media attribute values with an object store (local
+// disk, S3-compatible, …). Without it, media uploads return a validation
+// error.
+func WithBlobStore(s blob.Store) Option {
+	return func(o *options) { o.blobs = s }
 }
 
 // Option customises an embedded Service.
@@ -200,6 +210,8 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		cfg.Features.EventDelivery = true
 	}
 
+	cfg.BlobStore = o.blobs
+
 	return &Service{
 		pool:       pool,
 		transactor: transactor,
@@ -209,6 +221,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		indexer:    indexer,
 		worker:     worker,
 		pruner:     pruner,
+		blobs:      o.blobs,
 	}
 }
 
@@ -228,6 +241,10 @@ func NewInMemory(opts ...Option) *Service {
 	savedViews := memory.NewSavedViewStore()
 	matchRules := memory.NewMatchStore()
 	revisions := memory.NewRevisionStore()
+	// The playground gets a working, process-local media store by default.
+	if o.blobs == nil {
+		o.blobs = blob.NewMemoryStore()
+	}
 
 	var indexer *search.Indexer
 	if o.searchIndex {
@@ -249,8 +266,10 @@ func NewInMemory(opts ...Option) *Service {
 			SavedViews:      savedViews,
 			MatchRules:      matchRules,
 			Revisions:       revisions,
+			BlobStore:       o.blobs,
 		}),
 		indexer: indexer,
+		blobs:   o.blobs,
 	}
 }
 
@@ -409,6 +428,7 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 		Accounts:    cfg.Accounts,
 		Metrics:     cfg.Metrics,
 		RateLimiter: cfg.RateLimiter,
+		BlobStore:   s.blobs,
 	}
 	if cfg.EnableProvisioning {
 		server.Admin = s.AdminInteractor()

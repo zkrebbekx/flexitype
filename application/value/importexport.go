@@ -317,7 +317,7 @@ func cellToRaw(dt valueobjects.DataType, cell string) (json.RawMessage, error) {
 			return nil, domainerrors.NewValidation("expected a number", "got", cell)
 		}
 		return json.Marshal(f)
-	case valueobjects.DataTypeJSON:
+	case valueobjects.DataTypeJSON, valueobjects.DataTypeMedia:
 		if !json.Valid([]byte(cell)) {
 			return nil, domainerrors.NewValidation("expected a JSON document")
 		}

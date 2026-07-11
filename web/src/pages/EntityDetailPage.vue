@@ -205,6 +205,27 @@ const setValue = useMutation({
   onError: (e) => (editor.error = friendlyError(e)),
 })
 
+// Media attributes upload a file to a dedicated endpoint rather than
+// setting a scalar value.
+const mediaFile = ref<File>()
+function onMediaFile(e: Event) {
+  mediaFile.value = (e.target as HTMLInputElement).files?.[0]
+}
+const uploadMedia = useMutation({
+  mutationFn: () => {
+    if (!editor.attribute || !mediaFile.value) throw new Error('no file selected')
+    return api.uploadMedia(typeId.value, entityId.value, editor.attribute.id, mediaFile.value)
+  },
+  onSuccess: () => {
+    queryClient.invalidateQueries({ queryKey: ['entity-values', typeId, entityId] })
+    queryClient.invalidateQueries({ queryKey: ['entity-completeness', typeId, entityId] })
+    mediaFile.value = undefined
+    toasts.success('File uploaded')
+    editor.open = false
+  },
+  onError: (e) => (editor.error = friendlyError(e)),
+})
+
 // --- entity lifecycle ----------------------------------------------------------
 
 const confirmDelete = ref(false)
@@ -579,8 +600,17 @@ const removeValue = useMutation({
           <template v-else>Narrowed by dependencies to {{ editorAllowed?.length }} allowed value(s).</template>
         </div>
 
+        <div v-if="editor.attribute?.data_type === 'media'">
+          <label class="mb-1 block text-[13px] font-medium text-(--text-secondary)">File</label>
+          <input
+            type="file"
+            class="block w-full text-sm text-(--text-secondary) file:mr-3 file:rounded-md file:border file:border-(--border-strong) file:bg-(--canvas) file:px-3 file:py-1.5 file:text-sm file:font-medium"
+            @change="onMediaFile"
+          />
+          <p v-if="editor.error" class="mt-2 text-[13px] text-(--danger)">{{ editor.error }}</p>
+        </div>
         <ValueInput
-          v-if="editor.attribute && !blockedByDependency"
+          v-else-if="editor.attribute && !blockedByDependency"
           v-model="editor.input"
           :data-type="editor.attribute.data_type"
           :allowed-values="editorAllowed"
@@ -591,7 +621,15 @@ const removeValue = useMutation({
 
         <div class="mt-4 flex justify-end gap-2">
           <Button @click="editor.open = false">Cancel</Button>
-          <Button variant="primary" :disabled="setValue.isPending.value || blockedByDependency" @click="setValue.mutate()">
+          <Button
+            v-if="editor.attribute?.data_type === 'media'"
+            variant="primary"
+            :disabled="uploadMedia.isPending.value || !mediaFile"
+            @click="uploadMedia.mutate()"
+          >
+            Upload
+          </Button>
+          <Button v-else variant="primary" :disabled="setValue.isPending.value || blockedByDependency" @click="setValue.mutate()">
             Save value
           </Button>
         </div>

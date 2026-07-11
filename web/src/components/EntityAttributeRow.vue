@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import type { AttributeDefinition, AttributeValue } from '@/lib/api'
+import { api } from '@/lib/api'
 import { renderValue } from '@/lib/format'
+
+// A media value is metadata, not a scalar; narrow it for the preview.
+interface MediaMeta {
+  object_key: string
+  mime: string
+  size: number
+  filename?: string
+}
+const asMedia = (v: unknown) => v as MediaMeta
 import TypeChip from '@/components/ui/TypeChip.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -47,7 +57,26 @@ const emit = defineEmits<{
         :key="v.id"
         class="flex items-center justify-between gap-3 rounded-md bg-(--canvas) px-3 py-1.5"
       >
-        <span class="mono min-w-0 flex-1 truncate text-[13px]">{{ renderValue(v.value) }}</span>
+        <template v-if="attribute.data_type === 'media'">
+          <a
+            :href="api.mediaUrl(asMedia(v.value).object_key)"
+            target="_blank"
+            rel="noopener"
+            class="flex min-w-0 flex-1 items-center gap-2.5 text-[13px]"
+          >
+            <img
+              v-if="asMedia(v.value).mime?.startsWith('image/')"
+              :src="api.mediaUrl(asMedia(v.value).object_key)"
+              :alt="asMedia(v.value).filename ?? 'media'"
+              class="h-10 w-10 shrink-0 rounded border border-(--border) object-cover"
+            />
+            <span class="min-w-0 truncate text-(--accent) hover:underline">
+              {{ asMedia(v.value).filename || asMedia(v.value).object_key }}
+              <span class="text-(--text-muted)">({{ Math.round(asMedia(v.value).size / 1024) }} KB)</span>
+            </span>
+          </a>
+        </template>
+        <span v-else class="mono min-w-0 flex-1 truncate text-[13px]">{{ renderValue(v.value) }}</span>
         <span class="flex shrink-0 items-center gap-2 text-[12px] text-(--text-muted)">
           <span :title="`Validated against definition v${v.definition_version}`">def v{{ v.definition_version }}</span>
           <span v-if="v.definition_version < attribute.version" title="The definition has changed since this value was validated">

@@ -19,6 +19,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/outbox"
 	"github.com/zkrebbekx/flexitype/application/webhook"
 	"github.com/zkrebbekx/flexitype/infrastructure/gcppubsub"
+	"github.com/zkrebbekx/flexitype/pkg/blob"
 	"github.com/zkrebbekx/flexitype/pkg/config"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/health"
@@ -130,6 +131,14 @@ func run(log *logger.Logger) error {
 	if cfg.EnableSearchIndex {
 		opts = append(opts, flexitype.WithSearchIndex())
 		log.Info().Msg("search index enabled")
+	}
+	if cfg.BlobDir != "" {
+		store, err := blob.NewDiskStore(cfg.BlobDir)
+		if err != nil {
+			return fmt.Errorf("init blob store: %w", err)
+		}
+		opts = append(opts, flexitype.WithBlobStore(store))
+		log.Info().Str("dir", cfg.BlobDir).Msg("media storage enabled (local disk)")
 	}
 
 	svc := flexitype.New(pool, opts...)

@@ -1,0 +1,146 @@
+{
+  "attributes": [
+    {
+      "constraints": [
+        {
+          "kind": "max_length",
+          "n": 200
+        }
+      ],
+      "data_type": "string",
+      "display_name": "Name",
+      "internal_name": "name",
+      "multi_valued": false,
+      "required": true,
+      "type": "product",
+      "unique": false
+    },
+    {
+      "constraints": [],
+      "data_type": "string",
+      "display_name": "SKU",
+      "internal_name": "sku",
+      "multi_valued": false,
+      "required": false,
+      "type": "product",
+      "unique": true
+    },
+    {
+      "constraints": [
+        {
+          "kind": "one_of",
+          "values": [
+            {
+              "type": "enum",
+              "value": "draft"
+            },
+            {
+              "type": "enum",
+              "value": "active"
+            },
+            {
+              "type": "enum",
+              "value": "discontinued"
+            }
+          ]
+        }
+      ],
+      "data_type": "enum",
+      "display_name": "Status",
+      "internal_name": "status",
+      "multi_valued": false,
+      "required": false,
+      "type": "product",
+      "unique": false
+    },
+    {
+      "constraints": [],
+      "data_type": "string",
+      "display_name": "Author",
+      "internal_name": "author",
+      "multi_valued": false,
+      "required": false,
+      "type": "book",
+      "unique": false
+    },
+    {
+      "constraints": [],
+      "data_type": "integer",
+      "display_name": "Pages",
+      "internal_name": "pages",
+      "multi_valued": false,
+      "required": false,
+      "type": "book",
+      "unique": false
+    },
+    {
+      "constraints": [],
+      "data_type": "integer",
+      "display_name": "Voltage",
+      "internal_name": "voltage",
+      "multi_valued": false,
+      "required": false,
+      "type": "electronics",
+      "unique": false
+    },
+    {
+      "constraints": [],
+      "data_type": "integer",
+      "display_name": "Warranty (months)",
+      "internal_name": "warranty_months",
+      "multi_valued": false,
+      "required": false,
+      "type": "electronics",
+      "unique": false
+    }
+  ],
+  "dependencies": [
+    {
+      "conditions": [
+        {
+          "kind": "equals",
+          "value": {
+            "type": "enum",
+            "value": "active"
+          }
+        }
+      ],
+      "description": "Active products must have a SKU",
+      "effect": {
+        "required": true
+      },
+      "source_attribute": "status",
+      "source_type": "product",
+      "target_attribute": "sku",
+      "target_type": "product"
+    }
+  ],
+  "relationship_definitions": [
+    {
+      "child_type": "electronics",
+      "child_version_policy": "latest",
+      "display_name": "Compatible with",
+      "internal_name": "compatible_with",
+      "kind": "symmetric",
+      "parent_type": "electronics",
+      "parent_version_policy": "latest"
+    }
+  ],
+  "types": [
+    {
+      "display_name": "Product",
+      "internal_name": "product"
+    },
+    {
+      "display_name": "Book",
+      "extends": "product",
+      "internal_name": "book"
+    },
+    {
+      "display_name": "Electronics",
+      "extends": "product",
+      "internal_name": "electronics"
+    }
+  ],
+  "version": 1
+}

@@ -30,6 +30,22 @@ const (
 
 func (p VersionPolicy) valid() bool { return p == PolicyLatest || p == PolicyPinned }
 
+// Kind distinguishes directed relationships (ordered parent/child roles,
+// per-side version pinning) from symmetric ones (unordered peers, e.g.
+// compatible_with — neither side is authoritative).
+type Kind string
+
+const (
+	// KindDirected is the classic parent/child edge.
+	KindDirected Kind = "directed"
+	// KindSymmetric is an unordered peer link: the pair is stored
+	// canonically, traversed with FQL linked(), and never version-pinned
+	// (pinning is inherently directional).
+	KindSymmetric Kind = "symmetric"
+)
+
+func (k Kind) valid() bool { return k == KindDirected || k == KindSymmetric }
+
 // Definition is the aggregate root for a relationship type.
 type Definition struct {
 	id                  valueobjects.RelationshipDefinitionID
@@ -37,8 +53,11 @@ type Definition struct {
 	internalName        string
 	displayName         string
 	description         string
+	kind                Kind
 	parentTypeID        valueobjects.TypeDefinitionID
 	childTypeID         valueobjects.TypeDefinitionID
+	parentLabel         string
+	childLabel          string
 	attributeSetID      valueobjects.TypeDefinitionID
 	extendsID           *valueobjects.RelationshipDefinitionID
 	parentVersionPolicy VersionPolicy
@@ -53,12 +72,21 @@ type Definition struct {
 // usecase resolves and passes the endpoint types, the pre-created attribute
 // set, and the base definition when extending.
 type NewDefinitionInput struct {
-	TenantID            valueobjects.TenantID
-	InternalName        string
-	DisplayName         string
-	Description         string
-	ParentType          *typedef.TypeDefinition
-	ChildType           *typedef.TypeDefinition
+	TenantID     valueobjects.TenantID
+	InternalName string
+	DisplayName  string
+	Description  string
+	// Kind defaults to directed. Symmetric definitions treat the two
+	// endpoint types as an unordered pair and reject pinned policies and
+	// side labels.
+	Kind       Kind
+	ParentType *typedef.TypeDefinition
+	ChildType  *typedef.TypeDefinition
+	// ParentLabel/ChildLabel are display-only role names on directed
+	// definitions (e.g. "assembly"/"component"); the console renders them
+	// instead of parent/child.
+	ParentLabel         string
+	ChildLabel          string
 	AttributeSet        *typedef.TypeDefinition
 	Extends             *Definition
 	ParentVersionPolicy VersionPolicy
@@ -91,6 +119,12 @@ func NewDefinition(in NewDefinitionInput, now time.Time) (*Definition, []events.
 	if in.AttributeSet == nil || in.AttributeSet.Kind() != typedef.KindRelationshipAttributes {
 		return nil, nil, domainerrors.NewValidation("a relationship definition requires its attribute-set type")
 	}
+	if in.Kind == "" {
+		in.Kind = KindDirected
+	}
+	if !in.Kind.valid() {
+		return nil, nil, domainerrors.NewValidation("relationship kind must be directed or symmetric")
+	}
 	if in.ParentVersionPolicy == "" {
 		in.ParentVersionPolicy = PolicyLatest
 	}
@@ -100,6 +134,16 @@ func NewDefinition(in NewDefinitionInput, now time.Time) (*Definition, []events.
 	if !in.ParentVersionPolicy.valid() || !in.ChildVersionPolicy.valid() {
 		return nil, nil, domainerrors.NewValidation("version policies must be latest or pinned")
 	}
+	if in.Kind == KindSymmetric {
+		// Pinning is inherently directional and roles are undefined on an
+		// unordered pair.
+		if in.ParentVersionPolicy == PolicyPinned || in.ChildVersionPolicy == PolicyPinned {
+			return nil, nil, domainerrors.NewValidation("symmetric relationships cannot pin versions")
+		}
+		if in.ParentLabel != "" || in.ChildLabel != "" {
+			return nil, nil, domainerrors.NewValidation("symmetric relationships do not take side labels")
+		}
+	}
 
 	var extendsID *valueobjects.RelationshipDefinitionID
 	if in.Extends != nil {
@@ -107,6 +151,10 @@ func NewDefinition(in NewDefinitionInput, now time.Time) (*Definition, []events.
 		// endpoint types; its attribute set layers on top of the base's.
 		if in.Extends.IsArchived() {
 			return nil, nil, domainerrors.NewValidation("cannot extend an archived relationship definition")
+		}
+		if in.Extends.Kind() != in.Kind {
+			return nil, nil, domainerrors.NewValidation(
+				"an extending relationship definition must have the same kind as its base")
 		}
 		if !in.Extends.ParentTypeID().Equals(in.ParentType.ID()) || !in.Extends.ChildTypeID().Equals(in.ChildType.ID()) {
 			return nil, nil, domainerrors.NewValidation(
@@ -122,8 +170,11 @@ func NewDefinition(in NewDefinitionInput, now time.Time) (*Definition, []events.
 		internalName:        in.InternalName,
 		displayName:         in.DisplayName,
 		description:         in.Description,
+		kind:                in.Kind,
 		parentTypeID:        in.ParentType.ID(),
 		childTypeID:         in.ChildType.ID(),
+		parentLabel:         in.ParentLabel,
+		childLabel:          in.ChildLabel,
 		attributeSetID:      in.AttributeSet.ID(),
 		extendsID:           extendsID,
 		parentVersionPolicy: in.ParentVersionPolicy,
@@ -148,6 +199,8 @@ func NewDefinition(in NewDefinitionInput, now time.Time) (*Definition, []events.
 type UpdateDefinitionInput struct {
 	DisplayName         string
 	Description         string
+	ParentLabel         string
+	ChildLabel          string
 	ParentVersionPolicy VersionPolicy
 	ChildVersionPolicy  VersionPolicy
 }
@@ -169,13 +222,24 @@ func (d *Definition) Update(in UpdateDefinitionInput, now time.Time) ([]events.E
 	if !in.ParentVersionPolicy.valid() || !in.ChildVersionPolicy.valid() {
 		return nil, domainerrors.NewValidation("version policies must be latest or pinned")
 	}
+	if d.kind == KindSymmetric {
+		if in.ParentVersionPolicy == PolicyPinned || in.ChildVersionPolicy == PolicyPinned {
+			return nil, domainerrors.NewValidation("symmetric relationships cannot pin versions")
+		}
+		if in.ParentLabel != "" || in.ChildLabel != "" {
+			return nil, domainerrors.NewValidation("symmetric relationships do not take side labels")
+		}
+	}
 	if d.displayName == in.DisplayName && d.description == in.Description &&
+		d.parentLabel == in.ParentLabel && d.childLabel == in.ChildLabel &&
 		d.parentVersionPolicy == in.ParentVersionPolicy && d.childVersionPolicy == in.ChildVersionPolicy {
 		return nil, nil
 	}
 
 	d.displayName = in.DisplayName
 	d.description = in.Description
+	d.parentLabel = in.ParentLabel
+	d.childLabel = in.ChildLabel
 	d.parentVersionPolicy = in.ParentVersionPolicy
 	d.childVersionPolicy = in.ChildVersionPolicy
 	d.version++
@@ -234,11 +298,25 @@ func (d *Definition) DisplayName() string { return d.displayName }
 // Description returns the description.
 func (d *Definition) Description() string { return d.description }
 
-// ParentTypeID returns the parent-side entity type.
+// Kind reports whether the relationship is directed or symmetric.
+func (d *Definition) Kind() Kind { return d.kind }
+
+// IsSymmetric reports whether the pair is unordered.
+func (d *Definition) IsSymmetric() bool { return d.kind == KindSymmetric }
+
+// ParentTypeID returns the parent-side entity type (the first endpoint
+// type on symmetric definitions).
 func (d *Definition) ParentTypeID() valueobjects.TypeDefinitionID { return d.parentTypeID }
 
-// ChildTypeID returns the child-side entity type.
+// ChildTypeID returns the child-side entity type (the second endpoint
+// type on symmetric definitions).
 func (d *Definition) ChildTypeID() valueobjects.TypeDefinitionID { return d.childTypeID }
+
+// ParentLabel returns the display-only role name for the parent side.
+func (d *Definition) ParentLabel() string { return d.parentLabel }
+
+// ChildLabel returns the display-only role name for the child side.
+func (d *Definition) ChildLabel() string { return d.childLabel }
 
 // AttributeSetID returns the hidden companion type holding this
 // definition's attributes; link values anchor to it with the relationship
@@ -276,8 +354,11 @@ type DefinitionSnapshot struct {
 	InternalName        string                                 `json:"internal_name"`
 	DisplayName         string                                 `json:"display_name"`
 	Description         string                                 `json:"description,omitempty"`
+	Kind                Kind                                   `json:"kind"`
 	ParentTypeID        valueobjects.TypeDefinitionID          `json:"parent_type_id"`
 	ChildTypeID         valueobjects.TypeDefinitionID          `json:"child_type_id"`
+	ParentLabel         string                                 `json:"parent_label,omitempty"`
+	ChildLabel          string                                 `json:"child_label,omitempty"`
 	AttributeSetID      valueobjects.TypeDefinitionID          `json:"attribute_set_id"`
 	ExtendsID           *valueobjects.RelationshipDefinitionID `json:"extends_id,omitempty"`
 	ParentVersionPolicy VersionPolicy                          `json:"parent_version_policy"`
@@ -296,8 +377,11 @@ func (d *Definition) Snapshot() DefinitionSnapshot {
 		InternalName:        d.internalName,
 		DisplayName:         d.displayName,
 		Description:         d.description,
+		Kind:                d.kind,
 		ParentTypeID:        d.parentTypeID,
 		ChildTypeID:         d.childTypeID,
+		ParentLabel:         d.parentLabel,
+		ChildLabel:          d.childLabel,
 		AttributeSetID:      d.attributeSetID,
 		ExtendsID:           d.extendsID,
 		ParentVersionPolicy: d.parentVersionPolicy,
@@ -309,6 +393,14 @@ func (d *Definition) Snapshot() DefinitionSnapshot {
 	}
 }
 
+// normalizeKind defaults pre-symmetric rows (empty kind) to directed.
+func normalizeKind(k Kind) Kind {
+	if k == "" {
+		return KindDirected
+	}
+	return k
+}
+
 // RehydrateDefinition rebuilds the aggregate from a persisted snapshot.
 // Repository use only.
 func RehydrateDefinition(s DefinitionSnapshot) *Definition {
@@ -318,8 +410,11 @@ func RehydrateDefinition(s DefinitionSnapshot) *Definition {
 		internalName:        s.InternalName,
 		displayName:         s.DisplayName,
 		description:         s.Description,
+		kind:                normalizeKind(s.Kind),
 		parentTypeID:        s.ParentTypeID,
 		childTypeID:         s.ChildTypeID,
+		parentLabel:         s.ParentLabel,
+		childLabel:          s.ChildLabel,
 		attributeSetID:      s.AttributeSetID,
 		extendsID:           s.ExtendsID,
 		parentVersionPolicy: s.ParentVersionPolicy,

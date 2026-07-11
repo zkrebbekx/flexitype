@@ -361,18 +361,12 @@ func (b *binder) bindTraversal(ctx context.Context, n *fql.Traversal, s *scope) 
 	if !ok {
 		return nil, positioned(n.Pos, "unknown relationship %q for this type", n.Relationship)
 	}
-
-	// The counterpart side the inner expression evaluates against.
-	counterpartTypeID := def.ChildTypeID
-	if n.Direction == fql.DirParent {
-		counterpartTypeID = def.ParentTypeID
-	}
-	counterpart, err := b.typeDefs.Get(ctx, counterpartTypeID)
-	if err != nil {
-		return nil, err
+	if def.Kind == domainrelationship.KindSymmetric && n.Direction != fql.DirAny {
+		return nil, positioned(n.Pos,
+			"%q is symmetric; traverse it with linked(%s)", n.Relationship, n.Relationship)
 	}
 
-	inner, _, err := b.scopeFor(ctx, counterpart, s.depth+1)
+	inner, err := b.traversalScope(ctx, n, def, s.depth+1)
 	if err != nil {
 		return nil, err
 	}
@@ -385,6 +379,52 @@ func (b *binder) bindTraversal(ctx context.Context, n *fql.Traversal, s *scope) 
 		return nil, err
 	}
 	return &BoundTraversal{Def: def, Direction: n.Direction, Inner: boundInner}, nil
+}
+
+// traversalScope builds the binding scope for a traversal's counterpart.
+// child()/parent() scope one endpoint; linked() can land on either end,
+// so its scope is the union of both endpoint schemas (on a name clash the
+// parent endpoint's attribute wins).
+func (b *binder) traversalScope(ctx context.Context, n *fql.Traversal, def domainrelationship.DefinitionSnapshot, depth int) (*scope, error) {
+	scopeOf := func(id valueobjects.TypeDefinitionID) (*scope, error) {
+		t, err := b.typeDefs.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		s, _, err := b.scopeFor(ctx, t, depth)
+		return s, err
+	}
+
+	if n.Direction != fql.DirAny {
+		counterpartTypeID := def.ChildTypeID
+		if n.Direction == fql.DirParent {
+			counterpartTypeID = def.ParentTypeID
+		}
+		return scopeOf(counterpartTypeID)
+	}
+
+	merged, err := scopeOf(def.ParentTypeID)
+	if err != nil {
+		return nil, err
+	}
+	if def.ChildTypeID.Equals(def.ParentTypeID) {
+		return merged, nil
+	}
+	other, err := scopeOf(def.ChildTypeID)
+	if err != nil {
+		return nil, err
+	}
+	for name, a := range other.attrs {
+		if _, exists := merged.attrs[name]; !exists {
+			merged.attrs[name] = a
+		}
+	}
+	for name, r := range other.rels {
+		if _, exists := merged.rels[name]; !exists {
+			merged.rels[name] = r
+		}
+	}
+	return merged, nil
 }
 
 // coerce turns a literal into a typed value via the attribute's data type.

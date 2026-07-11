@@ -21,9 +21,9 @@ import (
 
 // --- relationship definitions -------------------------------------------------
 
-const relDefColumns = `id, tenant_id, internal_name, display_name, description, parent_type_id,
-	child_type_id, attribute_set_id, extends_id, parent_version_policy, child_version_policy,
-	version, created_at, updated_at, archived_at`
+const relDefColumns = `id, tenant_id, internal_name, display_name, description, kind, parent_type_id,
+	child_type_id, parent_label, child_label, attribute_set_id, extends_id, parent_version_policy,
+	child_version_policy, version, created_at, updated_at, archived_at`
 
 type relDefRow struct {
 	ID                  ulid.ID      `db:"id"`
@@ -31,8 +31,11 @@ type relDefRow struct {
 	InternalName        string       `db:"internal_name"`
 	DisplayName         string       `db:"display_name"`
 	Description         string       `db:"description"`
+	Kind                string       `db:"kind"`
 	ParentTypeID        ulid.ID      `db:"parent_type_id"`
 	ChildTypeID         ulid.ID      `db:"child_type_id"`
+	ParentLabel         string       `db:"parent_label"`
+	ChildLabel          string       `db:"child_label"`
 	AttributeSetID      ulid.ID      `db:"attribute_set_id"`
 	ExtendsID           ulid.ID      `db:"extends_id"`
 	ParentVersionPolicy string       `db:"parent_version_policy"`
@@ -55,8 +58,11 @@ func (r relDefRow) snapshot() domainrelationship.DefinitionSnapshot {
 		InternalName:        r.InternalName,
 		DisplayName:         r.DisplayName,
 		Description:         r.Description,
+		Kind:                domainrelationship.Kind(r.Kind),
 		ParentTypeID:        valueobjects.TypeDefinitionID{ID: r.ParentTypeID},
 		ChildTypeID:         valueobjects.TypeDefinitionID{ID: r.ChildTypeID},
+		ParentLabel:         r.ParentLabel,
+		ChildLabel:          r.ChildLabel,
 		AttributeSetID:      valueobjects.TypeDefinitionID{ID: r.AttributeSetID},
 		ExtendsID:           extends,
 		ParentVersionPolicy: domainrelationship.VersionPolicy(r.ParentVersionPolicy),
@@ -261,20 +267,23 @@ func (r *relationshipDefinitionRepository) Save(ctx context.Context, d *domainre
 	}
 	_, err := r.q.ExecContext(ctx, bind(
 		`INSERT INTO flexitype_relationship_definition
-		   (id, tenant_id, internal_name, display_name, description, parent_type_id, child_type_id,
-		    attribute_set_id, extends_id, parent_version_policy, child_version_policy, version,
-		    created_at, updated_at, archived_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   (id, tenant_id, internal_name, display_name, description, kind, parent_type_id, child_type_id,
+		    parent_label, child_label, attribute_set_id, extends_id, parent_version_policy,
+		    child_version_policy, version, created_at, updated_at, archived_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   display_name          = EXCLUDED.display_name,
 		   description           = EXCLUDED.description,
+		   parent_label          = EXCLUDED.parent_label,
+		   child_label           = EXCLUDED.child_label,
 		   parent_version_policy = EXCLUDED.parent_version_policy,
 		   child_version_policy  = EXCLUDED.child_version_policy,
 		   version               = EXCLUDED.version,
 		   updated_at            = EXCLUDED.updated_at,
 		   archived_at           = EXCLUDED.archived_at`),
 		s.ID.String(), s.TenantID.String(), s.InternalName, s.DisplayName, s.Description,
-		s.ParentTypeID.String(), s.ChildTypeID.String(), s.AttributeSetID.String(), extends,
+		string(s.Kind), s.ParentTypeID.String(), s.ChildTypeID.String(), s.ParentLabel, s.ChildLabel,
+		s.AttributeSetID.String(), extends,
 		string(s.ParentVersionPolicy), string(s.ChildVersionPolicy), s.Version,
 		s.CreatedAt, s.UpdatedAt, nullableTime(s.ArchivedAt),
 	)

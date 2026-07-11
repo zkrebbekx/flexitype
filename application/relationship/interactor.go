@@ -39,11 +39,15 @@ func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, defs dom
 
 // CreateDefinitionInput holds data for creating a relationship definition.
 type CreateDefinitionInput struct {
-	InternalName        string
-	DisplayName         string
-	Description         string
+	InternalName string
+	DisplayName  string
+	Description  string
+	// Kind is directed (default) or symmetric.
+	Kind                string
 	ParentTypeID        string
 	ChildTypeID         string
+	ParentLabel         string
+	ChildLabel          string
 	ExtendsID           string
 	ParentVersionPolicy string
 	ChildVersionPolicy  string
@@ -112,8 +116,11 @@ func (i *Interactor) CreateDefinition(ctx context.Context, in CreateDefinitionIn
 			InternalName:        in.InternalName,
 			DisplayName:         in.DisplayName,
 			Description:         in.Description,
+			Kind:                domainrelationship.Kind(in.Kind),
 			ParentType:          parentType,
 			ChildType:           childType,
+			ParentLabel:         in.ParentLabel,
+			ChildLabel:          in.ChildLabel,
 			AttributeSet:        attrSet,
 			Extends:             extends,
 			ParentVersionPolicy: domainrelationship.VersionPolicy(in.ParentVersionPolicy),
@@ -148,6 +155,8 @@ type UpdateDefinitionInput struct {
 	ID                  string
 	DisplayName         string
 	Description         string
+	ParentLabel         string
+	ChildLabel          string
 	ParentVersionPolicy string
 	ChildVersionPolicy  string
 }
@@ -172,6 +181,8 @@ func (i *Interactor) UpdateDefinition(ctx context.Context, in UpdateDefinitionIn
 		evts, err := def.Update(domainrelationship.UpdateDefinitionInput{
 			DisplayName:         in.DisplayName,
 			Description:         in.Description,
+			ParentLabel:         in.ParentLabel,
+			ChildLabel:          in.ChildLabel,
 			ParentVersionPolicy: domainrelationship.VersionPolicy(in.ParentVersionPolicy),
 			ChildVersionPolicy:  domainrelationship.VersionPolicy(in.ChildVersionPolicy),
 		}, i.now())
@@ -399,6 +410,12 @@ func (i *Interactor) Link(ctx context.Context, in LinkInput) (*domainrelationshi
 		def, err := defs.GetForUpdate(ctx, defID)
 		if err != nil {
 			return err
+		}
+
+		if def.IsSymmetric() && child.String() < parent.String() {
+			// Match the domain's canonical order so the one-live-link
+			// guard holds for the unordered pair.
+			parent, child = child, parent
 		}
 
 		existing, err := links.FindLive(ctx, defID, parent, child)

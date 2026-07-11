@@ -176,7 +176,8 @@ const EXAMPLES = [
         Conditions over attributes, joined with <code>and</code>/<code>or</code>/<code>not</code> and parentheses.
         Operators: <code>= != &gt; &gt;= &lt; &lt;= in</code>. Functions: <code>min max count length range has
         contains icontains iequals</code>. Cross relationships with
-        <code>child(rel) {…}</code> / <code>parent(rel) {…}</code>; link attributes via <code>link.x</code>.
+        <code>child(rel) {…}</code> / <code>parent(rel) {…}</code>, or <code>linked(rel) {…}</code> for
+        symmetric links (matches either end); link attributes via <code>link.x</code>.
         <code>type isa x</code> matches a type and its subtypes.
       </p>
       <p class="mt-2 mb-1 font-semibold">Examples</p>

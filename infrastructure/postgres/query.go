@@ -274,21 +274,32 @@ func (r *queryRepository) compileCompare(c *compiler, n *query.BoundCompare, e e
 func (r *queryRepository) compileTraversal(c *compiler, n *query.BoundTraversal, e entityRef) (string, error) {
 	rel := c.alias("r")
 
-	nearCol, farCol := "parent_entity_id", "child_entity_id"
-	if n.Direction == fql.DirParent {
-		nearCol, farCol = "child_entity_id", "parent_entity_id"
-	}
-
 	// Arguments bind positionally: the definition id's placeholder appears
 	// before the inner expression's, so register it first.
 	defArg := c.arg(n.Def.ID.String())
 
+	// linked() matches either end and evaluates against the opposite one.
+	var nearCond, farExpr string
+	switch n.Direction {
+	case fql.DirAny:
+		nearCond = fmt.Sprintf("(%s.parent_entity_id = %s OR %s.child_entity_id = %s)",
+			rel, e.entity, rel, e.entity)
+		farExpr = fmt.Sprintf("(CASE WHEN %s.parent_entity_id = %s THEN %s.child_entity_id ELSE %s.parent_entity_id END)",
+			rel, e.entity, rel, rel)
+	case fql.DirParent:
+		nearCond = fmt.Sprintf("%s.child_entity_id = %s", rel, e.entity)
+		farExpr = rel + ".parent_entity_id"
+	default:
+		nearCond = fmt.Sprintf("%s.parent_entity_id = %s", rel, e.entity)
+		farExpr = rel + ".child_entity_id"
+	}
+
 	inner, err := r.compile(c, n.Inner, entityRef{
 		tenant: rel + ".tenant_id",
-		entity: rel + "." + farCol,
+		entity: farExpr,
 		// The counterpart's declared type isn't materialised on the link;
 		// type conditions inside traversals compare against value rows.
-		typeID: r.counterpartType(c, rel, farCol),
+		typeID: r.counterpartType(rel, farExpr),
 		link:   rel + ".id",
 	})
 	if err != nil {
@@ -297,16 +308,17 @@ func (r *queryRepository) compileTraversal(c *compiler, n *query.BoundTraversal,
 
 	return fmt.Sprintf(`EXISTS (SELECT 1 FROM flexitype_relationship %s
 	 WHERE %s.tenant_id = %s AND %s.relationship_definition_id = %s
-	   AND %s.archived_at IS NULL AND %s.%s = %s
+	   AND %s.archived_at IS NULL AND %s
 	   AND %s)`,
 		rel, rel, e.tenant, rel, defArg,
-		rel, rel, nearCol, e.entity, inner), nil
+		rel, nearCond, inner), nil
 }
 
 // counterpartType resolves the counterpart entity's declared type as a
-// scalar subquery over its value rows (any row carries it).
-func (r *queryRepository) counterpartType(_ *compiler, rel, farCol string) string {
+// scalar subquery over its value rows (any row carries it). farExpr is a
+// full SQL expression for the counterpart entity id.
+func (r *queryRepository) counterpartType(rel, farExpr string) string {
 	return fmt.Sprintf(`(SELECT tv.type_definition_id FROM flexitype_attribute_value tv
-	 WHERE tv.tenant_id = %s.tenant_id AND tv.entity_id = %s.%s AND tv.archived_at IS NULL
-	 LIMIT 1)`, rel, rel, farCol)
+	 WHERE tv.tenant_id = %s.tenant_id AND tv.entity_id = %s AND tv.archived_at IS NULL
+	 LIMIT 1)`, rel, farExpr)
 }

@@ -162,6 +162,10 @@ const (
 	// DirParent — the current entity is the child; the inner expression
 	// evaluates against parent-side counterparts.
 	DirParent Direction = "parent"
+	// DirAny — the current entity matches either end; the inner expression
+	// evaluates against the opposite end. The only traversal symmetric
+	// relationships support, also usable on directed ones.
+	DirAny Direction = "linked"
 )
 
 // Traversal crosses a relationship: child(rel) { expr }.

@@ -42,18 +42,23 @@ data resets on reload.
   constraint and dependency; no shadowing anywhere in a hierarchy; values
   anchor to the entity's declared type; uniqueness applies hierarchy-wide;
   dependencies and relationships work across levels
-- **Relationships between types**: user-defined relationship types with a
-  parent side and a child side, their own attributes and constraints (the
-  full attribute machinery applies to links), definition inheritance, and
-  per-link version binding — track the latest parent/child type version or
-  pin a specific one
+- **Relationships between types**: user-defined relationship types —
+  **directed** (a parent side and a child side, optional display role
+  labels like "assembly"/"component", per-link version binding: track the
+  latest type version or pin one) or **symmetric** (unordered peers such
+  as `compatible_with`; the pair is stored canonically so `A↔B` can never
+  duplicate as `B↔A`). Both carry their own attributes and constraints
+  (the full attribute machinery applies to links) and support definition
+  inheritance.
 - **FQL, a schema-aware query language**: query entities by attribute
   values and across relationships — `category = "bike" and (min(price) >=
   500 or "sale" in tags) and child(supplied_by) { link.lead_time_days <=
   14 }`. Comparisons, `in`, `range`, `has`, `length`, `min`/`max`/`count`,
   case-insensitive string matching, `and`/`or`/`not` with parentheses,
-  `type isa` hierarchy matching. Names bind against the (inherited) schema
-  with positioned errors; archived types, attributes and entities are
+  `type isa` hierarchy matching; `child()`/`parent()` traverse directed
+  relationships, `linked()` matches either end (the only traversal for
+  symmetric ones). Names bind against the (inherited) schema with
+  positioned errors; archived types, attributes and entities are
   invisible. See `docs/design/query-language.md`.
 - **Transactional outbox** (optional): event envelopes persist in the same
   transaction as the change and a relay dispatches them with retries —

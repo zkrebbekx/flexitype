@@ -563,6 +563,26 @@ func (s *server) effectiveSchema(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *server) entityCompleteness(w http.ResponseWriter, r *http.Request) {
+	out, err := application.FromContext(r.Context()).Dependencies().Completeness(r.Context(),
+		chi.URLParam(r, "typeDefinitionID"), chi.URLParam(r, "entityID"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) typeCompleteness(w http.ResponseWriter, r *http.Request) {
+	out, err := application.FromContext(r.Context()).Dependencies().TypeCompleteness(r.Context(),
+		chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // --- dependencies -----------------------------------------------------------
 
 type dependencyRequest struct {

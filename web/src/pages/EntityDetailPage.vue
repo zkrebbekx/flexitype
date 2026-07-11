@@ -35,6 +35,14 @@ const values = useQuery({
   queryKey: ['entity-values', typeId, entityId],
   queryFn: () => api.listEntityValues(typeId.value, entityId.value),
 })
+const completeness = useQuery({
+  queryKey: ['entity-completeness', typeId, entityId],
+  queryFn: () => api.entityCompleteness(typeId.value, entityId.value),
+})
+// Percent of required attributes (dependency-adjusted) that hold a value.
+const completenessPct = computed(() =>
+  completeness.data.value ? Math.round(completeness.data.value.score * 100) : 0,
+)
 
 interface Row {
   attribute: AttributeDefinition
@@ -135,6 +143,7 @@ const setValue = useMutation({
   },
   onSuccess: () => {
     queryClient.invalidateQueries({ queryKey: ['entity-values', typeId, entityId] })
+    queryClient.invalidateQueries({ queryKey: ['entity-completeness', typeId, entityId] })
     toasts.success('Value saved')
     editor.open = false
   },
@@ -254,6 +263,7 @@ const removeValue = useMutation({
   mutationFn: (v: AttributeValue) => api.removeValue(v.id),
   onSuccess: () => {
     queryClient.invalidateQueries({ queryKey: ['entity-values', typeId, entityId] })
+    queryClient.invalidateQueries({ queryKey: ['entity-completeness', typeId, entityId] })
     toasts.success('Value removed')
     confirmRemove.value = undefined
   },
@@ -277,6 +287,33 @@ const removeValue = useMutation({
     </template>
     Every attribute this {{ type.data.value?.display_name?.toLowerCase() ?? 'type' }} can hold, with its current values.
   </PageHeader>
+
+  <div
+    v-if="completeness.data.value && completeness.data.value.required > 0"
+    class="mb-4 rounded-lg border border-(--border) bg-(--surface) px-4 py-3"
+  >
+    <div class="mb-1.5 flex items-baseline justify-between gap-3">
+      <span class="text-[13px] font-medium text-(--text-secondary)">Completeness</span>
+      <span class="text-[13px] text-(--text-muted)">
+        <span class="font-semibold text-(--text-primary)">{{ completenessPct }}%</span>
+        · {{ completeness.data.value.filled }}/{{ completeness.data.value.required }} required
+      </span>
+    </div>
+    <div class="h-2 overflow-hidden rounded-full bg-(--border)" role="progressbar" :aria-valuenow="completenessPct" aria-valuemin="0" aria-valuemax="100">
+      <div
+        class="h-full rounded-full transition-all"
+        :class="completenessPct === 100 ? 'bg-(--ok)' : 'bg-(--accent)'"
+        :style="{ width: `${completenessPct}%` }"
+      />
+    </div>
+    <p v-if="completeness.data.value.missing.length" class="mt-2 text-[12px] text-(--text-muted)">
+      Missing:
+      <span v-for="(m, idx) in completeness.data.value.missing" :key="m.attribute_definition_id">
+        <span class="text-(--text-secondary)">{{ m.display_name }}</span
+        ><span v-if="idx < completeness.data.value.missing.length - 1">, </span>
+      </span>
+    </p>
+  </div>
 
   <ErrorState
     v-if="effective.isError.value || values.isError.value || type.isError.value"

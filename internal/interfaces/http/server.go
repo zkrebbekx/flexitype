@@ -77,6 +77,7 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Get("/{id}/attributes", s.listAttributesByTypeDefinition)
 			r.Get("/{id}/effective-attributes", s.effectiveAttributes)
 			r.Get("/{id}/children", s.typeChildren)
+			r.Get("/{id}/completeness", s.typeCompleteness)
 		})
 
 		api.Route("/attributes", func(r chi.Router) {
@@ -116,6 +117,7 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Get("/relationships", s.listEntityRelationships)
 			r.Get("/attributes/{attributeID}/effective-schema", s.effectiveSchema)
 			r.Get("/relationship-requirements", s.relationshipRequirements)
+			r.Get("/completeness", s.entityCompleteness)
 			// Cascade: archive the entity's values and unlink its relationships.
 			r.Delete("/", s.removeEntity)
 		})

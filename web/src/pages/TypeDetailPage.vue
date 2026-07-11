@@ -21,7 +21,7 @@ import AttributeDrawer from '@/components/AttributeDrawer.vue'
 import DependencyDrawer from '@/components/DependencyDrawer.vue'
 import RelationshipDefinitionDrawer from '@/components/RelationshipDefinitionDrawer.vue'
 import TypeDefinitionDrawer from '@/components/TypeDefinitionDrawer.vue'
-import { Plus, Archive, ArchiveRestore, ArrowRight, Pencil } from 'lucide-vue-next'
+import { Plus, Archive, ArchiveRestore, ArrowLeftRight, ArrowRight, Pencil } from 'lucide-vue-next'
 
 const route = useRoute()
 const typeId = computed(() => String(route.params.id))
@@ -414,12 +414,21 @@ function describeEffect(d: Dependency): string {
             </p>
             <p class="mt-1 flex items-center gap-1.5 text-[13px] text-(--text-secondary)">
               {{ typeName(d.parent_type_id) }}
-              <ArrowRight :size="13" class="text-(--text-muted)" />
+              <component :is="d.kind === 'symmetric' ? ArrowLeftRight : ArrowRight" :size="13" class="text-(--text-muted)" />
               {{ typeName(d.child_type_id) }}
             </p>
-            <p class="mt-1 flex gap-1.5 text-[12px] text-(--text-muted)">
-              <Badge :tone="d.parent_version_policy === 'pinned' ? 'warn' : 'neutral'">parent: {{ d.parent_version_policy }}</Badge>
-              <Badge :tone="d.child_version_policy === 'pinned' ? 'warn' : 'neutral'">child: {{ d.child_version_policy }}</Badge>
+            <!-- Symmetric links are unordered peers: no direction, no roles,
+                 no per-side version pinning. Directed links carry both. -->
+            <p class="mt-1 flex flex-wrap gap-1.5 text-[12px] text-(--text-muted)">
+              <template v-if="d.kind === 'symmetric'">
+                <Badge tone="neutral">symmetric</Badge>
+              </template>
+              <template v-else>
+                <Badge v-if="d.parent_label" tone="accent">{{ d.parent_label }}</Badge>
+                <Badge v-if="d.child_label" tone="neutral">{{ d.child_label }}</Badge>
+                <Badge :tone="d.parent_version_policy === 'pinned' ? 'warn' : 'neutral'">parent: {{ d.parent_version_policy }}</Badge>
+                <Badge :tone="d.child_version_policy === 'pinned' ? 'warn' : 'neutral'">child: {{ d.child_version_policy }}</Badge>
+              </template>
               <Badge v-if="d.extends_id" tone="accent">inherits</Badge>
             </p>
           </div>

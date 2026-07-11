@@ -1,0 +1,415 @@
+package query
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
+	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	domainrelationship "github.com/zkrebbekx/flexitype/domain/relationship"
+	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
+	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/db"
+	"github.com/zkrebbekx/flexitype/pkg/fql"
+)
+
+// maxTraversalDepth bounds nested relationship crossings per query.
+const maxTraversalDepth = 5
+
+// scope is one binding context: the attribute and relationship names
+// visible to expressions at this level, plus link attributes when inside a
+// traversal.
+type scope struct {
+	attrs     map[string]domainattribute.Snapshot
+	linkAttrs map[string]domainattribute.Snapshot
+	rels      map[string]domainrelationship.DefinitionSnapshot
+	depth     int
+}
+
+// binder resolves parsed queries against the schema.
+type binder struct {
+	tenant   valueobjects.TenantID
+	typeDefs domaintypedef.Repository
+	attrs    domainattribute.Repository
+	relDefs  domainrelationship.DefinitionRepository
+	// typesByName caches every live entity type for the virtual type field.
+	typesByName map[string]domaintypedef.Snapshot
+}
+
+// scopeFor assembles the binding scope for one root type: attributes from
+// the type's chain and its descendants (shadowing rules keep names
+// unambiguous), and every relationship definition touching those types.
+func (b *binder) scopeFor(ctx context.Context, root *domaintypedef.TypeDefinition, depth int) (*scope, []*domaintypedef.TypeDefinition, error) {
+	chain, err := apptypedef.Chain(ctx, b.typeDefs, root)
+	if err != nil {
+		return nil, nil, err
+	}
+	descendants, err := apptypedef.Descendants(ctx, b.typeDefs, root)
+	if err != nil {
+		return nil, nil, err
+	}
+	types := make([]*domaintypedef.TypeDefinition, 0, len(chain)+len(descendants))
+	types = append(types, chain...)
+	types = append(types, descendants...)
+
+	s := &scope{
+		attrs: make(map[string]domainattribute.Snapshot),
+		rels:  make(map[string]domainrelationship.DefinitionSnapshot),
+		depth: depth,
+	}
+	typeIDs := make([]valueobjects.TypeDefinitionID, 0, len(types))
+	for _, t := range types {
+		// Archived schema is invisible to search: neither archived types nor
+		// archived attributes bind.
+		if t.IsArchived() {
+			continue
+		}
+		typeIDs = append(typeIDs, t.ID())
+		attrs, _, err := b.attrs.ListByTypeDefinition(ctx, t.ID(), db.Page{Limit: 500})
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, a := range attrs {
+			if a.IsArchived() {
+				continue
+			}
+			s.attrs[a.InternalName()] = a.Snapshot()
+		}
+	}
+
+	rels, _, err := b.relDefs.List(ctx, domainrelationship.DefinitionFilter{
+		TenantID:          b.tenant,
+		TypeDefinitionIDs: typeIDs,
+	}, db.Page{Limit: 500})
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, r := range rels {
+		s.rels[r.InternalName()] = r.Snapshot()
+	}
+
+	// The root type set: the queried type plus its descendants (ancestors
+	// contribute attributes, not rows).
+	rowTypes := append([]*domaintypedef.TypeDefinition{root}, descendants...)
+	return s, rowTypes, nil
+}
+
+// linkAttrsFor resolves a relationship definition's inherited attribute
+// sets into a name → attribute map.
+func (b *binder) linkAttrsFor(ctx context.Context, def domainrelationship.DefinitionSnapshot) (map[string]domainattribute.Snapshot, error) {
+	out := make(map[string]domainattribute.Snapshot)
+	current := def
+	for depth := 0; depth < maxTraversalDepth*2; depth++ {
+		attrs, _, err := b.attrs.ListByTypeDefinition(ctx, current.AttributeSetID, db.Page{Limit: 500})
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range attrs {
+			if a.IsArchived() {
+				continue
+			}
+			if _, exists := out[a.InternalName()]; !exists {
+				out[a.InternalName()] = a.Snapshot()
+			}
+		}
+		if current.ExtendsID == nil {
+			return out, nil
+		}
+		base, err := b.relDefs.Get(ctx, *current.ExtendsID)
+		if err != nil {
+			return nil, err
+		}
+		current = base.Snapshot()
+	}
+	return out, nil
+}
+
+func (b *binder) bind(ctx context.Context, node fql.Node, s *scope) (BoundNode, error) {
+	switch n := node.(type) {
+	case *fql.Logical:
+		out := &BoundLogical{Op: n.Op}
+		for _, e := range n.Exprs {
+			bound, err := b.bind(ctx, e, s)
+			if err != nil {
+				return nil, err
+			}
+			out.Exprs = append(out.Exprs, bound)
+		}
+		return out, nil
+
+	case *fql.Not:
+		inner, err := b.bind(ctx, n.Expr, s)
+		if err != nil {
+			return nil, err
+		}
+		return &BoundNot{Expr: inner}, nil
+
+	case *fql.Compare:
+		if n.Field.Scope == fql.ScopeType {
+			return b.bindTypeCompare(n)
+		}
+		return b.bindCompare(n, s)
+
+	case *fql.In:
+		if n.Field.Scope == fql.ScopeType {
+			return b.bindTypeIn(n)
+		}
+		return b.bindIn(n, s)
+
+	case *fql.Range:
+		return b.bindRange(n, s)
+
+	case *fql.Has:
+		attr, link, err := b.resolveField(n.Field, s)
+		if err != nil {
+			return nil, err
+		}
+		return &BoundHas{Attr: attr, Link: link}, nil
+
+	case *fql.StringMatch:
+		attr, link, err := b.resolveField(n.Field, s)
+		if err != nil {
+			return nil, err
+		}
+		if !attr.DataType.IsTextual() {
+			return nil, positioned(n.Pos, "%s requires a textual attribute; %q is %s", n.Kind, attr.InternalName, attr.DataType)
+		}
+		return &BoundStringMatch{Attr: attr, Link: link, Kind: n.Kind, Value: n.Value.Text}, nil
+
+	case *fql.Traversal:
+		return b.bindTraversal(ctx, n, s)
+
+	default:
+		return nil, domainerrors.NewValidation("unsupported query construct")
+	}
+}
+
+func (b *binder) resolveField(f fql.Field, s *scope) (domainattribute.Snapshot, bool, error) {
+	switch f.Scope {
+	case fql.ScopeLink:
+		if s.linkAttrs == nil {
+			return domainattribute.Snapshot{}, false, positioned(f.Pos, "link.%s is only valid inside a relationship traversal", f.Name)
+		}
+		attr, ok := s.linkAttrs[f.Name]
+		if !ok {
+			return domainattribute.Snapshot{}, false, positioned(f.Pos, "unknown link attribute %q", f.Name)
+		}
+		return attr, true, nil
+	default:
+		attr, ok := s.attrs[f.Name]
+		if !ok {
+			return domainattribute.Snapshot{}, false, positioned(f.Pos, "unknown attribute %q", f.Name)
+		}
+		return attr, false, nil
+	}
+}
+
+func (b *binder) bindCompare(n *fql.Compare, s *scope) (BoundNode, error) {
+	attr, link, err := b.resolveField(n.Field, s)
+	if err != nil {
+		return nil, err
+	}
+	if n.Op == fql.CmpIsa {
+		return nil, positioned(n.Pos, "isa applies to the type field only")
+	}
+
+	ordered := n.Op == fql.CmpGt || n.Op == fql.CmpGte || n.Op == fql.CmpLt || n.Op == fql.CmpLte
+
+	switch n.Func {
+	case fql.FuncLength:
+		if !attr.DataType.IsTextual() {
+			return nil, positioned(n.Pos, "length() requires a textual attribute; %q is %s", attr.InternalName, attr.DataType)
+		}
+		v, err := intLiteral(n.Literal)
+		if err != nil {
+			return nil, err
+		}
+		return &BoundCompare{Attr: attr, Link: link, Func: n.Func, Op: n.Op, Value: v}, nil
+
+	case fql.FuncCount:
+		v, err := intLiteral(n.Literal)
+		if err != nil {
+			return nil, err
+		}
+		return &BoundCompare{Attr: attr, Link: link, Func: n.Func, Op: n.Op, Value: v}, nil
+
+	case fql.FuncMin, fql.FuncMax:
+		if !attr.DataType.IsOrdered() {
+			return nil, positioned(n.Pos, "%s() requires an ordered attribute; %q is %s", n.Func, attr.InternalName, attr.DataType)
+		}
+	case fql.FuncNone:
+		if ordered && !attr.DataType.IsOrdered() {
+			return nil, positioned(n.Pos, "%q is %s and does not support ordering comparisons", attr.InternalName, attr.DataType)
+		}
+	}
+
+	v, err := coerce(attr.DataType, n.Literal)
+	if err != nil {
+		return nil, err
+	}
+	return &BoundCompare{Attr: attr, Link: link, Func: n.Func, Op: n.Op, Value: v}, nil
+}
+
+func (b *binder) bindIn(n *fql.In, s *scope) (BoundNode, error) {
+	attr, link, err := b.resolveField(n.Field, s)
+	if err != nil {
+		return nil, err
+	}
+	if n.Func != fql.FuncNone {
+		return nil, positioned(n.Pos, "in does not combine with %s()", n.Func)
+	}
+	values := make([]valueobjects.Value, 0, len(n.Values))
+	for _, lit := range n.Values {
+		v, err := coerce(attr.DataType, lit)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, v)
+	}
+	return &BoundIn{Attr: attr, Link: link, Values: values}, nil
+}
+
+func (b *binder) bindRange(n *fql.Range, s *scope) (BoundNode, error) {
+	attr, link, err := b.resolveField(n.Field, s)
+	if err != nil {
+		return nil, err
+	}
+	if n.Func != fql.FuncNone {
+		return nil, positioned(n.Pos, "range does not combine with %s()", n.Func)
+	}
+	if !attr.DataType.IsOrdered() {
+		return nil, positioned(n.Pos, "range() requires an ordered attribute; %q is %s", attr.InternalName, attr.DataType)
+	}
+	lo, err := coerce(attr.DataType, n.Lo)
+	if err != nil {
+		return nil, err
+	}
+	hi, err := coerce(attr.DataType, n.Hi)
+	if err != nil {
+		return nil, err
+	}
+	return &BoundRange{Attr: attr, Link: link, Lo: lo, Hi: hi}, nil
+}
+
+func (b *binder) bindTypeCompare(n *fql.Compare) (BoundNode, error) {
+	if n.Func != fql.FuncNone {
+		return nil, positioned(n.Pos, "aggregate functions do not apply to the type field")
+	}
+	t, err := b.lookupType(n.Literal)
+	if err != nil {
+		return nil, err
+	}
+
+	switch n.Op {
+	case fql.CmpEq, fql.CmpNeq:
+		return &BoundType{TypeIDs: []valueobjects.TypeDefinitionID{t.ID}, Negate: n.Op == fql.CmpNeq}, nil
+	case fql.CmpIsa:
+		// The type or any of its descendants.
+		root, err := b.typeDefs.Get(context.Background(), t.ID)
+		if err != nil {
+			return nil, err
+		}
+		descendants, err := apptypedef.Descendants(context.Background(), b.typeDefs, root)
+		if err != nil {
+			return nil, err
+		}
+		ids := []valueobjects.TypeDefinitionID{t.ID}
+		for _, d := range descendants {
+			ids = append(ids, d.ID())
+		}
+		return &BoundType{TypeIDs: ids}, nil
+	default:
+		return nil, positioned(n.Pos, "the type field supports =, != and isa")
+	}
+}
+
+func (b *binder) bindTypeIn(n *fql.In) (BoundNode, error) {
+	ids := make([]valueobjects.TypeDefinitionID, 0, len(n.Values))
+	for _, lit := range n.Values {
+		t, err := b.lookupType(lit)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, t.ID)
+	}
+	return &BoundType{TypeIDs: ids}, nil
+}
+
+func (b *binder) lookupType(lit fql.Literal) (domaintypedef.Snapshot, error) {
+	t, ok := b.typesByName[lit.Text]
+	if !ok {
+		return domaintypedef.Snapshot{}, positioned(lit.Pos, "unknown type %q", lit.Text)
+	}
+	return t, nil
+}
+
+func (b *binder) bindTraversal(ctx context.Context, n *fql.Traversal, s *scope) (BoundNode, error) {
+	if s.depth+1 > maxTraversalDepth {
+		return nil, positioned(n.Pos, "traversals nest at most %d deep", maxTraversalDepth)
+	}
+	def, ok := s.rels[n.Relationship]
+	if !ok {
+		return nil, positioned(n.Pos, "unknown relationship %q for this type", n.Relationship)
+	}
+
+	// The counterpart side the inner expression evaluates against.
+	counterpartTypeID := def.ChildTypeID
+	if n.Direction == fql.DirParent {
+		counterpartTypeID = def.ParentTypeID
+	}
+	counterpart, err := b.typeDefs.Get(ctx, counterpartTypeID)
+	if err != nil {
+		return nil, err
+	}
+
+	inner, _, err := b.scopeFor(ctx, counterpart, s.depth+1)
+	if err != nil {
+		return nil, err
+	}
+	if inner.linkAttrs, err = b.linkAttrsFor(ctx, def); err != nil {
+		return nil, err
+	}
+
+	boundInner, err := b.bind(ctx, n.Inner, inner)
+	if err != nil {
+		return nil, err
+	}
+	return &BoundTraversal{Def: def, Direction: n.Direction, Inner: boundInner}, nil
+}
+
+// coerce turns a literal into a typed value via the attribute's data type.
+func coerce(dt valueobjects.DataType, lit fql.Literal) (valueobjects.Value, error) {
+	var raw json.RawMessage
+	switch lit.Kind {
+	case fql.LitNumber:
+		raw = json.RawMessage(lit.Text)
+	case fql.LitBool:
+		raw = json.RawMessage(lit.Text)
+	default:
+		// Strings and bare identifiers (enum members) quote as JSON strings;
+		// decimals accept the string form.
+		raw, _ = json.Marshal(lit.Text)
+	}
+	v, err := valueobjects.ParseValue(dt, raw)
+	if err != nil {
+		return valueobjects.Value{}, positioned(lit.Pos, "value %q is not a valid %s: %s", lit.Text, dt, err.Error())
+	}
+	return v, nil
+}
+
+func intLiteral(lit fql.Literal) (valueobjects.Value, error) {
+	n, err := strconv.ParseInt(lit.Text, 10, 64)
+	if err != nil {
+		return valueobjects.Value{}, positioned(lit.Pos, "expected a whole number, got %q", lit.Text)
+	}
+	return valueobjects.NewIntegerValue(n), nil
+}
+
+// positioned wraps a schema-binding failure as a validation error carrying
+// the query position, so the console can underline it like a parse error.
+func positioned(pos int, format string, args ...any) error {
+	return domainerrors.NewValidation(fmt.Sprintf(format, args...), "position", pos)
+}

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
 import { useQuery } from '@tanstack/vue-query'
 import { Shapes, Boxes, ScrollText, Moon, Sun } from 'lucide-vue-next'
@@ -7,11 +8,18 @@ import Toasts from '@/components/ui/Toasts.vue'
 
 const { theme, toggle } = useTheme()
 
-const nav = [
+const features = useQuery({
+  queryKey: ['features'],
+  queryFn: () => fetch('/api/v1/features').then((r) => r.json() as Promise<{ search: boolean; activity: boolean }>),
+  staleTime: Infinity,
+  retry: false,
+})
+
+const nav = computed(() => [
   { to: '/types', label: 'Types', icon: Shapes },
   { to: '/entities', label: 'Entities', icon: Boxes },
-  { to: '/activity', label: 'Activity', icon: ScrollText },
-]
+  ...(features.data.value?.activity === false ? [] : [{ to: '/activity', label: 'Activity', icon: ScrollText }]),
+])
 
 const health = useQuery({
   queryKey: ['health'],

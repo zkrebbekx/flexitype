@@ -7,6 +7,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/activity"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
+	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -14,6 +15,16 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 )
+
+// Features toggles optional capabilities per deployment. Zero value =
+// everything enabled.
+type Features struct {
+	// DisableSearch turns the FQL query surface off.
+	DisableSearch bool
+	// DisableActivity turns the audit log off entirely: no pre-commit
+	// writes, no read API.
+	DisableActivity bool
+}
 
 // FactoryConfig carries the factory's composition-time dependencies.
 type FactoryConfig struct {
@@ -39,6 +50,9 @@ type FactoryConfig struct {
 
 	// Now overrides the clock. Optional; defaults to time.Now.
 	Now func() time.Time
+
+	// Features toggles optional capabilities.
+	Features Features
 }
 
 // factory is the common usecase factory: every request gets fresh
@@ -60,8 +74,8 @@ func NewFactory(cfg FactoryConfig) Factory {
 	if cfg.Dispatcher == nil {
 		cfg.Dispatcher = events.NewDispatcher()
 	}
-	if cfg.ActivityLog == nil {
-		panic("application: FactoryConfig.ActivityLog is required")
+	if cfg.ActivityLog == nil && !cfg.Features.DisableActivity {
+		panic("application: FactoryConfig.ActivityLog is required unless activity is disabled")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -77,7 +91,11 @@ func (f *factory) New(context.Context) *Interactors {
 	if f.cfg.OnRollback != nil {
 		opts = append(opts, uow.WithRollbackObserver(f.cfg.OnRollback))
 	}
-	unit := uow.New(f.cfg.Transactor, f.cfg.Dispatcher, f.cfg.ActivityLog, opts...)
+	activityLog := f.cfg.ActivityLog
+	if f.cfg.Features.DisableActivity {
+		activityLog = nil // the unit of work skips audit writes entirely
+	}
+	unit := uow.New(f.cfg.Transactor, f.cfg.Dispatcher, activityLog, opts...)
 
 	return &Interactors{
 		typeDefs:      apptypedef.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
@@ -85,6 +103,8 @@ func (f *factory) New(context.Context) *Interactors {
 		values:        appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
 		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
 		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),
-		activity:      &ActivityInteractor{log: f.cfg.ActivityLog},
+		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query),
+		activity:      &ActivityInteractor{log: activityLog},
+		features:      f.cfg.Features,
 	}
 }

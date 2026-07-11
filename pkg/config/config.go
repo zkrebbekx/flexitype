@@ -25,6 +25,10 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	// MigrateOnStart applies embedded migrations during boot.
 	MigrateOnStart bool
+	// EnableSearch toggles the FQL query surface.
+	EnableSearch bool
+	// EnableActivity toggles the audit log (writes and read API).
+	EnableActivity bool
 }
 
 // Database holds PostgreSQL pool settings.
@@ -56,6 +60,8 @@ func Load() (Config, error) {
 		LogFormat:           envStr("FLEXITYPE_LOG_FORMAT", "json"),
 		ShutdownTimeout:     envDuration("FLEXITYPE_SHUTDOWN_TIMEOUT", 30*time.Second),
 		MigrateOnStart:      envBool("FLEXITYPE_MIGRATE_ON_START", true),
+		EnableSearch:        envBool("FLEXITYPE_FEATURE_SEARCH", true),
+		EnableActivity:      envBool("FLEXITYPE_FEATURE_ACTIVITY", true),
 		Database: Database{
 			Host:            envStr("FLEXITYPE_DB_HOST", "localhost"),
 			Port:            envInt("FLEXITYPE_DB_PORT", 5432),

@@ -216,6 +216,13 @@ export interface EntitySummary {
   last_updated_at: string
 }
 
+export interface QueryResultRow {
+  entity_id: string
+  type_definition_id: string
+  value_count: number
+  last_updated_at: string
+}
+
 export interface EffectiveAttribute {
   attribute: AttributeDefinition
   declared_in: TypeDefinition
@@ -399,6 +406,12 @@ export const api = {
   unlink: (id: string) => request<Relationship>('DELETE', `/relationships/${id}`),
   listEntityRelationships: (typeId: string, entityId: string) =>
     request<{ items: EntityLink[] }>('GET', `/entities/${typeId}/${encodeURIComponent(entityId)}/relationships`),
+
+  // Query (FQL)
+  runQuery: (q: PageQuery & { type: string; q: string }) =>
+    request<Paged<QueryResultRow>>('GET', `/query${qs(q)}`),
+  validateQuery: (type: string, q: string) =>
+    request<{ valid: boolean }>('POST', '/query/validate', { type, q }),
 
   // Activity
   listActivity: (q: PageQuery & { entity?: string; entity_id?: string; actor?: string } = {}) =>

@@ -471,8 +471,11 @@ type relationshipDefinitionRequest struct {
 	InternalName        string `json:"internal_name,omitempty"`
 	DisplayName         string `json:"display_name"`
 	Description         string `json:"description,omitempty"`
+	Kind                string `json:"kind,omitempty"`
 	ParentTypeID        string `json:"parent_type_id,omitempty"`
 	ChildTypeID         string `json:"child_type_id,omitempty"`
+	ParentLabel         string `json:"parent_label,omitempty"`
+	ChildLabel          string `json:"child_label,omitempty"`
 	ExtendsID           string `json:"extends_id,omitempty"`
 	ParentVersionPolicy string `json:"parent_version_policy,omitempty"`
 	ChildVersionPolicy  string `json:"child_version_policy,omitempty"`
@@ -488,8 +491,11 @@ func (s *server) createRelationshipDefinition(w http.ResponseWriter, r *http.Req
 		InternalName:        req.InternalName,
 		DisplayName:         req.DisplayName,
 		Description:         req.Description,
+		Kind:                req.Kind,
 		ParentTypeID:        req.ParentTypeID,
 		ChildTypeID:         req.ChildTypeID,
+		ParentLabel:         req.ParentLabel,
+		ChildLabel:          req.ChildLabel,
 		ExtendsID:           req.ExtendsID,
 		ParentVersionPolicy: req.ParentVersionPolicy,
 		ChildVersionPolicy:  req.ChildVersionPolicy,
@@ -520,6 +526,8 @@ func (s *server) updateRelationshipDefinition(w http.ResponseWriter, r *http.Req
 		ID:                  chi.URLParam(r, "id"),
 		DisplayName:         req.DisplayName,
 		Description:         req.Description,
+		ParentLabel:         req.ParentLabel,
+		ChildLabel:          req.ChildLabel,
 		ParentVersionPolicy: req.ParentVersionPolicy,
 		ChildVersionPolicy:  req.ChildVersionPolicy,
 	})

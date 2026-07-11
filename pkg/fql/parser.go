@@ -131,7 +131,7 @@ func (p *parser) parsePrimary() (Node, error) {
 	}
 
 	switch strings.ToLower(t.Text) {
-	case "child", "parent":
+	case "child", "parent", "linked":
 		return p.parseTraversal()
 	case "range":
 		return p.parseRange()
@@ -145,7 +145,7 @@ func (p *parser) parsePrimary() (Node, error) {
 	return p.parseComparisonOrIn()
 }
 
-// parseTraversal: (child|parent) "(" ident ")" "{" expr "}"
+// parseTraversal: (child|parent|linked) "(" ident ")" "{" expr "}"
 func (p *parser) parseTraversal() (Node, error) {
 	kw := p.next()
 	direction := Direction(strings.ToLower(kw.Text))

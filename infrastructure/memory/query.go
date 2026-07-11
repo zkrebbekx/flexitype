@@ -245,12 +245,29 @@ func (r *queryRepo) evalTraversal(n *query.BoundTraversal, s evalScope) (bool, e
 			continue
 		}
 
-		near, far := rel.ParentEntityID.String(), rel.ChildEntityID.String()
-		if n.Direction == fql.DirParent {
-			near, far = far, near
-		}
-		if near != s.entity {
-			continue
+		parent, child := rel.ParentEntityID.String(), rel.ChildEntityID.String()
+		var far string
+		switch n.Direction {
+		case fql.DirAny:
+			// linked(): match either end, evaluate the opposite one.
+			switch s.entity {
+			case parent:
+				far = child
+			case child:
+				far = parent
+			default:
+				continue
+			}
+		case fql.DirParent:
+			if child != s.entity {
+				continue
+			}
+			far = parent
+		default:
+			if parent != s.entity {
+				continue
+			}
+			far = child
 		}
 
 		ok, err := r.eval(n.Inner, evalScope{

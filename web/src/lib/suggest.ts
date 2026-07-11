@@ -77,7 +77,7 @@ function analyse(text: string, cursor: number): analysis {
     const t = m[0]
     tokens.push(t)
     const lower = t.toLowerCase()
-    if (lower === 'child' || lower === 'parent') {
+    if (lower === 'child' || lower === 'parent' || lower === 'linked') {
       lastKw = lower
     } else if (t === '(' && lastKw) {
       pendingRel = '' // next ident is the relationship name
@@ -122,14 +122,18 @@ export function suggest(text: string, cursor: number, schema: SuggestSchema): Su
 function candidates(a: analysis, schema: SuggestSchema): Suggestion[] {
   const attrByName = new Map(schema.attributes.map((e) => [e.attribute.internal_name, e]))
 
-  // Inside child( / parent( — complete relationship names.
-  if (a.inRelParens || a.prev === 'child' || a.prev === 'parent') {
-    return schema.relationships.map((r) => ({
-      label: r.internal_name,
-      insert: r.internal_name,
-      detail: r.display_name,
-      kind: 'relationship' as const,
-    }))
+  // Inside child( / parent( / linked( — complete relationship names.
+  // Symmetric definitions only traverse via linked().
+  if (a.inRelParens || a.prev === 'child' || a.prev === 'parent' || a.prev === 'linked') {
+    const wantSymmetric = a.prev === 'linked'
+    return schema.relationships
+      .filter((r) => (wantSymmetric ? true : r.kind !== 'symmetric'))
+      .map((r) => ({
+        label: r.internal_name,
+        insert: r.internal_name,
+        detail: r.display_name + (r.kind === 'symmetric' ? ' (symmetric)' : ''),
+        kind: 'relationship' as const,
+      }))
   }
 
   // link.<attr> inside a traversal body.
@@ -235,6 +239,7 @@ function candidates(a: analysis, schema: SuggestSchema): Suggestion[] {
     out.push(
       { label: 'child(rel) { … }', insert: 'child(', detail: 'traverse to child-side entities', kind: 'function' },
       { label: 'parent(rel) { … }', insert: 'parent(', detail: 'traverse to parent-side entities', kind: 'function' },
+      { label: 'linked(rel) { … }', insert: 'linked(', detail: 'traverse either end (symmetric links)', kind: 'function' },
       { label: 'not', insert: 'not', kind: 'keyword' },
     )
     return out

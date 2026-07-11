@@ -172,14 +172,19 @@ export interface EffectiveSchema {
 
 export type VersionPolicy = 'latest' | 'pinned'
 
+export type RelationshipKind = 'directed' | 'symmetric'
+
 export interface RelationshipDefinition {
   id: string
   tenant_id: string
   internal_name: string
   display_name: string
   description?: string
+  kind: RelationshipKind
   parent_type_id: string
   child_type_id: string
+  parent_label?: string
+  child_label?: string
   attribute_set_id: string
   extends_id?: string
   parent_version_policy: VersionPolicy
@@ -382,15 +387,25 @@ export const api = {
     internal_name: string
     display_name: string
     description?: string
+    kind?: RelationshipKind
     parent_type_id: string
     child_type_id: string
+    parent_label?: string
+    child_label?: string
     extends_id?: string
     parent_version_policy?: VersionPolicy
     child_version_policy?: VersionPolicy
   }) => request<RelationshipDefinition>('POST', '/relationship-definitions', input),
   updateRelationshipDefinition: (
     id: string,
-    input: { display_name: string; description?: string; parent_version_policy?: VersionPolicy; child_version_policy?: VersionPolicy },
+    input: {
+      display_name: string
+      description?: string
+      parent_label?: string
+      child_label?: string
+      parent_version_policy?: VersionPolicy
+      child_version_policy?: VersionPolicy
+    },
   ) => request<RelationshipDefinition>('PATCH', `/relationship-definitions/${id}`),
   archiveRelationshipDefinition: (id: string) =>
     request<RelationshipDefinition>('POST', `/relationship-definitions/${id}/archive`),

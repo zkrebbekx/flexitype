@@ -190,6 +190,53 @@ func TestInMemoryService(t *testing.T) {
 			})
 		})
 
+		Convey("When two products are linked symmetrically", func() {
+			productID := h.createType("product", "")
+			nameAttr := h.createAttr(productID, "name", "string")
+
+			rels := h.interactors().Relationships()
+			def, err := rels.CreateDefinition(h.ctx, apprelationship.CreateDefinitionInput{
+				InternalName: "compatible_with",
+				DisplayName:  "Compatible with",
+				Kind:         "symmetric",
+				ParentTypeID: productID,
+				ChildTypeID:  productID,
+			})
+			So(err, ShouldBeNil)
+
+			h.setValue(nameAttr, "sku-a", productID, "Alpha")
+			h.setValue(nameAttr, "sku-b", productID, "Beta")
+			// Link in reverse order: canonical storage makes the pair unique.
+			_, err = rels.Link(h.ctx, apprelationship.LinkInput{
+				DefinitionID: def.ID.String(),
+				ParentEntity: "sku-b",
+				ChildEntity:  "sku-a",
+			})
+			So(err, ShouldBeNil)
+
+			Convey("Then the reverse link conflicts as a duplicate", func() {
+				_, err := rels.Link(h.ctx, apprelationship.LinkInput{
+					DefinitionID: def.ID.String(),
+					ParentEntity: "sku-a",
+					ChildEntity:  "sku-b",
+				})
+				So(domainerrors.IsConflict(err), ShouldBeTrue)
+			})
+
+			Convey("Then linked() traverses from either end", func() {
+				So(entityIDs(h.query("product", `linked(compatible_with) { name = "Beta" }`)),
+					ShouldResemble, []string{"sku-a"})
+				So(entityIDs(h.query("product", `linked(compatible_with) { name = "Alpha" }`)),
+					ShouldResemble, []string{"sku-b"})
+			})
+
+			Convey("Then child() on a symmetric definition is rejected", func() {
+				err := h.interactors().Query().Validate(h.ctx, "product",
+					`child(compatible_with) { name = "Beta" }`)
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
+			})
+		})
+
 		Convey("When a write fails validation", func() {
 			productID := h.createType("product", "")
 

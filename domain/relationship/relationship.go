@@ -48,6 +48,11 @@ func Link(in LinkInput, now time.Time) (*Relationship, []events.Event, error) {
 	if in.ParentEntity == in.ChildEntity && in.Definition.ParentTypeID().Equals(in.Definition.ChildTypeID()) {
 		return nil, nil, domainerrors.NewValidation("an entity cannot relate to itself")
 	}
+	if in.Definition.IsSymmetric() && in.ChildEntity.String() < in.ParentEntity.String() {
+		// Canonical order makes the unordered pair unique regardless of
+		// which way callers supply it.
+		in.ParentEntity, in.ChildEntity = in.ChildEntity, in.ParentEntity
+	}
 	if err := checkPin("parent", in.Definition.ParentVersionPolicy(), in.ParentVersion); err != nil {
 		return nil, nil, err
 	}

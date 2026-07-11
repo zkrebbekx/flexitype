@@ -16,7 +16,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ValueInput from '@/components/ValueInput.vue'
 import Select from '@/components/ui/Select.vue'
 import Input from '@/components/ui/Input.vue'
-import { ArrowRight, Link2, Pencil, Plus, Trash2, Unlink } from 'lucide-vue-next'
+import { ArrowLeftRight, ArrowRight, Link2, Pencil, Plus, Trash2, Unlink } from 'lucide-vue-next'
 
 const route = useRoute()
 const typeId = computed(() => String(route.params.typeId))
@@ -171,6 +171,14 @@ function counterpartOf(l: EntityLink): string {
   return l.role === 'parent' ? l.relationship.child_entity_id : l.relationship.parent_entity_id
 }
 
+// Role chip text: symmetric links have no roles; directed ones prefer the
+// definition's display labels over parent/child.
+function roleLabel(l: EntityLink): string {
+  if (l.definition.kind === 'symmetric') return 'linked'
+  if (l.role === 'parent') return l.definition.parent_label || 'parent'
+  return l.definition.child_label || 'child'
+}
+
 const confirmRemove = ref<AttributeValue>()
 const removeValue = useMutation({
   mutationFn: (v: AttributeValue) => api.removeValue(v.id),
@@ -276,9 +284,10 @@ const removeValue = useMutation({
         class="flex items-center justify-between gap-3 rounded-lg border border-(--border) bg-(--surface) px-4 py-2.5 text-sm"
       >
         <span class="flex min-w-0 flex-wrap items-center gap-1.5">
-          <Badge :tone="l.role === 'parent' ? 'accent' : 'neutral'">{{ l.role }}</Badge>
+          <Badge :tone="l.definition.kind === 'symmetric' ? 'neutral' : l.role === 'parent' ? 'accent' : 'neutral'">{{ roleLabel(l) }}</Badge>
           <span class="font-medium">{{ l.definition.display_name }}</span>
-          <ArrowRight :size="13" class="text-(--text-muted)" />
+          <ArrowLeftRight v-if="l.definition.kind === 'symmetric'" :size="13" class="text-(--text-muted)" />
+          <ArrowRight v-else :size="13" class="text-(--text-muted)" />
           <span class="mono truncate">{{ counterpartOf(l) }}</span>
           <Badge v-if="l.relationship.parent_type_version" tone="warn">parent v{{ l.relationship.parent_type_version }}</Badge>
           <Badge v-if="l.relationship.child_type_version" tone="warn">child v{{ l.relationship.child_type_version }}</Badge>

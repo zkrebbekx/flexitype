@@ -224,3 +224,93 @@ func TestRelationshipLinks(t *testing.T) {
 		})
 	})
 }
+
+func TestSymmetricRelationships(t *testing.T) {
+	Convey("Given two entity types and an attribute set", t, func() {
+		now := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+		product := newEntityType(t, "product")
+		accessory := newEntityType(t, "accessory")
+		attrSet := newAttrSet(t, "rel_compatible_attrs")
+
+		input := NewDefinitionInput{
+			InternalName: "compatible_with",
+			DisplayName:  "Compatible with",
+			Kind:         KindSymmetric,
+			ParentType:   product,
+			ChildType:    accessory,
+			AttributeSet: attrSet,
+		}
+
+		Convey("When a symmetric definition is created", func() {
+			def, _, err := NewDefinition(input, now)
+
+			Convey("Then it is symmetric with latest-only policies", func() {
+				So(err, ShouldBeNil)
+				So(def.IsSymmetric(), ShouldBeTrue)
+				So(def.ParentVersionPolicy(), ShouldEqual, PolicyLatest)
+			})
+
+			Convey("And links canonicalize the unordered pair", func() {
+				rel, _, err := Link(LinkInput{Definition: def, ParentEntity: "zz-9", ChildEntity: "aa-1"}, now)
+				So(err, ShouldBeNil)
+				So(rel.ParentEntityID().String(), ShouldEqual, "aa-1")
+				So(rel.ChildEntityID().String(), ShouldEqual, "zz-9")
+			})
+		})
+
+		Convey("When a symmetric definition tries to pin versions", func() {
+			input.ParentVersionPolicy = PolicyPinned
+			_, _, err := NewDefinition(input, now)
+
+			Convey("Then it is rejected — pinning is directional", func() {
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
+			})
+		})
+
+		Convey("When a symmetric definition supplies side labels", func() {
+			input.ParentLabel = "left"
+			_, _, err := NewDefinition(input, now)
+
+			Convey("Then it is rejected — roles are undefined on an unordered pair", func() {
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
+			})
+		})
+
+		Convey("When a directed definition declares role labels", func() {
+			directed := NewDefinitionInput{
+				InternalName: "uses",
+				DisplayName:  "Uses",
+				ParentType:   product,
+				ChildType:    accessory,
+				ParentLabel:  "assembly",
+				ChildLabel:   "component",
+				AttributeSet: newAttrSet(t, "rel_uses_attrs"),
+			}
+			def, _, err := NewDefinition(directed, now)
+
+			Convey("Then the labels persist for display", func() {
+				So(err, ShouldBeNil)
+				So(def.ParentLabel(), ShouldEqual, "assembly")
+				So(def.ChildLabel(), ShouldEqual, "component")
+			})
+		})
+
+		Convey("When a definition extends a base of a different kind", func() {
+			base, _, err := NewDefinition(NewDefinitionInput{
+				InternalName: "related_to",
+				DisplayName:  "Related to",
+				ParentType:   product,
+				ChildType:    accessory,
+				AttributeSet: newAttrSet(t, "rel_related_attrs"),
+			}, now)
+			So(err, ShouldBeNil)
+
+			input.Extends = base
+			_, _, err = NewDefinition(input, now)
+
+			Convey("Then it is rejected", func() {
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
+			})
+		})
+	})
+}

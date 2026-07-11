@@ -36,6 +36,11 @@ func NewHandler(cfg ServerConfig) http.Handler {
 	r.Get("/healthz", cfg.Health.LiveHandler())
 	r.Get("/readyz", cfg.Health.ReadyHandler())
 
+	// The OpenAPI document is public (before auth) so client generators
+	// and mock servers can fetch the contract without credentials.
+	r.Get("/api/v1/openapi.json", s.openAPIJSON)
+	r.Get("/api/v1/openapi.yaml", s.openAPIYAML)
+
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(authenticate(cfg.Accounts, cfg.Logger))
 		// Interactors after auth: the set is built with the request's actor

@@ -289,6 +289,11 @@ No file configured → auth disabled (development mode).
 
 ### REST API (v1)
 
+The full contract is published as OpenAPI 3 — committed at
+[`api/openapi.yaml`](api/openapi.yaml) and served (unauthenticated) at
+`/api/v1/openapi.json` and `/api/v1/openapi.yaml`. Generate typed clients
+for any language from it; see [docs/clients.md](docs/clients.md).
+
 ```
 GET|POST   /api/v1/type-definitions            PATCH /api/v1/type-definitions/{id}
 POST       /api/v1/type-definitions/{id}/archive|restore

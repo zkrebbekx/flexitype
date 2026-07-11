@@ -198,6 +198,22 @@ webhooks; every subscriber sees the same envelope:
 Webhook deliveries carry `X-Flexitype-Signature` (hex HMAC-SHA256 of the
 body); verify with `events.VerifySignature`.
 
+## Quickstart (Docker)
+
+One command brings up the service (admin console embedded) and Postgres,
+with the transactional outbox and entity search index enabled:
+
+```bash
+docker compose up --build
+# then open http://localhost:8080
+```
+
+The published image is available without cloning:
+
+```bash
+docker pull ghcr.io/zkrebbekx/flexitype:latest
+```
+
 ## Standalone service
 
 ```bash

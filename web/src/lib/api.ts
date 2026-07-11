@@ -250,6 +250,46 @@ export interface PageQuery {
   cursor?: string
 }
 
+export interface WebhookSubscription {
+  id: string
+  name: string
+  url: string
+  event_types: string[]
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type DeliveryStatus = 'pending' | 'inflight' | 'delivered' | 'dead'
+
+export interface WebhookDelivery {
+  id: string
+  subscription_id: string
+  envelope_id: string
+  event_type: string
+  feed_seq: number
+  status: DeliveryStatus
+  attempts: number
+  next_attempt_at: string
+  last_error?: string
+  response_code?: number
+  created_at: string
+  updated_at: string
+}
+
+export interface FeedEvent {
+  seq: number
+  envelope: {
+    id: string
+    type: string
+    aggregate_type: string
+    aggregate_id: string
+    tenant_id: string
+    actor: string
+    occurred_at: string
+  }
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api/v1${path}`, {
     method,
@@ -431,6 +471,31 @@ export const api = {
   // Activity
   listActivity: (q: PageQuery & { entity?: string; entity_id?: string; actor?: string } = {}) =>
     request<Paged<ActivityEntry>>('GET', `/activity${qs(q)}`),
+
+  // Event delivery — webhook subscriptions
+  listSubscriptions: () =>
+    request<{ items: WebhookSubscription[] }>('GET', '/webhook-subscriptions'),
+  createSubscription: (input: {
+    name: string
+    url: string
+    secret?: string
+    event_types?: string[]
+    active?: boolean
+  }) => request<WebhookSubscription>('POST', '/webhook-subscriptions', input),
+  updateSubscription: (
+    id: string,
+    input: { url?: string; event_types?: string[]; active?: boolean; rotate_secret?: string },
+  ) => request<WebhookSubscription>('PATCH', `/webhook-subscriptions/${id}`, input),
+  deleteSubscription: (id: string) =>
+    request<void>('DELETE', `/webhook-subscriptions/${id}`),
+  listDeliveries: (id: string, q: PageQuery & { status?: DeliveryStatus } = {}) =>
+    request<Paged<WebhookDelivery>>('GET', `/webhook-subscriptions/${id}/deliveries${qs(q)}`),
+  redeliver: (deliveryId: string) =>
+    request<{ status: string }>('POST', `/webhook-deliveries/${deliveryId}/redeliver`),
+
+  // Event delivery — events feed
+  listEvents: (q: { after?: number; types?: string; limit?: number } = {}) =>
+    request<{ items: FeedEvent[]; next_cursor: number }>('GET', `/events${qs(q)}`),
 }
 
 // friendlyError renders an ApiError for inline display.

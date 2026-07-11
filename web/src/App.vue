@@ -10,6 +10,7 @@ const { theme, toggle } = useTheme()
 
 // Playground builds run the service in-browser; data resets on reload.
 const isPlayground = import.meta.env.VITE_WASM === '1'
+const baseUrl = import.meta.env.BASE_URL
 
 const features = useQuery({
   queryKey: ['features'],
@@ -39,7 +40,7 @@ const health = useQuery({
   <div class="flex h-full">
     <aside class="flex w-52 shrink-0 flex-col border-r border-(--border) bg-(--surface)">
       <div class="flex items-center gap-2 px-4 py-4">
-        <span class="grid h-7 w-7 place-items-center rounded-md bg-(--accent) text-[15px] font-bold text-white">◳</span>
+        <img :src="`${baseUrl}logo.svg`" alt="" class="h-7 w-7" />
         <span class="text-[15px] font-semibold tracking-tight">flexitype</span>
         <span
           v-if="isPlayground"

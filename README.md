@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/banner.png" alt="flexitype — soft types, attributes &amp; relationships for Go, defined at runtime" width="100%">
+</p>
+
 # flexitype
 
 Soft types and attributes for Go: define entity types, typed and constrained

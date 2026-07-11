@@ -13,6 +13,7 @@ import Badge from '@/components/ui/Badge.vue'
 import TypeChip from '@/components/ui/TypeChip.vue'
 import Modal from '@/components/ui/Modal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import ValueInput from '@/components/ValueInput.vue'
 import Select from '@/components/ui/Select.vue'
 import Input from '@/components/ui/Input.vue'
@@ -203,7 +204,14 @@ const removeValue = useMutation({
     Every attribute this {{ type.data.value?.display_name?.toLowerCase() ?? 'type' }} can hold, with its current values.
   </PageHeader>
 
-  <div class="flex flex-col gap-2">
+  <ErrorState
+    v-if="effective.isError.value || values.isError.value || type.isError.value"
+    :error="effective.error.value ?? values.error.value ?? type.error.value"
+    class="mb-2"
+    @retry="((effective.refetch(), values.refetch(), type.refetch()))"
+  />
+
+  <div v-else class="flex flex-col gap-2">
     <article
       v-for="row in rows"
       :key="row.attribute.id"

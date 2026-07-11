@@ -15,6 +15,7 @@ import TypeChip from '@/components/ui/TypeChip.vue'
 import Tabs from '@/components/ui/Tabs.vue'
 import Modal from '@/components/ui/Modal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import SkeletonRows from '@/components/ui/SkeletonRows.vue'
 import AttributeDrawer from '@/components/AttributeDrawer.vue'
 import DependencyDrawer from '@/components/DependencyDrawer.vue'
@@ -185,6 +186,9 @@ function describeEffect(d: Dependency): string {
     </template>
   </PageHeader>
 
+  <ErrorState v-if="type.isError.value" :error="type.error.value" @retry="type.refetch()" />
+
+  <template v-else>
   <Tabs v-model="tab" :tabs="tabs" />
 
   <!-- Attributes -->
@@ -417,6 +421,7 @@ function describeEffect(d: Dependency): string {
       />
     </div>
   </section>
+  </template>
 
   <AttributeDrawer :open="attrDrawer" :type-id="typeId" :attribute="editingAttr" @close="attrDrawer = false" />
   <RelationshipDefinitionDrawer

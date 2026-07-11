@@ -8,6 +8,7 @@ import { formatRelative } from '@/lib/format'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import Select from '@/components/ui/Select.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import SkeletonRows from '@/components/ui/SkeletonRows.vue'
 import Pagination from '@/components/ui/Pagination.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -67,6 +68,7 @@ const queryResults = useQuery({
 
 const rows = computed(() => (activeQuery.value ? queryResults.data.value : entities.data.value))
 const rowsPending = computed(() => (activeQuery.value ? queryResults.isPending.value : entities.isPending.value))
+const rowsError = computed(() => (activeQuery.value ? queryResults.error.value : entities.error.value))
 
 function runQuery(q: string) {
   cursor.value = undefined
@@ -176,8 +178,9 @@ const suggestSchema = computed<SuggestSchema>(() => ({
           </tr>
         </tbody>
       </table>
+      <ErrorState v-if="rowsError" :error="rowsError" class="m-4" @retry="activeQuery ? queryResults.refetch() : entities.refetch()" />
       <EmptyState
-        v-if="!rowsPending && !rows?.items.length"
+        v-else-if="!rowsPending && !rows?.items.length"
         :title="activeQuery ? 'No entities match this query' : 'No entities for this type'"
         :body="activeQuery ? 'Adjust the conditions or clear the query.' : 'Entities appear as soon as your systems write values against this type.'"
         class="m-4"

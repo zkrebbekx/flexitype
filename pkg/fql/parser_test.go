@@ -1,10 +1,42 @@
 package fql
 
 import (
+	"strings"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
+
+func TestParserBounds(t *testing.T) {
+	Convey("Given adversarial query input", t, func() {
+		Convey("Deeply nested parentheses are rejected, not crashed", func() {
+			q := strings.Repeat("(", 500) + "a = 1" + strings.Repeat(")", 500)
+			_, err := Parse(q)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "too deep")
+		})
+
+		Convey("A deep not-chain is rejected, not crashed", func() {
+			q := strings.Repeat("not ", 500) + "a = 1"
+			_, err := Parse(q)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "too deep")
+		})
+
+		Convey("An over-length query is rejected before lexing", func() {
+			_, err := Parse(strings.Repeat("a", maxQueryLen+1))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "too long")
+		})
+
+		Convey("Moderately nested queries still parse", func() {
+			q := strings.Repeat("(", 40) + "a = 1" + strings.Repeat(")", 40)
+			node, err := Parse(q)
+			So(err, ShouldBeNil)
+			So(node, ShouldNotBeNil)
+		})
+	})
+}
 
 func TestParser(t *testing.T) {
 	Convey("Given FQL query text", t, func() {

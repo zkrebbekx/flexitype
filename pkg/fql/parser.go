@@ -2,10 +2,24 @@ package fql
 
 import "strings"
 
+// maxQueryLen bounds the raw query size. Recursive-descent parsing is linear
+// in token count, but an unbounded input is a cheap way to make the service do
+// arbitrary work, so a query longer than this is rejected before lexing.
+const maxQueryLen = 16 * 1024
+
+// maxParseDepth bounds parenthesis / traversal / not nesting. A Go stack
+// overflow is a fatal runtime throw that panic recovery cannot catch, so
+// deeply nested input must be rejected as a validation error rather than
+// allowed to crash the process.
+const maxParseDepth = 128
+
 // Parse turns query text into an AST. Errors carry byte positions.
 func Parse(input string) (Node, error) {
 	if strings.TrimSpace(input) == "" {
 		return nil, errorf(0, "empty query")
+	}
+	if len(input) > maxQueryLen {
+		return nil, errorf(0, "query too long (max %d bytes)", maxQueryLen)
 	}
 	tokens, err := lex(input)
 	if err != nil {
@@ -25,7 +39,21 @@ func Parse(input string) (Node, error) {
 type parser struct {
 	tokens []Token
 	pos    int
+	depth  int
 }
+
+// enter/leave bound recursion depth. Called at the two unbounded descent
+// points — parseOr (parentheses and traversal bodies) and parseUnary (not
+// chains) — so any nesting vector is capped at maxParseDepth.
+func (p *parser) enter(pos int) error {
+	p.depth++
+	if p.depth > maxParseDepth {
+		return errorf(pos, "query nesting too deep (max %d)", maxParseDepth)
+	}
+	return nil
+}
+
+func (p *parser) leave() { p.depth-- }
 
 func (p *parser) peek() Token { return p.tokens[p.pos] }
 
@@ -60,6 +88,10 @@ func displayToken(t Token) string {
 }
 
 func (p *parser) parseOr() (Node, error) {
+	if err := p.enter(p.peek().Pos); err != nil {
+		return nil, err
+	}
+	defer p.leave()
 	left, err := p.parseAnd()
 	if err != nil {
 		return nil, err
@@ -101,6 +133,10 @@ func (p *parser) parseAnd() (Node, error) {
 
 func (p *parser) parseUnary() (Node, error) {
 	if p.keyword("not") {
+		if err := p.enter(p.peek().Pos); err != nil {
+			return nil, err
+		}
+		defer p.leave()
 		t := p.next()
 		inner, err := p.parseUnary()
 		if err != nil {

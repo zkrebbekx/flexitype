@@ -18,23 +18,30 @@ type Page struct {
 }
 
 // PageArgs are raw client pagination arguments: a page size and an opaque
-// cursor. Cursors are base64-encoded "offset:<n>" strings.
+// cursor. Cursors are base64-encoded "offset:<n>" strings; pages use
+// LIMIT/OFFSET, so a page can shift by rows inserted or deleted before it
+// between requests. Callers that need stability across concurrent writes
+// should snapshot or accept that (see issue #42 for the keyset follow-up).
 type PageArgs struct {
 	Limit  *int
 	Cursor *string
 }
 
-// Resolve converts client args into a clamped limit/offset Page.
+// Resolve validates client args into a clamped limit/offset Page. A limit that
+// is present but not a positive integer is rejected (callers surface it as a
+// 422) rather than silently defaulted, so every endpoint validates pagination
+// params the same way; a limit above the maximum is clamped. A malformed
+// cursor is likewise rejected.
 func (a PageArgs) Resolve() (Page, error) {
 	limit := defaultPageSize
 	if a.Limit != nil {
+		if *a.Limit < 1 {
+			return Page{}, fmt.Errorf("limit must be a positive integer")
+		}
 		limit = *a.Limit
-	}
-	if limit <= 0 {
-		limit = defaultPageSize
-	}
-	if limit > maxPageSize {
-		limit = maxPageSize
+		if limit > maxPageSize {
+			limit = maxPageSize
+		}
 	}
 
 	offset := 0

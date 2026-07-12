@@ -40,7 +40,7 @@ func (s *server) listChangeSets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": sets})
+	writeItems(w, sets)
 }
 
 func (s *server) getChangeSet(w http.ResponseWriter, r *http.Request) {

@@ -37,7 +37,7 @@ func (s *server) listUnitFamilies(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": families})
+	writeItems(w, families)
 }
 
 func (s *server) getUnitFamily(w http.ResponseWriter, r *http.Request) {

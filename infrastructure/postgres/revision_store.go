@@ -115,6 +115,28 @@ func (s *revisionStore) AsOf(ctx context.Context, tenant valueobjects.TenantID, 
 	return row.toRevision()
 }
 
+func (s *revisionStore) PurgeEntity(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error) {
+	res, err := s.q.ExecContext(ctx, bind(
+		`DELETE FROM flexitype_entity_revision
+		 WHERE tenant_id = ? AND type_definition_id = ? AND entity_id = ?`),
+		tenant.String(), typeDefID, entityID)
+	if err != nil {
+		return 0, fmt.Errorf("purge entity revisions: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+func (s *revisionStore) PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error) {
+	res, err := s.q.ExecContext(ctx, bind(
+		`DELETE FROM flexitype_entity_revision WHERE tenant_id = ?`), tenant.String())
+	if err != nil {
+		return 0, fmt.Errorf("purge tenant revisions: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 func (s *revisionStore) LastSeq(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error) {
 	var seq int
 	err := s.q.GetContext(ctx, &seq, bind(

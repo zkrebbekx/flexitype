@@ -53,3 +53,13 @@ func (s *searchStore) Remove(ctx context.Context, tenant valueobjects.TenantID, 
 	}
 	return nil
 }
+
+func (s *searchStore) PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error) {
+	res, err := s.q.ExecContext(ctx, bind(
+		`DELETE FROM flexitype_entity_search WHERE tenant_id = ?`), tenant.String())
+	if err != nil {
+		return 0, fmt.Errorf("purge tenant search documents: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}

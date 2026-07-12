@@ -99,6 +99,11 @@ type FactoryConfig struct {
 	// Revisions persists entity revisions; nil disables the feature.
 	Revisions apprevision.Store
 
+	// SearchStore is the entity search projection an erasure purges; nil when
+	// the search index is off. Typed as the value package's erasure-facing
+	// slice (search.DocumentStore satisfies it) to avoid an import cycle.
+	SearchStore appvalue.SearchStore
+
 	// ChangeSets persists change-management drafts; nil disables the feature.
 	ChangeSets appchangeset.Store
 
@@ -179,6 +184,12 @@ func (f *factory) New(context.Context) *Interactors {
 	}
 	if f.cfg.Revisions != nil {
 		i.revisions = apprevision.NewInteractor(f.cfg.Revisions, repos.TypeDefinitions, repos.Attributes, repos.Values, i.values, f.cfg.Now)
+		// The erasure usecase purges revisions too.
+		i.values.SetRevisionStore(f.cfg.Revisions)
+	}
+	if f.cfg.SearchStore != nil {
+		// The erasure usecase purges the search projection too.
+		i.values.SetSearchStore(f.cfg.SearchStore)
 	}
 	if f.cfg.ChangeSets != nil {
 		i.changesets = appchangeset.NewInteractor(f.cfg.ChangeSets, i.values, f.cfg.Now)

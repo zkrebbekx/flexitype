@@ -91,4 +91,15 @@ type Repository interface {
 
 	// Save upserts the aggregate.
 	Save(ctx context.Context, r *Relationship) error
+
+	// PurgeEntity HARD-deletes every link touching an entity — as parent OR
+	// child, including already-archived links — for the right-to-erasure
+	// primitive. It returns the number of links deleted. Only valid on a
+	// transaction-bound repository.
+	PurgeEntity(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) (int, error)
+
+	// PurgeTenant HARD-deletes every link of a tenant (including archived
+	// links), returning the row count. Only valid on a transaction-bound
+	// repository.
+	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error)
 }

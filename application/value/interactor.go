@@ -31,16 +31,46 @@ const maxBatchItems = 1000
 
 // Interactor implements the attribute-value usecases.
 type Interactor struct {
-	uow      uow.UnitOfWork
-	typeDefs domaintypedef.Repository
-	attrs    domainattribute.Repository
-	values   domainvalue.Repository
-	deps     domaindependency.Repository
-	links    domainrelationship.Repository
-	blobs    blobStore
-	units    unitStore
-	now      func() time.Time
+	uow       uow.UnitOfWork
+	typeDefs  domaintypedef.Repository
+	attrs     domainattribute.Repository
+	values    domainvalue.Repository
+	deps      domaindependency.Repository
+	links     domainrelationship.Repository
+	blobs     blobStore
+	units     unitStore
+	revisions revisionPurger
+	search    SearchStore
+	now       func() time.Time
 }
+
+// revisionPurger hard-deletes an entity's or a tenant's revisions during an
+// erasure. Nil disables revision purging (the revision feature is off). It is
+// the erasure-facing slice of the revision store; kept local so the value
+// package does not import the revision package.
+type revisionPurger interface {
+	PurgeEntity(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error)
+	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error)
+}
+
+// SetRevisionStore installs the revision store an erasure purges. Called once
+// at wiring time when the revision feature is enabled.
+func (i *Interactor) SetRevisionStore(s revisionPurger) { i.revisions = s }
+
+// SearchStore is the erasure-facing slice of the search-projection port: an
+// entity's document is dropped with Remove, a tenant's with PurgeTenant. It is
+// declared here (rather than imported from the search package) because the
+// search package depends on the application root, which depends on this
+// package — importing it would cycle. Nil disables search purging (the index
+// is off).
+type SearchStore interface {
+	Remove(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) error
+	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error)
+}
+
+// SetSearchStore installs the search projection an erasure purges. Called once
+// at wiring time when the search index is enabled.
+func (i *Interactor) SetSearchStore(s SearchStore) { i.search = s }
 
 // unitStore resolves the unit family a quantity attribute pins, for
 // converting a magnitude to its base unit. Nil disables quantity writes.
@@ -421,6 +451,194 @@ func (i *Interactor) RemoveEntity(ctx context.Context, rawTypeDefID, rawEntityID
 		return nil, err
 	}
 	return out, nil
+}
+
+// PurgeReport counts what an erasure permanently removed. It is the audited
+// receipt of a hard delete.
+type PurgeReport struct {
+	// EntityID is set for a per-entity purge; empty for a tenant purge.
+	EntityID          string `json:"entity_id,omitempty"`
+	ValuesPurged      int    `json:"values_purged"`
+	RevisionsPurged   int    `json:"revisions_purged"`
+	RelationshipsGone int    `json:"relationships_gone"`
+	SearchDocsPurged  int    `json:"search_docs_purged"`
+	MediaBlobsPurged  int    `json:"media_blobs_purged"`
+}
+
+// PurgeEntity permanently ERASES one entity: it hard-deletes every attribute
+// value (already-archived rows included), every revision, and every
+// relationship link the entity participates in, then garbage-collects the
+// backing blobs of any media values. This is irreversible — unlike
+// RemoveEntity, which only archives — and the erasure itself is audited. An
+// entity with nothing to erase is reported NotFound.
+//
+// The value and relationship deletes plus the audit entry are one atomic unit
+// of work. The revision and search projections are maintained outside the
+// value write transaction in this architecture (revisions are created
+// non-transactionally; the search index is an event-driven projection), so
+// their purge runs on their own stores within the same call; on the happy path
+// every trace is removed, and the deletes are idempotent under retry.
+func (i *Interactor) PurgeEntity(ctx context.Context, rawTypeDefID, rawEntityID string) (*PurgeReport, error) {
+	typeDefID, err := valueobjects.ParseTypeDefinitionID(rawTypeDefID)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	entityID, err := valueobjects.ParseEntityID(rawEntityID)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	tenant := uow.TenantFromContext(ctx)
+
+	report := &PurgeReport{EntityID: rawEntityID}
+	err = i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
+		*report = PurgeReport{EntityID: rawEntityID}
+		values := i.values.WithTx(tx)
+		links := i.links.WithTx(tx)
+
+		mediaKeys, vcount, err := values.PurgeEntity(ctx, domainvalue.EntityKey{
+			TenantID: tenant, TypeDefinitionID: typeDefID, EntityID: entityID,
+		})
+		if err != nil {
+			return fmt.Errorf("purge entity values: %w", err)
+		}
+		report.ValuesPurged = vcount
+
+		rcount, err := links.PurgeEntity(ctx, tenant, entityID)
+		if err != nil {
+			return fmt.Errorf("purge entity relationships: %w", err)
+		}
+		report.RelationshipsGone = rcount
+
+		if i.revisions != nil {
+			n, err := i.revisions.PurgeEntity(ctx, tenant, typeDefID.String(), entityID.String())
+			if err != nil {
+				return fmt.Errorf("purge entity revisions: %w", err)
+			}
+			report.RevisionsPurged = n
+		}
+
+		// An entity with no values, links or revisions never existed here.
+		if report.ValuesPurged == 0 && report.RelationshipsGone == 0 && report.RevisionsPurged == 0 {
+			return domainerrors.NewNotFound("entity", rawEntityID)
+		}
+
+		// Drop the search document (best effort: the projection is derived and
+		// self-heals, and a storage hiccup must not fail the erasure).
+		if i.search != nil {
+			_ = i.search.Remove(ctx, tenant, entityID)
+		}
+
+		c.RecordChange(activity.Change{
+			Entity:   domainvalue.AggregateType,
+			EntityID: rawEntityID,
+			Action:   activity.ActionPurged,
+			Before: map[string]any{
+				"entity_id":          rawEntityID,
+				"type_definition_id": rawTypeDefID,
+				"values_purged":      report.ValuesPurged,
+				"revisions_purged":   report.RevisionsPurged,
+				"relationships_gone": report.RelationshipsGone,
+			},
+		})
+
+		i.gcBlobsAfterCommit(tx, mediaKeys)
+		report.MediaBlobsPurged = len(mediaKeys)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
+// PurgeTenant permanently ERASES a tenant's entity DATA: it hard-deletes every
+// attribute value, revision, relationship link and search document of the
+// tenant taken from the context, and garbage-collects the backing media blobs.
+//
+// It is deliberately scoped to entity data. It does NOT remove the tenant's
+// type/attribute DEFINITIONS, unit families, saved views, change-sets, dedup
+// rules, webhook subscriptions or the activity log — the schema and control
+// plane survive so the tenant can keep operating (or be decommissioned
+// separately). The erasure itself is audited.
+func (i *Interactor) PurgeTenant(ctx context.Context) (*PurgeReport, error) {
+	tenant := uow.TenantFromContext(ctx)
+	if tenant.String() == "" {
+		return nil, domainerrors.NewValidation("a tenant is required to purge tenant data")
+	}
+
+	report := &PurgeReport{}
+	err := i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
+		*report = PurgeReport{}
+		values := i.values.WithTx(tx)
+		links := i.links.WithTx(tx)
+
+		mediaKeys, vcount, err := values.PurgeTenant(ctx, tenant)
+		if err != nil {
+			return fmt.Errorf("purge tenant values: %w", err)
+		}
+		report.ValuesPurged = vcount
+
+		rcount, err := links.PurgeTenant(ctx, tenant)
+		if err != nil {
+			return fmt.Errorf("purge tenant relationships: %w", err)
+		}
+		report.RelationshipsGone = rcount
+
+		if i.revisions != nil {
+			n, err := i.revisions.PurgeTenant(ctx, tenant)
+			if err != nil {
+				return fmt.Errorf("purge tenant revisions: %w", err)
+			}
+			report.RevisionsPurged = n
+		}
+		if i.search != nil {
+			n, err := i.search.PurgeTenant(ctx, tenant)
+			if err != nil {
+				return fmt.Errorf("purge tenant search documents: %w", err)
+			}
+			report.SearchDocsPurged = n
+		}
+
+		c.RecordChange(activity.Change{
+			Entity:   "tenant",
+			EntityID: tenant.String(),
+			Action:   activity.ActionPurged,
+			Before: map[string]any{
+				"tenant_id":          tenant.String(),
+				"values_purged":      report.ValuesPurged,
+				"revisions_purged":   report.RevisionsPurged,
+				"relationships_gone": report.RelationshipsGone,
+				"search_docs_purged": report.SearchDocsPurged,
+			},
+		})
+
+		i.gcBlobsAfterCommit(tx, mediaKeys)
+		report.MediaBlobsPurged = len(mediaKeys)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
+// gcBlobsAfterCommit schedules the backing blobs of purged media values for
+// deletion once the surrounding transaction commits (best effort — a storage
+// error never fails the erasure; a later sweep can reconcile), mirroring
+// gcMediaAfterCommit for the multi-key purge path.
+func (i *Interactor) gcBlobsAfterCommit(tx db.Transactor, keys []string) {
+	if i.blobs == nil || len(keys) == 0 {
+		return
+	}
+	keys = append([]string(nil), keys...) // capture: the caller may reuse the slice
+	tx.OnPostCommit(func(ctx context.Context) error {
+		for _, key := range keys {
+			if key != "" {
+				_ = i.blobs.Delete(ctx, key)
+			}
+		}
+		return nil
+	})
 }
 
 // checkDependencies resolves the effective schema for the target attribute

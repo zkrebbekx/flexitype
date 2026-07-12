@@ -241,6 +241,14 @@ func (r *fakeValueRepo) Save(_ context.Context, av *domainvalue.AttributeValue) 
 	return nil
 }
 
+func (r *fakeValueRepo) PurgeEntity(context.Context, domainvalue.EntityKey) ([]string, int, error) {
+	return nil, 0, nil
+}
+
+func (r *fakeValueRepo) PurgeTenant(context.Context, valueobjects.TenantID) ([]string, int, error) {
+	return nil, 0, nil
+}
+
 type fakeDepRepo struct {
 	deps []*domaindependency.Dependency
 }
@@ -306,6 +314,12 @@ func (r *fakeLinksRepo) List(context.Context, domainrelationship.Filter, db.Page
 	return nil, 0, nil
 }
 func (r *fakeLinksRepo) Save(context.Context, *domainrelationship.Relationship) error { return nil }
+func (r *fakeLinksRepo) PurgeEntity(context.Context, valueobjects.TenantID, valueobjects.EntityID) (int, error) {
+	return 0, nil
+}
+func (r *fakeLinksRepo) PurgeTenant(context.Context, valueobjects.TenantID) (int, error) {
+	return 0, nil
+}
 
 type fakeActivityLog struct {
 	entries []activity.Entry

@@ -84,4 +84,16 @@ type Repository interface {
 
 	// Save upserts the aggregate.
 	Save(ctx context.Context, av *AttributeValue) error
+
+	// PurgeEntity HARD-deletes every stored value of one entity, including
+	// already-archived rows — the right-to-erasure primitive. It returns the
+	// object keys of any media values removed so the caller can garbage-collect
+	// the backing blobs, and the number of rows deleted. Only valid on a
+	// transaction-bound repository.
+	PurgeEntity(ctx context.Context, key EntityKey) (purgedMediaKeys []string, count int, err error)
+
+	// PurgeTenant HARD-deletes every stored value of a tenant (all types,
+	// entities and archived rows), returning purged media object keys and the
+	// row count. Only valid on a transaction-bound repository.
+	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (purgedMediaKeys []string, count int, err error)
 }

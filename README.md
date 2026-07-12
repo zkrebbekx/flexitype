@@ -67,6 +67,9 @@ No backend; data resets on reload.
   HMAC-signed webhooks, or plain funcs
 - **Activity log**: every change audited with JSON before/after descriptors,
   written in the *same transaction* as the change
+- **Data erasure**: an admin-scoped, audited, irreversible hard delete of one
+  entity or a tenant's entity data — the right-to-erasure primitive on top of
+  everyday soft deletes. See [docs/erasure.md](docs/erasure.md)
 - **Dataloaders throughout the repositories**: point lookups batch into
   `ANY()` queries, identical filter+page queries deduplicate, per-parent
   pagination collapses into one windowed query
@@ -423,6 +426,8 @@ GET        /api/v1/entities/{typeDef}                (list)
 GET        /api/v1/entities/{typeDef}/grid|facets    (faceted grid)
 POST|GET   /api/v1/entities/{typeDef}/import|export  (CSV)
 GET        /api/v1/entities/{typeDef}/{entity}/values|completeness|as-of
+DELETE     /api/v1/entities/{typeDef}/{entity}                 (archive, cascade)
+POST       /api/v1/entities/{typeDef}/{entity}/purge           (erase, admin, hard delete)
 GET        /api/v1/entities/{typeDef}/{entity}/attributes/{attr}/effective-schema
 POST       /api/v1/entities/{typeDef}/{entity}/attributes/{attr}/media
 GET|POST   /api/v1/entities/{typeDef}/{entity}/revisions
@@ -444,6 +449,7 @@ GET|POST   /api/v1/relationships               GET|DELETE /api/v1/relationships/
 GET        /api/v1/entities/{typeDef}/{entity}/relationships
 GET        /api/v1/match-rules/{id}/scan|dismiss                (duplicate detection)
 GET        /api/v1/activity
+POST       /api/v1/admin/purge                 (erase tenant entity data, admin, hard delete)
 GET|POST   /api/v1/webhook-subscriptions       GET|PATCH|DELETE /api/v1/webhook-subscriptions/{id}
 GET        /api/v1/webhook-subscriptions/{id}/deliveries?status=
 POST       /api/v1/webhook-deliveries/{id}/redeliver

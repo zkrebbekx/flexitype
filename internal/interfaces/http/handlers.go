@@ -530,6 +530,37 @@ func (s *server) removeEntity(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// purgeEntity permanently ERASES one entity (values, revisions, links and
+// media blobs). Admin-scoped: this is an irreversible hard delete, the
+// right-to-erasure primitive, distinct from the soft-delete DELETE handler.
+func (s *server) purgeEntity(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	report, err := application.FromContext(r.Context()).Values().PurgeEntity(
+		r.Context(), chi.URLParam(r, "typeDefinitionID"), chi.URLParam(r, "entityID"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+// purgeTenant permanently ERASES the calling tenant's entity data (values,
+// revisions, links, search documents and media blobs). Admin-scoped and
+// irreversible; type/attribute definitions and the control plane survive.
+func (s *server) purgeTenant(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	report, err := application.FromContext(r.Context()).Values().PurgeTenant(r.Context())
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
 func (s *server) getValue(w http.ResponseWriter, r *http.Request) {
 	snap, err := application.FromContext(r.Context()).Values().Get(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {

@@ -25,6 +25,9 @@ const (
 	ActionArchived Action = "archived"
 	ActionRestored Action = "restored"
 	ActionRemoved  Action = "removed"
+	// ActionPurged records a HARD delete (right-to-erasure): the entity or
+	// tenant data was permanently and irreversibly removed, not archived.
+	ActionPurged Action = "purged"
 )
 
 // Change is what a usecase records: the entity that changed plus

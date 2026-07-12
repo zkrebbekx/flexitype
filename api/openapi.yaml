@@ -402,6 +402,28 @@ paths:
                   values_removed: { type: integer }
                   relationships_gone: { type: integer }
         "404": { $ref: "#/components/responses/Error" }
+  /entities/{typeDefinitionID}/{entityID}/purge:
+    post:
+      tags: [entities]
+      summary: Erase an entity (hard delete, admin scope)
+      description: >
+        Permanently and IRREVERSIBLY hard-deletes every trace of the entity —
+        all attribute values (archived rows included), all revisions, every
+        relationship link it participates in, and the backing media blobs — in
+        one audited unit of work. This is the right-to-erasure primitive, distinct
+        from the soft-delete DELETE. Requires the admin scope. NotFound if the
+        entity has no values, revisions or links.
+      parameters:
+        - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
+        - { name: entityID, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Erasure receipt (counts of what was purged)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurgeReport" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /entities/{typeDefinitionID}/{entityID}/values:
     get:
       tags: [entities]
@@ -679,6 +701,24 @@ paths:
         "200": { description: Committed }
         "409": { $ref: "#/components/responses/Error" }
 
+  /admin/purge:
+    post:
+      tags: [provisioning]
+      summary: Erase the tenant's entity data (hard delete, admin scope)
+      description: >
+        Permanently and IRREVERSIBLY hard-deletes the calling tenant's entity
+        DATA — every attribute value, revision, relationship link and search
+        document — and garbage-collects the backing media blobs. The tenant is
+        taken from the credential. Deliberately scoped to entity data: type and
+        attribute definitions, unit families, saved views and the control plane
+        survive. The erasure itself is audited. Requires the admin scope.
+      responses:
+        "200":
+          description: Erasure receipt (counts of what was purged)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurgeReport" }
+        "403": { $ref: "#/components/responses/Error" }
   /tenants:
     get:
       tags: [provisioning]
@@ -1479,6 +1519,16 @@ components:
         type_definition_id: { type: string }
         value_count: { type: integer }
         last_updated_at: { type: string, format: date-time }
+    PurgeReport:
+      type: object
+      description: The audited receipt of a hard delete (right-to-erasure).
+      properties:
+        entity_id: { type: string, description: "set for a per-entity purge; omitted for a tenant purge" }
+        values_purged: { type: integer }
+        revisions_purged: { type: integer }
+        relationships_gone: { type: integer }
+        search_docs_purged: { type: integer }
+        media_blobs_purged: { type: integer }
     EffectiveAttribute:
       type: object
       properties:

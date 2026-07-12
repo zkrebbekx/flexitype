@@ -737,3 +737,27 @@ func (r *relationshipRepository) Save(ctx context.Context, rel *domainrelationsh
 	}
 	return nil
 }
+
+func (r *relationshipRepository) PurgeEntity(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) (int, error) {
+	// Erase every link the entity participates in, on either side, archived
+	// links included.
+	res, err := r.q.ExecContext(ctx, bind(
+		`DELETE FROM flexitype_relationship
+		 WHERE tenant_id = ? AND (parent_entity_id = ? OR child_entity_id = ?)`),
+		tenant.String(), entityID.String(), entityID.String())
+	if err != nil {
+		return 0, fmt.Errorf("purge entity relationships: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+func (r *relationshipRepository) PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error) {
+	res, err := r.q.ExecContext(ctx, bind(
+		`DELETE FROM flexitype_relationship WHERE tenant_id = ?`), tenant.String())
+	if err != nil {
+		return 0, fmt.Errorf("purge tenant relationships: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}

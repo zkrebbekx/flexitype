@@ -183,8 +183,10 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	newRepos := func() application.Repositories { return postgres.NewRepositories(pool) }
 
 	var indexer *search.Indexer
+	var searchStore search.DocumentStore
 	if o.searchIndex {
-		indexer = search.NewIndexer(newRepos, postgres.NewSearchStore(pool))
+		searchStore = postgres.NewSearchStore(pool)
+		indexer = search.NewIndexer(newRepos, searchStore)
 		o.dispatcher.Register(indexer, events.WithEventTypes(search.EventTypes()...))
 	}
 
@@ -204,6 +206,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		Revisions:       postgres.NewRevisionStore(pool),
 		ChangeSets:      postgres.NewChangeSetStore(pool),
 		UnitFamilies:    postgres.NewUnitFamilyStore(pool),
+		SearchStore:     searchStore, // may be nil; enables entity-data erasure of the projection
 	}
 	if o.outbox {
 		store := postgres.NewOutboxStore(transactor)
@@ -285,8 +288,10 @@ func NewInMemory(opts ...Option) *Service {
 	}
 
 	var indexer *search.Indexer
+	var searchStore search.DocumentStore
 	if o.searchIndex {
-		indexer = search.NewIndexer(newRepos, store.SearchStore())
+		searchStore = store.SearchStore()
+		indexer = search.NewIndexer(newRepos, searchStore)
 		o.dispatcher.Register(indexer, events.WithEventTypes(search.EventTypes()...))
 	}
 
@@ -305,6 +310,7 @@ func NewInMemory(opts ...Option) *Service {
 		ChangeSets:      changesets,
 		UnitFamilies:    unitFamilies,
 		BlobStore:       o.blobs,
+		SearchStore:     searchStore, // may be nil; enables entity-data erasure of the projection
 	})
 	o.dispatcher.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
 	graphqlEngine := gql.NewEngine()

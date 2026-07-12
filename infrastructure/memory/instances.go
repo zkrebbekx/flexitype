@@ -181,6 +181,48 @@ func (r *valueRepo) Save(_ context.Context, av *domainvalue.AttributeValue) erro
 	return nil
 }
 
+func (r *valueRepo) PurgeEntity(_ context.Context, key domainvalue.EntityKey) ([]string, int, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	var mediaKeys []string
+	count := 0
+	// Erase every row of the entity, archived rows included (no archived_at
+	// guard), collecting media object keys so the interactor can GC the blobs.
+	for id, snap := range r.s.values {
+		if snap.TenantID != key.TenantID || !snap.TypeDefinitionID.Equals(key.TypeDefinitionID) || snap.EntityID != key.EntityID {
+			continue
+		}
+		if snap.Value.DataType() == valueobjects.DataTypeMedia {
+			if k := snap.Value.Media().ObjectKey; k != "" {
+				mediaKeys = append(mediaKeys, k)
+			}
+		}
+		delete(r.s.values, id)
+		count++
+	}
+	return mediaKeys, count, nil
+}
+
+func (r *valueRepo) PurgeTenant(_ context.Context, tenant valueobjects.TenantID) ([]string, int, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	var mediaKeys []string
+	count := 0
+	for id, snap := range r.s.values {
+		if snap.TenantID != tenant {
+			continue
+		}
+		if snap.Value.DataType() == valueobjects.DataTypeMedia {
+			if k := snap.Value.Media().ObjectKey; k != "" {
+				mediaKeys = append(mediaKeys, k)
+			}
+		}
+		delete(r.s.values, id)
+		count++
+	}
+	return mediaKeys, count, nil
+}
+
 // --- dependencies -----------------------------------------------------------
 
 type depRepo struct{ s *Store }
@@ -437,4 +479,31 @@ func (r *relRepo) Save(_ context.Context, rel *domainrelationship.Relationship) 
 	defer r.s.mu.Unlock()
 	r.s.rels[rel.ID().String()] = rel.Snapshot()
 	return nil
+}
+
+func (r *relRepo) PurgeEntity(_ context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) (int, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	count := 0
+	// Erase every link touching the entity on either side, archived included.
+	for id, snap := range r.s.rels {
+		if snap.TenantID == tenant && (snap.ParentEntityID == entityID || snap.ChildEntityID == entityID) {
+			delete(r.s.rels, id)
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (r *relRepo) PurgeTenant(_ context.Context, tenant valueobjects.TenantID) (int, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	count := 0
+	for id, snap := range r.s.rels {
+		if snap.TenantID == tenant {
+			delete(r.s.rels, id)
+			count++
+		}
+	}
+	return count, nil
 }

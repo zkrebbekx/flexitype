@@ -152,6 +152,9 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 			r.Post("/attributes/{attributeID}/media", s.uploadMedia)
 			// Cascade: archive the entity's values and unlink its relationships.
 			r.Delete("/", s.removeEntity)
+			// Erasure (admin-scoped): permanently hard-delete every trace of
+			// the entity. Irreversible, distinct from the soft-delete DELETE.
+			r.Post("/purge", s.purgeEntity)
 		})
 
 		api.Route("/revisions", func(r chi.Router) {
@@ -230,6 +233,10 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 			r.Get("/", s.getCursor)
 			r.Put("/", s.commitCursor)
 		})
+
+		// Data erasure (admin-scoped): permanently hard-delete the calling
+		// tenant's entity data (right-to-erasure). Irreversible.
+		api.Post("/admin/purge", s.purgeTenant)
 
 		// Provisioning control plane (admin-scoped; each handler checks).
 		api.Route("/tenants", func(r chi.Router) {

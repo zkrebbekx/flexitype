@@ -35,6 +35,9 @@ type EntityDocument struct {
 type DocumentStore interface {
 	Upsert(ctx context.Context, doc EntityDocument) error
 	Remove(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) error
+	// PurgeTenant HARD-deletes every search document of a tenant — the
+	// right-to-erasure primitive — returning the row count.
+	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error)
 }
 
 // Indexer rebuilds entity documents from value events.

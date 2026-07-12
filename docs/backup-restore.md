@@ -6,6 +6,9 @@ a schema (types, attributes, relationship definitions, dependencies)
 between instances without moving data — for seeding, promotion, or version
 control.
 
+> For the opposite operation — permanently destroying a data subject's data
+> (right to erasure / GDPR / CCPA) — see [Data erasure](erasure.md).
+
 ## Full backup and restore (Postgres)
 
 flexitype owns no state outside its database. A logical dump captures

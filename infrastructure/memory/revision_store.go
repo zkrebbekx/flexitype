@@ -75,6 +75,32 @@ func (s *revisionStore) AsOf(_ context.Context, tenant valueobjects.TenantID, ty
 	return revision.Revision{}, domainerrors.NewNotFound("entity_revision", "as-of "+at.Format(time.RFC3339))
 }
 
+func (s *revisionStore) PurgeEntity(_ context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for id, r := range s.revs {
+		if r.TenantID == tenant && r.TypeDefinitionID == typeDefID && r.EntityID == entityID {
+			delete(s.revs, id)
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (s *revisionStore) PurgeTenant(_ context.Context, tenant valueobjects.TenantID) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for id, r := range s.revs {
+		if r.TenantID == tenant {
+			delete(s.revs, id)
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (s *revisionStore) LastSeq(_ context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

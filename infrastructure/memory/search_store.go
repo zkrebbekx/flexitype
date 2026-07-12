@@ -33,3 +33,16 @@ func (st *searchStore) Remove(_ context.Context, tenant valueobjects.TenantID, e
 	delete(st.s.searchDocs, tenant.String()+"\x00"+entityID.String())
 	return nil
 }
+
+func (st *searchStore) PurgeTenant(_ context.Context, tenant valueobjects.TenantID) (int, error) {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	count := 0
+	for k, doc := range st.s.searchDocs {
+		if doc.tenant == tenant.String() {
+			delete(st.s.searchDocs, k)
+			count++
+		}
+	}
+	return count, nil
+}

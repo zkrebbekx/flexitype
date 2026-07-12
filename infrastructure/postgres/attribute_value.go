@@ -588,3 +588,53 @@ func (r *attributeValueRepository) Save(ctx context.Context, av *domainvalue.Att
 	}
 	return nil
 }
+
+// purgedValueRow is the projection returned by a purge DELETE: enough to
+// recover the object key of any media value so the blobs can be collected.
+type purgedValueRow struct {
+	DataType string `db:"data_type"`
+	JSON     []byte `db:"value_json"`
+}
+
+// purgedMediaKeys extracts the backing object keys of the media rows a purge
+// removed, so the caller can garbage-collect the blobs after commit.
+func purgedMediaKeys(rows []purgedValueRow) []string {
+	var keys []string
+	for _, row := range rows {
+		if row.DataType != valueobjects.DataTypeMedia.String() {
+			continue
+		}
+		v, err := valueobjects.NewMediaValue(json.RawMessage(row.JSON))
+		if err != nil {
+			continue // malformed metadata: nothing recoverable to collect
+		}
+		if key := v.Media().ObjectKey; key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func (r *attributeValueRepository) PurgeEntity(ctx context.Context, key domainvalue.EntityKey) ([]string, int, error) {
+	// DELETE ... RETURNING removes every row (archived included) and hands back
+	// the media metadata in one round trip so the interactor can GC the blobs.
+	var rows []purgedValueRow
+	query := bind(`DELETE FROM flexitype_attribute_value
+	 WHERE tenant_id = ? AND type_definition_id = ? AND entity_id = ?
+	 RETURNING data_type, value_json`)
+	if err := r.q.SelectContext(ctx, &rows, query,
+		key.TenantID.String(), key.TypeDefinitionID.String(), key.EntityID.String()); err != nil {
+		return nil, 0, fmt.Errorf("purge entity values: %w", err)
+	}
+	return purgedMediaKeys(rows), len(rows), nil
+}
+
+func (r *attributeValueRepository) PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) ([]string, int, error) {
+	var rows []purgedValueRow
+	query := bind(`DELETE FROM flexitype_attribute_value WHERE tenant_id = ?
+	 RETURNING data_type, value_json`)
+	if err := r.q.SelectContext(ctx, &rows, query, tenant.String()); err != nil {
+		return nil, 0, fmt.Errorf("purge tenant values: %w", err)
+	}
+	return purgedMediaKeys(rows), len(rows), nil
+}

@@ -55,6 +55,14 @@ type Store interface {
 	AsOf(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string, at time.Time) (Revision, error)
 	// LastSeq returns the highest revision sequence for an entity, or 0.
 	LastSeq(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error)
+
+	// PurgeEntity HARD-deletes every revision of one entity — the
+	// right-to-erasure primitive — and returns the number of rows removed.
+	PurgeEntity(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error)
+
+	// PurgeTenant HARD-deletes every revision of a tenant, returning the row
+	// count.
+	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error)
 }
 
 // SnapshotApplier applies a target value set to an entity in one unit of

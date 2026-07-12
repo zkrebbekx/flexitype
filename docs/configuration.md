@@ -22,7 +22,7 @@ environment variables. Every variable, its default, and its meaning:
 | `FLEXITYPE_DB_USER` | `postgres` | Database user. |
 | `FLEXITYPE_DB_PASSWORD` | `postgres` | Database password. |
 | `FLEXITYPE_DB_NAME` | `flexitype` | Database name. |
-| `FLEXITYPE_DB_SSLMODE` | `disable` | `libpq` SSL mode (`disable`, `require`, `verify-full`, …). |
+| `FLEXITYPE_DB_SSLMODE` | `disable` | `libpq` SSL mode (`disable`, `require`, `verify-full`, …). `disable` is refused for a non-loopback host — use `require`/`verify-full` in production. |
 | `FLEXITYPE_DB_MAX_OPEN_CONNS` | `25` | Pool max open connections. |
 | `FLEXITYPE_DB_MAX_IDLE_CONNS` | `10` | Pool max idle connections. |
 | `FLEXITYPE_DB_CONN_MAX_LIFETIME` | `30m` | Max connection lifetime. |

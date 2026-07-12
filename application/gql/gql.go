@@ -1,16 +1,19 @@
 // Package gql serves a read-only GraphQL API whose schema mirrors a tenant's
 // live type definitions: each entity type becomes an object, each attribute a
-// field, and each relationship a nested-selectable field resolved through the
-// batched repositories (no N+1). The schema is built per tenant and per
-// caller-permission set — an attribute the caller may not read is not a field,
-// so introspection never leaks it — and is regenerated after any definition
-// event. FQL is exposed as a filter argument on each top-level field.
+// field, and each relationship a nested Relay connection resolved through the
+// batched repositories (no N+1). Top-level fields and relationship fields are
+// Relay connections — edges/node/cursor plus pageInfo and totalCount — paged
+// with first/after. The schema is built per tenant and per caller-permission
+// set (an attribute the caller may not read is not a field, so introspection
+// never leaks it) and is regenerated after any definition event. FQL is
+// exposed as a filter argument on each top-level field.
 package gql
 
 import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -33,9 +36,9 @@ import (
 
 // Limits bound query cost.
 const (
-	maxDepth       = 6   // nested selection depth
-	defaultLimit   = 50  // rows per top-level field when unspecified
-	maxLimit       = 200 // hard cap on a field's row count
+	maxRelDepth    = 6   // nested relationship-connection hops
+	defaultFirst   = 50  // connection page size when unspecified
+	maxFirst       = 200 // hard cap on a connection page
 	typeListLimit  = 500 // schema-build enumeration page size
 	maxRelChildren = 500 // per-parent relationship fan-out cap
 )
@@ -174,8 +177,21 @@ type typeMeta struct {
 	relByField   map[string]relMeta
 }
 
+// connectionArgs are the Relay forward-pagination arguments shared by every
+// connection field.
+func connectionArgs(withFilter bool) graphql.FieldConfigArgument {
+	args := graphql.FieldConfigArgument{
+		"first": &graphql.ArgumentConfig{Type: graphql.Int, Description: "page size (default 50, max 200)"},
+		"after": &graphql.ArgumentConfig{Type: graphql.String, Description: "opaque cursor: return items after it"},
+	}
+	if withFilter {
+		args["filter"] = &graphql.ArgumentConfig{Type: graphql.String, Description: "FQL filter expression"}
+	}
+	return args
+}
+
 // buildSchema reads the caller's live, readable schema and assembles a GraphQL
-// schema mirroring it.
+// schema mirroring it, with Relay connections.
 func buildSchema(ctx context.Context, inter *application.Interactors) (graphql.Schema, error) {
 	types, err := listEntityTypes(ctx, inter)
 	if err != nil {
@@ -195,8 +211,7 @@ func buildSchema(ctx context.Context, inter *application.Interactors) (graphql.S
 		tm := typeMeta{internalName: t.InternalName, attrByField: map[string]attrMeta{}, relByField: map[string]relMeta{}}
 		for _, e := range effs {
 			a := e.Attribute
-			field := a.InternalName // internal names are already valid GraphQL names
-			tm.attrByField[field] = attrMeta{attrID: a.ID.String(), dataType: a.DataType, multi: a.MultiValued}
+			tm.attrByField[a.InternalName] = attrMeta{attrID: a.ID.String(), dataType: a.DataType, multi: a.MultiValued}
 		}
 		metas[t.InternalName] = tm
 	}
@@ -205,12 +220,34 @@ func buildSchema(ctx context.Context, inter *application.Interactors) (graphql.S
 		return graphql.Schema{}, err
 	}
 
-	// Objects reference each other, so build them with a lazy fields thunk.
+	pageInfo := pageInfoObject()
+
+	// Objects reference each other (and their own connections), so build the
+	// object, edge and connection types with lazy thunks over shared maps.
 	objects := make(map[string]*graphql.Object, len(metas))
+	connections := make(map[string]*graphql.Object, len(metas))
 	for name := range metas {
 		objects[name] = graphql.NewObject(graphql.ObjectConfig{
 			Name:   typeName(name),
-			Fields: fieldsThunk(name, metas, objects),
+			Fields: fieldsThunk(name, metas, connections),
+		})
+	}
+	for name := range metas {
+		obj := objects[name]
+		edge := graphql.NewObject(graphql.ObjectConfig{
+			Name: typeName(name) + "Edge",
+			Fields: graphql.Fields{
+				"node":   &graphql.Field{Type: obj},
+				"cursor": &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
+			},
+		})
+		connections[name] = graphql.NewObject(graphql.ObjectConfig{
+			Name: typeName(name) + "Connection",
+			Fields: graphql.Fields{
+				"edges":      &graphql.Field{Type: graphql.NewList(edge)},
+				"pageInfo":   &graphql.Field{Type: graphql.NewNonNull(pageInfo)},
+				"totalCount": &graphql.Field{Type: graphql.NewNonNull(graphql.Int)},
+			},
 		})
 	}
 
@@ -232,17 +269,27 @@ func buildSchema(ctx context.Context, inter *application.Interactors) (graphql.S
 	for name := range metas {
 		internal := name
 		rootFields[internal] = &graphql.Field{
-			Type: graphql.NewList(objects[internal]),
-			Args: graphql.FieldConfigArgument{
-				"filter": &graphql.ArgumentConfig{Type: graphql.String, Description: "FQL filter expression"},
-				"limit":  &graphql.ArgumentConfig{Type: graphql.Int, Description: "max rows (default 50, max 200)"},
-			},
+			Type:    connections[internal],
+			Args:    connectionArgs(true),
 			Resolve: rootResolve(internal, metas),
 		}
 	}
 
 	return graphql.NewSchema(graphql.SchemaConfig{
 		Query: graphql.NewObject(graphql.ObjectConfig{Name: "Query", Fields: rootFields}),
+	})
+}
+
+// pageInfoObject builds the shared Relay PageInfo type.
+func pageInfoObject() *graphql.Object {
+	return graphql.NewObject(graphql.ObjectConfig{
+		Name: "PageInfo",
+		Fields: graphql.Fields{
+			"hasNextPage":     &graphql.Field{Type: graphql.NewNonNull(graphql.Boolean)},
+			"hasPreviousPage": &graphql.Field{Type: graphql.NewNonNull(graphql.Boolean)},
+			"startCursor":     &graphql.Field{Type: graphql.String},
+			"endCursor":       &graphql.Field{Type: graphql.String},
+		},
 	})
 }
 
@@ -267,8 +314,8 @@ func listEntityTypes(ctx context.Context, inter *application.Interactors) ([]dom
 	return out, nil
 }
 
-// addRelationshipFields adds a nested-selectable field on each endpoint type
-// for every live relationship definition.
+// addRelationshipFields adds a nested-selectable connection field on each
+// endpoint type for every live relationship definition.
 func addRelationshipFields(ctx context.Context, inter *application.Interactors, typeByID map[string]string, metas map[string]typeMeta) error {
 	var cursor *string
 	for {
@@ -287,7 +334,6 @@ func addRelationshipFields(ctx context.Context, inter *application.Interactors, 
 				addRelField(metas, parent, name, relMeta{defID: d.ID.String(), otherType: child, symmetric: true})
 				continue
 			}
-			// Directed: parent gets a field to its children, child to its parents.
 			addRelField(metas, parent, sanitizeName(firstNonEmpty(d.ChildLabel, d.InternalName)),
 				relMeta{defID: d.ID.String(), otherType: child, entityIsParent: true})
 			addRelField(metas, child, sanitizeName(firstNonEmpty(d.ParentLabel, d.InternalName)),
@@ -312,13 +358,13 @@ func addRelField(metas map[string]typeMeta, typeInternal, field string, rm relMe
 		field += "_rel"
 	}
 	if _, taken := tm.relByField[field]; taken {
-		return // already have this field name; skip the duplicate
+		return
 	}
 	tm.relByField[field] = rm
 }
 
-// fieldsThunk lazily builds an object's fields once every object exists.
-func fieldsThunk(typeInternal string, metas map[string]typeMeta, objects map[string]*graphql.Object) graphql.FieldsThunk {
+// fieldsThunk lazily builds an object's fields once every connection exists.
+func fieldsThunk(typeInternal string, metas map[string]typeMeta, connections map[string]*graphql.Object) graphql.FieldsThunk {
 	return func() graphql.Fields {
 		tm := metas[typeInternal]
 		fields := graphql.Fields{
@@ -328,8 +374,8 @@ func fieldsThunk(typeInternal string, metas map[string]typeMeta, objects map[str
 			fields[field] = &graphql.Field{Type: gqlType(am.dataType, am.multi)}
 		}
 		for field, rm := range tm.relByField {
-			if obj, ok := objects[rm.otherType]; ok {
-				fields[field] = &graphql.Field{Type: graphql.NewList(obj)}
+			if conn, ok := connections[rm.otherType]; ok {
+				fields[field] = &graphql.Field{Type: conn, Args: connectionArgs(false)}
 			}
 		}
 		return fields
@@ -338,73 +384,85 @@ func fieldsThunk(typeInternal string, metas map[string]typeMeta, objects map[str
 
 // ---- resolution (batched: no N+1) ----
 
-// rootResolve runs the FQL filter for a top-level type field, then materializes
-// the whole selected subtree in batched passes.
+// rootResolve runs the FQL filter (or lists all) for a top-level connection,
+// then materializes the whole selected subtree in batched passes.
 func rootResolve(typeInternal string, metas map[string]typeMeta) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (any, error) {
 		inter := application.FromContext(p.Context)
 		if inter == nil {
 			return nil, fmt.Errorf("no interactors on context")
 		}
-		sels := selectionsFromInfo(p.Info)
-		if 1+selectionDepth(sels) > maxDepth {
-			return nil, fmt.Errorf("query exceeds max selection depth of %d", maxDepth)
+		connSels := selectionsFromInfo(p.Info)
+		nodeSels := nodeSelections(connSels)
+		if relationshipDepth(nodeSels, typeInternal, metas) > maxRelDepth {
+			return nil, fmt.Errorf("query exceeds max relationship depth of %d", maxRelDepth)
 		}
 		filter, _ := p.Args["filter"].(string)
-		limit := clampLimit(p.Args["limit"])
-		ids, err := topLevelEntityIDs(p.Context, inter, typeInternal, filter, limit)
+		first := clampFirst(p.Args["first"])
+		after, _ := p.Args["after"].(string)
+
+		ids, total, hasNext, offset, err := topLevelPage(p.Context, inter, typeInternal, filter, first, after)
 		if err != nil {
 			return nil, err
 		}
-		return buildLevel(p.Context, inter, typeInternal, ids, sels, metas)
+		nodes, err := buildNodes(p.Context, inter, typeInternal, ids, nodeSels, metas)
+		if err != nil {
+			return nil, err
+		}
+		return connection(nodes, offset, total, hasNext), nil
 	}
 }
 
-// topLevelEntityIDs resolves the matching entity ids for a top-level field:
-// the FQL filter when one is given, or every entity of the type (descendants
-// included) when the filter is empty.
-func topLevelEntityIDs(ctx context.Context, inter *application.Interactors, typeInternal, filter string, limit int) ([]string, error) {
+// topLevelPage resolves one page of entity ids for a top-level field: the FQL
+// filter when given, otherwise every entity of the type (descendants
+// included). It returns the ids, the total count, whether more remain, and the
+// page's starting offset (for synthesizing edge cursors).
+func topLevelPage(ctx context.Context, inter *application.Interactors, typeInternal, filter string, first int, after string) (ids []string, total int, hasNext bool, offset int, err error) {
+	offset, err = cursorOffset(after)
+	if err != nil {
+		return nil, 0, false, 0, err
+	}
+	cursor := cursorPtr(after)
 	if strings.TrimSpace(filter) == "" {
-		td, err := inter.TypeDefinitions().GetByInternalName(ctx, typeInternal)
-		if err != nil {
-			return nil, err
+		td, terr := inter.TypeDefinitions().GetByInternalName(ctx, typeInternal)
+		if terr != nil {
+			return nil, 0, false, 0, terr
 		}
-		out, err := inter.Values().ListEntities(ctx, td.ID.String(), true, db.PageArgs{Limit: &limit})
-		if err != nil {
-			return nil, err
+		out, lerr := inter.Values().ListEntities(ctx, td.ID.String(), true, db.PageArgs{Limit: &first, Cursor: cursor})
+		if lerr != nil {
+			return nil, 0, false, 0, lerr
 		}
-		ids := make([]string, 0, len(out.Items))
+		ids = make([]string, 0, len(out.Items))
 		for _, e := range out.Items {
 			ids = append(ids, e.EntityID)
 		}
-		return ids, nil
+		return ids, out.PageInfo.TotalCount, out.PageInfo.HasNextPage, offset, nil
 	}
-	out, err := inter.Query().Execute(ctx, appquery.ExecuteInput{
+	out, qerr := inter.Query().Execute(ctx, appquery.ExecuteInput{
 		Type:  typeInternal,
 		Query: filter,
-		Page:  db.PageArgs{Limit: &limit},
+		Page:  db.PageArgs{Limit: &first, Cursor: cursor},
 	})
-	if err != nil {
-		return nil, err
+	if qerr != nil {
+		return nil, 0, false, 0, qerr
 	}
-	ids := make([]string, 0, len(out.Items))
+	ids = make([]string, 0, len(out.Items))
 	for _, r := range out.Items {
 		ids = append(ids, r.EntityID)
 	}
-	return ids, nil
+	return ids, out.PageInfo.TotalCount, out.PageInfo.HasNextPage, offset, nil
 }
 
-// buildLevel materializes a set of entities of one type into GraphQL objects,
-// batch-loading their values and — for each selected relationship field — their
-// related entities, recursing into the selection. Each level runs a bounded
+// buildNodes materializes a set of entities of one type into node maps,
+// batch-loading their values and — for each selected relationship field —
+// their related entities as a nested connection. Each level runs a bounded
 // number of queries regardless of the entity count, so there is no N+1.
-func buildLevel(ctx context.Context, inter *application.Interactors, typeInternal string, entityIDs []string, sels []selection, metas map[string]typeMeta) ([]map[string]any, error) {
+func buildNodes(ctx context.Context, inter *application.Interactors, typeInternal string, entityIDs []string, nodeSels []selection, metas map[string]typeMeta) ([]map[string]any, error) {
 	tm, ok := metas[typeInternal]
 	if !ok || len(entityIDs) == 0 {
 		return []map[string]any{}, nil
 	}
 
-	// One query for every entity's values.
 	vals, err := inter.Values().ListByEntities(ctx, entityIDs)
 	if err != nil {
 		return nil, err
@@ -433,81 +491,134 @@ func buildLevel(ctx context.Context, inter *application.Interactors, typeInterna
 		nodes = append(nodes, node)
 	}
 
-	// For each selected relationship field, batch-load links then recurse.
-	want := make(map[string]bool, len(entityIDs))
-	for _, id := range entityIDs {
-		want[id] = true
-	}
-	for _, sel := range sels {
+	for _, sel := range nodeSels {
 		rm, isRel := tm.relByField[sel.name]
 		if !isRel {
 			continue
 		}
-		links, err := inter.Relationships().LinksByEntities(ctx, entityIDs)
-		if err != nil {
+		if err := attachRelationship(ctx, inter, sel, rm, entityIDs, nodeByID, metas); err != nil {
 			return nil, err
-		}
-		childrenByParent := map[string][]string{}
-		var allChildren []string
-		seen := map[string]bool{}
-		for _, l := range links {
-			if l.DefinitionID.String() != rm.defID {
-				continue
-			}
-			pid := l.ParentEntityID.String()
-			cid := l.ChildEntityID.String()
-			var self, other string
-			switch {
-			case rm.symmetric:
-				switch {
-				case want[pid]:
-					self, other = pid, cid
-				case want[cid]:
-					self, other = cid, pid
-				default:
-					continue
-				}
-			case rm.entityIsParent:
-				if !want[pid] {
-					continue
-				}
-				self, other = pid, cid
-			default:
-				if !want[cid] {
-					continue
-				}
-				self, other = cid, pid
-			}
-			if len(childrenByParent[self]) >= maxRelChildren {
-				continue
-			}
-			childrenByParent[self] = append(childrenByParent[self], other)
-			if !seen[other] {
-				seen[other] = true
-				allChildren = append(allChildren, other)
-			}
-		}
-		childNodes, err := buildLevel(ctx, inter, rm.otherType, allChildren, sel.sub, metas)
-		if err != nil {
-			return nil, err
-		}
-		childByID := make(map[string]map[string]any, len(childNodes))
-		for _, cn := range childNodes {
-			if id, ok := cn["entityId"].(string); ok {
-				childByID[id] = cn
-			}
-		}
-		for _, eid := range entityIDs {
-			kids := make([]map[string]any, 0, len(childrenByParent[eid]))
-			for _, cid := range childrenByParent[eid] {
-				if cn := childByID[cid]; cn != nil {
-					kids = append(kids, cn)
-				}
-			}
-			nodeByID[eid][sel.name] = kids
 		}
 	}
 	return nodes, nil
+}
+
+// attachRelationship batch-loads one relationship for every parent entity and
+// attaches a paged connection of related nodes to each parent node.
+func attachRelationship(ctx context.Context, inter *application.Interactors, sel selection, rm relMeta, entityIDs []string, nodeByID map[string]map[string]any, metas map[string]typeMeta) error {
+	links, err := inter.Relationships().LinksByEntities(ctx, entityIDs)
+	if err != nil {
+		return err
+	}
+	want := make(map[string]bool, len(entityIDs))
+	for _, id := range entityIDs {
+		want[id] = true
+	}
+	childrenByParent := map[string][]string{}
+	var allChildren []string
+	seen := map[string]bool{}
+	for _, l := range links {
+		if l.DefinitionID.String() != rm.defID {
+			continue
+		}
+		pid := l.ParentEntityID.String()
+		cid := l.ChildEntityID.String()
+		var self, other string
+		switch {
+		case rm.symmetric:
+			switch {
+			case want[pid]:
+				self, other = pid, cid
+			case want[cid]:
+				self, other = cid, pid
+			default:
+				continue
+			}
+		case rm.entityIsParent:
+			if !want[pid] {
+				continue
+			}
+			self, other = pid, cid
+		default:
+			if !want[cid] {
+				continue
+			}
+			self, other = cid, pid
+		}
+		if len(childrenByParent[self]) >= maxRelChildren {
+			continue
+		}
+		childrenByParent[self] = append(childrenByParent[self], other)
+		if !seen[other] {
+			seen[other] = true
+			allChildren = append(allChildren, other)
+		}
+	}
+
+	// Build every related node once (batched), then slice per parent.
+	childNodes, err := buildNodes(ctx, inter, rm.otherType, allChildren, nodeSelections(sel.sub), metas)
+	if err != nil {
+		return err
+	}
+	childByID := make(map[string]map[string]any, len(childNodes))
+	for _, cn := range childNodes {
+		if id, ok := cn["entityId"].(string); ok {
+			childByID[id] = cn
+		}
+	}
+
+	first := clampFirst(sel.args["first"])
+	afterOffset, err := cursorOffset(argString(sel.args["after"]))
+	if err != nil {
+		return err
+	}
+	for _, eid := range entityIDs {
+		all := childrenByParent[eid]
+		total := len(all)
+		lo := afterOffset
+		if lo > total {
+			lo = total
+		}
+		hi := lo + first
+		if hi > total {
+			hi = total
+		}
+		pageNodes := make([]map[string]any, 0, hi-lo)
+		for _, cid := range all[lo:hi] {
+			if cn := childByID[cid]; cn != nil {
+				pageNodes = append(pageNodes, cn)
+			}
+		}
+		nodeByID[eid][sel.name] = connection(pageNodes, lo, total, lo+len(pageNodes) < total)
+	}
+	return nil
+}
+
+// connection assembles a Relay connection map from a page of nodes, the page's
+// starting offset in the full result, the total count and whether more remain.
+func connection(nodes []map[string]any, offset, total int, hasNext bool) map[string]any {
+	edges := make([]map[string]any, 0, len(nodes))
+	for i, n := range nodes {
+		edges = append(edges, map[string]any{
+			"node":   n,
+			"cursor": db.EncodeCursor(offset + i + 1),
+		})
+	}
+	var startCursor, endCursor any
+	if len(edges) > 0 {
+		startCursor = edges[0]["cursor"]
+		endCursor = edges[len(edges)-1]["cursor"]
+	}
+	return map[string]any{
+		"edges":      edges,
+		"totalCount": total,
+		"pageInfo": map[string]any{
+			"hasNextPage":     hasNext,
+			"hasPreviousPage": offset > 0,
+			"startCursor":     startCursor,
+			"endCursor":       endCursor,
+		},
+	}
 }
 
 func projectValues(vals []valueobjects.Value, am attrMeta) any {
@@ -562,6 +673,7 @@ func gqlScalar(dt valueobjects.DataType) *graphql.Scalar {
 
 type selection struct {
 	name string
+	args map[string]any
 	sub  []selection
 }
 
@@ -569,10 +681,10 @@ func selectionsFromInfo(info graphql.ResolveInfo) []selection {
 	if len(info.FieldASTs) == 0 {
 		return nil
 	}
-	return collectSelections(info.FieldASTs[0].SelectionSet, info.Fragments)
+	return collectSelections(info.FieldASTs[0].SelectionSet, info.Fragments, info.VariableValues)
 }
 
-func collectSelections(set *ast.SelectionSet, fragments map[string]ast.Definition) []selection {
+func collectSelections(set *ast.SelectionSet, fragments map[string]ast.Definition, vars map[string]any) []selection {
 	if set == nil {
 		return nil
 	}
@@ -580,41 +692,116 @@ func collectSelections(set *ast.SelectionSet, fragments map[string]ast.Definitio
 	for _, sel := range set.Selections {
 		switch s := sel.(type) {
 		case *ast.Field:
-			out = append(out, selection{name: s.Name.Value, sub: collectSelections(s.SelectionSet, fragments)})
+			out = append(out, selection{
+				name: s.Name.Value,
+				args: argValues(s.Arguments, vars),
+				sub:  collectSelections(s.SelectionSet, fragments, vars),
+			})
 		case *ast.InlineFragment:
-			out = append(out, collectSelections(s.SelectionSet, fragments)...)
+			out = append(out, collectSelections(s.SelectionSet, fragments, vars)...)
 		case *ast.FragmentSpread:
 			if def, ok := fragments[s.Name.Value].(*ast.FragmentDefinition); ok {
-				out = append(out, collectSelections(def.SelectionSet, fragments)...)
+				out = append(out, collectSelections(def.SelectionSet, fragments, vars)...)
 			}
 		}
 	}
 	return out
 }
 
-func selectionDepth(sels []selection) int {
-	d := 0
-	for _, s := range sels {
-		cur := 1
-		if len(s.sub) > 0 {
-			cur = 1 + selectionDepth(s.sub)
+// nodeSelections digs the node-level field selections out of a connection's
+// selection set: connection → edges → node → <fields>.
+func nodeSelections(connSels []selection) []selection {
+	for _, s := range connSels {
+		if s.name != "edges" {
+			continue
 		}
-		if cur > d {
-			d = cur
+		for _, e := range s.sub {
+			if e.name == "node" {
+				return e.sub
+			}
+		}
+	}
+	return nil
+}
+
+// relationshipDepth counts the deepest chain of nested relationship
+// connections in a node's selection, independent of the edges/node wrappers.
+func relationshipDepth(nodeSels []selection, typeInternal string, metas map[string]typeMeta) int {
+	tm, ok := metas[typeInternal]
+	if !ok {
+		return 0
+	}
+	d := 0
+	for _, s := range nodeSels {
+		rm, isRel := tm.relByField[s.name]
+		if !isRel {
+			continue
+		}
+		child := 1 + relationshipDepth(nodeSelections(s.sub), rm.otherType, metas)
+		if child > d {
+			d = child
 		}
 	}
 	return d
 }
 
-func clampLimit(v any) int {
+func argValues(args []*ast.Argument, vars map[string]any) map[string]any {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(args))
+	for _, a := range args {
+		out[a.Name.Value] = argValue(a.Value, vars)
+	}
+	return out
+}
+
+func argValue(v ast.Value, vars map[string]any) any {
+	switch n := v.(type) {
+	case *ast.IntValue:
+		if i, err := strconv.Atoi(n.Value); err == nil {
+			return i
+		}
+	case *ast.StringValue:
+		return n.Value
+	case *ast.BooleanValue:
+		return n.Value
+	case *ast.Variable:
+		return vars[n.Name.Value]
+	}
+	return nil
+}
+
+func argString(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func clampFirst(v any) int {
 	n, ok := v.(int)
 	if !ok || n <= 0 {
-		return defaultLimit
+		return defaultFirst
 	}
-	if n > maxLimit {
-		return maxLimit
+	if n > maxFirst {
+		return maxFirst
 	}
 	return n
+}
+
+// cursorOffset decodes a Relay cursor to its offset; the empty cursor is the
+// start of the result set.
+func cursorOffset(cursor string) (int, error) {
+	if cursor == "" {
+		return 0, nil
+	}
+	return db.DecodeCursor(cursor)
+}
+
+func cursorPtr(cursor string) *string {
+	if cursor == "" {
+		return nil
+	}
+	return &cursor
 }
 
 // typeName renders a type's GraphQL object name (PascalCase of the internal

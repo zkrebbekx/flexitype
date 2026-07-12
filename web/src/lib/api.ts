@@ -460,6 +460,10 @@ export const api = {
   applyTemplate: (name: string) =>
     request<SchemaImportResult>('POST', `/schema/templates/${encodeURIComponent(name)}/apply`),
 
+  // GraphQL read API
+  graphql: (query: string, variables?: Record<string, unknown>) =>
+    request<GraphQLResponse>('POST', '/graphql', { query, variables }),
+
   // Attributes
   listTypeAttributes: (typeId: string, q: PageQuery = {}) =>
     request<Paged<AttributeDefinition>>('GET', `/type-definitions/${typeId}/attributes${qs(q)}`),
@@ -775,6 +779,11 @@ export interface SchemaImportResult {
   attributes: KindCount
   relationship_definitions: KindCount
   dependencies: KindCount
+}
+
+export interface GraphQLResponse {
+  data?: unknown
+  errors?: { message: string }[]
 }
 
 // friendlyError renders an ApiError for inline display.

@@ -382,6 +382,29 @@ func (r *relRepo) ListByEntity(_ context.Context, key domainrelationship.EntityL
 	return out, nil
 }
 
+func (r *relRepo) ListByEntities(_ context.Context, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) ([]*domainrelationship.Relationship, error) {
+	if len(entityIDs) == 0 {
+		return nil, nil
+	}
+	want := make(map[valueobjects.EntityID]bool, len(entityIDs))
+	for _, id := range entityIDs {
+		want[id] = true
+	}
+	r.s.mu.RLock()
+	defer r.s.mu.RUnlock()
+	var out []*domainrelationship.Relationship
+	for _, snap := range r.s.rels {
+		if snap.TenantID != tenant || snap.ArchivedAt != nil {
+			continue
+		}
+		if want[snap.ParentEntityID] || want[snap.ChildEntityID] {
+			out = append(out, domainrelationship.Rehydrate(snap))
+		}
+	}
+	sortByID(out, func(rel *domainrelationship.Relationship) string { return rel.ID().String() })
+	return out, nil
+}
+
 func (r *relRepo) List(_ context.Context, filter domainrelationship.Filter, page db.Page) ([]*domainrelationship.Relationship, int, error) {
 	r.s.mu.RLock()
 	var out []*domainrelationship.Relationship

@@ -560,6 +560,30 @@ func (i *Interactor) ListByEntity(ctx context.Context, rawTypeDefID, rawEntityID
 	return i.redactUnreadable(ctx, snaps)
 }
 
+// ListByEntities loads every live value held by any of the given entities in
+// one query, with field-level access control applied. It powers batched
+// projections such as the GraphQL resolver, where fanning out per entity
+// would be an N+1.
+func (i *Interactor) ListByEntities(ctx context.Context, rawEntityIDs []string) ([]domainvalue.Snapshot, error) {
+	ids := make([]valueobjects.EntityID, 0, len(rawEntityIDs))
+	for _, raw := range rawEntityIDs {
+		id, err := valueobjects.ParseEntityID(raw)
+		if err != nil {
+			return nil, domainerrors.NewValidation(err.Error())
+		}
+		ids = append(ids, id)
+	}
+	items, err := i.values.ListByEntities(ctx, uow.TenantFromContext(ctx), ids)
+	if err != nil {
+		return nil, err
+	}
+	snaps := make([]domainvalue.Snapshot, 0, len(items))
+	for _, av := range items {
+		snaps = append(snaps, av.Snapshot())
+	}
+	return i.redactUnreadable(ctx, snaps)
+}
+
 // redactUnreadable drops values of attributes the principal may not read.
 // Admins (and unauthenticated development) keep everything.
 func (i *Interactor) redactUnreadable(ctx context.Context, snaps []domainvalue.Snapshot) ([]domainvalue.Snapshot, error) {

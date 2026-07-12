@@ -1,12 +1,27 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
 import { useQuery } from '@tanstack/vue-query'
-import { Shapes, Boxes, ScrollText, Radio, Settings, Moon, Sun, Braces } from 'lucide-vue-next'
+import { Shapes, Boxes, ScrollText, Radio, Settings, Moon, Sun, Braces, LogOut } from 'lucide-vue-next'
 import { useTheme } from '@/composables/useTheme'
 import Toasts from '@/components/ui/Toasts.vue'
+import { authRequired, isAuthenticated, setToken, signOut, bearerHeader, challenge } from '@/lib/auth'
 
 const { theme, toggle } = useTheme()
+
+// Bearer-token sign-in. In development / playground mode the service runs with
+// auth disabled, so nothing 401s and this overlay never appears.
+const tokenInput = ref('')
+function submitToken() {
+  const t = tokenInput.value.trim()
+  if (!t) return
+  setToken(t)
+  location.reload() // re-run every query with the token attached
+}
+function doSignOut() {
+  signOut()
+  location.reload()
+}
 
 // Playground builds run the service in-browser; data resets on reload.
 const isPlayground = import.meta.env.VITE_WASM === '1'
@@ -14,10 +29,11 @@ const baseUrl = import.meta.env.BASE_URL
 
 const features = useQuery({
   queryKey: ['features'],
-  queryFn: () =>
-    fetch('/api/v1/features').then(
-      (r) => r.json() as Promise<{ search: boolean; activity: boolean; event_delivery?: boolean }>,
-    ),
+  queryFn: async () => {
+    const r = await fetch('/api/v1/features', { headers: bearerHeader() })
+    if (r.status === 401) challenge()
+    return r.json() as Promise<{ search: boolean; activity: boolean; event_delivery?: boolean }>
+  },
   staleTime: Infinity,
   retry: false,
 })
@@ -78,14 +94,25 @@ const health = useQuery({
           />
           {{ health.data.value?.version ?? '—' }}
         </span>
-        <button
-          class="rounded-md p-1.5 text-(--text-muted) hover:bg-(--canvas) hover:text-(--text)"
-          :aria-label="theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'"
-          @click="toggle"
-        >
-          <Sun v-if="theme === 'dark'" :size="16" />
-          <Moon v-else :size="16" />
-        </button>
+        <div class="flex items-center gap-1">
+          <button
+            v-if="isAuthenticated"
+            class="rounded-md p-1.5 text-(--text-muted) hover:bg-(--canvas) hover:text-(--text)"
+            aria-label="Sign out"
+            title="Sign out"
+            @click="doSignOut"
+          >
+            <LogOut :size="16" />
+          </button>
+          <button
+            class="rounded-md p-1.5 text-(--text-muted) hover:bg-(--canvas) hover:text-(--text)"
+            :aria-label="theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'"
+            @click="toggle"
+          >
+            <Sun v-if="theme === 'dark'" :size="16" />
+            <Moon v-else :size="16" />
+          </button>
+        </div>
       </footer>
     </aside>
 
@@ -96,5 +123,40 @@ const health = useQuery({
     </main>
 
     <Toasts />
+
+    <!-- Sign-in overlay: shown when the service rejects a request for auth. -->
+    <div
+      v-if="authRequired"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="signin-title"
+    >
+      <form
+        class="w-full max-w-sm rounded-lg border border-(--border) bg-(--surface) p-6 shadow-xl"
+        @submit.prevent="submitToken"
+      >
+        <h2 id="signin-title" class="text-base font-semibold">Authentication required</h2>
+        <p class="mt-1.5 text-sm text-(--text-secondary)">
+          This deployment requires a service-account token. Paste a bearer token
+          (<code class="text-(--text-muted)">ft_&lt;account&gt;_&lt;secret&gt;</code>) to continue.
+        </p>
+        <input
+          v-model="tokenInput"
+          type="password"
+          autocomplete="off"
+          placeholder="ft_…"
+          aria-label="Service-account token"
+          class="mt-4 w-full rounded-md border border-(--border) bg-(--canvas) px-3 py-2 text-sm outline-none focus:border-(--accent)"
+        />
+        <button
+          type="submit"
+          class="mt-4 w-full rounded-md bg-(--accent) px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          :disabled="!tokenInput.trim()"
+        >
+          Sign in
+        </button>
+      </form>
+    </div>
   </div>
 </template>

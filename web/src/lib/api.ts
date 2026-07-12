@@ -1,6 +1,8 @@
 // Typed client for the flexitype REST API. One fetch wrapper maps domain
 // error codes onto ApiError so screens can speak plainly about failures.
 
+import { bearerHeader, challenge } from './auth'
+
 export type DataType =
   | 'bool'
   | 'string'
@@ -400,10 +402,11 @@ export interface FeedEvent {
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api/v1${path}`, {
     method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    headers: { ...bearerHeader(), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
 
+  if (res.status === 401) challenge()
   if (res.status === 204) return undefined as T
 
   const text = await res.text()
@@ -535,8 +538,9 @@ export const api = {
     form.append('file', file)
     const res = await fetch(
       `/api/v1/entities/${typeId}/${encodeURIComponent(entityId)}/attributes/${attributeId}/media`,
-      { method: 'POST', body: form },
+      { method: 'POST', body: form, headers: bearerHeader() },
     )
+    if (res.status === 401) challenge()
     const text = await res.text()
     const parsed = text ? JSON.parse(text) : undefined
     if (!res.ok) {
@@ -555,7 +559,8 @@ export const api = {
     const form = new FormData()
     form.append('file', file)
     form.append('mapping', JSON.stringify(mapping))
-    const res = await fetch(`/api/v1/entities/${typeId}/import`, { method: 'POST', body: form })
+    const res = await fetch(`/api/v1/entities/${typeId}/import`, { method: 'POST', body: form, headers: bearerHeader() })
+    if (res.status === 401) challenge()
     const text = await res.text()
     const parsed = text ? JSON.parse(text) : undefined
     if (!res.ok) {

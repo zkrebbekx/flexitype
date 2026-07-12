@@ -28,18 +28,35 @@ Runs two ways from one codebase:
   service-account auth, OpenTelemetry and health endpoints
 
 **[▶ Try the playground](https://zkrebbekx.github.io/flexitype/)** — the full
-service (usecases, REST API, FQL search, search index) compiled to
-WebAssembly, running the admin console entirely in your browser. No backend;
-data resets on reload.
+service (usecases, REST API, FQL, GraphQL, search index, schema templates)
+compiled to WebAssembly, running the admin console entirely in your browser.
+No backend; data resets on reload.
 
 ## Features
 
 - **Soft types**: `TypeDefinition` → `AttributeDefinition` → `AttributeValue`,
   anchored to *your* entities via an opaque `entity_id`
-- **12 data types**: bool, string, integer, float, decimal (arbitrary
-  precision), date, time, datetime, enum, url, email, json
-- **Constraints**: min/max length, min/max value, RE2 pattern, one-of, plus
-  required / multi-valued / unique attribute flags
+- **14 data types**: bool, string, integer, float, decimal (arbitrary
+  precision), date, time, datetime, enum, url, email, json, **media** (files
+  backed by a blob store), **quantity** (a magnitude in a unit family)
+- **Constraints**: min/max length, min/max value, RE2 pattern, one-of, media
+  (allowed MIME types + max size), plus required / multi-valued / unique
+  attribute flags
+- **Localized & scoped values**: mark an attribute *localizable* and/or
+  *scopable* and hold a distinct value per locale and channel; single-valued
+  uniqueness and FQL filtering apply per scope, and a query can pin one
+  (`GET /query?locale=fr&channel=web`)
+- **Computed attributes**: derive a value from a formula over other
+  attributes (`(price - cost) / price`) — materialized by an event subscriber
+  so the result is an ordinary, FQL-queryable value that stays in sync
+- **Units of measure**: a `quantity` attribute pins a tenant *unit family*
+  (mass, length, …) with per-unit conversion factors; values normalize to a
+  base unit so `weight > 5.5 kg` compares `6000 g` correctly, and min/max
+  constraints normalize too. `/api/v1/unit-families`
+- **Media attributes**: upload files against a `media` attribute through a
+  pluggable blob store (local disk or in-memory; S3/MinIO drop-in), with MIME
+  and size limits and blob GC on archive.
+  `POST /api/v1/entities/{type}/{entity}/attributes/{attr}/media`
 - **Attribute dependencies**: cascading picklists and conditional validation —
   when a source attribute matches conditions (equals / in / range / pattern /
   dynamic time), the target's allowed values narrow, constraints tighten or
@@ -64,8 +81,9 @@ data resets on reload.
   latest type version or pin one) or **symmetric** (unordered peers such
   as `compatible_with`; the pair is stored canonically so `A↔B` can never
   duplicate as `B↔A`). Both carry their own attributes and constraints
-  (the full attribute machinery applies to links) and support definition
-  inheritance.
+  (the full attribute machinery applies to links), support definition
+  inheritance, and enforce optional **cardinality** bounds (min/max children
+  per parent and parents per child).
 - **FQL, a schema-aware query language**: query entities by attribute
   values and across relationships — `category = "bike" and (min(price) >=
   500 or "sale" in tags) and child(supplied_by) { link.lead_time_days <=
@@ -76,6 +94,47 @@ data resets on reload.
   symmetric ones). Names bind against the (inherited) schema with
   positioned errors; archived types, attributes and entities are
   invisible. See `docs/design/query-language.md`.
+- **GraphQL read API**: a read-only `/api/v1/graphql` whose schema is generated
+  from your live type definitions — each type an object, each attribute a
+  field, each relationship a nested **Relay connection** (edges/node/cursor,
+  `pageInfo`, on-demand `totalCount`), with FQL exposed as a `filter` argument.
+  Relationship fields resolve through the dataloaders (no N+1), the schema
+  regenerates on definition events, and introspection reflects only the
+  caller's readable types.
+- **Faceted grid & saved views**: project chosen attributes as columns
+  (`/entities/{type}/grid`), get value counts over the current result set
+  (`/entities/{type}/facets`), and persist a type + query + columns as a named
+  **saved view** (`/api/v1/saved-views`).
+- **CSV import & export**: bulk-load entities from tabular data with column
+  mapping, a dry-run validation report, and best-effort or all-or-nothing
+  modes; export honours the active FQL query.
+  `POST|GET /api/v1/entities/{type}/import|export`
+- **Duplicate detection**: per-type match rules (exact, case-insensitive or
+  trigram with a threshold) produce scored candidate pairs; dismissals stick.
+  Scoring runs in Go so both backends agree. `/type-definitions/{id}/match-rules`
+- **Completeness scoring**: score an entity (or a whole type) against its
+  effective, dependency-adjusted required schema.
+  `/entities/{type}/{entity}/completeness`
+- **Entity revisions**: capture immutable point-in-time value snapshots, list
+  and diff them, read an entity *as of* a timestamp, and restore a revision
+  (which replays as normal writes, so events and activity fire).
+  `/entities/{type}/{entity}/revisions`, `/revisions/{id}`
+- **Change management**: stage a batch of value edits as a **change-set**
+  (draft → in-review → approved → published), preview the result against live
+  data without touching it, require a distinct approver, and publish now or on
+  a schedule. `/api/v1/changesets`
+- **Field-level access control**: per-attribute read/write permissions on a
+  service account gate the write path, value reads, effective-attributes and
+  the FQL binder — an unreadable attribute is invisible rather than leaked.
+- **Schema templates & type cloning**: bootstrap a tenant from curated,
+  in-repo starter schemas (`/api/v1/schema/templates`), or clone an existing
+  type's attributes, constraints and dependencies as a fresh root
+  (`POST /type-definitions/{id}/clone`). Both reuse the portable, name-keyed
+  schema bundle from import/export.
+- **Keyset cursor pagination**: every list pages with an opaque keyset cursor
+  (not offset), so pages stay stable under concurrent inserts and deletes — no
+  skipped or duplicated rows. The total is computed only when asked for
+  (`?total=true`, or the GraphQL `totalCount` field).
 - **Transactional outbox** (optional): event envelopes persist in the same
   transaction as the change and a relay dispatches them with retries —
   at-least-once delivery for every hook (webhooks, pub/sub, the search
@@ -103,9 +162,12 @@ data resets on reload.
   `flexitype.WithoutSearch()` / `WithoutActivityLog()` when embedding);
   the console adapts automatically.
 - **Admin console**: a built-in Vue 3 UI at `/` for modelling types,
-  attributes, dependencies and relationships, browsing entities with
-  dependency-aware value editing, and auditing every change with
-  before/after diffs
+  attributes, dependencies and relationships (including from a template or by
+  cloning), browsing entities with a faceted, column-configurable grid and
+  dependency-aware value editing (localized/scoped values, media upload,
+  computed and unit-of-measure fields), running FQL and a GraphQL explorer,
+  managing saved views, duplicates, revisions and change-sets, and auditing
+  every change with before/after diffs
 - **Multi-tenant** from day one; **definition versioning** with values pinned
   to the version they were validated against
 
@@ -113,15 +175,18 @@ data resets on reload.
 
 ```
 domain/          Aggregates, value objects, constraints, events, repo ports
-application/     Usecases (interactors), common factory, unit of work,
-                 activity log contract, actor/tenant context
-infrastructure/  PostgreSQL repositories (dataloader-backed), migrations,
-                 activity log, embedded migration runner
-internal/.../http REST API for the standalone service
-pkg/             Reusable primitives: ulid, db (Transactor + commit hooks),
-                 dataloader, events (dispatcher + hooks), logger, config,
-                 telemetry, health, shutdown, serviceaccount
-cmd/flexitype    Composition root for the standalone service
+application/     Usecases (interactors) — types, attributes, values, query,
+                 relationships, schema, dedup, revision, changeset, unit,
+                 computed, search, gql — plus the common factory, unit of
+                 work, activity log contract, actor/tenant context
+infrastructure/  PostgreSQL + in-memory repositories (dataloader-backed),
+                 migrations, activity log, embedded migration runner
+internal/.../http REST + GraphQL API for the standalone service
+pkg/             Reusable primitives: ulid, db (Transactor + commit hooks,
+                 keyset pagination), dataloader, events (dispatcher + hooks),
+                 blob (media store), fql, formula, ratelimit, metrics,
+                 safedial, serviceaccount, logger, config, telemetry, health
+cmd/flexitype    Composition root for the standalone service (+ -wasm playground)
 flexitype.go     Embedding facade
 ```
 
@@ -229,6 +294,7 @@ FLEXITYPE_DB_HOST=localhost FLEXITYPE_DB_NAME=flexitype ./flexitype
 Configuration is environment-driven (`FLEXITYPE_PORT`, `FLEXITYPE_DB_*`,
 `FLEXITYPE_SERVICE_ACCOUNTS`, `FLEXITYPE_WEBHOOK_URL`/`_SECRET`,
 `FLEXITYPE_OUTBOX`, `FLEXITYPE_EVENT_RETENTION`, `FLEXITYPE_METRICS`,
+`FLEXITYPE_FEATURE_SEARCH_INDEX`, `FLEXITYPE_BLOB_DIR` (media storage),
 `FLEXITYPE_MIGRATE_ON_START`, `FLEXITYPE_LOG_LEVEL`) — every variable is
 tabulated in [docs/configuration.md](docs/configuration.md). Tracing
 follows the standard `OTEL_EXPORTER_OTLP_ENDPOINT`. Liveness at
@@ -327,22 +393,41 @@ for any language from it; see [docs/clients.md](docs/clients.md).
 ```
 GET|POST   /api/v1/type-definitions            PATCH /api/v1/type-definitions/{id}
 POST       /api/v1/type-definitions/{id}/archive|restore
+POST       /api/v1/type-definitions/{id}/clone
 GET        /api/v1/type-definitions/{id}/attributes
 GET        /api/v1/type-definitions/{id}/effective-attributes
 GET        /api/v1/type-definitions/{id}/children
+GET        /api/v1/type-definitions/{id}/completeness
+GET|POST   /api/v1/type-definitions/{id}/match-rules
 GET|POST   /api/v1/attributes                  PATCH /api/v1/attributes/{id}
 POST       /api/v1/attributes/{id}/archive|restore
+POST       /api/v1/attributes/{id}/validate-value
 GET|POST   /api/v1/values                      GET|DELETE /api/v1/values/{id}
-GET        /api/v1/entities/{typeDef}/{entity}/values
+POST       /api/v1/values/batch
+GET        /api/v1/entities/{typeDef}                (list)
+GET        /api/v1/entities/{typeDef}/grid|facets    (faceted grid)
+POST|GET   /api/v1/entities/{typeDef}/import|export  (CSV)
+GET        /api/v1/entities/{typeDef}/{entity}/values|completeness|as-of
 GET        /api/v1/entities/{typeDef}/{entity}/attributes/{attr}/effective-schema
+POST       /api/v1/entities/{typeDef}/{entity}/attributes/{attr}/media
+GET|POST   /api/v1/entities/{typeDef}/{entity}/revisions
+GET        /api/v1/revisions/{id}              GET /api/v1/revisions/{id}/diff  POST .../restore
+GET        /api/v1/media/{objectKey}
 GET|POST   /api/v1/dependencies                PATCH|DELETE /api/v1/dependencies/{id}
+GET|POST   /api/v1/unit-families               GET|DELETE /api/v1/unit-families/{id}
+GET|POST   /api/v1/saved-views                 GET|PATCH|DELETE /api/v1/saved-views/{id}
+GET|POST   /api/v1/changesets/...              (submit|approve|reject|publish|mutations)
+GET        /api/v1/schema/export|templates     POST /api/v1/schema/import|templates/{name}/apply
 GET        /api/v1/features
-GET        /api/v1/query?type=&q=              POST /api/v1/query/validate
+GET        /api/v1/query?type=&q=&locale=&channel=&total=   POST /api/v1/query/validate
+GET|POST   /api/v1/graphql                     (read-only, schema from your types)
+POST       /api/v1/search/reindex
 GET|POST   /api/v1/relationship-definitions    PATCH /api/v1/relationship-definitions/{id}
 POST       /api/v1/relationship-definitions/{id}/archive|restore
 GET        /api/v1/relationship-definitions/{id}/attribute-sets
 GET|POST   /api/v1/relationships               GET|DELETE /api/v1/relationships/{id}
 GET        /api/v1/entities/{typeDef}/{entity}/relationships
+GET        /api/v1/match-rules/{id}/scan|dismiss                (duplicate detection)
 GET        /api/v1/activity
 GET|POST   /api/v1/webhook-subscriptions       GET|PATCH|DELETE /api/v1/webhook-subscriptions/{id}
 GET        /api/v1/webhook-subscriptions/{id}/deliveries?status=
@@ -351,9 +436,12 @@ GET        /api/v1/events?after=&types=        GET /api/v1/events/stream (SSE)
 GET|PUT    /api/v1/event-cursors/{consumer}
 ```
 
-Lists paginate with `?limit=` and an opaque `?cursor=`; errors carry stable
-machine codes (`VALIDATION`, `NOT_FOUND`, `CONFLICT`, `ARCHIVED`,
-`DEPENDENCY_VIOLATION`).
+Lists paginate with `?limit=` and an opaque, keyset **`?cursor=`** (stable
+under concurrent writes); the total count is computed only when asked
+(`?total=true`). Bad pagination params (a non-positive limit, a malformed
+cursor) return `422` uniformly. Errors carry stable machine codes
+(`VALIDATION`, `NOT_FOUND`, `CONFLICT`, `ARCHIVED`, `DEPENDENCY_VIOLATION`,
+`FORBIDDEN`, `RATE_LIMITED`).
 
 ## Example: cascading picklist
 

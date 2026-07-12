@@ -1,7 +1,6 @@
 package safedial
 
 import (
-	"context"
 	"errors"
 	"net"
 	"testing"
@@ -37,12 +36,10 @@ func TestIsPublic(t *testing.T) {
 	})
 }
 
-func TestCheckAddr(t *testing.T) {
-	Convey("Given the dial-time guard", t, func() {
-		ctx := context.Background()
-
-		Convey("When the target is a literal private IP", func() {
-			err := checkAddr(ctx, "169.254.169.254:80")
+func TestGuardAddress(t *testing.T) {
+	Convey("Given the connect-time guard (Control hook)", t, func() {
+		Convey("When the resolved address is a private/metadata IP", func() {
+			err := guardAddress("169.254.169.254:80")
 
 			Convey("Then it is blocked with a typed error", func() {
 				var blocked *ErrBlockedAddress
@@ -51,16 +48,16 @@ func TestCheckAddr(t *testing.T) {
 			})
 		})
 
-		Convey("When the target is a public IP", func() {
-			So(checkAddr(ctx, "8.8.8.8:443"), ShouldBeNil)
+		Convey("When the resolved address is a public IP", func() {
+			So(guardAddress("8.8.8.8:443"), ShouldBeNil)
 		})
 
-		Convey("When localhost resolves to loopback", func() {
-			err := checkAddr(ctx, "localhost:80")
-
-			Convey("Then it is blocked (defeats DNS-based bypass)", func() {
-				So(err, ShouldNotBeNil)
-			})
+		Convey("When a rebinding attack surfaces loopback at connect time", func() {
+			// Control sees the ACTUAL dialed IP, so a name that resolved to a
+			// public IP for a prior check but to loopback for the connection is
+			// still blocked here.
+			So(guardAddress("127.0.0.1:80"), ShouldNotBeNil)
+			So(guardAddress("[::1]:80"), ShouldNotBeNil)
 		})
 	})
 }

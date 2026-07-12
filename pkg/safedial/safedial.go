@@ -6,10 +6,10 @@
 package safedial
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"net/http"
+	"syscall"
 	"time"
 )
 
@@ -41,7 +41,21 @@ func NewClient(opts Options) *http.Client {
 		timeout = 10 * time.Second
 	}
 
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	// Control runs after the dialer has resolved the name and is about to
+	// connect, with the ACTUAL destination address — so validating the IP here
+	// closes the DNS-rebinding TOCTOU that a separate pre-dial lookup leaves
+	// open (a low-TTL name could resolve to a public IP for the check and a
+	// private IP for the connection). It is invoked for every connection
+	// attempt, so a multi-record host cannot slip a private IP past on a retry.
+	dialer := &net.Dialer{
+		Timeout: 5 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			if opts.AllowPrivate {
+				return nil
+			}
+			return guardAddress(address)
+		},
+	}
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		ForceAttemptHTTP2:     true,
@@ -49,34 +63,23 @@ func NewClient(opts Options) *http.Client {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: time.Second,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			if !opts.AllowPrivate {
-				if err := checkAddr(ctx, addr); err != nil {
-					return nil, err
-				}
-			}
-			return dialer.DialContext(ctx, network, addr)
-		},
+		DialContext:           dialer.DialContext,
 	}
 	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
-// checkAddr resolves host:port and rejects the connection if any resolved
-// IP is non-public. Rejecting when *any* resolved IP is private prevents a
-// multi-record host from slipping a private address past the guard.
-func checkAddr(ctx context.Context, addr string) error {
-	host, _, err := net.SplitHostPort(addr)
+// guardAddress rejects a resolved "ip:port" connection address whose IP is
+// non-public. It is called by the dialer's Control hook on the actual address
+// being connected to, so it validates the real destination (not a re-resolvable
+// name), defeating DNS rebinding.
+func guardAddress(address string) error {
+	host, _, err := net.SplitHostPort(address)
 	if err != nil {
-		host = addr
+		host = address
 	}
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return fmt.Errorf("safedial: resolve %s: %w", host, err)
-	}
-	for _, ip := range ips {
-		if !isPublic(ip.IP) {
-			return &ErrBlockedAddress{Host: host, IP: ip.IP.String()}
-		}
+	ip := net.ParseIP(host)
+	if ip == nil || !isPublic(ip) {
+		return &ErrBlockedAddress{Host: address, IP: host}
 	}
 	return nil
 }

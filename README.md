@@ -188,6 +188,7 @@ pkg/             Reusable primitives: ulid, db (Transactor + commit hooks,
                  safedial, serviceaccount, logger, config, telemetry, health
 cmd/flexitype    Composition root for the standalone service (+ -wasm playground)
 flexitype.go     Embedding facade
+client/          First-party Go REST client (separate, stdlib-only module)
 ```
 
 Every write flows through the **unit of work**: the usecase opens the
@@ -387,8 +388,22 @@ No file configured → auth disabled (development mode).
 
 The full contract is published as OpenAPI 3 — committed at
 [`api/openapi.yaml`](api/openapi.yaml) and served (unauthenticated) at
-`/api/v1/openapi.json` and `/api/v1/openapi.yaml`. Generate typed clients
-for any language from it; see [docs/clients.md](docs/clients.md).
+`/api/v1/openapi.json` and `/api/v1/openapi.yaml`.
+
+**Go services** get a first-party, hand-crafted client at
+[`github.com/zkrebbekx/flexitype/client`](client) — a standard-library-only
+module that mirrors the embedded usecase surface over the network, with keyset
+pagination iterators and typed errors:
+
+```go
+c, _ := client.New("https://flexitype.internal", client.WithToken(tok))
+prod, _ := c.Types().Create(ctx, client.CreateTypeInput{InternalName: "product", DisplayName: "Product"})
+for row, err := range c.Query(ctx, "product", `price > 100`) { /* ... */ }
+if errors.Is(err, client.ErrNotFound) { /* ... */ }
+```
+
+For other languages, generate a client from the OpenAPI document. Both are
+covered in [docs/clients.md](docs/clients.md).
 
 ```
 GET|POST   /api/v1/type-definitions            PATCH /api/v1/type-definitions/{id}

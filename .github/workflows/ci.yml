@@ -52,6 +52,12 @@ jobs:
           # Enables the Postgres-backed integration tests (they skip when unset).
           FLEXITYPE_TEST_DSN: postgres://postgres:postgres@localhost:5432/flexitype?sslmode=disable
         run: go test -race -timeout 180s ./...
+      - name: Client module (build, vet, test)
+        run: |
+          cd client && go build ./... && go vet ./... && go test -race ./...
+      - name: Client conformance (client SDK vs the real handler)
+        run: |
+          cd conformance && go test -race ./...
       - name: Smoke test (migrations + service boot)
         env:
           FLEXITYPE_PORT: "58080"

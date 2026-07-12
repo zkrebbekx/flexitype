@@ -18,6 +18,11 @@ type Config struct {
 	// ServiceAccountsPath points at the service-account JSON file. Empty
 	// disables authentication (development only).
 	ServiceAccountsPath string
+	// RequireAuth refuses to boot unless an account source is configured
+	// (a service-account file or provisioning). It turns the default
+	// fail-open "no accounts → auth disabled" behaviour into a hard error,
+	// so production cannot accidentally serve the API unauthenticated.
+	RequireAuth bool
 	// LogLevel and LogFormat feed the logger.
 	LogLevel  string
 	LogFormat string
@@ -94,6 +99,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		Port:                envInt("FLEXITYPE_PORT", 8080),
 		ServiceAccountsPath: os.Getenv("FLEXITYPE_SERVICE_ACCOUNTS"),
+		RequireAuth:         envBool("FLEXITYPE_REQUIRE_AUTH", false),
 		LogLevel:            envStr("FLEXITYPE_LOG_LEVEL", "info"),
 		LogFormat:           envStr("FLEXITYPE_LOG_FORMAT", "json"),
 		ShutdownTimeout:     envDuration("FLEXITYPE_SHUTDOWN_TIMEOUT", 30*time.Second),
@@ -128,6 +134,9 @@ func Load() (Config, error) {
 	}
 	if cfg.Port <= 0 || cfg.Port > 65535 {
 		return Config{}, fmt.Errorf("invalid FLEXITYPE_PORT %d", cfg.Port)
+	}
+	if cfg.RequireAuth && cfg.ServiceAccountsPath == "" && !cfg.EnableProvisioning {
+		return Config{}, fmt.Errorf("FLEXITYPE_REQUIRE_AUTH is set but no account source is configured: set FLEXITYPE_SERVICE_ACCOUNTS or FLEXITYPE_PROVISIONING=true")
 	}
 	return cfg, nil
 }

@@ -390,7 +390,7 @@ const removeValue = useMutation({
     <div class="mb-1.5 flex items-baseline justify-between gap-3">
       <span class="text-[13px] font-medium text-(--text-secondary)">Completeness</span>
       <span class="text-[13px] text-(--text-muted)">
-        <span class="font-semibold text-(--text-primary)">{{ completenessPct }}%</span>
+        <span class="font-semibold text-(--text)">{{ completenessPct }}%</span>
         · {{ completeness.data.value.filled }}/{{ completeness.data.value.required }} required
       </span>
     </div>

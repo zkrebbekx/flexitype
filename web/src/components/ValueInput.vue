@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, useId } from 'vue'
 import type { DataType } from '@/lib/api'
 import { inputKind } from '@/lib/values'
 import Toggle from '@/components/ui/Toggle.vue'
@@ -20,6 +20,7 @@ const boolModel = computed({
   set: (v: boolean) => (model.value = String(v)),
 })
 
+const errorId = useId()
 const kind = computed(() => inputKind(props.dataType))
 const nativeType = computed(
   () =>
@@ -43,6 +44,8 @@ const nativeType = computed(
       <textarea
         v-model="model"
         rows="5"
+        :aria-invalid="error ? 'true' : undefined"
+        :aria-describedby="error ? errorId : undefined"
         class="mono w-full rounded-md border bg-(--surface) p-2.5 text-[12.5px]"
         :class="error ? 'border-(--danger)' : 'border-(--border-strong)'"
         placeholder='{ "key": "value" }'
@@ -54,10 +57,12 @@ const nativeType = computed(
         v-model="model"
         :type="nativeType"
         :step="dataType === 'float' || dataType === 'decimal' ? 'any' : undefined"
+        :aria-invalid="error ? 'true' : undefined"
+        :aria-describedby="error ? errorId : undefined"
         class="h-8.5 w-full rounded-md border bg-(--surface) px-2.5 text-sm"
         :class="error ? 'border-(--danger)' : 'border-(--border-strong)'"
       />
     </label>
-    <p v-if="error" class="mt-1 text-[13px] text-(--danger)">{{ error }}</p>
+    <p v-if="error" :id="errorId" role="alert" class="mt-1 text-[13px] text-(--danger)">{{ error }}</p>
   </div>
 </template>

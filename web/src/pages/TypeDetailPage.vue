@@ -87,6 +87,7 @@ const relDefs = useQuery({
 })
 
 const tab = ref('attributes')
+const tabsRef = ref<InstanceType<typeof Tabs>>()
 const tabs = computed(() => [
   { key: 'attributes', label: 'Attributes', count: effective.data.value?.items.length },
   { key: 'dependencies', label: 'Dependencies', count: dependencies.data.value?.length },
@@ -182,11 +183,13 @@ const archiveAttr = useMutation({
   onError: (e) => toasts.error(friendlyError(e)),
 })
 
+const confirmDepArchive = ref<Dependency>()
 const archiveDep = useMutation({
   mutationFn: (id: string) => api.archiveDependency(id),
   onSuccess: () => {
     queryClient.invalidateQueries({ queryKey: ['dependencies'] })
     toasts.success('Dependency archived')
+    confirmDepArchive.value = undefined
   },
   onError: (e) => toasts.error(friendlyError(e)),
 })
@@ -264,15 +267,21 @@ function describeEffect(d: Dependency): string {
   <ErrorState v-if="type.isError.value" :error="type.error.value" @retry="type.refetch()" />
 
   <template v-else>
-  <Tabs v-model="tab" :tabs="tabs" />
+  <Tabs ref="tabsRef" v-model="tab" :tabs="tabs" />
 
   <!-- Attributes -->
-  <section v-if="tab === 'attributes'" class="mt-4">
+  <section
+    v-if="tab === 'attributes'"
+    :id="tabsRef?.panelId('attributes')"
+    role="tabpanel"
+    :aria-labelledby="tabsRef?.tabId('attributes')"
+    class="mt-4"
+  >
     <div class="mb-3 flex justify-end">
       <Button variant="primary" size="sm" @click="openAttr()"><Plus :size="14" /> New attribute</Button>
     </div>
 
-    <div class="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
+    <div class="overflow-x-auto rounded-lg border border-(--border) bg-(--surface)">
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-(--border) bg-(--canvas) text-left text-[13px] text-(--text-muted)">
@@ -353,7 +362,7 @@ function describeEffect(d: Dependency): string {
 
     <template v-if="inherited.length">
       <h3 class="mt-6 mb-2 text-sm font-semibold text-(--text-secondary)">Inherited</h3>
-      <div class="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
+      <div class="overflow-x-auto rounded-lg border border-(--border) bg-(--surface)">
         <table class="w-full text-sm">
           <tbody>
             <tr v-for="e in inherited" :key="e.attribute.id" class="border-b border-(--border) last:border-0">
@@ -382,7 +391,13 @@ function describeEffect(d: Dependency): string {
   </section>
 
   <!-- Dependencies -->
-  <section v-else-if="tab === 'dependencies'" class="mt-4">
+  <section
+    v-else-if="tab === 'dependencies'"
+    :id="tabsRef?.panelId('dependencies')"
+    role="tabpanel"
+    :aria-labelledby="tabsRef?.tabId('dependencies')"
+    class="mt-4"
+  >
     <div class="mb-3 flex justify-end">
       <Button variant="primary" size="sm" @click="openDep()"><Plus :size="14" /> New dependency</Button>
     </div>
@@ -406,7 +421,7 @@ function describeEffect(d: Dependency): string {
           </div>
           <div class="flex shrink-0 gap-1">
             <Button size="sm" variant="ghost" aria-label="Edit dependency" @click="openDep(d)"><Pencil :size="14" /></Button>
-            <Button size="sm" variant="ghost" aria-label="Archive dependency" @click="archiveDep.mutate(d.id)">
+            <Button size="sm" variant="ghost" aria-label="Archive dependency" @click="confirmDepArchive = d">
               <Archive :size="14" />
             </Button>
           </div>
@@ -426,7 +441,13 @@ function describeEffect(d: Dependency): string {
   </section>
 
   <!-- Relationship types -->
-  <section v-else-if="tab === 'relationships'" class="mt-4">
+  <section
+    v-else-if="tab === 'relationships'"
+    :id="tabsRef?.panelId('relationships')"
+    role="tabpanel"
+    :aria-labelledby="tabsRef?.tabId('relationships')"
+    class="mt-4"
+  >
     <div class="mb-3 flex justify-end">
       <Button variant="primary" size="sm" @click="openRel()"><Plus :size="14" /> New relationship type</Button>
     </div>
@@ -494,8 +515,14 @@ function describeEffect(d: Dependency): string {
   </section>
 
   <!-- Entities -->
-  <section v-else class="mt-4">
-    <div class="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
+  <section
+    v-else
+    :id="tabsRef?.panelId('entities')"
+    role="tabpanel"
+    :aria-labelledby="tabsRef?.tabId('entities')"
+    class="mt-4"
+  >
+    <div class="overflow-x-auto rounded-lg border border-(--border) bg-(--surface)">
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-(--border) bg-(--canvas) text-left text-[13px] text-(--text-muted)">
@@ -585,6 +612,16 @@ function describeEffect(d: Dependency): string {
       </div>
     </template>
   </Drawer>
+
+  <Modal
+    :open="!!confirmDepArchive"
+    title="Archive dependency?"
+    message="This dependency stops applying its rules to the target attribute. Existing values are kept and it can be restored later."
+    confirm-label="Archive"
+    danger
+    @close="confirmDepArchive = undefined"
+    @confirm="confirmDepArchive && archiveDep.mutate(confirmDepArchive.id)"
+  />
 
   <Modal
     :open="!!confirmRelArchive"

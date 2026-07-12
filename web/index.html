@@ -5,9 +5,97 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <title>flexitype console</title>
+    <script>
+      // Set the theme before first paint so dark-mode users get no white
+      // flash. Must agree with src/composables/useTheme.ts (storage key and
+      // the `dark` class on <html>).
+      ;(function () {
+        try {
+          var t = localStorage.getItem('flexitype-theme')
+          if (t !== 'dark' && t !== 'light') {
+            t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+          }
+          document.documentElement.classList.toggle('dark', t === 'dark')
+        } catch (e) {
+          /* private mode / storage disabled — fall back to light */
+        }
+      })()
+    </script>
+    <style>
+      /* Boot splash shown until the app mounts. In the WASM playground this
+         covers the seconds the service spends compiling in the browser; in a
+         normal build the app mounts immediately and this is replaced at once. */
+      #ft-boot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        padding: 1.5rem;
+        background: #f8fafc;
+        color: #475569;
+        font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      }
+      html.dark #ft-boot {
+        background: #0b1120;
+        color: #94a3b8;
+      }
+      #ft-boot img {
+        width: 40px;
+        height: 40px;
+      }
+      #ft-boot .ft-boot-spinner {
+        width: 26px;
+        height: 26px;
+        border-radius: 9999px;
+        border: 3px solid rgba(100, 116, 139, 0.25);
+        border-top-color: #4f46e5;
+        animation: ft-boot-spin 0.8s linear infinite;
+      }
+      html.dark #ft-boot .ft-boot-spinner {
+        border-top-color: #818cf8;
+      }
+      #ft-boot p {
+        margin: 0;
+        max-width: 22rem;
+        text-align: center;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+      #ft-boot strong {
+        display: block;
+        margin-bottom: 0.25rem;
+        color: #0f172a;
+        font-size: 15px;
+      }
+      html.dark #ft-boot strong {
+        color: #f1f5f9;
+      }
+      @keyframes ft-boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #ft-boot .ft-boot-spinner {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div id="ft-boot">
+        <img src="/logo.svg" alt="" />
+        <div class="ft-boot-spinner" role="status" aria-label="Loading"></div>
+        <p>
+          <strong>Starting the playground</strong>
+          The full service is compiling in your browser. Data resets on reload.
+        </p>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

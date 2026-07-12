@@ -2,12 +2,16 @@
 import { computed, ref } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
 import { useQuery } from '@tanstack/vue-query'
-import { Shapes, Boxes, ScrollText, Radio, Settings, Moon, Sun, Braces, LogOut } from 'lucide-vue-next'
+import { Shapes, Boxes, ScrollText, Radio, Settings, Moon, Sun, Braces, LogOut, Menu } from 'lucide-vue-next'
 import { useTheme } from '@/composables/useTheme'
 import Toasts from '@/components/ui/Toasts.vue'
 import { authRequired, isAuthenticated, setToken, signOut, bearerHeader, challenge } from '@/lib/auth'
 
 const { theme, toggle } = useTheme()
+
+// Under the md breakpoint the sidebar collapses into a slide-over drawer
+// toggled from a top bar; this tracks whether that drawer is open.
+const mobileNavOpen = ref(false)
 
 // Bearer-token sign-in. In development / playground mode the service runs with
 // auth disabled, so nothing 401s and this overlay never appears.
@@ -59,8 +63,38 @@ const health = useQuery({
 </script>
 
 <template>
-  <div class="flex h-full">
-    <aside class="flex w-52 shrink-0 flex-col border-r border-(--border) bg-(--surface)">
+  <div class="flex h-full flex-col md:flex-row">
+    <a href="#main" class="sr-only-focusable">Skip to content</a>
+
+    <!-- Mobile top bar: logo + hamburger. Hidden from the md breakpoint up. -->
+    <header class="flex items-center gap-2 border-b border-(--border) bg-(--surface) px-4 py-2.5 md:hidden">
+      <button
+        class="rounded-md p-1.5 text-(--text-secondary) hover:bg-(--canvas) hover:text-(--text)"
+        aria-label="Toggle navigation"
+        :aria-expanded="mobileNavOpen"
+        aria-controls="sidebar-nav"
+        @click="mobileNavOpen = !mobileNavOpen"
+      >
+        <Menu :size="20" />
+      </button>
+      <img :src="`${baseUrl}logo.svg`" alt="" class="h-6 w-6" />
+      <span class="text-[15px] font-semibold tracking-tight">flexitype</span>
+      <span
+        v-if="isPlayground"
+        class="rounded-full bg-(--accent-soft) px-1.5 py-0.5 text-[10px] font-semibold text-(--accent)"
+        title="The full service runs in your browser via WebAssembly. Data resets on reload."
+        >demo</span
+      >
+    </header>
+
+    <!-- Backdrop behind the mobile nav drawer. -->
+    <div v-if="mobileNavOpen" class="fixed inset-0 z-30 bg-black/30 md:hidden" @click="mobileNavOpen = false" />
+
+    <aside
+      id="sidebar-nav"
+      class="fixed inset-y-0 left-0 z-40 flex w-52 shrink-0 flex-col border-r border-(--border) bg-(--surface) transition-transform md:static md:z-auto md:translate-x-0"
+      :class="mobileNavOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'"
+    >
       <div class="flex items-center gap-2 px-4 py-4">
         <img :src="`${baseUrl}logo.svg`" alt="" class="h-7 w-7" />
         <span class="text-[15px] font-semibold tracking-tight">flexitype</span>
@@ -79,6 +113,7 @@ const health = useQuery({
           :to="item.to"
           class="flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-(--text-secondary) hover:bg-(--canvas) hover:text-(--text)"
           active-class="!bg-(--accent-soft) !text-(--accent)"
+          @click="mobileNavOpen = false"
         >
           <component :is="item.icon" :size="16" />
           {{ item.label }}
@@ -116,7 +151,7 @@ const health = useQuery({
       </footer>
     </aside>
 
-    <main class="flex-1 overflow-y-auto">
+    <main id="main" aria-label="Main content" class="flex-1 overflow-y-auto">
       <div class="mx-auto max-w-5xl px-6 py-6">
         <RouterView />
       </div>

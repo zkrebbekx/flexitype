@@ -21,6 +21,7 @@ const toasts = useToasts()
 const queryClient = useQueryClient()
 
 const tab = ref('subscriptions')
+const tabsRef = ref<InstanceType<typeof Tabs>>()
 const tabs = [
   { key: 'subscriptions', label: 'Subscriptions' },
   { key: 'events', label: 'Events feed' },
@@ -110,17 +111,23 @@ const events = useQuery({
     </template>
   </PageHeader>
 
-  <Tabs v-model="tab" :tabs="tabs" />
+  <Tabs ref="tabsRef" v-model="tab" :tabs="tabs" />
 
   <!-- Subscriptions -->
-  <section v-if="tab === 'subscriptions'" class="mt-4 flex flex-col gap-4">
+  <section
+    v-if="tab === 'subscriptions'"
+    :id="tabsRef?.panelId('subscriptions')"
+    role="tabpanel"
+    :aria-labelledby="tabsRef?.tabId('subscriptions')"
+    class="mt-4 flex flex-col gap-4"
+  >
     <ErrorState
       v-if="subscriptions.isError.value"
       :error="subscriptions.error.value"
       @retry="subscriptions.refetch()"
     />
     <template v-else>
-      <div class="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
+      <div class="overflow-x-auto rounded-lg border border-(--border) bg-(--surface)">
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-(--border) bg-(--canvas) text-left text-[13px] text-(--text-muted)">
@@ -173,7 +180,7 @@ const events = useQuery({
           <Select v-model="statusFilter" label="" :options="STATUS_OPTIONS" class="w-44" />
         </div>
         <ErrorState v-if="deliveries.isError.value" :error="deliveries.error.value" @retry="deliveries.refetch()" />
-        <div v-else class="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
+        <div v-else class="overflow-x-auto rounded-lg border border-(--border) bg-(--surface)">
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-(--border) bg-(--canvas) text-left text-[13px] text-(--text-muted)">
@@ -220,9 +227,15 @@ const events = useQuery({
   </section>
 
   <!-- Events feed -->
-  <section v-else class="mt-4">
+  <section
+    v-else
+    :id="tabsRef?.panelId('events')"
+    role="tabpanel"
+    :aria-labelledby="tabsRef?.tabId('events')"
+    class="mt-4"
+  >
     <ErrorState v-if="events.isError.value" :error="events.error.value" @retry="events.refetch()" />
-    <div v-else class="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
+    <div v-else class="overflow-x-auto rounded-lg border border-(--border) bg-(--surface)">
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-(--border) bg-(--canvas) text-left text-[13px] text-(--text-muted)">

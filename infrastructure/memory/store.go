@@ -134,18 +134,23 @@ func cloneMap[K comparable, V any](m map[K]V) map[K]V {
 }
 
 // paginate returns the keyset page of a result set already sorted in the
-// list's order: the items strictly after the cursor (matched by cursorOf,
-// exclusive), over-fetched by one so the caller can detect a next page. The
-// total is always returned; the application layer drops it unless requested.
-func paginate[T any](items []T, page db.Page, cursorOf func(T) string) ([]T, int) {
+// list's order: the items strictly after the cursor, over-fetched by one so
+// the caller can detect a next page. keyOf extracts an item's ORDER BY column
+// values and desc flags the descending columns. The cursor is compared by
+// decoded key VALUE (not exact row identity), so a page stays correct even when
+// the cursor row was updated or deleted between requests — matching the
+// Postgres row-tuple predicate. The total is always returned; the application
+// layer drops it unless requested.
+func paginate[T any](items []T, page db.Page, keyOf func(T) []string, desc ...bool) ([]T, int) {
 	total := len(items)
 	start := 0
 	if page.Cursor != "" {
-		for i := range items {
-			if cursorOf(items[i]) == page.Cursor {
-				start = i + 1
-				break
-			}
+		if cur, err := db.DecodeKeyset(page.Cursor); err == nil {
+			// items are sorted in list order, so keyAfter is monotonic: find
+			// the first item strictly after the cursor key.
+			start = sort.Search(total, func(i int) bool {
+				return keyAfter(keyOf(items[i]), cur, desc)
+			})
 		}
 	}
 	if start >= total {
@@ -158,19 +163,36 @@ func paginate[T any](items []T, page db.Page, cursorOf func(T) string) ([]T, int
 	return items[start:end], total
 }
 
-// idCursor is the keyset cursor for an id-ordered list.
-func idCursor(id string) string { return db.EncodeKeyset(id) }
-
-// entityCursor is the composite keyset cursor for entity lists ordered by
-// last-updated (newest first) with the entity id as the unique tiebreaker.
-func entityCursor(lastUpdated time.Time, entityID string) string {
-	return db.EncodeKeyset(lastUpdated.UTC().Format(time.RFC3339Nano), entityID)
+// keyAfter reports whether row key a sorts strictly after cursor key b in the
+// list's order (desc[i] flags a descending column), mirroring the SQL
+// row-tuple comparison the Postgres backend uses. Timestamps are compared as
+// their RFC3339Nano (UTC) strings, which order chronologically.
+func keyAfter(a, b []string, desc []bool) bool {
+	for i := range a {
+		if i >= len(b) || a[i] == b[i] {
+			continue
+		}
+		if i < len(desc) && desc[i] {
+			return a[i] < b[i]
+		}
+		return a[i] > b[i]
+	}
+	return false // equal (or a is a prefix of b) → not strictly after
 }
 
-// entryCursor is the composite keyset cursor for the activity log (newest
-// first with the id as the tiebreaker).
-func entryCursor(e activity.Entry) string {
-	return db.EncodeKeyset(e.OccurredAt.UTC().Format(time.RFC3339Nano), e.ID.String())
+// idKey is the keyset key for an id-ordered (ascending) list.
+func idKey(id string) []string { return []string{id} }
+
+// entityKey is the composite keyset key for entity lists ordered by
+// last-updated (descending) with the entity id as the ascending tiebreaker.
+func entityKey(lastUpdated time.Time, entityID string) []string {
+	return []string{lastUpdated.UTC().Format(time.RFC3339Nano), entityID}
+}
+
+// entryKey is the composite keyset key for the activity log, ordered by
+// occurred-at then id (both descending — newest first).
+func entryKey(e activity.Entry) []string {
+	return []string{e.OccurredAt.UTC().Format(time.RFC3339Nano), e.ID.String()}
 }
 
 // sortByID orders snapshots by an id-extracting function for stable pages.

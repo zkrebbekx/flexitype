@@ -56,7 +56,7 @@ func (r *valueRepo) ListByDefinition(_ context.Context, defID valueobjects.Attri
 	}
 	r.s.mu.RUnlock()
 	sortByID(out, func(v *domainvalue.AttributeValue) string { return v.ID().String() })
-	pageItems, total := paginate(out, page, func(v *domainvalue.AttributeValue) string { return idCursor(v.ID().String()) })
+	pageItems, total := paginate(out, page, func(v *domainvalue.AttributeValue) []string { return idKey(v.ID().String()) })
 	return pageItems, total, nil
 }
 
@@ -127,7 +127,7 @@ func (r *valueRepo) List(_ context.Context, filter domainvalue.Filter, page db.P
 	}
 	r.s.mu.RUnlock()
 	sortByID(out, func(v *domainvalue.AttributeValue) string { return v.ID().String() })
-	pageItems, total := paginate(out, page, func(v *domainvalue.AttributeValue) string { return idCursor(v.ID().String()) })
+	pageItems, total := paginate(out, page, func(v *domainvalue.AttributeValue) []string { return idKey(v.ID().String()) })
 	return pageItems, total, nil
 }
 
@@ -170,7 +170,7 @@ func (r *valueRepo) ListEntities(_ context.Context, tenant valueobjects.TenantID
 		}
 		return out[i].EntityID.String() < out[j].EntityID.String()
 	})
-	pageItems, total := paginate(out, page, func(e domainvalue.EntitySummary) string { return entityCursor(e.LastUpdatedAt, e.EntityID.String()) })
+	pageItems, total := paginate(out, page, func(e domainvalue.EntitySummary) []string { return entityKey(e.LastUpdatedAt, e.EntityID.String()) }, true, false)
 	return pageItems, total, nil
 }
 
@@ -242,7 +242,7 @@ func (r *depRepo) List(_ context.Context, filter domaindependency.Filter, page d
 	}
 	r.s.mu.RUnlock()
 	sortByID(out, func(d *domaindependency.Dependency) string { return d.ID().String() })
-	pageItems, total := paginate(out, page, func(d *domaindependency.Dependency) string { return idCursor(d.ID().String()) })
+	pageItems, total := paginate(out, page, func(d *domaindependency.Dependency) []string { return idKey(d.ID().String()) })
 	return pageItems, total, nil
 }
 
@@ -306,7 +306,7 @@ func (r *relDefRepo) List(_ context.Context, filter domainrelationship.Definitio
 	}
 	r.s.mu.RUnlock()
 	sortByID(out, func(d *domainrelationship.Definition) string { return d.ID().String() })
-	pageItems, total := paginate(out, page, func(d *domainrelationship.Definition) string { return idCursor(d.ID().String()) })
+	pageItems, total := paginate(out, page, func(d *domainrelationship.Definition) []string { return idKey(d.ID().String()) })
 	return pageItems, total, nil
 }
 
@@ -428,7 +428,7 @@ func (r *relRepo) List(_ context.Context, filter domainrelationship.Filter, page
 	}
 	r.s.mu.RUnlock()
 	sortByID(out, func(rel *domainrelationship.Relationship) string { return rel.ID().String() })
-	pageItems, total := paginate(out, page, func(rel *domainrelationship.Relationship) string { return idCursor(rel.ID().String()) })
+	pageItems, total := paginate(out, page, func(rel *domainrelationship.Relationship) []string { return idKey(rel.ID().String()) })
 	return pageItems, total, nil
 }
 

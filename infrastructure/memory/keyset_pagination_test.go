@@ -91,6 +91,44 @@ func TestKeysetPaginationStableUnderInsert(t *testing.T) {
 			})
 		})
 
+		Convey("When the cursor row is deleted between two pages", func() {
+			page1, err := listPage("")
+			So(err, ShouldBeNil)
+			So(len(page1.Items), ShouldEqual, 2) // newest-first: [e4, e3]
+			cursorRow := page1.Items[len(page1.Items)-1].EntityID
+			cursor := *page1.PageInfo.NextCursor
+
+			// Delete the exact row the cursor points at. With naive exact-cursor
+			// matching this loses the resume point and re-lists from the front.
+			_, err = it.Values().RemoveEntity(ctx, product.ID.String(), cursorRow)
+			So(err, ShouldBeNil)
+
+			seen := map[string]int{}
+			for _, e := range page1.Items {
+				seen[e.EntityID]++
+			}
+			for {
+				pg, err := listPage(cursor)
+				So(err, ShouldBeNil)
+				for _, e := range pg.Items {
+					seen[e.EntityID]++
+				}
+				if !pg.PageInfo.HasNextPage || pg.PageInfo.NextCursor == nil {
+					break
+				}
+				cursor = *pg.PageInfo.NextCursor
+			}
+
+			Convey("Then no surviving entity is duplicated or skipped", func() {
+				// e4 came on page1; e3 (the deleted cursor row) came on page1 and
+				// must not reappear; e1 and e2 arrive on page2 — each exactly once.
+				for _, id := range []string{"e1", "e2", "e4"} {
+					So(seen[id], ShouldEqual, 1)
+				}
+				So(seen[cursorRow], ShouldEqual, 1)
+			})
+		})
+
 		Convey("When the total is not requested", func() {
 			page1, err := listPage("")
 			So(err, ShouldBeNil)

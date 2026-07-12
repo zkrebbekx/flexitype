@@ -6,6 +6,7 @@ package unit
 
 import (
 	"context"
+	"math/big"
 	"strconv"
 
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -36,8 +37,8 @@ func (f Family) Factor(unit string) (float64, bool) {
 // ToBase converts a magnitude string in one of the family's units to the
 // base-unit magnitude. It rejects units outside the family.
 func (f Family) ToBase(magnitude, unit string) (float64, error) {
-	m, err := strconv.ParseFloat(magnitude, 64)
-	if err != nil {
+	m, ok := new(big.Rat).SetString(magnitude)
+	if !ok {
 		return 0, domainerrors.NewValidation("quantity magnitude must be numeric", "magnitude", magnitude)
 	}
 	factor, ok := f.Factor(unit)
@@ -45,7 +46,14 @@ func (f Family) ToBase(magnitude, unit string) (float64, error) {
 		return 0, domainerrors.NewValidation("unit is not part of the attribute's unit family",
 			"unit", unit, "family", f.Name)
 	}
-	return m * factor, nil
+	// Multiply as exact rationals so equal quantities expressed in different
+	// units fold to the SAME float64 base (e.g. 997.9024 g and 2.2 lb), rather
+	// than differing in the last ~1e-13 from float multiplication. The factor's
+	// shortest round-trip string recovers the intended decimal (453.592, not
+	// its binary approximation).
+	fr, _ := new(big.Rat).SetString(strconv.FormatFloat(factor, 'f', -1, 64))
+	base, _ := new(big.Rat).Mul(m, fr).Float64()
+	return base, nil
 }
 
 // Store persists unit families, scoped by tenant.

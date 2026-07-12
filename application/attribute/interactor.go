@@ -76,7 +76,7 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 	if err != nil {
 		return nil, err
 	}
-	if err := i.normalizeQuantityConstraints(ctx, dataType, in.UnitFamilyID, constraints); err != nil {
+	if err := i.normalizeQuantityConstraints(ctx, dataType, in.UnitFamilyID, constraints, defaultValue); err != nil {
 		return nil, err
 	}
 	computed, err := decodeComputed(in.Computed)
@@ -279,7 +279,7 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			}
 		}
 
-		if err := i.normalizeQuantityConstraints(ctx, attr.DataType(), in.UnitFamilyID, constraints); err != nil {
+		if err := i.normalizeQuantityConstraints(ctx, attr.DataType(), in.UnitFamilyID, constraints, defaultValue); err != nil {
 			return err
 		}
 
@@ -536,15 +536,15 @@ func decodeRules(rawConstraints, rawDefault json.RawMessage) (domainattribute.Co
 // the attribute's unit family so range checks run in the base dimension. It is
 // a no-op for non-quantity attributes or when unit families are disabled. A
 // unit outside the family is a validation error.
-func (i *Interactor) normalizeQuantityConstraints(ctx context.Context, dt valueobjects.DataType, unitFamilyID string, constraints domainattribute.Constraints) error {
+func (i *Interactor) normalizeQuantityConstraints(ctx context.Context, dt valueobjects.DataType, unitFamilyID string, constraints domainattribute.Constraints, def *valueobjects.Default) error {
 	if dt != valueobjects.DataTypeQuantity {
 		return nil
 	}
-	needs := false
+	needs := def != nil && def.Static != nil
 	for _, c := range constraints {
-		if c.Kind() == domainattribute.KindMinValue || c.Kind() == domainattribute.KindMaxValue {
+		switch c.Kind() {
+		case domainattribute.KindMinValue, domainattribute.KindMaxValue, domainattribute.KindOneOf:
 			needs = true
-			break
 		}
 	}
 	if !needs {
@@ -565,6 +565,9 @@ func (i *Interactor) normalizeQuantityConstraints(ctx context.Context, dt valueo
 		return err
 	}
 	rebase := func(v valueobjects.Value) (valueobjects.Value, error) {
+		if v.DataType() != valueobjects.DataTypeQuantity {
+			return v, nil
+		}
 		q := v.Quantity()
 		base, err := family.ToBase(q.Magnitude, q.Unit)
 		if err != nil {
@@ -586,7 +589,26 @@ func (i *Interactor) normalizeQuantityConstraints(ctx context.Context, dt valueo
 				return err
 			}
 			constraints[idx] = domainattribute.MaxValue{Max: nv}
+		case domainattribute.OneOf:
+			vals := make([]valueobjects.Value, len(cc.Values))
+			for j, v := range cc.Values {
+				nv, err := rebase(v)
+				if err != nil {
+					return err
+				}
+				vals[j] = nv
+			}
+			constraints[idx] = domainattribute.OneOf{Values: vals}
 		}
+	}
+	// A static default is validated against the (now base-normalised)
+	// constraints, so it must be rebased to base too.
+	if def != nil && def.Static != nil {
+		nv, err := rebase(*def.Static)
+		if err != nil {
+			return err
+		}
+		def.Static = &nv
 	}
 	return nil
 }

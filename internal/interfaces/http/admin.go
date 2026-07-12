@@ -57,7 +57,7 @@ func (s *server) listTenants(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": tenants})
+	writeItems(w, tenants)
 }
 
 type setActiveRequest struct {
@@ -122,7 +122,7 @@ func (s *server) listServiceAccounts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": accounts})
+	writeItems(w, accounts)
 }
 
 func (s *server) rotateServiceAccount(w http.ResponseWriter, r *http.Request) {

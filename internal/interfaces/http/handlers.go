@@ -22,13 +22,17 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
 
-// pageArgs reads ?limit= and ?cursor=.
+// pageArgs reads ?limit= and ?cursor=. A non-numeric limit is passed through
+// as an invalid value so PageArgs.Resolve rejects it uniformly (a 422) instead
+// of being silently dropped to the default.
 func pageArgs(r *http.Request) db.PageArgs {
 	var args db.PageArgs
 	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
-			args.Limit = &n
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			n = 0 // rejected by Resolve as not a positive integer
 		}
+		args.Limit = &n
 	}
 	if raw := r.URL.Query().Get("cursor"); raw != "" {
 		args.Cursor = &raw
@@ -285,7 +289,7 @@ func (s *server) effectiveAttributes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeItems(w, items)
 }
 
 func (s *server) typeChildren(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +298,7 @@ func (s *server) typeChildren(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeItems(w, items)
 }
 
 func (s *server) listAttributesByTypeDefinition(w http.ResponseWriter, r *http.Request) {
@@ -409,7 +413,7 @@ func (s *server) listSavedViews(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": views})
+	writeItems(w, views)
 }
 
 func (s *server) createSavedView(w http.ResponseWriter, r *http.Request) {
@@ -483,7 +487,7 @@ func (s *server) relationshipRequirements(w http.ResponseWriter, r *http.Request
 		writeError(w, s.log, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": reqs})
+	writeItems(w, reqs)
 }
 
 func (s *server) exportSchema(w http.ResponseWriter, r *http.Request) {
@@ -897,7 +901,7 @@ func (s *server) listEntityRelationships(w http.ResponseWriter, r *http.Request)
 		writeError(w, s.log, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": links})
+	writeItems(w, links)
 }
 
 // --- features --------------------------------------------------------------------

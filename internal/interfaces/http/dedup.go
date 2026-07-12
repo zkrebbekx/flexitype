@@ -40,7 +40,7 @@ func (s *server) listMatchRules(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": rules})
+	writeItems(w, rules)
 }
 
 func (s *server) deleteMatchRule(w http.ResponseWriter, r *http.Request) {

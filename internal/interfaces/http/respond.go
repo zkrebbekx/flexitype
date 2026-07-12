@@ -29,6 +29,16 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	}
 }
 
+// writeItems writes a 200 {"items": [...]} list response, guaranteeing a JSON
+// array: a nil slice would marshal to null and break clients that read
+// `.items` as an array (see the saved-views regression).
+func writeItems[T any](w http.ResponseWriter, items []T) {
+	if items == nil {
+		items = []T{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 // writeError maps domain error codes onto HTTP statuses.
 func writeError(w http.ResponseWriter, log *logger.Logger, err error) {
 	var body errorBody

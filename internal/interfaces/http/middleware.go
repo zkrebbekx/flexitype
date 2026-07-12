@@ -81,10 +81,14 @@ func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(ht
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if auth == nil {
-				next.ServeHTTP(w, r.WithContext(uow.WithActor(r.Context(), uow.Actor{
-					Name: "dev",
-					Kind: uow.ActorSystem,
-				})))
+				// Development mode (auth disabled). Stamp the admin principal
+				// EXPLICITLY — scopes and field access — so no request relies
+				// on the implicit context defaults; the trust boundary is set
+				// here in one place rather than fanned out to every reader.
+				ctx := uow.WithActor(r.Context(), uow.Actor{Name: "dev", Kind: uow.ActorSystem})
+				ctx = context.WithValue(ctx, scopesKey{}, []serviceaccount.Scope{serviceaccount.ScopeAdmin})
+				ctx = uow.WithAccess(ctx, uow.Access{Admin: true})
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 

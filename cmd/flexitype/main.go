@@ -187,7 +187,9 @@ func run(log *logger.Logger) error {
 		accounts = fileStore
 		log.Info().Str("path", cfg.ServiceAccountsPath).Msg("service accounts loaded")
 	default:
-		log.Warn().Msg("no service accounts configured; authentication disabled")
+		// Reached only when RequireAuth is off (config.Load rejects
+		// RequireAuth with no account source before we get here).
+		log.Warn().Msg("no service accounts configured; authentication is DISABLED and the full multi-tenant API is served with admin access — configure FLEXITYPE_SERVICE_ACCOUNTS or FLEXITYPE_PROVISIONING for production, or set FLEXITYPE_REQUIRE_AUTH=true to refuse booting unauthenticated")
 	}
 
 	healthChecker := health.NewService("flexitype", version)

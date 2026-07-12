@@ -37,7 +37,10 @@ Three modes, in precedence order:
 2. **File** (`FLEXITYPE_SERVICE_ACCOUNTS=<path>`) — accounts are read from a
    JSON file at startup (static; edit-and-redeploy to change).
 3. **Development** (neither set) — authentication is disabled and every
-   request runs as the system actor with admin scope.
+   request runs as the system actor with admin scope. This is opt-out:
+   set `FLEXITYPE_REQUIRE_AUTH=true` in production so the service refuses to
+   boot unless an account source is configured, rather than silently serving
+   the whole multi-tenant API unauthenticated.
 
 Provisioning wins if both it and a file are set.
 
@@ -45,6 +48,7 @@ Provisioning wins if both it and a file are set.
 | --- | --- | --- |
 | `FLEXITYPE_SERVICE_ACCOUNTS` | _(unset)_ | Path to the service-account JSON file (file mode). |
 | `FLEXITYPE_PROVISIONING` | `false` | Enable database-backed auth and the admin-scoped tenant/service-account API. |
+| `FLEXITYPE_REQUIRE_AUTH` | `false` | Refuse to boot unless an account source (file or provisioning) is configured. Set to `true` in production to prevent accidentally running with authentication disabled. |
 | `FLEXITYPE_BOOTSTRAP_ADMIN` | `false` | On startup, if no accounts exist, seed a `default` tenant and `bootstrap-admin` admin account. Its token is logged **once** — capture it. |
 | `FLEXITYPE_AUTH_CACHE_TTL` | `30s` | How long a database-backed auth result is cached. Bounds how quickly a revoked or rotated credential stops working. |
 

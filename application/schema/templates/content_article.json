@@ -1,0 +1,24 @@
+{
+  "name": "content-article",
+  "title": "Content Articles (Headless CMS)",
+  "description": "Localized articles with a hero image (media), a unique slug, and author relationships with cardinality bounds.",
+  "bundle": {
+    "version": 1,
+    "types": [
+      { "internal_name": "article", "display_name": "Article" },
+      { "internal_name": "author", "display_name": "Author" }
+    ],
+    "attributes": [
+      { "type": "article", "internal_name": "title", "display_name": "Title", "data_type": "string", "required": true, "localizable": true, "constraints": [{ "kind": "max_length", "n": 300 }] },
+      { "type": "article", "internal_name": "slug", "display_name": "Slug", "data_type": "string", "unique": true },
+      { "type": "article", "internal_name": "body", "display_name": "Body", "data_type": "string", "localizable": true },
+      { "type": "article", "internal_name": "hero", "display_name": "Hero Image", "data_type": "media", "constraints": [{ "kind": "media", "mime": ["image/png", "image/jpeg"], "max_size": 5242880 }] },
+      { "type": "article", "internal_name": "published", "display_name": "Published", "data_type": "bool" },
+      { "type": "author", "internal_name": "name", "display_name": "Name", "data_type": "string", "required": true }
+    ],
+    "relationship_definitions": [
+      { "internal_name": "written_by", "display_name": "Written by", "kind": "directed", "parent_type": "article", "child_type": "author", "parent_label": "articles", "child_label": "authors", "parent_version_policy": "latest", "child_version_policy": "latest", "min_children": 1, "max_children": 3 }
+    ],
+    "dependencies": []
+  }
+}

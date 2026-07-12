@@ -1,0 +1,32 @@
+{
+  "name": "product-catalog",
+  "title": "Product Catalog (PIM)",
+  "description": "Products with localized names, a computed margin, a quantity weight in a mass unit family, supplier relationships and a conditional SKU requirement.",
+  "bundle": {
+    "version": 1,
+    "unit_families": [
+      { "name": "mass", "base_unit": "g", "units": { "g": 1, "kg": 1000, "lb": 453.592 } }
+    ],
+    "types": [
+      { "internal_name": "product", "display_name": "Product" },
+      { "internal_name": "supplier", "display_name": "Supplier" }
+    ],
+    "attributes": [
+      { "type": "product", "internal_name": "name", "display_name": "Name", "data_type": "string", "required": true, "localizable": true, "constraints": [{ "kind": "max_length", "n": 200 }] },
+      { "type": "product", "internal_name": "sku", "display_name": "SKU", "data_type": "string", "unique": true },
+      { "type": "product", "internal_name": "price", "display_name": "Price", "data_type": "decimal" },
+      { "type": "product", "internal_name": "cost", "display_name": "Cost", "data_type": "decimal" },
+      { "type": "product", "internal_name": "margin", "display_name": "Margin", "data_type": "decimal", "computed": { "kind": "formula", "formula": "(price - cost) / price" } },
+      { "type": "product", "internal_name": "weight", "display_name": "Weight", "data_type": "quantity", "unit_family": "mass", "display_unit": "g", "constraints": [{ "kind": "min_value", "value": { "type": "quantity", "value": { "magnitude": "1", "unit": "g" } } }] },
+      { "type": "product", "internal_name": "in_stock", "display_name": "In Stock", "data_type": "bool" },
+      { "type": "supplier", "internal_name": "name", "display_name": "Name", "data_type": "string", "required": true },
+      { "type": "supplier", "internal_name": "region", "display_name": "Region", "data_type": "string" }
+    ],
+    "relationship_definitions": [
+      { "internal_name": "supplied_by", "display_name": "Supplied by", "kind": "directed", "parent_type": "product", "child_type": "supplier", "parent_label": "products", "child_label": "suppliers", "parent_version_policy": "latest", "child_version_policy": "latest", "max_children": 5 }
+    ],
+    "dependencies": [
+      { "source_type": "product", "source_attribute": "in_stock", "target_type": "product", "target_attribute": "sku", "conditions": [{ "kind": "equals", "value": { "type": "bool", "value": true } }], "effect": { "required": true }, "description": "In-stock products must have a SKU" }
+    ]
+  }
+}

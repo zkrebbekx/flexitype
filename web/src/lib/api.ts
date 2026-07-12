@@ -447,6 +447,18 @@ export const api = {
     request<TypeDefinition>('PATCH', `/type-definitions/${id}`, input),
   archiveType: (id: string) => request<TypeDefinition>('POST', `/type-definitions/${id}/archive`),
   restoreType: (id: string) => request<TypeDefinition>('POST', `/type-definitions/${id}/restore`),
+  cloneType: (id: string, input: { internal_name: string; display_name?: string }) =>
+    request<{ type: TypeDefinition; attributes: number; dependencies: number }>(
+      'POST',
+      `/type-definitions/${id}/clone`,
+      input,
+    ),
+
+  // Schema templates
+  listTemplates: () =>
+    request<{ items: SchemaTemplate[] }>('GET', '/schema/templates'),
+  applyTemplate: (name: string) =>
+    request<SchemaImportResult>('POST', `/schema/templates/${encodeURIComponent(name)}/apply`),
 
   // Attributes
   listTypeAttributes: (typeId: string, q: PageQuery = {}) =>
@@ -745,6 +757,24 @@ export interface Features {
   activity: boolean
   search_index: boolean
   event_delivery: boolean
+}
+
+export interface SchemaTemplate {
+  name: string
+  title: string
+  description: string
+}
+
+export interface KindCount {
+  created: number
+  skipped: number
+}
+
+export interface SchemaImportResult {
+  types: KindCount
+  attributes: KindCount
+  relationship_definitions: KindCount
+  dependencies: KindCount
 }
 
 // friendlyError renders an ApiError for inline display.

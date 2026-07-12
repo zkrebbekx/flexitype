@@ -17,7 +17,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import SkeletonRows from '@/components/ui/SkeletonRows.vue'
 import Pagination from '@/components/ui/Pagination.vue'
-import { Plus } from 'lucide-vue-next'
+import { Plus, LayoutTemplate } from 'lucide-vue-next'
 
 const toasts = useToasts()
 const queryClient = useQueryClient()
@@ -64,6 +64,29 @@ const create = useMutation({
   },
   onError: (e) => (formError.value = friendlyError(e)),
 })
+
+// Schema templates: curated starter schemas applied in one call.
+const templateDrawerOpen = ref(false)
+const templates = useQuery({
+  queryKey: ['schema-templates'],
+  queryFn: () => api.listTemplates(),
+  enabled: templateDrawerOpen,
+})
+
+const applyTemplate = useMutation({
+  mutationFn: (name: string) => api.applyTemplate(name),
+  onSuccess: (res, name) => {
+    queryClient.invalidateQueries({ queryKey: ['types'] })
+    const created = res.types.created + res.attributes.created
+    toasts.success(
+      created > 0
+        ? `Template "${name}" applied — ${res.types.created} type(s), ${res.attributes.created} attribute(s)`
+        : `Template "${name}" already present — nothing to add`,
+    )
+    templateDrawerOpen.value = false
+  },
+  onError: (e) => toasts.error(friendlyError(e)),
+})
 </script>
 
 <template>
@@ -74,6 +97,7 @@ const create = useMutation({
         <input v-model="includeArchived" type="checkbox" class="accent-(--accent)" />
         Show archived
       </label>
+      <Button @click="templateDrawerOpen = true"><LayoutTemplate :size="15" /> From template</Button>
       <Button variant="primary" @click="((drawerOpen = true), (formError = ''))"><Plus :size="15" /> New type</Button>
     </template>
   </PageHeader>
@@ -170,5 +194,33 @@ const create = useMutation({
         <Button variant="primary" :disabled="create.isPending.value" @click="create.mutate()">Create type</Button>
       </div>
     </template>
+  </Drawer>
+
+  <Drawer :open="templateDrawerOpen" title="Start from a template" @close="templateDrawerOpen = false">
+    <p class="mb-4 text-[13px] text-(--text-muted)">
+      A template is a curated starter schema — types, attributes, constraints, unit families and
+      relationships — applied in one call. Applying is idempotent: existing objects are left as-is.
+    </p>
+    <SkeletonRows v-if="templates.isPending.value" :rows="2" :cols="1" />
+    <ul v-else class="flex flex-col gap-2">
+      <li
+        v-for="t in templates.data.value?.items ?? []"
+        :key="t.name"
+        class="rounded-lg border border-(--border) bg-(--canvas) p-3"
+      >
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <p class="font-medium">{{ t.title }}</p>
+            <p class="mono text-[12px] text-(--text-muted)">{{ t.name }}</p>
+            <p class="mt-1 text-[13px] text-(--text-secondary)">{{ t.description }}</p>
+          </div>
+          <Button
+            variant="primary"
+            :disabled="applyTemplate.isPending.value"
+            @click="applyTemplate.mutate(t.name)"
+          >Apply</Button>
+        </div>
+      </li>
+    </ul>
   </Drawer>
 </template>

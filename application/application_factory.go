@@ -163,7 +163,6 @@ func (f *factory) New(context.Context) *Interactors {
 	if f.cfg.BlobStore != nil {
 		i.values.SetBlobStore(f.cfg.BlobStore)
 	}
-	i.schema = appschema.NewInteractor(i.typeDefs, i.attrs, i.relationships, i.deps)
 	if f.cfg.SavedViews != nil {
 		i.savedViews = appsavedview.NewInteractor(f.cfg.SavedViews)
 	}
@@ -180,6 +179,9 @@ func (f *factory) New(context.Context) *Interactors {
 		i.units = appunit.NewInteractor(f.cfg.UnitFamilies)
 		i.values.SetUnitFamilies(f.cfg.UnitFamilies)
 	}
+	// Schema orchestrates the aggregate interactors; built after units so
+	// bundle export/import and clone carry quantity families.
+	i.schema = appschema.NewInteractor(i.typeDefs, i.attrs, i.relationships, i.deps, i.units)
 	if f.cfg.Features.EventDelivery {
 		i.webhooks = webhook.NewInteractor(unit, f.cfg.Subscriptions, f.cfg.Deliveries, f.cfg.WebhookURLPolicy)
 		i.feed = feed.NewInteractor(f.cfg.FeedStore, f.cfg.CursorStore)

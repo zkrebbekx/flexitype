@@ -15,6 +15,7 @@ import (
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
+	appunit "github.com/zkrebbekx/flexitype/application/unit"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -26,10 +27,19 @@ const BundleVersion = 1
 // Bundle is a portable, name-keyed snapshot of a tenant's schema.
 type Bundle struct {
 	Version                 int                      `json:"version"`
+	UnitFamilies            []UnitFamily             `json:"unit_families,omitempty"`
 	Types                   []Type                   `json:"types"`
 	Attributes              []Attribute              `json:"attributes"`
 	RelationshipDefinitions []RelationshipDefinition `json:"relationship_definitions"`
 	Dependencies            []Dependency             `json:"dependencies"`
+}
+
+// UnitFamily is a quantity attribute's unit family, referenced from
+// attributes by Name so a bundle stays ID-free and portable.
+type UnitFamily struct {
+	Name     string             `json:"name"`
+	BaseUnit string             `json:"base_unit"`
+	Units    map[string]float64 `json:"units"`
 }
 
 // Type is a type definition; Extends names the parent type (empty for a
@@ -42,7 +52,8 @@ type Type struct {
 }
 
 // Attribute is an attribute definition anchored to its declaring type by
-// name.
+// name. UnitFamily names a bundle unit family (for quantity attributes);
+// Computed carries the computed-attribute spec verbatim.
 type Attribute struct {
 	Type         string          `json:"type"`
 	InternalName string          `json:"internal_name"`
@@ -52,8 +63,16 @@ type Attribute struct {
 	Required     bool            `json:"required"`
 	MultiValued  bool            `json:"multi_valued"`
 	Unique       bool            `json:"unique"`
+	Localizable  bool            `json:"localizable,omitempty"`
+	Scopable     bool            `json:"scopable,omitempty"`
+	UnitFamily   string          `json:"unit_family,omitempty"`
+	DisplayUnit  string          `json:"display_unit,omitempty"`
+	Computed     json.RawMessage `json:"computed,omitempty"`
 	Constraints  json.RawMessage `json:"constraints,omitempty"`
 	DefaultValue json.RawMessage `json:"default_value,omitempty"`
+	Group        string          `json:"group,omitempty"`
+	SortOrder    int             `json:"sort_order,omitempty"`
+	HelpText     string          `json:"help_text,omitempty"`
 }
 
 // RelationshipDefinition references its endpoint types by name.
@@ -68,6 +87,10 @@ type RelationshipDefinition struct {
 	ChildLabel          string `json:"child_label,omitempty"`
 	ParentVersionPolicy string `json:"parent_version_policy"`
 	ChildVersionPolicy  string `json:"child_version_policy"`
+	MinChildren         *int   `json:"min_children,omitempty"`
+	MaxChildren         *int   `json:"max_children,omitempty"`
+	MinParents          *int   `json:"min_parents,omitempty"`
+	MaxParents          *int   `json:"max_parents,omitempty"`
 }
 
 // Dependency references its two attributes by type + attribute name.
@@ -88,11 +111,15 @@ type Interactor struct {
 	attrs    *appattribute.Interactor
 	rels     *apprelationship.Interactor
 	deps     *appdependency.Interactor
+	// units carries quantity unit families through export/import and clone;
+	// nil when unit families are disabled.
+	units *appunit.Interactor
 }
 
-// NewInteractor wires the schema usecases.
-func NewInteractor(typeDefs *apptypedef.Interactor, attrs *appattribute.Interactor, rels *apprelationship.Interactor, deps *appdependency.Interactor) *Interactor {
-	return &Interactor{typeDefs: typeDefs, attrs: attrs, rels: rels, deps: deps}
+// NewInteractor wires the schema usecases. units (nil-able) makes quantity
+// unit families portable in bundles.
+func NewInteractor(typeDefs *apptypedef.Interactor, attrs *appattribute.Interactor, rels *apprelationship.Interactor, deps *appdependency.Interactor, units *appunit.Interactor) *Interactor {
+	return &Interactor{typeDefs: typeDefs, attrs: attrs, rels: rels, deps: deps, units: units}
 }
 
 func limitPtr(n int) *int { return &n }
@@ -100,6 +127,21 @@ func limitPtr(n int) *int { return &n }
 // Export gathers the caller's tenant schema into a bundle.
 func (i *Interactor) Export(ctx context.Context) (*Bundle, error) {
 	bundle := &Bundle{Version: BundleVersion}
+
+	// Unit families first — quantity attributes reference them by name.
+	unitNameByID := map[string]string{}
+	if i.units != nil {
+		families, err := i.units.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range families {
+			unitNameByID[f.ID.String()] = f.Name
+			bundle.UnitFamilies = append(bundle.UnitFamilies, UnitFamily{
+				Name: f.Name, BaseUnit: f.BaseUnit, Units: f.Units,
+			})
+		}
+	}
 
 	// Types (entity kind only — relationship attribute-set companions are
 	// recreated implicitly when their relationship definition imports).
@@ -147,6 +189,20 @@ func (i *Interactor) Export(ctx context.Context) (*Bundle, error) {
 					Required:     a.Required,
 					MultiValued:  a.MultiValued,
 					Unique:       a.Unique,
+					Localizable:  a.Localizable,
+					Scopable:     a.Scopable,
+					DisplayUnit:  a.DisplayUnit,
+					Group:        a.Group,
+					SortOrder:    a.SortOrder,
+					HelpText:     a.HelpText,
+				}
+				if a.UnitFamilyID != "" {
+					ba.UnitFamily = unitNameByID[a.UnitFamilyID]
+				}
+				if a.Computed != nil {
+					if raw, err := json.Marshal(a.Computed); err == nil {
+						ba.Computed = raw
+					}
 				}
 				if raw, err := json.Marshal(a.Constraints); err == nil && string(raw) != "null" {
 					ba.Constraints = raw
@@ -184,6 +240,10 @@ func (i *Interactor) Export(ctx context.Context) (*Bundle, error) {
 				ChildLabel:          r.ChildLabel,
 				ParentVersionPolicy: string(r.ParentVersionPolicy),
 				ChildVersionPolicy:  string(r.ChildVersionPolicy),
+				MinChildren:         r.MinChildren,
+				MaxChildren:         r.MaxChildren,
+				MinParents:          r.MinParents,
+				MaxParents:          r.MaxParents,
 			})
 		}
 		if !ro.PageInfo.HasNextPage {
@@ -294,6 +354,12 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 	}
 	res := &ImportResult{}
 
+	// 0. Unit families — quantity attributes resolve their family by name.
+	unitIDByName, err := i.importUnitFamilies(ctx, bundle.UnitFamilies)
+	if err != nil {
+		return nil, err
+	}
+
 	// 1. Types, parents before children.
 	typeIDByName, err := i.currentTypeIDs(ctx)
 	if err != nil {
@@ -338,6 +404,15 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 			res.Attributes.Skipped++
 			continue
 		}
+		unitFamilyID := ""
+		if a.UnitFamily != "" {
+			id, ok := unitIDByName[a.UnitFamily]
+			if !ok {
+				return nil, domainerrors.NewValidation("attribute references an unknown unit family",
+					"attribute", a.InternalName, "unit_family", a.UnitFamily)
+			}
+			unitFamilyID = id
+		}
 		snap, err := i.attrs.Create(ctx, appattribute.CreateInput{
 			TypeDefinitionID: typeID,
 			InternalName:     a.InternalName,
@@ -347,8 +422,16 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 			Required:         a.Required,
 			MultiValued:      a.MultiValued,
 			Unique:           a.Unique,
+			Localizable:      a.Localizable,
+			Scopable:         a.Scopable,
+			UnitFamilyID:     unitFamilyID,
+			DisplayUnit:      a.DisplayUnit,
+			Computed:         a.Computed,
 			Constraints:      a.Constraints,
 			DefaultValue:     a.DefaultValue,
+			Group:            a.Group,
+			SortOrder:        a.SortOrder,
+			HelpText:         a.HelpText,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("import attribute %q.%q: %w", a.Type, a.InternalName, err)
@@ -383,6 +466,10 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 			ChildLabel:          r.ChildLabel,
 			ParentVersionPolicy: r.ParentVersionPolicy,
 			ChildVersionPolicy:  r.ChildVersionPolicy,
+			MinChildren:         r.MinChildren,
+			MaxChildren:         r.MaxChildren,
+			MinParents:          r.MinParents,
+			MaxParents:          r.MaxParents,
 		}); err != nil {
 			return nil, fmt.Errorf("import relationship %q: %w", r.InternalName, err)
 		}
@@ -420,6 +507,40 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 	}
 
 	return res, nil
+}
+
+// importUnitFamilies creates each bundle unit family that is not already
+// present (matched by name), returning name→id for every family the tenant
+// now has. A bundle carrying families when unit support is disabled is a
+// validation error.
+func (i *Interactor) importUnitFamilies(ctx context.Context, families []UnitFamily) (map[string]string, error) {
+	idByName := map[string]string{}
+	if i.units == nil {
+		if len(families) > 0 {
+			return nil, domainerrors.NewValidation("bundle declares unit families but unit support is disabled in this deployment")
+		}
+		return idByName, nil
+	}
+	existing, err := i.units.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range existing {
+		idByName[f.Name] = f.ID.String()
+	}
+	for _, f := range families {
+		if _, ok := idByName[f.Name]; ok {
+			continue
+		}
+		created, err := i.units.Create(ctx, appunit.CreateInput{
+			Name: f.Name, BaseUnit: f.BaseUnit, Units: f.Units,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("import unit family %q: %w", f.Name, err)
+		}
+		idByName[f.Name] = created.ID.String()
+	}
+	return idByName, nil
 }
 
 func (i *Interactor) currentTypeIDs(ctx context.Context) (map[string]string, error) {

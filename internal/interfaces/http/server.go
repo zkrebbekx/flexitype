@@ -42,6 +42,12 @@ type ServerConfig struct {
 // NewHandler builds the service's HTTP handler: versioned API plus
 // operational endpoints, instrumented with OpenTelemetry.
 func NewHandler(cfg ServerConfig) http.Handler {
+	return otelhttp.NewHandler(buildRouter(cfg), "flexitype.http")
+}
+
+// buildRouter constructs the raw chi router (before OpenTelemetry wrapping) so
+// tests can walk the registered routes.
+func buildRouter(cfg ServerConfig) *chi.Mux {
 	s := &server{factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex, admin: cfg.Admin, blobs: cfg.BlobStore, graphql: cfg.GraphQL}
 
 	r := chi.NewRouter()
@@ -243,7 +249,7 @@ func NewHandler(cfg ServerConfig) http.Handler {
 	// admin console SPA.
 	r.NotFound(spaHandler(cfg.Logger))
 
-	return otelhttp.NewHandler(r, "flexitype.http")
+	return r
 }
 
 // server holds per-handler dependencies.

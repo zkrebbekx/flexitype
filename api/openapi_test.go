@@ -20,7 +20,9 @@ func TestOpenAPISpec(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(doc.Validate(context.Background()), ShouldBeNil)
 			So(doc.Info.Version, ShouldEqual, "v1")
-			So(len(doc.Paths.Map()), ShouldBeGreaterThan, 20)
+			// Route-exact coverage is enforced by TestOpenAPIRouteCoverage
+			// (internal/interfaces/http); this only guards a floor.
+			So(len(doc.Paths.Map()), ShouldBeGreaterThan, 60)
 		})
 
 		Convey("It converts to well-formed JSON", func() {

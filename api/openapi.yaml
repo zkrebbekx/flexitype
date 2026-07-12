@@ -24,6 +24,13 @@ tags:
   - name: activity
   - name: event-delivery
   - name: ops
+  - name: schema
+  - name: changesets
+  - name: revisions
+  - name: units
+  - name: dedup
+  - name: media
+  - name: graphql
 
 paths:
   /features:
@@ -779,6 +786,483 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
 
+  /type-definitions/{id}/completeness:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [types]
+      summary: Score a type's entities against their required schema
+      responses:
+        "200":
+          description: Aggregate completeness across the type's entities
+          content: { application/json: { schema: { $ref: "#/components/schemas/TypeCompleteness" } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /type-definitions/{id}/match-rules:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [dedup]
+      summary: List a type's duplicate-match rules
+      responses:
+        "200":
+          description: Match rules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { items: { type: array, items: { $ref: "#/components/schemas/MatchRule" } } }
+    post:
+      tags: [dedup]
+      summary: Create a duplicate-match rule for a type
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMatchRule" }
+      responses:
+        "201": { description: Created match rule, content: { application/json: { schema: { $ref: "#/components/schemas/MatchRule" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /type-definitions/{id}/clone:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [types]
+      summary: Clone a type into a new independent root type
+      description: >
+        Copies the source type's declared attributes and the dependencies whose
+        endpoints both belong to it. Values and hierarchy position are not
+        copied; the clone is a fresh root.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloneType" }
+      responses:
+        "201": { description: Clone result, content: { application/json: { schema: { $ref: "#/components/schemas/CloneResult" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+
+  /match-rules/{ruleID}:
+    parameters: [{ name: ruleID, in: path, required: true, schema: { type: string } }]
+    delete:
+      tags: [dedup]
+      summary: Delete a match rule
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+  /match-rules/{ruleID}/scan:
+    parameters: [{ name: ruleID, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [dedup]
+      summary: Scan a rule for candidate duplicate pairs
+      description: >
+        Runs the matching rule over the type's current values and returns
+        candidate pairs highest score first, excluding dismissed pairs. Reads
+        only committed data and never writes.
+      responses:
+        "200": { description: Candidate duplicate pairs, content: { application/json: { schema: { $ref: "#/components/schemas/ScanResult" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /match-rules/{ruleID}/dismiss:
+    parameters: [{ name: ruleID, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [dedup]
+      summary: Dismiss a candidate pair as not a duplicate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entity_a, entity_b]
+              properties:
+                entity_a: { type: string }
+                entity_b: { type: string }
+      responses:
+        "204": { description: Dismissed }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /schema/templates:
+    get:
+      tags: [schema]
+      summary: List the curated schema templates
+      responses:
+        "200":
+          description: Template summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { items: { type: array, items: { $ref: "#/components/schemas/SchemaTemplateSummary" } } }
+  /schema/templates/{name}:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [schema]
+      summary: Get one schema template with its bundle
+      responses:
+        "200": { description: Template, content: { application/json: { schema: { $ref: "#/components/schemas/SchemaTemplate" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /schema/templates/{name}/apply:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [schema]
+      summary: Apply a template bundle into the caller's tenant (idempotent)
+      responses:
+        "200":
+          description: Per-kind created/skipped counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  types: { $ref: "#/components/schemas/ImportKindCount" }
+                  attributes: { $ref: "#/components/schemas/ImportKindCount" }
+                  relationship_definitions: { $ref: "#/components/schemas/ImportKindCount" }
+                  dependencies: { $ref: "#/components/schemas/ImportKindCount" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /entities/{typeDefinitionID}/grid:
+    parameters: [{ name: typeDefinitionID, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [entities]
+      summary: Project a page of entities onto chosen attribute columns
+      description: >
+        One list/query round-trip plus one batched value load — no N+1.
+        `attributes` chooses the value columns; `query` (FQL) filters the rows.
+      parameters:
+        - { name: attributes, in: query, schema: { type: string }, description: Comma-separated attribute internal names to project as columns }
+        - { name: query, in: query, schema: { type: string }, description: Optional FQL filter }
+        - { name: include_descendants, in: query, schema: { type: boolean } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Grid page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/GridResult"
+                  - type: object
+                    properties: { page_info: { $ref: "#/components/schemas/PageInfo" } }
+  /entities/{typeDefinitionID}/facets:
+    parameters: [{ name: typeDefinitionID, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [entities]
+      summary: Count attribute values across the current result set
+      parameters:
+        - { name: attributes, in: query, schema: { type: string }, description: Comma-separated attribute internal names to facet }
+        - { name: query, in: query, schema: { type: string }, description: Optional FQL filter }
+      responses:
+        "200": { description: Facet buckets keyed by attribute, content: { application/json: { schema: { $ref: "#/components/schemas/Facets" } } } }
+  /entities/{typeDefinitionID}/import:
+    parameters: [{ name: typeDefinitionID, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [entities]
+      summary: Import a CSV of entity values
+      description: >
+        Multipart upload: the CSV as `file` and a JSON `mapping` describing the
+        key column, column-to-attribute map, commit mode and dry-run flag.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, mapping]
+              properties:
+                file: { type: string, format: binary }
+                mapping: { type: string, description: "JSON: key_column, mapping, mode, dry_run" }
+      responses:
+        "200": { description: Import report, content: { application/json: { schema: { $ref: "#/components/schemas/ImportReport" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /entities/{typeDefinitionID}/export:
+    parameters: [{ name: typeDefinitionID, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [entities]
+      summary: Export a type's entities as CSV
+      parameters:
+        - { name: attributes, in: query, schema: { type: string }, description: Comma-separated attribute internal names (columns) }
+        - { name: query, in: query, schema: { type: string }, description: Optional FQL filter }
+        - { name: entity_ids, in: query, schema: { type: string }, description: Optional explicit comma-separated entity ids }
+      responses:
+        "200":
+          description: CSV export
+          content:
+            text/csv:
+              schema: { type: string }
+  /entities/{typeDefinitionID}/{entityID}/as-of:
+    parameters:
+      - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
+      - { name: entityID, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [entities]
+      summary: Reconstruct an entity's revision as of an instant
+      parameters:
+        - { name: at, in: query, required: true, schema: { type: string, format: date-time }, description: RFC3339 timestamp }
+      responses:
+        "200": { description: The latest revision at or before the instant, content: { application/json: { schema: { $ref: "#/components/schemas/Revision" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /entities/{typeDefinitionID}/{entityID}/completeness:
+    parameters:
+      - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
+      - { name: entityID, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [entities]
+      summary: Score one entity against its required schema
+      responses:
+        "200": { description: Completeness for the entity, content: { application/json: { schema: { $ref: "#/components/schemas/Completeness" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /entities/{typeDefinitionID}/{entityID}/relationship-requirements:
+    parameters:
+      - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
+      - { name: entityID, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [entities]
+      summary: List relationship definitions whose minimum cardinality is unmet
+      responses:
+        "200":
+          description: Unmet relationship requirements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { items: { type: array, items: { $ref: "#/components/schemas/RelationshipRequirement" } } }
+  /entities/{typeDefinitionID}/{entityID}/revisions:
+    parameters:
+      - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
+      - { name: entityID, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [revisions]
+      summary: List an entity's revisions
+      responses:
+        "200":
+          description: Revisions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { items: { type: array, items: { $ref: "#/components/schemas/Revision" } } }
+    post:
+      tags: [revisions]
+      summary: Snapshot the entity's current values as a new revision
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { label: { type: string } }
+      responses:
+        "201": { description: Created revision, content: { application/json: { schema: { $ref: "#/components/schemas/Revision" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /entities/{typeDefinitionID}/{entityID}/attributes/{attributeID}/media:
+    parameters:
+      - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
+      - { name: entityID, in: path, required: true, schema: { type: string } }
+      - { name: attributeID, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [media]
+      summary: Upload a file for a media attribute
+      description: Multipart upload carrying the file as `file`; writes the resulting media value.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201": { description: The stored media value, content: { application/json: { schema: { $ref: "#/components/schemas/Value" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+
+  /revisions/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [revisions]
+      summary: Get a revision
+      responses:
+        "200": { description: Revision, content: { application/json: { schema: { $ref: "#/components/schemas/Revision" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /revisions/{id}/diff:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [revisions]
+      summary: Diff this revision against another
+      parameters:
+        - { name: to, in: query, required: true, schema: { type: string }, description: The other revision id }
+      responses:
+        "200": { description: The changes from this revision to the other, content: { application/json: { schema: { $ref: "#/components/schemas/RevisionDiff" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /revisions/{id}/restore:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [revisions]
+      summary: Restore an entity to this revision
+      responses:
+        "201": { description: The new revision created by the restore, content: { application/json: { schema: { $ref: "#/components/schemas/Revision" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /media/{objectKey}:
+    parameters: [{ name: objectKey, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [media]
+      summary: Download a stored media object by key
+      responses:
+        "200":
+          description: The stored object
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /unit-families:
+    get:
+      tags: [units]
+      summary: List unit families
+      responses:
+        "200":
+          description: Unit families
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { items: { type: array, items: { $ref: "#/components/schemas/UnitFamily" } } }
+    post:
+      tags: [units]
+      summary: Create a unit family
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateUnitFamily" }
+      responses:
+        "201": { description: Created unit family, content: { application/json: { schema: { $ref: "#/components/schemas/UnitFamily" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /unit-families/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [units]
+      summary: Get a unit family
+      responses:
+        "200": { description: Unit family, content: { application/json: { schema: { $ref: "#/components/schemas/UnitFamily" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [units]
+      summary: Delete a unit family
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /changesets:
+    get:
+      tags: [changesets]
+      summary: List change-sets
+      responses:
+        "200":
+          description: Change-sets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { items: { type: array, items: { $ref: "#/components/schemas/ChangeSet" } } }
+    post:
+      tags: [changesets]
+      summary: Open a change-set
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateChangeSet" }
+      responses:
+        "201": { description: Created change-set, content: { application/json: { schema: { $ref: "#/components/schemas/ChangeSet" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /changesets/{id}:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [changesets]
+      summary: Get a change-set
+      responses:
+        "200": { description: Change-set, content: { application/json: { schema: { $ref: "#/components/schemas/ChangeSet" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /changesets/{id}/mutations:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [changesets]
+      summary: Stage a value mutation on a change-set
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Mutation" }
+      responses:
+        "200": { description: The updated change-set, content: { application/json: { schema: { $ref: "#/components/schemas/ChangeSet" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /changesets/{id}/submit:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [changesets]
+      summary: Submit a change-set for review
+      responses:
+        "200": { description: The updated change-set, content: { application/json: { schema: { $ref: "#/components/schemas/ChangeSet" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /changesets/{id}/approve:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [changesets]
+      summary: Approve a change-set in review
+      responses:
+        "200": { description: The updated change-set, content: { application/json: { schema: { $ref: "#/components/schemas/ChangeSet" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /changesets/{id}/reject:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [changesets]
+      summary: Reject a change-set in review
+      responses:
+        "200": { description: The updated change-set, content: { application/json: { schema: { $ref: "#/components/schemas/ChangeSet" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /changesets/{id}/publish:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    post:
+      tags: [changesets]
+      summary: Publish an approved change-set
+      responses:
+        "200": { description: The updated change-set, content: { application/json: { schema: { $ref: "#/components/schemas/ChangeSet" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+
+  /graphql:
+    get:
+      tags: [graphql]
+      summary: Run a read-only GraphQL query (via query params)
+      parameters:
+        - { name: query, in: query, required: true, schema: { type: string } }
+        - { name: variables, in: query, schema: { type: string }, description: JSON-encoded variables }
+      responses:
+        "200": { description: "GraphQL result (query-level errors are reported in the body)", content: { application/json: { schema: { $ref: "#/components/schemas/GraphQLResult" } } } }
+    post:
+      tags: [graphql]
+      summary: Run a read-only GraphQL query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+                variables: { type: object, additionalProperties: true }
+                operationName: { type: string }
+      responses:
+        "200": { description: "GraphQL result (query-level errors are reported in the body)", content: { application/json: { schema: { $ref: "#/components/schemas/GraphQLResult" } } } }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1161,3 +1645,226 @@ components:
               conditions: { type: array, items: { type: object, additionalProperties: true } }
               effect: { type: object, additionalProperties: true }
               description: { type: string }
+    ChangeSet:
+      type: object
+      description: A staged batch of value mutations moving through review to publish.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        name: { type: string }
+        state: { type: string, enum: [draft, in_review, approved, published, rejected] }
+        require_approval: { type: boolean }
+        author: { type: string }
+        approver: { type: string }
+        mutations: { type: array, items: { $ref: "#/components/schemas/Mutation" } }
+        publish_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        published_at: { type: string, format: date-time }
+    CreateChangeSet:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        require_approval: { type: boolean, description: Demand an approver distinct from the author before publish }
+        publish_at: { type: string, format: date-time, description: Schedule publication for a future instant }
+    Mutation:
+      type: object
+      required: [kind, attribute_definition_id, entity_id]
+      properties:
+        kind: { type: string, enum: [set, remove] }
+        attribute_definition_id: { type: string }
+        entity_id: { type: string }
+        type_definition_id: { type: string }
+        locale: { type: string }
+        channel: { type: string }
+        value: { description: The value for a set mutation; typed per the attribute's data_type }
+    UnitFamily:
+      type: object
+      description: A set of interconvertible units sharing a base unit.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        name: { type: string }
+        base_unit: { type: string, description: The unit factors convert to (factor 1) }
+        units: { type: object, additionalProperties: { type: number }, description: Unit symbol to conversion factor }
+    CreateUnitFamily:
+      type: object
+      required: [name, base_unit, units]
+      properties:
+        name: { type: string }
+        base_unit: { type: string }
+        units: { type: object, additionalProperties: { type: number } }
+    MatchRule:
+      type: object
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        type_definition_id: { type: string }
+        attribute_definition_id: { type: string }
+        strategy: { type: string, enum: [exact, case_insensitive, trigram] }
+        threshold: { type: number, description: Minimum trigram similarity (0..1); ignored by exact/case_insensitive }
+        created_at: { type: string, format: date-time }
+    CreateMatchRule:
+      type: object
+      required: [attribute_definition_id, strategy]
+      properties:
+        attribute_definition_id: { type: string }
+        strategy: { type: string, enum: [exact, case_insensitive, trigram] }
+        threshold: { type: number }
+    ScanResult:
+      type: object
+      properties:
+        rule_id: { type: string }
+        strategy: { type: string }
+        truncated: { type: boolean }
+        candidates: { type: array, items: { $ref: "#/components/schemas/ScanCandidate" } }
+    ScanCandidate:
+      type: object
+      properties:
+        entity_a: { type: string }
+        entity_b: { type: string }
+        value_a: { type: string }
+        value_b: { type: string }
+        score: { type: number }
+    Completeness:
+      type: object
+      description: How much of an entity's dependency-adjusted required schema is filled.
+      properties:
+        entity_id: { type: string }
+        type_definition_id: { type: string }
+        required: { type: integer }
+        filled: { type: integer }
+        score: { type: number, description: "filled / required in [0,1]; 1 when nothing is required" }
+        missing: { type: array, items: { $ref: "#/components/schemas/MissingAttribute" } }
+    MissingAttribute:
+      type: object
+      properties:
+        attribute_definition_id: { type: string }
+        internal_name: { type: string }
+        display_name: { type: string }
+        group: { type: string }
+    TypeCompleteness:
+      type: object
+      properties:
+        type_definition_id: { type: string }
+        count: { type: integer }
+        scored: { type: integer }
+        truncated: { type: boolean }
+        average_score: { type: number }
+        complete: { type: integer }
+        incomplete: { type: integer }
+        entities: { type: array, items: { $ref: "#/components/schemas/EntityScore" } }
+    EntityScore:
+      type: object
+      properties:
+        entity_id: { type: string }
+        score: { type: number }
+        filled: { type: integer }
+        required: { type: integer }
+    Revision:
+      type: object
+      description: An immutable snapshot of an entity's values at a point in time.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        type_definition_id: { type: string }
+        entity_id: { type: string }
+        seq: { type: integer }
+        label: { type: string }
+        created_at: { type: string, format: date-time }
+        values: { type: array, items: { type: object, additionalProperties: true } }
+    RevisionDiff:
+      type: object
+      properties:
+        from_seq: { type: integer }
+        to_seq: { type: integer }
+        changes: { type: array, items: { $ref: "#/components/schemas/RevisionChange" } }
+    RevisionChange:
+      type: object
+      properties:
+        attribute_definition_id: { type: string }
+        internal_name: { type: string }
+        locale: { type: string }
+        channel: { type: string }
+        kind: { type: string, enum: [added, changed, removed] }
+        before: { type: string }
+        after: { type: string }
+    Facets:
+      type: object
+      properties:
+        type_definition_id: { type: string }
+        facets:
+          type: object
+          additionalProperties:
+            type: array
+            items: { $ref: "#/components/schemas/FacetBucket" }
+    FacetBucket:
+      type: object
+      properties:
+        value: { type: string }
+        count: { type: integer }
+    GridResult:
+      type: object
+      properties:
+        columns: { type: array, items: { type: string } }
+        rows: { type: array, items: { $ref: "#/components/schemas/GridRow" } }
+    GridRow:
+      type: object
+      properties:
+        entity_id: { type: string }
+        values: { type: object, additionalProperties: { type: string } }
+    RelationshipRequirement:
+      type: object
+      properties:
+        definition_id: { type: string }
+        definition_name: { type: string }
+        side: { type: string, enum: [children, parents] }
+        required: { type: integer }
+        current: { type: integer }
+    ImportReport:
+      type: object
+      properties:
+        rows_total: { type: integer }
+        rows_valid: { type: integer }
+        rows_written: { type: integer }
+        dry_run: { type: boolean }
+        mode: { type: string }
+        errors: { type: array, items: { $ref: "#/components/schemas/ImportError" } }
+    ImportError:
+      type: object
+      properties:
+        row: { type: integer }
+        column: { type: string }
+        attribute: { type: string }
+        reason: { type: string }
+    SchemaTemplateSummary:
+      type: object
+      properties:
+        name: { type: string }
+        title: { type: string }
+        description: { type: string }
+    SchemaTemplate:
+      allOf:
+        - $ref: "#/components/schemas/SchemaTemplateSummary"
+        - type: object
+          properties:
+            bundle: { $ref: "#/components/schemas/SchemaBundle" }
+    CloneType:
+      type: object
+      required: [internal_name]
+      properties:
+        internal_name: { type: string }
+        display_name: { type: string, description: Defaults to the source type's display name }
+    CloneResult:
+      type: object
+      properties:
+        type: { $ref: "#/components/schemas/TypeDefinition" }
+        attributes: { type: integer, description: Number of attributes copied }
+        dependencies: { type: integer, description: Number of dependencies copied }
+    GraphQLResult:
+      type: object
+      description: Standard GraphQL-over-HTTP response; query-level errors appear here with a 200 status.
+      properties:
+        data: { type: object, additionalProperties: true }
+        errors: { type: array, items: { type: object, additionalProperties: true } }

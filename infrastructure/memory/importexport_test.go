@@ -129,3 +129,39 @@ func TestImportExport(t *testing.T) {
 		})
 	})
 }
+
+func TestImportRequiredEnforced(t *testing.T) {
+	Convey("Given a product with a required sku", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		product, err := it.TypeDefinitions().Create(ctx, apptypedef.CreateInput{InternalName: "product", DisplayName: "Product"})
+		So(err, ShouldBeNil)
+		typeID := product.ID.String()
+		_, err = it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: typeID, InternalName: "sku", DisplayName: "SKU", DataType: "string", Required: true,
+		})
+		So(err, ShouldBeNil)
+
+		Convey("When a row's required cell is blank", func() {
+			rep, err := it.Values().Import(ctx, appvalue.ImportInput{
+				TypeDefinitionID: typeID,
+				KeyColumn:        "id",
+				Mapping:          map[string]string{"sku": "sku"},
+				Columns:          []string{"id", "sku"},
+				Rows:             [][]string{{"e1", "ABC"}, {"e2", ""}},
+				Mode:             appvalue.ImportBestEffort,
+				DryRun:           true,
+			})
+
+			Convey("Then that row is reported as a required-value error, not skipped", func() {
+				So(err, ShouldBeNil)
+				So(rep.Errors, ShouldHaveLength, 1)
+				So(rep.Errors[0].Row, ShouldEqual, 2)
+				So(rep.Errors[0].Attribute, ShouldEqual, "sku")
+				So(rep.Errors[0].Reason, ShouldContainSubstring, "required")
+			})
+		})
+	})
+}

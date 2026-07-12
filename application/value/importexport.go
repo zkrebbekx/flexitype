@@ -84,6 +84,7 @@ type mappedColumn struct {
 	attrID   string
 	attrName string
 	dataType valueobjects.DataType
+	required bool
 }
 
 // Import loads tabular rows into a type's entities. It resolves the column
@@ -197,7 +198,7 @@ func (i *Interactor) resolveMapping(ctx context.Context, in ImportInput) ([]mapp
 			if _, seen := byName[s.InternalName]; seen {
 				continue
 			}
-			byName[s.InternalName] = mappedColumn{attrID: s.ID.String(), attrName: s.InternalName, dataType: s.DataType}
+			byName[s.InternalName] = mappedColumn{attrID: s.ID.String(), attrName: s.InternalName, dataType: s.DataType, required: s.Required}
 		}
 	}
 
@@ -247,6 +248,12 @@ func (i *Interactor) rowInputs(typeID string, cols []mappedColumn, keyIdx, rowNu
 		}
 		cell := row[c.index]
 		if cell == "" {
+			// A blank cell writes no value; if the target attribute is
+			// required, that is a per-row error (the normal write path would
+			// reject it too), not a silent skip.
+			if c.required {
+				errs = append(errs, ImportError{Row: rowNum, Column: c.column, Attribute: c.attrName, Reason: "value is required"})
+			}
 			continue
 		}
 		raw, err := cellToRaw(c.dataType, cell)

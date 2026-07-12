@@ -368,11 +368,13 @@ func trigrams(s string) map[string]struct{} {
 	return set
 }
 
-// jaccard is the size of the intersection over the union of two trigram
-// sets; two empty sets are identical (1).
+// jaccard is the size of the intersection over the union of two trigram sets.
+// A value with no trigrams (no alphanumeric content — punctuation or emoji
+// only) is treated as matching nothing, so two content-free values do not
+// score as a perfect duplicate.
 func jaccard(a, b map[string]struct{}) float64 {
-	if len(a) == 0 && len(b) == 0 {
-		return 1
+	if len(a) == 0 || len(b) == 0 {
+		return 0
 	}
 	inter := 0
 	for g := range a {

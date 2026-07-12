@@ -108,6 +108,12 @@ func TestChangeSets(t *testing.T) {
 				_, err = svc.Interactors(bob).ChangeSets().Approve(bob, id)
 				So(err, ShouldBeNil)
 			})
+
+			Convey("Then an unidentified (empty) actor cannot approve", func() {
+				_, err := svc.Interactors(ctx).ChangeSets().Approve(ctx, id)
+				So(err, ShouldNotBeNil)
+				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeForbidden)
+			})
 		})
 
 		Convey("When a publish hits a constraint failure", func() {

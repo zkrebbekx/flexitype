@@ -240,6 +240,12 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			if err := values.Save(ctx, av); err != nil {
 				return fmt.Errorf("save attribute value: %w", err)
 			}
+			// A media overwrite replaces the object key in place; GC the blob
+			// the old value pointed at (when it actually changed).
+			if before.Value.DataType() == valueobjects.DataTypeMedia &&
+				before.Value.Media().ObjectKey != snap.Value.Media().ObjectKey {
+				i.gcMediaAfterCommit(tx, before.Value)
+			}
 			c.CollectEvents(evts...)
 			c.RecordChange(activity.Change{
 				Entity:   domainvalue.AggregateType,
@@ -380,6 +386,7 @@ func (i *Interactor) RemoveEntity(ctx context.Context, rawTypeDefID, rawEntityID
 			if err := values.Save(ctx, av); err != nil {
 				return fmt.Errorf("archive value: %w", err)
 			}
+			i.gcMediaAfterCommit(tx, before.Value)
 			c.CollectEvents(evts...)
 			c.RecordChange(activity.Change{
 				Entity:   domainvalue.AggregateType,
@@ -514,6 +521,25 @@ func (i *Interactor) gcMedia(ctx context.Context, v valueobjects.Value) {
 	if key := v.Media().ObjectKey; key != "" {
 		_ = i.blobs.Delete(ctx, key)
 	}
+}
+
+// gcMediaAfterCommit schedules the blob backing an archived or overwritten
+// media value for deletion once the surrounding transaction commits (best
+// effort — a storage error never fails the write). Registering on the
+// transaction keeps GC correct across every archival path — overwrite, entity
+// removal, mutation apply and snapshot restore — not just single-value Remove.
+func (i *Interactor) gcMediaAfterCommit(tx db.Transactor, v valueobjects.Value) {
+	if i.blobs == nil || v.DataType() != valueobjects.DataTypeMedia {
+		return
+	}
+	key := v.Media().ObjectKey
+	if key == "" {
+		return
+	}
+	tx.OnPostCommit(func(ctx context.Context) error {
+		_ = i.blobs.Delete(ctx, key)
+		return nil
+	})
 }
 
 // Get loads one stored value by ID.

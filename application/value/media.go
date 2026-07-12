@@ -27,7 +27,7 @@ const maxMediaBytes = 64 << 20 // 64 MiB
 // metadata (object key, mime, size, checksum, filename). The value write
 // runs the attribute's media constraint (allowed types, max size); if it is
 // rejected the freshly stored object is deleted so nothing is orphaned.
-func (i *Interactor) UploadMedia(ctx context.Context, rawTypeID, entityID, rawAttrID string, r io.Reader, filename, declaredMIME string) (*domainvalue.Snapshot, error) {
+func (i *Interactor) UploadMedia(ctx context.Context, rawTypeID, entityID, rawAttrID string, r io.Reader, filename string) (*domainvalue.Snapshot, error) {
 	if i.blobs == nil {
 		return nil, domainerrors.NewValidation("media storage is not configured in this deployment")
 	}
@@ -54,10 +54,11 @@ func (i *Interactor) UploadMedia(ctx context.Context, rawTypeID, entityID, rawAt
 		return nil, domainerrors.NewValidation("upload exceeds the maximum size", "max_bytes", maxMediaBytes)
 	}
 
-	mime := declaredMIME
-	if mime == "" || mime == "application/octet-stream" {
-		mime = http.DetectContentType(buf)
-	}
+	// Sniff the content type from the bytes; never trust a client-declared
+	// type. The media constraint's allowlist is enforced against this sniffed
+	// type (below, in Set), so content mislabeled by the caller — e.g. a PDF
+	// sent as image/png — cannot slip past a type restriction.
+	mime := http.DetectContentType(buf)
 	if idx := strings.IndexByte(mime, ';'); idx >= 0 { // strip "; charset=..."
 		mime = strings.TrimSpace(mime[:idx])
 	}

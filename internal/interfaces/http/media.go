@@ -29,15 +29,13 @@ func (s *server) uploadMedia(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = file.Close() }()
 
 	filename := ""
-	mime := ""
 	if header != nil {
 		filename = header.Filename
-		mime = header.Header.Get("Content-Type")
 	}
 
 	snap, err := application.FromContext(r.Context()).Values().UploadMedia(r.Context(),
 		chi.URLParam(r, "typeDefinitionID"), chi.URLParam(r, "entityID"), chi.URLParam(r, "attributeID"),
-		file, filename, mime)
+		file, filename)
 	if err != nil {
 		writeError(w, s.log, err)
 		return

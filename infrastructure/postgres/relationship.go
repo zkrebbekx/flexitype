@@ -90,7 +90,7 @@ type relDefListFilter struct {
 	TypeIDs         []string `json:"type_definition_ids,omitempty"`
 	IncludeArchived bool     `json:"include_archived,omitempty"`
 	Limit           int      `json:"limit"`
-	Offset          int      `json:"offset"`
+	Cursor          string   `json:"cursor,omitempty"`
 }
 
 func (f relDefListFilter) key() string {
@@ -99,9 +99,9 @@ func (f relDefListFilter) key() string {
 	return string(b)
 }
 
-func (f relDefListFilter) arm(key string) (string, []any) {
+func (f relDefListFilter) where() ([]string, []any) {
 	where := []string{"tenant_id = ?"}
-	args := []any{key, f.Tenant}
+	args := []any{f.Tenant}
 	if !f.IncludeArchived {
 		where = append(where, "archived_at IS NULL")
 	}
@@ -109,14 +109,26 @@ func (f relDefListFilter) arm(key string) (string, []any) {
 		where = append(where, "(parent_type_id = ANY(?) OR child_type_id = ANY(?))")
 		args = append(args, pq.Array(f.TypeIDs), pq.Array(f.TypeIDs))
 	}
-	args = append(args, f.Limit, f.Offset)
+	return where, args
+}
 
-	query := `(SELECT ?::text AS loader_key, ` + relDefColumns + `, count(*) OVER () AS total_count
+func (f relDefListFilter) arm(key string) (string, []any) {
+	where, filterArgs := f.where()
+	args := append([]any{key}, filterArgs...)
+	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	args = append(args, f.Limit+1)
+
+	query := `(SELECT ?::text AS loader_key, ` + relDefColumns + `
 	 FROM flexitype_relationship_definition
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
-	 LIMIT ? OFFSET ?)`
+	 LIMIT ?)`
 	return query, args
+}
+
+func (f relDefListFilter) countQuery() (string, []any) {
+	where, args := f.where()
+	return `SELECT count(*) FROM flexitype_relationship_definition WHERE ` + strings.Join(where, " AND "), args
 }
 
 type relationshipDefinitionRepository struct {
@@ -169,7 +181,6 @@ func (r *relationshipDefinitionRepository) batchList(ctx context.Context, keys [
 	var rows []struct {
 		LoaderKey string `db:"loader_key"`
 		relDefRow
-		TotalCount int `db:"total_count"`
 	}
 	if err := r.q.SelectContext(ctx, &rows, bind(strings.Join(arms, "\nUNION ALL\n")), args...); err != nil {
 		return nil, fmt.Errorf("batch list relationship definitions: %w", err)
@@ -179,7 +190,6 @@ func (r *relationshipDefinitionRepository) batchList(ctx context.Context, keys [
 	for _, row := range rows {
 		pr := out[row.LoaderKey]
 		pr.Items = append(pr.Items, row.snapshot())
-		pr.Total = row.TotalCount
 		out[row.LoaderKey] = pr
 	}
 	return out, nil
@@ -239,7 +249,7 @@ func (r *relationshipDefinitionRepository) List(ctx context.Context, filter doma
 		Tenant:          filter.TenantID.String(),
 		IncludeArchived: filter.IncludeArchived,
 		Limit:           page.Limit,
-		Offset:          page.Offset,
+		Cursor:          page.Cursor,
 	}
 	for _, id := range filter.TypeDefinitionIDs {
 		f.TypeIDs = append(f.TypeIDs, id.String())
@@ -265,7 +275,11 @@ func (r *relationshipDefinitionRepository) List(ctx context.Context, filter doma
 	for _, snap := range result.Items {
 		out = append(out, domainrelationship.RehydrateDefinition(snap))
 	}
-	return out, result.Total, nil
+	total, err := countIf(ctx, r.q, page.WantTotal, f.countQuery)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 func (r *relationshipDefinitionRepository) Save(ctx context.Context, d *domainrelationship.Definition) error {
@@ -358,7 +372,7 @@ type relListFilter struct {
 	ChildEntityID   string `json:"child_entity_id,omitempty"`
 	IncludeArchived bool   `json:"include_archived,omitempty"`
 	Limit           int    `json:"limit"`
-	Offset          int    `json:"offset"`
+	Cursor          string `json:"cursor,omitempty"`
 }
 
 func (f relListFilter) key() string {
@@ -366,9 +380,9 @@ func (f relListFilter) key() string {
 	return string(b)
 }
 
-func (f relListFilter) arm(key string) (string, []any) {
+func (f relListFilter) where() ([]string, []any) {
 	where := []string{"tenant_id = ?"}
-	args := []any{key, f.Tenant}
+	args := []any{f.Tenant}
 	if !f.IncludeArchived {
 		where = append(where, "archived_at IS NULL")
 	}
@@ -384,14 +398,26 @@ func (f relListFilter) arm(key string) (string, []any) {
 		where = append(where, "child_entity_id = ?")
 		args = append(args, f.ChildEntityID)
 	}
-	args = append(args, f.Limit, f.Offset)
+	return where, args
+}
 
-	query := `(SELECT ?::text AS loader_key, ` + relColumns + `, count(*) OVER () AS total_count
+func (f relListFilter) arm(key string) (string, []any) {
+	where, filterArgs := f.where()
+	args := append([]any{key}, filterArgs...)
+	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	args = append(args, f.Limit+1)
+
+	query := `(SELECT ?::text AS loader_key, ` + relColumns + `
 	 FROM flexitype_relationship
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
-	 LIMIT ? OFFSET ?)`
+	 LIMIT ?)`
 	return query, args
+}
+
+func (f relListFilter) countQuery() (string, []any) {
+	where, args := f.where()
+	return `SELECT count(*) FROM flexitype_relationship WHERE ` + strings.Join(where, " AND "), args
 }
 
 // relEntityKey is the comparable projection of
@@ -530,7 +556,6 @@ func (r *relationshipRepository) batchList(ctx context.Context, keys []string) (
 	var rows []struct {
 		LoaderKey string `db:"loader_key"`
 		relRow
-		TotalCount int `db:"total_count"`
 	}
 	if err := r.q.SelectContext(ctx, &rows, bind(strings.Join(arms, "\nUNION ALL\n")), args...); err != nil {
 		return nil, fmt.Errorf("batch list relationships: %w", err)
@@ -540,7 +565,6 @@ func (r *relationshipRepository) batchList(ctx context.Context, keys []string) (
 	for _, row := range rows {
 		pr := out[row.LoaderKey]
 		pr.Items = append(pr.Items, row.snapshot())
-		pr.Total = row.TotalCount
 		out[row.LoaderKey] = pr
 	}
 	return out, nil
@@ -627,7 +651,7 @@ func (r *relationshipRepository) List(ctx context.Context, filter domainrelation
 		Tenant:          filter.TenantID.String(),
 		IncludeArchived: filter.IncludeArchived,
 		Limit:           page.Limit,
-		Offset:          page.Offset,
+		Cursor:          page.Cursor,
 	}
 	if !filter.DefinitionID.IsZero() {
 		f.DefinitionID = filter.DefinitionID.String()
@@ -659,7 +683,11 @@ func (r *relationshipRepository) List(ctx context.Context, filter domainrelation
 	for _, snap := range result.Items {
 		out = append(out, domainrelationship.Rehydrate(snap))
 	}
-	return out, result.Total, nil
+	total, err := countIf(ctx, r.q, page.WantTotal, f.countQuery)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 func (r *relationshipRepository) CountLiveLinks(ctx context.Context, defID valueobjects.RelationshipDefinitionID, entity valueobjects.EntityID) (int, int, error) {

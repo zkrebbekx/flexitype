@@ -664,9 +664,12 @@ func (i *Interactor) ListEntities(ctx context.Context, rawTypeDefID string, incl
 		return nil, err
 	}
 
+	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(e domainvalue.EntitySummary) string {
+		return db.EncodeKeyset(e.LastUpdatedAt.UTC().Format(time.RFC3339Nano), e.EntityID.String())
+	})
 	out := &EntityListOutput{
 		Items:    make([]EntitySummaryOutput, 0, len(items)),
-		PageInfo: db.BuildPageInfo(page, len(items), total),
+		PageInfo: info,
 	}
 	for _, e := range items {
 		out.Items = append(out.Items, EntitySummaryOutput{
@@ -726,9 +729,12 @@ func (i *Interactor) List(ctx context.Context, in ListInput) (*ListOutput, error
 		return nil, err
 	}
 
+	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(av *domainvalue.AttributeValue) string {
+		return db.EncodeKeyset(av.ID().String())
+	})
 	out := &ListOutput{
 		Items:    make([]domainvalue.Snapshot, 0, len(items)),
-		PageInfo: db.BuildPageInfo(page, len(items), total),
+		PageInfo: info,
 	}
 	for _, av := range items {
 		out.Items = append(out.Items, av.Snapshot())

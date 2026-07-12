@@ -8,8 +8,10 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -29,20 +31,51 @@ func NewRepositories(pool db.QueryExecer) application.Repositories {
 	}
 }
 
+// idKeyset is the single-column ascending keyset used by every id-ordered list.
+var idKeyset = []db.KeysetColumn{{Expr: "id"}}
+
+// keysetWhere appends the keyset predicate for the given ordering and cursor to
+// a WHERE slice and its args. The cursor is validated at the application layer
+// (PageArgs.Resolve), so a decode error here is treated as "no predicate".
+func keysetWhere(where []string, args []any, cols []db.KeysetColumn, cursor string) ([]string, []any) {
+	pred, pargs, err := db.KeysetPredicate(cols, cursor)
+	if err != nil || pred == "" {
+		return where, args
+	}
+	return append(where, pred), append(args, pargs...)
+}
+
+// countIf runs a count query and returns its result, but only when the caller
+// asked for the total; otherwise it returns 0 without touching the database.
+// The count query is separate from the keyset page so an unbounded list does
+// not pay for a count on every page.
+func countIf(ctx context.Context, q db.QueryExecer, want bool, query func() (string, []any)) (int, error) {
+	if !want {
+		return 0, nil
+	}
+	sql, args := query()
+	var n int
+	if err := q.GetContext(ctx, &n, bind(sql), args...); err != nil {
+		return 0, fmt.Errorf("count: %w", err)
+	}
+	return n, nil
+}
+
 // pageKey batches per-parent paginated child loads: identical pages for
 // different parents collapse into one windowed query.
 type pageKey struct {
-	Parent string
-	Limit  int
-	Offset int
+	Parent    string
+	Limit     int
+	Cursor    string
+	WantTotal bool
 }
 
-// pageKeyGroups splits page keys by (limit, offset) so each group runs one
-// windowed query.
-func pageKeyGroups(keys []pageKey) map[[2]int][]string {
-	groups := make(map[[2]int][]string)
+// pageKeyGroups splits page keys by (limit, cursor, wantTotal) so each group
+// runs one windowed query.
+func pageKeyGroups(keys []pageKey) map[[3]string][]string {
+	groups := make(map[[3]string][]string)
 	for _, k := range keys {
-		g := [2]int{k.Limit, k.Offset}
+		g := [3]string{fmt.Sprintf("%d", k.Limit), k.Cursor, fmt.Sprintf("%t", k.WantTotal)}
 		groups[g] = append(groups[g], k.Parent)
 	}
 	return groups

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,7 +111,7 @@ type attrListFilter struct {
 	DataTypes        []string `json:"data_types,omitempty"`
 	IncludeArchived  bool     `json:"include_archived,omitempty"`
 	Limit            int      `json:"limit"`
-	Offset           int      `json:"offset"`
+	Cursor           string   `json:"cursor,omitempty"`
 }
 
 func (f attrListFilter) key() string {
@@ -120,9 +121,9 @@ func (f attrListFilter) key() string {
 	return string(b)
 }
 
-func (f attrListFilter) arm(key string) (string, []any) {
+func (f attrListFilter) where() ([]string, []any) {
 	where := []string{"tenant_id = ?"}
-	args := []any{key, f.Tenant}
+	args := []any{f.Tenant}
 	if !f.IncludeArchived {
 		where = append(where, "archived_at IS NULL")
 	}
@@ -138,14 +139,26 @@ func (f attrListFilter) arm(key string) (string, []any) {
 		where = append(where, "data_type = ANY(?)")
 		args = append(args, pq.Array(f.DataTypes))
 	}
-	args = append(args, f.Limit, f.Offset)
+	return where, args
+}
 
-	query := `(SELECT ?::text AS loader_key, ` + attrColumns + `, count(*) OVER () AS total_count
+func (f attrListFilter) arm(key string) (string, []any) {
+	where, filterArgs := f.where()
+	args := append([]any{key}, filterArgs...)
+	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	args = append(args, f.Limit+1)
+
+	query := `(SELECT ?::text AS loader_key, ` + attrColumns + `
 	 FROM flexitype_attribute_definition
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
-	 LIMIT ? OFFSET ?)`
+	 LIMIT ?)`
 	return query, args
+}
+
+func (f attrListFilter) countQuery() (string, []any) {
+	where, args := f.where()
+	return `SELECT count(*) FROM flexitype_attribute_definition WHERE ` + strings.Join(where, " AND "), args
 }
 
 type attributeDefinitionRepository struct {
@@ -221,23 +234,27 @@ func (r *attributeDefinitionRepository) batchByTypePage(ctx context.Context, key
 	out := make(map[pageKey]pagedResult[domainattribute.Snapshot], len(keys))
 
 	for group, parents := range pageKeyGroups(keys) {
-		limit, offset := group[0], group[1]
+		limit, _ := strconv.Atoi(group[0])
+		cursor := group[1]
+		wantTotal := group[2] == "true"
+		inner := []string{"type_definition_id = ANY(?)", "archived_at IS NULL"}
+		qargs := []any{pq.Array(parents)}
+		inner, qargs = keysetWhere(inner, qargs, idKeyset, cursor)
 		query := bind(`SELECT * FROM (
 		   SELECT ` + attrColumns + `,
-		          count(*)     OVER (PARTITION BY type_definition_id) AS total_count,
 		          row_number() OVER (PARTITION BY type_definition_id ORDER BY id) AS rn
 		   FROM flexitype_attribute_definition
-		   WHERE type_definition_id = ANY(?) AND archived_at IS NULL
+		   WHERE ` + strings.Join(inner, " AND ") + `
 		 ) w
-		 WHERE rn > ? AND rn <= ?
+		 WHERE rn <= ?
 		 ORDER BY type_definition_id, rn`)
+		qargs = append(qargs, limit+1)
 
 		var rows []struct {
 			attrRow
-			TotalCount int `db:"total_count"`
-			RN         int `db:"rn"`
+			RN int `db:"rn"`
 		}
-		if err := r.q.SelectContext(ctx, &rows, query, pq.Array(parents), offset, offset+limit); err != nil {
+		if err := r.q.SelectContext(ctx, &rows, query, qargs...); err != nil {
 			return nil, fmt.Errorf("batch attributes by type definition: %w", err)
 		}
 
@@ -250,11 +267,31 @@ func (r *attributeDefinitionRepository) batchByTypePage(ctx context.Context, key
 			parent := row.TypeDefinitionID.String()
 			pr := results[parent]
 			pr.Items = append(pr.Items, snap)
-			pr.Total = row.TotalCount
 			results[parent] = pr
 		}
+
+		// The count is per partition and independent of the keyset cursor, so
+		// it is run once per group only when a caller asked for the total.
+		totals := map[string]int{}
+		if wantTotal {
+			var trows []struct {
+				TypeDefinitionID ulid.ID `db:"type_definition_id"`
+				Count            int     `db:"count"`
+			}
+			if err := r.q.SelectContext(ctx, &trows, bind(
+				`SELECT type_definition_id, count(*) AS count FROM flexitype_attribute_definition
+				 WHERE type_definition_id = ANY(?) AND archived_at IS NULL
+				 GROUP BY type_definition_id`), pq.Array(parents)); err != nil {
+				return nil, fmt.Errorf("count attributes by type definition: %w", err)
+			}
+			for _, t := range trows {
+				totals[t.TypeDefinitionID.String()] = t.Count
+			}
+		}
 		for _, parent := range parents {
-			out[pageKey{Parent: parent, Limit: limit, Offset: offset}] = results[parent]
+			pr := results[parent]
+			pr.Total = totals[parent]
+			out[pageKey{Parent: parent, Limit: limit, Cursor: cursor, WantTotal: wantTotal}] = pr
 		}
 	}
 	return out, nil
@@ -277,7 +314,6 @@ func (r *attributeDefinitionRepository) batchList(ctx context.Context, keys []st
 	var rows []struct {
 		LoaderKey string `db:"loader_key"`
 		attrRow
-		TotalCount int `db:"total_count"`
 	}
 	if err := r.q.SelectContext(ctx, &rows, bind(strings.Join(arms, "\nUNION ALL\n")), args...); err != nil {
 		return nil, fmt.Errorf("batch list attribute definitions: %w", err)
@@ -291,7 +327,6 @@ func (r *attributeDefinitionRepository) batchList(ctx context.Context, keys []st
 		}
 		pr := out[row.LoaderKey]
 		pr.Items = append(pr.Items, snap)
-		pr.Total = row.TotalCount
 		out[row.LoaderKey] = pr
 	}
 	return out, nil
@@ -401,7 +436,7 @@ func (r *attributeDefinitionRepository) GetByInternalName(ctx context.Context, t
 }
 
 func (r *attributeDefinitionRepository) ListByTypeDefinition(ctx context.Context, typeDefID valueobjects.TypeDefinitionID, page db.Page) ([]*domainattribute.Definition, int, error) {
-	key := pageKey{Parent: typeDefID.String(), Limit: page.Limit, Offset: page.Offset}
+	key := pageKey{Parent: typeDefID.String(), Limit: page.Limit, Cursor: page.Cursor, WantTotal: page.WantTotal}
 
 	var result pagedResult[domainattribute.Snapshot]
 	if r.inTx {
@@ -422,6 +457,8 @@ func (r *attributeDefinitionRepository) ListByTypeDefinition(ctx context.Context
 	for _, snap := range result.Items {
 		out = append(out, domainattribute.Rehydrate(snap))
 	}
+	// The per-partition total was computed in the windowed batch only when the
+	// page asked for it.
 	return out, result.Total, nil
 }
 
@@ -436,7 +473,7 @@ func (r *attributeDefinitionRepository) List(ctx context.Context, filter domaina
 		DataTypes:       dataTypes,
 		IncludeArchived: filter.IncludeArchived,
 		Limit:           page.Limit,
-		Offset:          page.Offset,
+		Cursor:          page.Cursor,
 	}
 	if !filter.TypeDefinitionID.IsZero() {
 		f.TypeDefinitionID = filter.TypeDefinitionID.String()
@@ -462,7 +499,11 @@ func (r *attributeDefinitionRepository) List(ctx context.Context, filter domaina
 	for _, snap := range result.Items {
 		out = append(out, domainattribute.Rehydrate(snap))
 	}
-	return out, result.Total, nil
+	total, err := countIf(ctx, r.q, page.WantTotal, f.countQuery)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattribute.Definition) error {

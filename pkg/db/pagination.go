@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -11,27 +12,32 @@ const (
 	maxPageSize     = 200
 )
 
-// Page holds resolved limit/offset values for database queries.
+// Page is a resolved pagination request: a clamped page size, an opaque keyset
+// cursor, and whether the caller wants the total count. The cursor encodes the
+// ORDER BY column values of the last row of the previous page; each repository
+// decodes it against its own ordering and selects the rows strictly after it.
+// Keyset (rather than LIMIT/OFFSET) keeps pages stable under concurrent inserts
+// and deletes — no skipped or duplicated rows.
 type Page struct {
 	Limit  int
-	Offset int
+	Cursor string // "" = first page
+	// WantTotal asks for the full filtered count. It is computed with a
+	// separate query only when requested, so unbounded lists don't pay for a
+	// count on every page.
+	WantTotal bool
 }
 
-// PageArgs are raw client pagination arguments: a page size and an opaque
-// cursor. Cursors are base64-encoded "offset:<n>" strings; pages use
-// LIMIT/OFFSET, so a page can shift by rows inserted or deleted before it
-// between requests. Callers that need stability across concurrent writes
-// should snapshot or accept that (see issue #42 for the keyset follow-up).
+// PageArgs are raw client pagination arguments.
 type PageArgs struct {
-	Limit  *int
-	Cursor *string
+	Limit     *int
+	Cursor    *string
+	WantTotal bool
 }
 
-// Resolve validates client args into a clamped limit/offset Page. A limit that
-// is present but not a positive integer is rejected (callers surface it as a
-// 422) rather than silently defaulted, so every endpoint validates pagination
-// params the same way; a limit above the maximum is clamped. A malformed
-// cursor is likewise rejected.
+// Resolve validates and clamps client args. A limit that is present but not a
+// positive integer is rejected (callers surface it as a 422) rather than
+// silently defaulted; a limit above the maximum is clamped. The cursor is
+// passed through opaquely and validated when a repository decodes it.
 func (a PageArgs) Resolve() (Page, error) {
 	limit := defaultPageSize
 	if a.Limit != nil {
@@ -43,69 +49,128 @@ func (a PageArgs) Resolve() (Page, error) {
 			limit = maxPageSize
 		}
 	}
-
-	offset := 0
+	cursor := ""
 	if a.Cursor != nil && *a.Cursor != "" {
-		n, err := decodeCursor(*a.Cursor)
-		if err != nil {
-			return Page{}, fmt.Errorf("invalid cursor: %w", err)
+		// Validate the cursor's shape here (a 422) so a malformed cursor is
+		// rejected before it reaches a repository; the column count is checked
+		// when the repository decodes it against its own ordering.
+		if _, err := DecodeKeyset(*a.Cursor); err != nil {
+			return Page{}, fmt.Errorf("invalid cursor")
 		}
-		offset = n
+		cursor = *a.Cursor
 	}
-
-	return Page{Limit: limit, Offset: offset}, nil
+	return Page{Limit: limit, Cursor: cursor, WantTotal: a.WantTotal}, nil
 }
 
+// FetchLimit is the row count a keyset query should request: one more than the
+// page size, so the caller can tell whether another page exists by whether the
+// sentinel row came back.
+func (p Page) FetchLimit() int { return p.Limit + 1 }
+
 // PageInfo describes the position of a page within the full result set.
+// TotalCount is present only when the caller asked for it (Page.WantTotal).
 type PageInfo struct {
 	HasNextPage     bool    `json:"has_next_page"`
 	HasPreviousPage bool    `json:"has_previous_page"`
 	NextCursor      *string `json:"next_cursor,omitempty"`
-	TotalCount      int     `json:"total_count"`
+	TotalCount      *int    `json:"total_count,omitempty"`
 }
 
-// BuildPageInfo derives PageInfo from a resolved page, the number of rows
-// returned and the total row count for the query.
-func BuildPageInfo(page Page, resultCount, totalCount int) PageInfo {
-	info := PageInfo{
-		HasNextPage:     page.Offset+resultCount < totalCount,
-		HasPreviousPage: page.Offset > 0,
-		TotalCount:      totalCount,
+// KeysetPage finalizes a keyset page: repositories over-fetch by one row
+// (page.FetchLimit); this trims the sentinel, reports whether more remain and
+// builds PageInfo with the cursor of the last returned row. cursorOf extracts a
+// row's keyset cursor (typically db.EncodeKeyset of its ORDER BY values). total
+// is nil unless the caller requested the count.
+func KeysetPage[T any](page Page, items []T, total *int, cursorOf func(T) string) ([]T, PageInfo) {
+	hasNext := len(items) > page.Limit
+	if hasNext {
+		items = items[:page.Limit]
 	}
-	if info.HasNextPage {
-		next := EncodeCursor(page.Offset + resultCount)
+	info := PageInfo{
+		HasNextPage:     hasNext,
+		HasPreviousPage: page.Cursor != "",
+		TotalCount:      total,
+	}
+	if hasNext && len(items) > 0 {
+		next := cursorOf(items[len(items)-1])
 		info.NextCursor = &next
 	}
-	return info
+	return items, info
 }
 
-// EncodeCursor encodes an offset into a stable opaque cursor string.
-func EncodeCursor(offset int) string {
-	return base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "offset:%d", offset))
+// EncodeKeyset builds an opaque cursor from a row's ORDER BY column values, in
+// ORDER BY order (stringified: ids as-is, timestamps as RFC3339Nano).
+func EncodeKeyset(values ...string) string {
+	b, _ := json.Marshal(values)
+	return base64.StdEncoding.EncodeToString(b)
 }
 
-// DecodeCursor is the inverse of EncodeCursor: it reads the offset back out of
-// an opaque cursor, so callers that synthesize per-row cursors (e.g. Relay
-// edges) can locate a page within the full result set.
-func DecodeCursor(cursor string) (int, error) {
-	return decodeCursor(cursor)
-}
-
-func decodeCursor(cursor string) (int, error) {
-	b, err := base64.StdEncoding.DecodeString(cursor)
+// DecodeKeyset parses a keyset cursor back into its column values, erroring on
+// a malformed cursor so callers can reject it as a bad request.
+func DecodeKeyset(cursor string) ([]string, error) {
+	raw, err := base64.StdEncoding.DecodeString(cursor)
 	if err != nil {
-		return 0, err
+		return nil, fmt.Errorf("invalid cursor")
 	}
-	parts := strings.SplitN(string(b), ":", 2)
-	if len(parts) != 2 || parts[0] != "offset" {
-		return 0, fmt.Errorf("malformed cursor")
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, fmt.Errorf("invalid cursor")
 	}
-	var n int
-	if _, err := fmt.Sscanf(parts[1], "%d", &n); err != nil {
-		return 0, err
+	return values, nil
+}
+
+// KeysetColumn is one ORDER BY column for keyset pagination: a SQL expression,
+// its direction, and an optional cast applied to the bound cursor value (e.g.
+// "::timestamptz" so a string parameter compares against a timestamp column).
+type KeysetColumn struct {
+	Expr string
+	Desc bool
+	Cast string
+}
+
+// KeysetPredicate builds the row-tuple comparison selecting rows strictly after
+// the cursor for the given ORDER BY columns, using `?` placeholders. It returns
+// the empty string when the cursor is empty (first page). For ascending columns
+// (c1, c2), "after (v1, v2)" expands to:
+//
+//	(c1 > v1) OR (c1 = v1 AND c2 > v2)
+//
+// A descending column flips its final comparison to `<`.
+func KeysetPredicate(cols []KeysetColumn, cursor string) (string, []any, error) {
+	if cursor == "" {
+		return "", nil, nil
 	}
-	if n < 0 {
-		return 0, fmt.Errorf("negative cursor offset")
+	values, err := DecodeKeyset(cursor)
+	if err != nil {
+		return "", nil, err
 	}
-	return n, nil
+	if len(values) != len(cols) {
+		return "", nil, fmt.Errorf("invalid cursor")
+	}
+	var ors []string
+	var args []any
+	for i := range cols {
+		var ands []string
+		for j := 0; j < i; j++ {
+			ands = append(ands, cols[j].Expr+" = ?"+cols[j].Cast)
+			args = append(args, values[j])
+		}
+		cmp := ">"
+		if cols[i].Desc {
+			cmp = "<"
+		}
+		ands = append(ands, cols[i].Expr+" "+cmp+" ?"+cols[i].Cast)
+		args = append(args, values[i])
+		ors = append(ors, "("+strings.Join(ands, " AND ")+")")
+	}
+	return "(" + strings.Join(ors, " OR ") + ")", args, nil
+}
+
+// KeysetTotal wraps a computed count as the optional PageInfo total, or nil
+// when the caller did not request it.
+func KeysetTotal(page Page, count int) *int {
+	if !page.WantTotal {
+		return nil
+	}
+	return &count
 }

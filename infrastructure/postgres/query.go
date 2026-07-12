@@ -80,27 +80,39 @@ func (r *queryRepository) Search(ctx context.Context, tenant valueobjects.Tenant
 		return nil, 0, err
 	}
 
-	sql := fmt.Sprintf(`SELECT e.entity_id, e.type_definition_id, e.value_count, e.last_updated_at,
-	       count(*) OVER () AS total_count
+	// The count (when requested) is over the full filtered set, so it uses the
+	// args built for base + where before the keyset and limit are added.
+	countArgs := append([]any(nil), c.args...)
+	countSQL := fmt.Sprintf(`SELECT count(*) FROM (%s) e WHERE %s`, base, where)
+
+	// Keyset on the ordered (last update, entity id) so a page is stable under
+	// concurrent writes: newest-first, entity_id as the unique tiebreaker.
+	keyset := ""
+	if page.Cursor != "" {
+		if vals, derr := db.DecodeKeyset(page.Cursor); derr == nil && len(vals) == 2 {
+			keyset = fmt.Sprintf(` AND ((e.last_updated_at < %s::timestamptz) OR (e.last_updated_at = %s::timestamptz AND e.entity_id > %s))`,
+				c.arg(vals[0]), c.arg(vals[0]), c.arg(vals[1]))
+		}
+	}
+
+	sql := fmt.Sprintf(`SELECT e.entity_id, e.type_definition_id, e.value_count, e.last_updated_at
 	 FROM (%s) e
-	 WHERE %s
+	 WHERE %s%s
 	 ORDER BY e.last_updated_at DESC, e.entity_id
-	 LIMIT %s OFFSET %s`,
-		base, where, c.arg(page.Limit), c.arg(page.Offset))
+	 LIMIT %s`,
+		base, where, keyset, c.arg(page.FetchLimit()))
 
 	var rows []struct {
 		EntityID         string    `db:"entity_id"`
 		TypeDefinitionID ulid.ID   `db:"type_definition_id"`
 		ValueCount       int       `db:"value_count"`
 		LastUpdatedAt    time.Time `db:"last_updated_at"`
-		TotalCount       int       `db:"total_count"`
 	}
 	if err := r.q.SelectContext(ctx, &rows, bind(sql), c.args...); err != nil {
 		return nil, 0, fmt.Errorf("execute query: %w", err)
 	}
 
 	out := make([]domainvalue.EntitySummary, 0, len(rows))
-	total := 0
 	for _, row := range rows {
 		out = append(out, domainvalue.EntitySummary{
 			EntityID:         valueobjects.EntityID(row.EntityID),
@@ -108,7 +120,12 @@ func (r *queryRepository) Search(ctx context.Context, tenant valueobjects.Tenant
 			ValueCount:       row.ValueCount,
 			LastUpdatedAt:    row.LastUpdatedAt,
 		})
-		total = row.TotalCount
+	}
+	total := 0
+	if page.WantTotal {
+		if err := r.q.GetContext(ctx, &total, bind(countSQL), countArgs...); err != nil {
+			return nil, 0, fmt.Errorf("count query: %w", err)
+		}
 	}
 	return out, total, nil
 }

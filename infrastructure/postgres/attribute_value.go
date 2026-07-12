@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,7 +76,7 @@ type valueListFilter struct {
 	EntityID        string `json:"entity_id,omitempty"`
 	IncludeArchived bool   `json:"include_archived,omitempty"`
 	Limit           int    `json:"limit"`
-	Offset          int    `json:"offset"`
+	Cursor          string `json:"cursor,omitempty"`
 }
 
 func (f valueListFilter) key() string {
@@ -83,9 +84,9 @@ func (f valueListFilter) key() string {
 	return string(b)
 }
 
-func (f valueListFilter) arm(key string) (string, []any) {
+func (f valueListFilter) where() ([]string, []any) {
 	where := []string{"tenant_id = ?"}
-	args := []any{key, f.Tenant}
+	args := []any{f.Tenant}
 	if !f.IncludeArchived {
 		where = append(where, "archived_at IS NULL")
 	}
@@ -101,14 +102,26 @@ func (f valueListFilter) arm(key string) (string, []any) {
 		where = append(where, "entity_id = ?")
 		args = append(args, f.EntityID)
 	}
-	args = append(args, f.Limit, f.Offset)
+	return where, args
+}
 
-	query := `(SELECT ?::text AS loader_key, ` + valueColumnList + `, count(*) OVER () AS total_count
+func (f valueListFilter) arm(key string) (string, []any) {
+	where, filterArgs := f.where()
+	args := append([]any{key}, filterArgs...)
+	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	args = append(args, f.Limit+1)
+
+	query := `(SELECT ?::text AS loader_key, ` + valueColumnList + `
 	 FROM flexitype_attribute_value
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
-	 LIMIT ? OFFSET ?)`
+	 LIMIT ?)`
 	return query, args
+}
+
+func (f valueListFilter) countQuery() (string, []any) {
+	where, args := f.where()
+	return `SELECT count(*) FROM flexitype_attribute_value WHERE ` + strings.Join(where, " AND "), args
 }
 
 type attributeValueRepository struct {
@@ -182,29 +195,33 @@ func (r *attributeValueRepository) batchByEntity(ctx context.Context, keys []ent
 	return out, nil
 }
 
-// batchByDefinitionPage collapses per-definition value pages into one
-// windowed query per (limit, offset) group.
+// batchByDefinitionPage collapses per-definition value pages into one keyset
+// windowed query per (limit, cursor) group. It over-fetches one row per
+// partition so the caller can detect a next page.
 func (r *attributeValueRepository) batchByDefinitionPage(ctx context.Context, keys []pageKey) (map[pageKey]pagedResult[domainvalue.Snapshot], error) {
 	out := make(map[pageKey]pagedResult[domainvalue.Snapshot], len(keys))
 
 	for group, parents := range pageKeyGroups(keys) {
-		limit, offset := group[0], group[1]
+		limit, _ := strconv.Atoi(group[0])
+		cursor := group[1]
+		inner := []string{"attribute_definition_id = ANY(?)", "archived_at IS NULL"}
+		qargs := []any{pq.Array(parents)}
+		inner, qargs = keysetWhere(inner, qargs, idKeyset, cursor)
 		query := bind(`SELECT * FROM (
 		   SELECT ` + valueColumnList + `,
-		          count(*)     OVER (PARTITION BY attribute_definition_id) AS total_count,
 		          row_number() OVER (PARTITION BY attribute_definition_id ORDER BY id) AS rn
 		   FROM flexitype_attribute_value
-		   WHERE attribute_definition_id = ANY(?) AND archived_at IS NULL
+		   WHERE ` + strings.Join(inner, " AND ") + `
 		 ) w
-		 WHERE rn > ? AND rn <= ?
+		 WHERE rn <= ?
 		 ORDER BY attribute_definition_id, rn`)
+		qargs = append(qargs, limit+1)
 
 		var rows []struct {
 			valueRow
-			TotalCount int `db:"total_count"`
-			RN         int `db:"rn"`
+			RN int `db:"rn"`
 		}
-		if err := r.q.SelectContext(ctx, &rows, query, pq.Array(parents), offset, offset+limit); err != nil {
+		if err := r.q.SelectContext(ctx, &rows, query, qargs...); err != nil {
 			return nil, fmt.Errorf("batch values by definition: %w", err)
 		}
 
@@ -217,11 +234,10 @@ func (r *attributeValueRepository) batchByDefinitionPage(ctx context.Context, ke
 			parent := row.AttributeDefinitionID.String()
 			pr := results[parent]
 			pr.Items = append(pr.Items, snap)
-			pr.Total = row.TotalCount
 			results[parent] = pr
 		}
 		for _, parent := range parents {
-			out[pageKey{Parent: parent, Limit: limit, Offset: offset}] = results[parent]
+			out[pageKey{Parent: parent, Limit: limit, Cursor: cursor}] = results[parent]
 		}
 	}
 	return out, nil
@@ -244,7 +260,6 @@ func (r *attributeValueRepository) batchList(ctx context.Context, keys []string)
 	var rows []struct {
 		LoaderKey string `db:"loader_key"`
 		valueRow
-		TotalCount int `db:"total_count"`
 	}
 	if err := r.q.SelectContext(ctx, &rows, bind(strings.Join(arms, "\nUNION ALL\n")), args...); err != nil {
 		return nil, fmt.Errorf("batch list values: %w", err)
@@ -258,7 +273,6 @@ func (r *attributeValueRepository) batchList(ctx context.Context, keys []string)
 		}
 		pr := out[row.LoaderKey]
 		pr.Items = append(pr.Items, snap)
-		pr.Total = row.TotalCount
 		out[row.LoaderKey] = pr
 	}
 	return out, nil
@@ -334,7 +348,7 @@ func (r *attributeValueRepository) ListByEntity(ctx context.Context, key domainv
 }
 
 func (r *attributeValueRepository) ListByDefinition(ctx context.Context, defID valueobjects.AttributeDefinitionID, page db.Page) ([]*domainvalue.AttributeValue, int, error) {
-	key := pageKey{Parent: defID.String(), Limit: page.Limit, Offset: page.Offset}
+	key := pageKey{Parent: defID.String(), Limit: page.Limit, Cursor: page.Cursor}
 
 	var result pagedResult[domainvalue.Snapshot]
 	if r.inTx {
@@ -355,7 +369,9 @@ func (r *attributeValueRepository) ListByDefinition(ctx context.Context, defID v
 	for _, snap := range result.Items {
 		out = append(out, domainvalue.Rehydrate(snap))
 	}
-	return out, result.Total, nil
+	// ListByDefinition backs an internal full-scan (dedup) that follows the
+	// cursor and stops on a short page, so it does not need a total.
+	return out, 0, nil
 }
 
 func (r *attributeValueRepository) ListByEntities(ctx context.Context, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) ([]*domainvalue.AttributeValue, error) {
@@ -425,7 +441,7 @@ func (r *attributeValueRepository) List(ctx context.Context, filter domainvalue.
 		Tenant:          filter.TenantID.String(),
 		IncludeArchived: filter.IncludeArchived,
 		Limit:           page.Limit,
-		Offset:          page.Offset,
+		Cursor:          page.Cursor,
 	}
 	if !filter.TypeDefinitionID.IsZero() {
 		f.TypeDefID = filter.TypeDefinitionID.String()
@@ -457,7 +473,11 @@ func (r *attributeValueRepository) List(ctx context.Context, filter domainvalue.
 	for _, snap := range result.Items {
 		out = append(out, domainvalue.Rehydrate(snap))
 	}
-	return out, result.Total, nil
+	total, err := countIf(ctx, r.q, page.WantTotal, f.countQuery)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valueobjects.TenantID, typeDefIDs []valueobjects.TypeDefinitionID, page db.Page) ([]domainvalue.EntitySummary, int, error) {
@@ -471,29 +491,38 @@ func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valu
 		TypeDefinitionID ulid.ID   `db:"type_definition_id"`
 		ValueCount       int       `db:"value_count"`
 		LastUpdatedAt    time.Time `db:"last_updated_at"`
-		TotalCount       int       `db:"total_count"`
 	}
-	// An entity's rows all carry its declared type, so grouping by both
-	// keeps one row per entity while surfacing the subtype.
+	// Keyset on the ordered aggregate (last update) with entity_id as the
+	// unique tiebreaker; the predicate is a HAVING clause because it compares
+	// an aggregate.
+	entityKeyset := []db.KeysetColumn{{Expr: "max(updated_at)", Desc: true, Cast: "::timestamptz"}, {Expr: "entity_id"}}
+	pred, pargs, _ := db.KeysetPredicate(entityKeyset, page.Cursor)
+	having := ""
+	if pred != "" {
+		having = "\n\t\t HAVING " + pred
+	}
+	args := []any{tenant.String(), pq.Array(ids)}
+	args = append(args, pargs...)
+	args = append(args, page.FetchLimit())
+	// An entity's rows all carry its declared type, so grouping by both keeps
+	// one row per entity while surfacing the subtype.
 	err := r.q.SelectContext(ctx, &rows, bind(
 		`SELECT entity_id,
 		        type_definition_id,
 		        count(*)        AS value_count,
-		        max(updated_at) AS last_updated_at,
-		        count(*) OVER () AS total_count
+		        max(updated_at) AS last_updated_at
 		 FROM flexitype_attribute_value
 		 WHERE tenant_id = ? AND type_definition_id = ANY(?) AND archived_at IS NULL
-		 GROUP BY entity_id, type_definition_id
+		 GROUP BY entity_id, type_definition_id`+having+`
 		 ORDER BY max(updated_at) DESC, entity_id
-		 LIMIT ? OFFSET ?`),
-		tenant.String(), pq.Array(ids), page.Limit, page.Offset,
+		 LIMIT ?`),
+		args...,
 	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list entities: %w", err)
 	}
 
 	out := make([]domainvalue.EntitySummary, 0, len(rows))
-	total := 0
 	for _, row := range rows {
 		out = append(out, domainvalue.EntitySummary{
 			EntityID:         valueobjects.EntityID(row.EntityID),
@@ -501,7 +530,17 @@ func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valu
 			ValueCount:       row.ValueCount,
 			LastUpdatedAt:    row.LastUpdatedAt,
 		})
-		total = row.TotalCount
+	}
+	total := 0
+	if page.WantTotal {
+		if err := r.q.GetContext(ctx, &total, bind(
+			`SELECT count(*) FROM (
+			   SELECT 1 FROM flexitype_attribute_value
+			   WHERE tenant_id = ? AND type_definition_id = ANY(?) AND archived_at IS NULL
+			   GROUP BY entity_id, type_definition_id
+			 ) g`), tenant.String(), pq.Array(ids)); err != nil {
+			return nil, 0, fmt.Errorf("count entities: %w", err)
+		}
 	}
 	return out, total, nil
 }

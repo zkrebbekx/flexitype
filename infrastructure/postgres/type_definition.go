@@ -72,7 +72,7 @@ type typeDefListFilter struct {
 	IncludeArchived      bool     `json:"include_archived,omitempty"`
 	IncludeAttributeSets bool     `json:"include_attribute_sets,omitempty"`
 	Limit                int      `json:"limit"`
-	Offset               int      `json:"offset"`
+	Cursor               string   `json:"cursor,omitempty"`
 }
 
 func (f typeDefListFilter) key() string {
@@ -81,12 +81,11 @@ func (f typeDefListFilter) key() string {
 	return string(b)
 }
 
-// arm renders this filter as one UNION ALL arm with ? placeholders; the
-// loader key rides along as a column so rows demultiplex after one round
-// trip.
-func (f typeDefListFilter) arm(key string) (string, []any) {
+// where builds the filter predicates and args shared by the list arm and the
+// count query.
+func (f typeDefListFilter) where() ([]string, []any) {
 	where := []string{"tenant_id = ?"}
-	args := []any{key, f.Tenant}
+	args := []any{f.Tenant}
 	if !f.IncludeArchived {
 		where = append(where, "archived_at IS NULL")
 	}
@@ -97,14 +96,30 @@ func (f typeDefListFilter) arm(key string) (string, []any) {
 		where = append(where, "internal_name = ANY(?)")
 		args = append(args, pq.Array(f.InternalNames))
 	}
-	args = append(args, f.Limit, f.Offset)
+	return where, args
+}
 
-	query := `(SELECT ?::text AS loader_key, ` + typeDefColumns + `, count(*) OVER () AS total_count
+// arm renders this filter as one keyset UNION ALL arm with ? placeholders; the
+// loader key rides along as a column so rows demultiplex after one round trip.
+// It over-fetches one row so the caller can detect a next page.
+func (f typeDefListFilter) arm(key string) (string, []any) {
+	where, filterArgs := f.where()
+	args := append([]any{key}, filterArgs...)
+	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	args = append(args, f.Limit+1)
+
+	query := `(SELECT ?::text AS loader_key, ` + typeDefColumns + `
 	 FROM flexitype_type_definition
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
-	 LIMIT ? OFFSET ?)`
+	 LIMIT ?)`
 	return query, args
+}
+
+// countQuery counts the full filtered set, ignoring the keyset cursor.
+func (f typeDefListFilter) countQuery() (string, []any) {
+	where, args := f.where()
+	return `SELECT count(*) FROM flexitype_type_definition WHERE ` + strings.Join(where, " AND "), args
 }
 
 type typeDefinitionRepository struct {
@@ -184,7 +199,6 @@ func (r *typeDefinitionRepository) batchList(ctx context.Context, keys []string)
 	var rows []struct {
 		LoaderKey string `db:"loader_key"`
 		typeDefRow
-		TotalCount int `db:"total_count"`
 	}
 	if err := r.q.SelectContext(ctx, &rows, bind(strings.Join(arms, "\nUNION ALL\n")), args...); err != nil {
 		return nil, fmt.Errorf("batch list type definitions: %w", err)
@@ -194,7 +208,6 @@ func (r *typeDefinitionRepository) batchList(ctx context.Context, keys []string)
 	for _, row := range rows {
 		pr := out[row.LoaderKey]
 		pr.Items = append(pr.Items, row.snapshot())
-		pr.Total = row.TotalCount
 		out[row.LoaderKey] = pr
 	}
 	return out, nil
@@ -307,7 +320,7 @@ func (r *typeDefinitionRepository) List(ctx context.Context, filter domaintypede
 		IncludeArchived:      filter.IncludeArchived,
 		IncludeAttributeSets: filter.IncludeAttributeSets,
 		Limit:                page.Limit,
-		Offset:               page.Offset,
+		Cursor:               page.Cursor,
 	}
 	key := f.key()
 
@@ -330,7 +343,11 @@ func (r *typeDefinitionRepository) List(ctx context.Context, filter domaintypede
 	for _, snap := range result.Items {
 		out = append(out, domaintypedef.Rehydrate(snap))
 	}
-	return out, result.Total, nil
+	total, err := countIf(ctx, r.q, page.WantTotal, f.countQuery)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 // extendsParam maps an optional parent pointer to its driver argument.

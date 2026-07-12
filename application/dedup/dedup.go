@@ -253,7 +253,7 @@ func (i *Interactor) loadEntityValues(ctx context.Context, attrID valueobjects.A
 	seen := map[valueobjects.EntityID]bool{}
 	page := db.Page{Limit: 500}
 	for {
-		batch, total, err := i.values.ListByDefinition(ctx, attrID, page)
+		batch, _, err := i.values.ListByDefinition(ctx, attrID, page)
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -268,10 +268,11 @@ func (i *Interactor) loadEntityValues(ctx context.Context, attrID valueobjects.A
 			entities = append(entities, av.EntityID().String())
 			values = append(values, av.Value().String())
 		}
-		page.Offset += len(batch)
-		if len(batch) == 0 || page.Offset >= total {
+		// The repository over-fetches by one; a short page is the last one.
+		if len(batch) <= page.Limit {
 			break
 		}
+		page.Cursor = db.EncodeKeyset(batch[len(batch)-1].ID().String())
 	}
 	return entities, values, false, nil
 }

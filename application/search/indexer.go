@@ -155,10 +155,10 @@ func (i *Indexer) Reindex(ctx context.Context, tenant valueobjects.TenantID) (in
 
 	count := 0
 	for _, t := range types {
-		offset := 0
+		page := db.Page{Limit: 200}
 		for {
 			entities, _, err := repos.Values.ListEntities(ctx, tenant,
-				[]valueobjects.TypeDefinitionID{t.ID()}, db.Page{Limit: 200, Offset: offset})
+				[]valueobjects.TypeDefinitionID{t.ID()}, page)
 			if err != nil {
 				return count, err
 			}
@@ -171,7 +171,12 @@ func (i *Indexer) Reindex(ctx context.Context, tenant valueobjects.TenantID) (in
 				}
 				count++
 			}
-			offset += len(entities)
+			// The repository over-fetches by one; a short page is the last one.
+			if len(entities) <= page.Limit {
+				break
+			}
+			last := entities[len(entities)-1]
+			page.Cursor = db.EncodeKeyset(last.LastUpdatedAt.UTC().Format(time.RFC3339Nano), last.EntityID.String())
 		}
 	}
 	return count, nil

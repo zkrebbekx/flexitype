@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -328,26 +329,32 @@ func (s *deliveryStore) List(ctx context.Context, filter webhook.DeliveryFilter,
 		where += " AND status = ?"
 		args = append(args, filter.Status)
 	}
-	args = append(args, page.Limit, page.Offset)
+	filterClause := where
+	filterArgs := append([]any(nil), args...)
 
-	var rows []struct {
-		deliveryRow
-		TotalCount int `db:"total_count"`
-	}
-	query := `SELECT ` + deliveryCols + `, count(*) OVER () AS total_count
+	whereParts, args := keysetWhere([]string{where}, args, []db.KeysetColumn{{Expr: "id", Desc: true}}, page.Cursor)
+	args = append(args, page.FetchLimit())
+
+	var rows []deliveryRow
+	query := `SELECT ` + deliveryCols + `
 	 FROM flexitype_webhook_delivery
-	 WHERE ` + where + `
+	 WHERE ` + strings.Join(whereParts, " AND ") + `
 	 ORDER BY id DESC
-	 LIMIT ? OFFSET ?`
+	 LIMIT ?`
 	if err := s.q.SelectContext(ctx, &rows, bind(query), args...); err != nil {
 		return nil, 0, fmt.Errorf("list deliveries: %w", err)
 	}
 
 	out := make([]webhook.Delivery, 0, len(rows))
-	total := 0
 	for _, r := range rows {
 		out = append(out, r.toDelivery())
-		total = r.TotalCount
+	}
+	total := 0
+	if page.WantTotal {
+		if err := s.q.GetContext(ctx, &total, bind(
+			`SELECT count(*) FROM flexitype_webhook_delivery WHERE `+filterClause), filterArgs...); err != nil {
+			return nil, 0, fmt.Errorf("count deliveries: %w", err)
+		}
 	}
 	return out, total, nil
 }

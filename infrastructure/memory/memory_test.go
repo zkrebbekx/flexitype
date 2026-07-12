@@ -153,9 +153,10 @@ func TestInMemoryService(t *testing.T) {
 			})
 
 			Convey("Then the activity log recorded the changes", func() {
-				out, err := h.interactors().Activity().List(h.ctx, application.ActivityListInput{})
+				out, err := h.interactors().Activity().List(h.ctx, application.ActivityListInput{Page: db.PageArgs{WantTotal: true}})
 				So(err, ShouldBeNil)
-				So(out.PageInfo.TotalCount, ShouldBeGreaterThanOrEqualTo, 6)
+				So(out.PageInfo.TotalCount, ShouldNotBeNil)
+				So(*out.PageInfo.TotalCount, ShouldBeGreaterThanOrEqualTo, 6)
 			})
 		})
 

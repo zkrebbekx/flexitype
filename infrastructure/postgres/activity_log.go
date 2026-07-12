@@ -50,6 +50,9 @@ func (l *activityLog) Write(ctx context.Context, tx db.QueryExecer, entries []ac
 	return nil
 }
 
+// activityKeyset orders newest-first with the id as a unique tiebreaker.
+var activityKeyset = []db.KeysetColumn{{Expr: "occurred_at", Desc: true, Cast: "::timestamptz"}, {Expr: "id", Desc: true}}
+
 func (l *activityLog) List(ctx context.Context, filter activity.Filter, page db.Page) ([]activity.Entry, int, error) {
 	where := []string{"tenant_id = ?"}
 	args := []any{filter.TenantID.String()}
@@ -65,29 +68,37 @@ func (l *activityLog) List(ctx context.Context, filter activity.Filter, page db.
 		where = append(where, "actor = ?")
 		args = append(args, filter.Actor)
 	}
-	args = append(args, page.Limit, page.Offset)
+	filterClause := strings.Join(where, " AND ")
+	filterArgs := append([]any(nil), args...)
+
+	pageWhere, pageArgs := keysetWhere(where, args, activityKeyset, page.Cursor)
+	pageArgs = append(pageArgs, page.FetchLimit())
 
 	// NULL jsonb cannot scan into json.RawMessage; coalesce to empty text.
 	query := bind(`SELECT id, tenant_id, actor, entity, entity_id, action,
 	        COALESCE(before_state::text, '') AS before_state,
 	        COALESCE(after_state::text, '')  AS after_state,
-	        occurred_at,
-	        count(*) OVER () AS total_count
+	        occurred_at
 	 FROM flexitype_activity_log
-	 WHERE ` + strings.Join(where, " AND ") + `
+	 WHERE ` + strings.Join(pageWhere, " AND ") + `
 	 ORDER BY occurred_at DESC, id DESC
-	 LIMIT ? OFFSET ?`)
+	 LIMIT ?`)
 
 	var rows []activityRow
-	if err := l.pool.SelectContext(ctx, &rows, query, args...); err != nil {
+	if err := l.pool.SelectContext(ctx, &rows, query, pageArgs...); err != nil {
 		return nil, 0, fmt.Errorf("list activity log: %w", err)
 	}
 
 	entries := make([]activity.Entry, 0, len(rows))
-	total := 0
 	for _, row := range rows {
 		entries = append(entries, row.entry())
-		total = row.TotalCount
+	}
+	total := 0
+	if page.WantTotal {
+		if err := l.pool.GetContext(ctx, &total, bind(
+			`SELECT count(*) FROM flexitype_activity_log WHERE `+filterClause), filterArgs...); err != nil {
+			return nil, 0, fmt.Errorf("count activity log: %w", err)
+		}
 	}
 	return entries, total, nil
 }

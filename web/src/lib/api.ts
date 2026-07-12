@@ -60,7 +60,8 @@ export interface PageInfo {
   has_next_page: boolean
   has_previous_page: boolean
   next_cursor?: string
-  total_count: number
+  // Present only when the request asked for it (?total=true).
+  total_count?: number
 }
 
 export interface Paged<T> {
@@ -352,6 +353,8 @@ export interface ActivityEntry {
 export interface PageQuery {
   limit?: number
   cursor?: string
+  // total asks the API to compute total_count (off by default server-side).
+  total?: boolean
 }
 
 export interface WebhookSubscription {
@@ -435,7 +438,7 @@ function qs(params: object): string {
 export const api = {
   // Type definitions
   listTypes: (q: PageQuery & { include_archived?: boolean } = {}) =>
-    request<Paged<TypeDefinition>>('GET', `/type-definitions${qs(q)}`),
+    request<Paged<TypeDefinition>>('GET', `/type-definitions${qs({ total: true, ...q })}`),
   getType: (id: string) => request<TypeDefinition>('GET', `/type-definitions/${id}`),
   createType: (input: { internal_name: string; display_name: string; description?: string; extends_id?: string }) =>
     request<TypeDefinition>('POST', '/type-definitions', input),
@@ -466,7 +469,7 @@ export const api = {
 
   // Attributes
   listTypeAttributes: (typeId: string, q: PageQuery = {}) =>
-    request<Paged<AttributeDefinition>>('GET', `/type-definitions/${typeId}/attributes${qs(q)}`),
+    request<Paged<AttributeDefinition>>('GET', `/type-definitions/${typeId}/attributes${qs({ total: true, ...q })}`),
   listAttributes: (q: PageQuery & { type_definition_id?: string; include_archived?: boolean } = {}) =>
     request<Paged<AttributeDefinition>>('GET', `/attributes${qs(q)}`),
   getAttribute: (id: string) => request<AttributeDefinition>('GET', `/attributes/${id}`),
@@ -513,7 +516,7 @@ export const api = {
 
   // Values & entities
   listEntities: (typeId: string, q: PageQuery & { include_descendants?: boolean } = {}) =>
-    request<Paged<EntitySummary>>('GET', `/entities/${typeId}${qs(q)}`),
+    request<Paged<EntitySummary>>('GET', `/entities/${typeId}${qs({ total: true, ...q })}`),
   listEntityValues: (typeId: string, entityId: string) =>
     request<{ items: AttributeValue[] }>('GET', `/entities/${typeId}/${encodeURIComponent(entityId)}/values`),
   effectiveSchema: (typeId: string, entityId: string, attributeId: string) =>
@@ -638,7 +641,7 @@ export const api = {
 
   // Relationships
   listRelationshipDefinitions: (q: PageQuery & { type_definition_id?: string; include_archived?: boolean } = {}) =>
-    request<Paged<RelationshipDefinition>>('GET', `/relationship-definitions${qs(q)}`),
+    request<Paged<RelationshipDefinition>>('GET', `/relationship-definitions${qs({ total: true, ...q })}`),
   getRelationshipDefinition: (id: string) =>
     request<RelationshipDefinition>('GET', `/relationship-definitions/${id}`),
   createRelationshipDefinition: (input: {
@@ -692,13 +695,13 @@ export const api = {
 
   // Query (FQL)
   runQuery: (q: PageQuery & { type: string; q: string }) =>
-    request<Paged<QueryResultRow>>('GET', `/query${qs(q)}`),
+    request<Paged<QueryResultRow>>('GET', `/query${qs({ total: true, ...q })}`),
   validateQuery: (type: string, q: string) =>
     request<{ valid: boolean }>('POST', '/query/validate', { type, q }),
 
   // Activity
   listActivity: (q: PageQuery & { entity?: string; entity_id?: string; actor?: string } = {}) =>
-    request<Paged<ActivityEntry>>('GET', `/activity${qs(q)}`),
+    request<Paged<ActivityEntry>>('GET', `/activity${qs({ total: true, ...q })}`),
 
   // Event delivery — webhook subscriptions
   listSubscriptions: () =>

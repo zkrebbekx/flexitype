@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"
@@ -244,9 +245,10 @@ func buildSchema(ctx context.Context, inter *application.Interactors) (graphql.S
 		connections[name] = graphql.NewObject(graphql.ObjectConfig{
 			Name: typeName(name) + "Connection",
 			Fields: graphql.Fields{
-				"edges":      &graphql.Field{Type: graphql.NewList(edge)},
-				"pageInfo":   &graphql.Field{Type: graphql.NewNonNull(pageInfo)},
-				"totalCount": &graphql.Field{Type: graphql.NewNonNull(graphql.Int)},
+				"edges":    &graphql.Field{Type: graphql.NewList(edge)},
+				"pageInfo": &graphql.Field{Type: graphql.NewNonNull(pageInfo)},
+				// Nullable: the total is computed only when this field is selected.
+				"totalCount": &graphql.Field{Type: graphql.Int, Description: "total matching rows; computed only when requested"},
 			},
 		})
 	}
@@ -400,8 +402,9 @@ func rootResolve(typeInternal string, metas map[string]typeMeta) graphql.FieldRe
 		filter, _ := p.Args["filter"].(string)
 		first := clampFirst(p.Args["first"])
 		after, _ := p.Args["after"].(string)
+		wantTotal := selectionHasField(connSels, "totalCount")
 
-		ids, total, hasNext, offset, err := topLevelPage(p.Context, inter, typeInternal, filter, first, after)
+		ids, cursorByID, info, err := topLevelPage(p.Context, inter, typeInternal, filter, first, after, wantTotal)
 		if err != nil {
 			return nil, err
 		}
@@ -409,48 +412,50 @@ func rootResolve(typeInternal string, metas map[string]typeMeta) graphql.FieldRe
 		if err != nil {
 			return nil, err
 		}
-		return connection(nodes, offset, total, hasNext), nil
+		edges := make([]map[string]any, 0, len(nodes))
+		for _, n := range nodes {
+			edges = append(edges, map[string]any{"node": n, "cursor": cursorByID[n["entityId"].(string)]})
+		}
+		return connection(edges, info.HasNextPage, after != "", info.TotalCount), nil
 	}
 }
 
-// topLevelPage resolves one page of entity ids for a top-level field: the FQL
-// filter when given, otherwise every entity of the type (descendants
-// included). It returns the ids, the total count, whether more remain, and the
-// page's starting offset (for synthesizing edge cursors).
-func topLevelPage(ctx context.Context, inter *application.Interactors, typeInternal, filter string, first int, after string) (ids []string, total int, hasNext bool, offset int, err error) {
-	offset, err = cursorOffset(after)
-	if err != nil {
-		return nil, 0, false, 0, err
+// topLevelPage resolves one page of a top-level field via the FQL filter, or —
+// when the filter is empty — every entity of the type (descendants included).
+// The page is keyset-paginated; each entity's opaque cursor rides back in
+// cursorByID, and the total is present in the PageInfo only when requested.
+func topLevelPage(ctx context.Context, inter *application.Interactors, typeInternal, filter string, first int, after string, wantTotal bool) (ids []string, cursorByID map[string]string, info db.PageInfo, err error) {
+	pa := db.PageArgs{Limit: &first, WantTotal: wantTotal}
+	if after != "" {
+		pa.Cursor = &after
 	}
-	cursor := cursorPtr(after)
+	cursorByID = map[string]string{}
 	if strings.TrimSpace(filter) == "" {
 		td, terr := inter.TypeDefinitions().GetByInternalName(ctx, typeInternal)
 		if terr != nil {
-			return nil, 0, false, 0, terr
+			return nil, nil, db.PageInfo{}, terr
 		}
-		out, lerr := inter.Values().ListEntities(ctx, td.ID.String(), true, db.PageArgs{Limit: &first, Cursor: cursor})
+		out, lerr := inter.Values().ListEntities(ctx, td.ID.String(), true, pa)
 		if lerr != nil {
-			return nil, 0, false, 0, lerr
+			return nil, nil, db.PageInfo{}, lerr
 		}
 		ids = make([]string, 0, len(out.Items))
 		for _, e := range out.Items {
 			ids = append(ids, e.EntityID)
+			cursorByID[e.EntityID] = db.EncodeKeyset(e.LastUpdatedAt.UTC().Format(time.RFC3339Nano), e.EntityID)
 		}
-		return ids, out.PageInfo.TotalCount, out.PageInfo.HasNextPage, offset, nil
+		return ids, cursorByID, out.PageInfo, nil
 	}
-	out, qerr := inter.Query().Execute(ctx, appquery.ExecuteInput{
-		Type:  typeInternal,
-		Query: filter,
-		Page:  db.PageArgs{Limit: &first, Cursor: cursor},
-	})
+	out, qerr := inter.Query().Execute(ctx, appquery.ExecuteInput{Type: typeInternal, Query: filter, Page: pa})
 	if qerr != nil {
-		return nil, 0, false, 0, qerr
+		return nil, nil, db.PageInfo{}, qerr
 	}
 	ids = make([]string, 0, len(out.Items))
 	for _, r := range out.Items {
 		ids = append(ids, r.EntityID)
+		cursorByID[r.EntityID] = db.EncodeKeyset(r.LastUpdatedAt.UTC().Format(time.RFC3339Nano), r.EntityID)
 	}
-	return ids, out.PageInfo.TotalCount, out.PageInfo.HasNextPage, offset, nil
+	return ids, cursorByID, out.PageInfo, nil
 }
 
 // buildNodes materializes a set of entities of one type into node maps,
@@ -567,58 +572,69 @@ func attachRelationship(ctx context.Context, inter *application.Interactors, sel
 		}
 	}
 
+	// Nested connections page in memory over the batch-loaded children, keyset
+	// on the child entity id so the shape matches the top-level connections.
 	first := clampFirst(sel.args["first"])
-	afterOffset, err := cursorOffset(argString(sel.args["after"]))
-	if err != nil {
-		return err
+	afterID := ""
+	if raw := argString(sel.args["after"]); raw != "" {
+		if vals, derr := db.DecodeKeyset(raw); derr == nil && len(vals) == 1 {
+			afterID = vals[0]
+		}
 	}
+	wantTotal := selectionHasField(sel.sub, "totalCount")
 	for _, eid := range entityIDs {
-		all := childrenByParent[eid]
-		total := len(all)
-		lo := afterOffset
-		if lo > total {
-			lo = total
+		all := append([]string(nil), childrenByParent[eid]...)
+		sort.Strings(all)
+		start := 0
+		for start < len(all) && all[start] <= afterID {
+			if afterID == "" {
+				break
+			}
+			start++
 		}
-		hi := lo + first
-		if hi > total {
-			hi = total
+		end := start + first
+		if end > len(all) {
+			end = len(all)
 		}
-		pageNodes := make([]map[string]any, 0, hi-lo)
-		for _, cid := range all[lo:hi] {
+		edges := make([]map[string]any, 0, end-start)
+		for _, cid := range all[start:end] {
 			if cn := childByID[cid]; cn != nil {
-				pageNodes = append(pageNodes, cn)
+				edges = append(edges, map[string]any{"node": cn, "cursor": db.EncodeKeyset(cid)})
 			}
 		}
-		nodeByID[eid][sel.name] = connection(pageNodes, lo, total, lo+len(pageNodes) < total)
+		var total *int
+		if wantTotal {
+			t := len(all)
+			total = &t
+		}
+		nodeByID[eid][sel.name] = connection(edges, end < len(all), afterID != "", total)
 	}
 	return nil
 }
 
-// connection assembles a Relay connection map from a page of nodes, the page's
-// starting offset in the full result, the total count and whether more remain.
-func connection(nodes []map[string]any, offset, total int, hasNext bool) map[string]any {
-	edges := make([]map[string]any, 0, len(nodes))
-	for i, n := range nodes {
-		edges = append(edges, map[string]any{
-			"node":   n,
-			"cursor": db.EncodeCursor(offset + i + 1),
-		})
-	}
+// connection assembles a Relay connection from pre-built edges. total is nil
+// unless the caller selected the totalCount field.
+func connection(edges []map[string]any, hasNext, hasPrev bool, total *int) map[string]any {
 	var startCursor, endCursor any
 	if len(edges) > 0 {
 		startCursor = edges[0]["cursor"]
 		endCursor = edges[len(edges)-1]["cursor"]
 	}
-	return map[string]any{
-		"edges":      edges,
-		"totalCount": total,
+	conn := map[string]any{
+		"edges": edges,
 		"pageInfo": map[string]any{
 			"hasNextPage":     hasNext,
-			"hasPreviousPage": offset > 0,
+			"hasPreviousPage": hasPrev,
 			"startCursor":     startCursor,
 			"endCursor":       endCursor,
 		},
 	}
+	if total != nil {
+		conn["totalCount"] = *total
+	} else {
+		conn["totalCount"] = nil
+	}
+	return conn
 }
 
 func projectValues(vals []valueobjects.Value, am attrMeta) any {
@@ -788,20 +804,15 @@ func clampFirst(v any) int {
 	return n
 }
 
-// cursorOffset decodes a Relay cursor to its offset; the empty cursor is the
-// start of the result set.
-func cursorOffset(cursor string) (int, error) {
-	if cursor == "" {
-		return 0, nil
+// selectionHasField reports whether a field with the given name is directly
+// selected — used to compute the total only when totalCount is requested.
+func selectionHasField(sels []selection, name string) bool {
+	for _, s := range sels {
+		if s.name == name {
+			return true
+		}
 	}
-	return db.DecodeCursor(cursor)
-}
-
-func cursorPtr(cursor string) *string {
-	if cursor == "" {
-		return nil
-	}
-	return &cursor
+	return false
 }
 
 // typeName renders a type's GraphQL object name (PascalCase of the internal

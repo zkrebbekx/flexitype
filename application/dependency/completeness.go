@@ -3,6 +3,7 @@ package dependency
 import (
 	"context"
 	"sort"
+	"time"
 
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -205,13 +206,20 @@ func (i *Interactor) TypeCompleteness(ctx context.Context, rawTypeID string) (*T
 	out := &TypeCompletenessOutput{TypeDefinitionID: typeID.String(), Entities: []EntityScore{}}
 	types := map[valueobjects.TypeDefinitionID]*domaintypedef.TypeDefinition{typeID: t}
 	var sum float64
-	page := db.Page{Limit: 200}
+	// Ask for the total once so Count reflects the full population even though
+	// only the first maxCompletenessScan entities are scored.
+	page := db.Page{Limit: 200, WantTotal: true}
+	first := true
 	for {
 		summaries, total, err := i.values.ListEntities(ctx, t.TenantID(), []valueobjects.TypeDefinitionID{typeID}, page)
 		if err != nil {
 			return nil, err
 		}
-		out.Count = total
+		if first {
+			out.Count = total
+			first = false
+			page.WantTotal = false
+		}
 		for _, s := range summaries {
 			et, ok := types[s.TypeDefinitionID]
 			if !ok {
@@ -240,11 +248,16 @@ func (i *Interactor) TypeCompleteness(ctx context.Context, rawTypeID string) (*T
 				out.Incomplete++
 			}
 		}
-		page.Offset += len(summaries)
-		if len(summaries) == 0 || page.Offset >= total || page.Offset >= maxCompletenessScan {
-			out.Truncated = total > page.Offset
+		if len(out.Entities) >= maxCompletenessScan {
+			out.Truncated = true
 			break
 		}
+		// The repository over-fetches by one; a short page is the last one.
+		if len(summaries) <= page.Limit {
+			break
+		}
+		last := summaries[len(summaries)-1]
+		page.Cursor = db.EncodeKeyset(last.LastUpdatedAt.UTC().Format(time.RFC3339Nano), last.EntityID.String())
 	}
 	out.Scored = len(out.Entities)
 	if out.Scored > 0 {

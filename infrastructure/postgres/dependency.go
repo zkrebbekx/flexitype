@@ -71,7 +71,7 @@ type dependencyListFilter struct {
 	TargetID        string `json:"target_attribute_id,omitempty"`
 	IncludeArchived bool   `json:"include_archived,omitempty"`
 	Limit           int    `json:"limit"`
-	Offset          int    `json:"offset"`
+	Cursor          string `json:"cursor,omitempty"`
 }
 
 func (f dependencyListFilter) key() string {
@@ -79,9 +79,9 @@ func (f dependencyListFilter) key() string {
 	return string(b)
 }
 
-func (f dependencyListFilter) arm(key string) (string, []any) {
+func (f dependencyListFilter) where() ([]string, []any) {
 	where := []string{"tenant_id = ?"}
-	args := []any{key, f.Tenant}
+	args := []any{f.Tenant}
 	if !f.IncludeArchived {
 		where = append(where, "archived_at IS NULL")
 	}
@@ -93,14 +93,26 @@ func (f dependencyListFilter) arm(key string) (string, []any) {
 		where = append(where, "target_attribute_id = ?")
 		args = append(args, f.TargetID)
 	}
-	args = append(args, f.Limit, f.Offset)
+	return where, args
+}
 
-	query := `(SELECT ?::text AS loader_key, ` + dependencyColumns + `, count(*) OVER () AS total_count
+func (f dependencyListFilter) arm(key string) (string, []any) {
+	where, filterArgs := f.where()
+	args := append([]any{key}, filterArgs...)
+	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	args = append(args, f.Limit+1)
+
+	query := `(SELECT ?::text AS loader_key, ` + dependencyColumns + `
 	 FROM flexitype_attribute_value_dependency
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
-	 LIMIT ? OFFSET ?)`
+	 LIMIT ?)`
 	return query, args
+}
+
+func (f dependencyListFilter) countQuery() (string, []any) {
+	where, args := f.where()
+	return `SELECT count(*) FROM flexitype_attribute_value_dependency WHERE ` + strings.Join(where, " AND "), args
 }
 
 type dependencyRepository struct {
@@ -190,7 +202,6 @@ func (r *dependencyRepository) batchList(ctx context.Context, keys []string) (ma
 	var rows []struct {
 		LoaderKey string `db:"loader_key"`
 		dependencyRow
-		TotalCount int `db:"total_count"`
 	}
 	if err := r.q.SelectContext(ctx, &rows, bind(strings.Join(arms, "\nUNION ALL\n")), args...); err != nil {
 		return nil, fmt.Errorf("batch list dependencies: %w", err)
@@ -204,7 +215,6 @@ func (r *dependencyRepository) batchList(ctx context.Context, keys []string) (ma
 		}
 		pr := out[row.LoaderKey]
 		pr.Items = append(pr.Items, snap)
-		pr.Total = row.TotalCount
 		out[row.LoaderKey] = pr
 	}
 	return out, nil
@@ -286,7 +296,7 @@ func (r *dependencyRepository) List(ctx context.Context, filter domaindependency
 		Tenant:          filter.TenantID.String(),
 		IncludeArchived: filter.IncludeArchived,
 		Limit:           page.Limit,
-		Offset:          page.Offset,
+		Cursor:          page.Cursor,
 	}
 	if !filter.SourceAttributeID.IsZero() {
 		f.SourceID = filter.SourceAttributeID.String()
@@ -315,7 +325,11 @@ func (r *dependencyRepository) List(ctx context.Context, filter domaindependency
 	for _, snap := range result.Items {
 		out = append(out, domaindependency.Rehydrate(snap))
 	}
-	return out, result.Total, nil
+	total, err := countIf(ctx, r.q, page.WantTotal, f.countQuery)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 func (r *dependencyRepository) Save(ctx context.Context, d *domaindependency.Dependency) error {

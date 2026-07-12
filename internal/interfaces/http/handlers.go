@@ -37,6 +37,9 @@ func pageArgs(r *http.Request) db.PageArgs {
 	if raw := r.URL.Query().Get("cursor"); raw != "" {
 		args.Cursor = &raw
 	}
+	// The total is computed only when asked for (?total=true), so unbounded
+	// lists don't pay for a count on every page.
+	args.WantTotal = boolQuery(r, "total")
 	return args
 }
 

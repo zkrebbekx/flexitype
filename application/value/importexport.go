@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"time"
 
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -464,17 +465,21 @@ func (i *Interactor) exportEntityIDs(
 	var ids []string
 	page := db.Page{Limit: 500}
 	for {
-		summaries, total, err := i.values.ListEntities(ctx, tenant, []valueobjects.TypeDefinitionID{typeID}, page)
+		summaries, _, err := i.values.ListEntities(ctx, tenant, []valueobjects.TypeDefinitionID{typeID}, page)
 		if err != nil {
 			return nil, err
 		}
 		for _, s := range summaries {
 			ids = append(ids, s.EntityID.String())
 		}
-		page.Offset += len(summaries)
-		if len(summaries) == 0 || page.Offset >= total || page.Offset >= maxExportRows {
+		if len(ids) >= maxExportRows || len(summaries) <= page.Limit {
 			break
 		}
+		last := summaries[len(summaries)-1]
+		page.Cursor = db.EncodeKeyset(last.LastUpdatedAt.UTC().Format(time.RFC3339Nano), last.EntityID.String())
+	}
+	if len(ids) > maxExportRows {
+		ids = ids[:maxExportRows]
 	}
 	return ids, nil
 }

@@ -85,7 +85,7 @@ func (r *queryRepo) Search(_ context.Context, tenant valueobjects.TenantID, root
 		}
 		return matched[i].EntityID.String() < matched[j].EntityID.String()
 	})
-	pageItems, total := paginate(matched, page)
+	pageItems, total := paginate(matched, page, func(e domainvalue.EntitySummary) string { return entityCursor(e.LastUpdatedAt, e.EntityID.String()) })
 	return pageItems, total, nil
 }
 

@@ -467,9 +467,12 @@ func (i *Interactor) List(ctx context.Context, in ListInput) (*ListOutput, error
 }
 
 func newListOutput(items []*domainattribute.Definition, page db.Page, total int) *ListOutput {
+	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(a *domainattribute.Definition) string {
+		return db.EncodeKeyset(a.ID().String())
+	})
 	out := &ListOutput{
 		Items:    make([]domainattribute.Snapshot, 0, len(items)),
-		PageInfo: db.BuildPageInfo(page, len(items), total),
+		PageInfo: info,
 	}
 	for _, a := range items {
 		out.Items = append(out.Items, a.Snapshot())

@@ -372,9 +372,12 @@ func (i *Interactor) ListDefinitions(ctx context.Context, in DefinitionListInput
 		return nil, err
 	}
 
+	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(d *domainrelationship.Definition) string {
+		return db.EncodeKeyset(d.ID().String())
+	})
 	out := &DefinitionListOutput{
 		Items:    make([]domainrelationship.DefinitionSnapshot, 0, len(items)),
-		PageInfo: db.BuildPageInfo(page, len(items), total),
+		PageInfo: info,
 	}
 	for _, d := range items {
 		out.Items = append(out.Items, d.Snapshot())
@@ -770,9 +773,12 @@ func (i *Interactor) List(ctx context.Context, in ListInput) (*ListOutput, error
 		return nil, err
 	}
 
+	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(rel *domainrelationship.Relationship) string {
+		return db.EncodeKeyset(rel.ID().String())
+	})
 	out := &ListOutput{
 		Items:    make([]domainrelationship.Snapshot, 0, len(items)),
-		PageInfo: db.BuildPageInfo(page, len(items), total),
+		PageInfo: info,
 	}
 	for _, rel := range items {
 		out.Items = append(out.Items, rel.Snapshot())

@@ -9,7 +9,8 @@ const emit = defineEmits<{ next: [cursor: string]; previous: []; reset: [] }>()
 
 <template>
   <div v-if="pageInfo" class="flex items-center justify-between py-3 text-[13px] text-(--text-muted)">
-    <span class="tnum">{{ pageInfo.total_count }} total</span>
+    <span v-if="pageInfo.total_count != null" class="tnum">{{ pageInfo.total_count }} total</span>
+    <span v-else></span>
     <div class="flex gap-2">
       <button
         v-if="canPrevious"

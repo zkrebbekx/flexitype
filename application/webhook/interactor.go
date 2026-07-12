@@ -256,9 +256,12 @@ func (i *Interactor) ListDeliveries(ctx context.Context, in ListDeliveriesInput)
 	if err != nil {
 		return nil, err
 	}
+	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(d Delivery) string {
+		return db.EncodeKeyset(d.ID.String())
+	})
 	return &ListDeliveriesOutput{
 		Items:    items,
-		PageInfo: db.BuildPageInfo(page, len(items), total),
+		PageInfo: info,
 	}, nil
 }
 

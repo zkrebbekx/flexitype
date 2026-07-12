@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/activity"
@@ -132,17 +133,44 @@ func cloneMap[K comparable, V any](m map[K]V) map[K]V {
 	return out
 }
 
-// paginate slices a sorted result set and reports the total.
-func paginate[T any](items []T, page db.Page) ([]T, int) {
+// paginate returns the keyset page of a result set already sorted in the
+// list's order: the items strictly after the cursor (matched by cursorOf,
+// exclusive), over-fetched by one so the caller can detect a next page. The
+// total is always returned; the application layer drops it unless requested.
+func paginate[T any](items []T, page db.Page, cursorOf func(T) string) ([]T, int) {
 	total := len(items)
-	if page.Offset >= total {
+	start := 0
+	if page.Cursor != "" {
+		for i := range items {
+			if cursorOf(items[i]) == page.Cursor {
+				start = i + 1
+				break
+			}
+		}
+	}
+	if start >= total {
 		return nil, total
 	}
-	end := page.Offset + page.Limit
+	end := start + page.Limit + 1 // over-fetch by one (keyset sentinel)
 	if page.Limit <= 0 || end > total {
 		end = total
 	}
-	return items[page.Offset:end], total
+	return items[start:end], total
+}
+
+// idCursor is the keyset cursor for an id-ordered list.
+func idCursor(id string) string { return db.EncodeKeyset(id) }
+
+// entityCursor is the composite keyset cursor for entity lists ordered by
+// last-updated (newest first) with the entity id as the unique tiebreaker.
+func entityCursor(lastUpdated time.Time, entityID string) string {
+	return db.EncodeKeyset(lastUpdated.UTC().Format(time.RFC3339Nano), entityID)
+}
+
+// entryCursor is the composite keyset cursor for the activity log (newest
+// first with the id as the tiebreaker).
+func entryCursor(e activity.Entry) string {
+	return db.EncodeKeyset(e.OccurredAt.UTC().Format(time.RFC3339Nano), e.ID.String())
 }
 
 // sortByID orders snapshots by an id-extracting function for stable pages.

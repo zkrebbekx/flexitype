@@ -63,7 +63,7 @@ func (r *typeDefRepo) List(_ context.Context, filter domaintypedef.Filter, page 
 	r.s.mu.RUnlock()
 
 	sortByID(snaps, func(s domaintypedef.Snapshot) string { return s.ID.String() })
-	pageItems, total := paginate(snaps, page)
+	pageItems, total := paginate(snaps, page, func(s domaintypedef.Snapshot) string { return idCursor(s.ID.String()) })
 
 	out := make([]*domaintypedef.TypeDefinition, 0, len(pageItems))
 	for _, snap := range pageItems {
@@ -146,7 +146,7 @@ func (r *attrRepo) ListByTypeDefinition(_ context.Context, typeDefID valueobject
 	r.s.mu.RUnlock()
 
 	sortByID(snaps, func(s domainattribute.Snapshot) string { return s.ID.String() })
-	pageItems, total := paginate(snaps, page)
+	pageItems, total := paginate(snaps, page, func(s domainattribute.Snapshot) string { return idCursor(s.ID.String()) })
 
 	out := make([]*domainattribute.Definition, 0, len(pageItems))
 	for _, snap := range pageItems {
@@ -188,7 +188,7 @@ func (r *attrRepo) List(_ context.Context, filter domainattribute.Filter, page d
 	r.s.mu.RUnlock()
 
 	sortByID(snaps, func(s domainattribute.Snapshot) string { return s.ID.String() })
-	pageItems, total := paginate(snaps, page)
+	pageItems, total := paginate(snaps, page, func(s domainattribute.Snapshot) string { return idCursor(s.ID.String()) })
 
 	out := make([]*domainattribute.Definition, 0, len(pageItems))
 	for _, snap := range pageItems {
@@ -240,6 +240,6 @@ func (l *activityLog) List(_ context.Context, filter activity.Filter, page db.Pa
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
 	}
-	pageItems, total := paginate(out, page)
+	pageItems, total := paginate(out, page, entryCursor)
 	return pageItems, total, nil
 }

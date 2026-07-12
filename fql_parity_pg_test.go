@@ -39,6 +39,8 @@ func seedProductCatalog(ctx context.Context, t *testing.T, svc *flexitype.Servic
 	priceID := mkAttr("price", "integer")
 	inStockID := mkAttr("in_stock", "bool")
 	nameID := mkAttr("name", "string")
+	ratingID := mkAttr("rating", "decimal")
+	releasedID := mkAttr("released", "date")
 
 	set := func(attrID, entity string, v any) {
 		raw, _ := json.Marshal(v)
@@ -49,16 +51,22 @@ func seedProductCatalog(ctx context.Context, t *testing.T, svc *flexitype.Servic
 		}
 	}
 	// e1: cheap, in stock; e2: pricey, in stock; e3: cheap, out of stock;
-	// e4: only a name (price/in_stock absent — exercises NULL semantics).
+	// e4: only a name (price/in_stock/rating/released absent — NULL semantics).
 	set(priceID, "e1", 10)
 	set(inStockID, "e1", true)
 	set(nameID, "e1", "Alpha")
+	set(ratingID, "e1", "4.8")
+	set(releasedID, "e1", "2024-06-01")
 	set(priceID, "e2", 100)
 	set(inStockID, "e2", true)
 	set(nameID, "e2", "Beta")
+	set(ratingID, "e2", "4.2")
+	set(releasedID, "e2", "2023-01-15")
 	set(priceID, "e3", 10)
 	set(inStockID, "e3", false)
 	set(nameID, "e3", "Gamma")
+	set(ratingID, "e3", "4.5")
+	set(releasedID, "e3", "2024-03-10")
 	set(nameID, "e4", "Delta")
 }
 
@@ -101,6 +109,7 @@ func TestFQLMemoryPostgresParity(t *testing.T) {
 	}
 
 	corpus := []string{
+		// comparisons + boolean logic + NULL / three-valued cases
 		`price = 10`,
 		`price > 10`,
 		`price >= 10 and in_stock = true`,
@@ -111,6 +120,31 @@ func TestFQLMemoryPostgresParity(t *testing.T) {
 		`name != "Alpha"`,
 		`price < 50 and not (name = "Gamma")`,
 		`price > 5 and price < 200`,
+		// set membership + range
+		`price in (10, 100)`,
+		`name in ("Alpha", "Delta")`,
+		`range(price, 5, 50)`,
+		// presence (has) over NULL
+		`has(in_stock)`,
+		`not has(in_stock)`,
+		`has(rating)`,
+		// string matching (case-sensitive and insensitive)
+		`contains(name, "lph")`,
+		`icontains(name, "ET")`,
+		`iequals(name, "alpha")`,
+		// aggregate/scalar functions
+		`length(name) = 5`,
+		`length(name) < 5`,
+		// type scope
+		`type = "product"`,
+		`type isa "product"`,
+		// decimals (numeric comparison, not string)
+		`rating > 4.5`,
+		`rating >= 4.2 and rating <= 4.5`,
+		`rating = 4.5`,
+		// dates
+		`released > "2024-01-01"`,
+		`released <= "2024-03-10"`,
 	}
 
 	Convey("Given identical catalogs in the memory and Postgres backends", t, func() {

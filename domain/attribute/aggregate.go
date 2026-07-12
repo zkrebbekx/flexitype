@@ -28,6 +28,8 @@ type Definition struct {
 	unique           bool
 	localizable      bool
 	scopable         bool
+	unitFamilyID     string
+	displayUnit      string
 	computed         *Computed
 	constraints      Constraints
 	defaultValue     *valueobjects.Default
@@ -54,8 +56,10 @@ type NewInput struct {
 	// Localizable lets an attribute hold a value per locale; Scopable, a
 	// value per channel. Together the value identity is (entity, attribute,
 	// locale, channel).
-	Localizable bool
-	Scopable    bool
+	Localizable  bool
+	Scopable     bool
+	UnitFamilyID string
+	DisplayUnit  string
 	// Computed, when set, makes the attribute read-only and derived (a
 	// formula or a relationship rollup); it is materialized, not written.
 	Computed     *Computed
@@ -111,6 +115,8 @@ func New(in NewInput, now time.Time) (*Definition, []events.Event, error) {
 		unique:           in.Unique,
 		localizable:      in.Localizable,
 		scopable:         in.Scopable,
+		unitFamilyID:     in.UnitFamilyID,
+		displayUnit:      in.DisplayUnit,
 		computed:         in.Computed,
 		constraints:      in.Constraints,
 		defaultValue:     in.DefaultValue,
@@ -144,6 +150,8 @@ type UpdateInput struct {
 	Unique       bool
 	Localizable  bool
 	Scopable     bool
+	UnitFamilyID string
+	DisplayUnit  string
 	Computed     *Computed
 	Constraints  Constraints
 	DefaultValue *valueobjects.Default
@@ -177,6 +185,8 @@ func (a *Definition) Update(in UpdateInput, now time.Time) ([]events.Event, erro
 	a.unique = in.Unique
 	a.localizable = in.Localizable
 	a.scopable = in.Scopable
+	a.unitFamilyID = in.UnitFamilyID
+	a.displayUnit = in.DisplayUnit
 	a.computed = in.Computed
 	a.constraints = in.Constraints
 	a.defaultValue = in.DefaultValue
@@ -327,6 +337,12 @@ func (a *Definition) Localizable() bool { return a.localizable }
 // Scopable reports whether the attribute holds a value per channel.
 func (a *Definition) Scopable() bool { return a.scopable }
 
+// UnitFamilyID returns the unit family a quantity attribute uses.
+func (a *Definition) UnitFamilyID() string { return a.unitFamilyID }
+
+// DisplayUnit returns the preferred display unit, if set.
+func (a *Definition) DisplayUnit() string { return a.displayUnit }
+
 // IsComputed reports whether the attribute is derived (read-only).
 func (a *Definition) IsComputed() bool { return a.computed != nil }
 
@@ -369,6 +385,8 @@ type Snapshot struct {
 	Unique           bool                               `json:"unique"`
 	Localizable      bool                               `json:"localizable,omitempty"`
 	Scopable         bool                               `json:"scopable,omitempty"`
+	UnitFamilyID     string                             `json:"unit_family_id,omitempty"`
+	DisplayUnit      string                             `json:"display_unit,omitempty"`
 	Computed         *Computed                          `json:"computed,omitempty"`
 	Constraints      Constraints                        `json:"constraints"`
 	DefaultValue     *valueobjects.Default              `json:"default_value,omitempty"`
@@ -396,6 +414,8 @@ func (a *Definition) Snapshot() Snapshot {
 		Unique:           a.unique,
 		Localizable:      a.localizable,
 		Scopable:         a.scopable,
+		UnitFamilyID:     a.unitFamilyID,
+		DisplayUnit:      a.displayUnit,
 		Computed:         a.computed,
 		Constraints:      a.constraints,
 		DefaultValue:     a.defaultValue,
@@ -425,6 +445,8 @@ func Rehydrate(s Snapshot) *Definition {
 		unique:           s.Unique,
 		localizable:      s.Localizable,
 		scopable:         s.Scopable,
+		unitFamilyID:     s.UnitFamilyID,
+		displayUnit:      s.DisplayUnit,
 		computed:         s.Computed,
 		constraints:      s.Constraints,
 		defaultValue:     s.DefaultValue,

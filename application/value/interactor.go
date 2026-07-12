@@ -12,6 +12,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/activity"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
+	appunit "github.com/zkrebbekx/flexitype/application/unit"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
@@ -21,6 +22,7 @@ import (
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
+	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
 // maxBatchItems caps one batch write so a single request can't hold a
@@ -36,8 +38,19 @@ type Interactor struct {
 	deps     domaindependency.Repository
 	links    domainrelationship.Repository
 	blobs    blobStore
+	units    unitStore
 	now      func() time.Time
 }
+
+// unitStore resolves the unit family a quantity attribute pins, for
+// converting a magnitude to its base unit. Nil disables quantity writes.
+type unitStore interface {
+	Get(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) (appunit.Family, error)
+}
+
+// SetUnitFamilies installs the unit-family store backing quantity
+// attributes. Called once at wiring time.
+func (i *Interactor) SetUnitFamilies(s unitStore) { i.units = s }
 
 // blobStore is the subset of the object-storage port the value interactor
 // needs for media uploads and archival cleanup. Nil disables media.
@@ -162,8 +175,14 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			return domainerrors.NewForbidden("not permitted to write this attribute", "attribute", def.InternalName())
 		}
 
-		v, err := valueobjects.ParseValue(def.DataType(), in.Value)
-		if err != nil {
+		var v valueobjects.Value
+		if def.DataType() == valueobjects.DataTypeQuantity {
+			// Quantities convert to the family's base unit; a unit outside the
+			// family is rejected (mixing families).
+			if v, err = i.quantityValue(ctx, def, in.Value); err != nil {
+				return err
+			}
+		} else if v, err = valueobjects.ParseValue(def.DataType(), in.Value); err != nil {
 			return domainerrors.NewValidation(err.Error())
 		}
 

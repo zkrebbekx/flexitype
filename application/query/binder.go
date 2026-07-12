@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
+	appunit "github.com/zkrebbekx/flexitype/application/unit"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
@@ -15,6 +16,7 @@ import (
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/fql"
+	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
 // maxTraversalDepth bounds nested relationship crossings per query.
@@ -38,6 +40,9 @@ type binder struct {
 	typeDefs    domaintypedef.Repository
 	attrs       domainattribute.Repository
 	relDefs     domainrelationship.DefinitionRepository
+	// units resolves unit families for unit-suffixed quantity literals; nil
+	// when unit families are disabled.
+	units appunit.Store
 	// typesByName caches every live entity type for the virtual type field.
 	typesByName map[string]domaintypedef.Snapshot
 }
@@ -161,16 +166,16 @@ func (b *binder) bind(ctx context.Context, node fql.Node, s *scope) (BoundNode, 
 		if n.Field.Scope == fql.ScopeType {
 			return b.bindTypeCompare(n)
 		}
-		return b.bindCompare(n, s)
+		return b.bindCompare(ctx, n, s)
 
 	case *fql.In:
 		if n.Field.Scope == fql.ScopeType {
 			return b.bindTypeIn(n)
 		}
-		return b.bindIn(n, s)
+		return b.bindIn(ctx, n, s)
 
 	case *fql.Range:
-		return b.bindRange(n, s)
+		return b.bindRange(ctx, n, s)
 
 	case *fql.Has:
 		attr, link, err := b.resolveField(n.Field, s)
@@ -223,7 +228,7 @@ func (b *binder) resolveField(f fql.Field, s *scope) (domainattribute.Snapshot, 
 	}
 }
 
-func (b *binder) bindCompare(n *fql.Compare, s *scope) (BoundNode, error) {
+func (b *binder) bindCompare(ctx context.Context, n *fql.Compare, s *scope) (BoundNode, error) {
 	attr, link, err := b.resolveField(n.Field, s)
 	if err != nil {
 		return nil, err
@@ -262,14 +267,14 @@ func (b *binder) bindCompare(n *fql.Compare, s *scope) (BoundNode, error) {
 		}
 	}
 
-	v, err := coerce(attr.DataType, n.Literal)
+	v, err := b.coerceLiteral(ctx, attr, n.Literal)
 	if err != nil {
 		return nil, err
 	}
 	return &BoundCompare{Attr: attr, Link: link, Func: n.Func, Op: n.Op, Value: v}, nil
 }
 
-func (b *binder) bindIn(n *fql.In, s *scope) (BoundNode, error) {
+func (b *binder) bindIn(ctx context.Context, n *fql.In, s *scope) (BoundNode, error) {
 	attr, link, err := b.resolveField(n.Field, s)
 	if err != nil {
 		return nil, err
@@ -279,7 +284,7 @@ func (b *binder) bindIn(n *fql.In, s *scope) (BoundNode, error) {
 	}
 	values := make([]valueobjects.Value, 0, len(n.Values))
 	for _, lit := range n.Values {
-		v, err := coerce(attr.DataType, lit)
+		v, err := b.coerceLiteral(ctx, attr, lit)
 		if err != nil {
 			return nil, err
 		}
@@ -288,7 +293,7 @@ func (b *binder) bindIn(n *fql.In, s *scope) (BoundNode, error) {
 	return &BoundIn{Attr: attr, Link: link, Values: values}, nil
 }
 
-func (b *binder) bindRange(n *fql.Range, s *scope) (BoundNode, error) {
+func (b *binder) bindRange(ctx context.Context, n *fql.Range, s *scope) (BoundNode, error) {
 	attr, link, err := b.resolveField(n.Field, s)
 	if err != nil {
 		return nil, err
@@ -299,11 +304,11 @@ func (b *binder) bindRange(n *fql.Range, s *scope) (BoundNode, error) {
 	if !attr.DataType.IsOrdered() {
 		return nil, positioned(n.Pos, "range() requires an ordered attribute; %q is %s", attr.InternalName, attr.DataType)
 	}
-	lo, err := coerce(attr.DataType, n.Lo)
+	lo, err := b.coerceLiteral(ctx, attr, n.Lo)
 	if err != nil {
 		return nil, err
 	}
-	hi, err := coerce(attr.DataType, n.Hi)
+	hi, err := b.coerceLiteral(ctx, attr, n.Hi)
 	if err != nil {
 		return nil, err
 	}
@@ -434,6 +439,72 @@ func (b *binder) traversalScope(ctx context.Context, n *fql.Traversal, def domai
 		}
 	}
 	return merged, nil
+}
+
+// coerceLiteral turns a literal into a typed value for the attribute. It
+// special-cases quantity attributes, normalizing a unit-suffixed number
+// (`weight > 5.5 kg`) to the attribute's base unit; everything else defers to
+// the type-directed coerce.
+func (b *binder) coerceLiteral(ctx context.Context, attr domainattribute.Snapshot, lit fql.Literal) (valueobjects.Value, error) {
+	if attr.DataType == valueobjects.DataTypeQuantity {
+		return b.coerceQuantity(ctx, attr, lit)
+	}
+	if lit.Unit != "" {
+		return valueobjects.Value{}, positioned(lit.Pos, "unit suffix %q is only valid on quantity attributes; %q is %s", lit.Unit, attr.InternalName, attr.DataType)
+	}
+	return coerce(attr.DataType, lit)
+}
+
+// coerceQuantity resolves the attribute's unit family and folds a
+// `magnitude unit` literal to the base-unit magnitude, so comparisons run in a
+// single normalized dimension. The unit suffix is required and must be a
+// member of the family.
+func (b *binder) coerceQuantity(ctx context.Context, attr domainattribute.Snapshot, lit fql.Literal) (valueobjects.Value, error) {
+	if lit.Kind != fql.LitNumber {
+		return valueobjects.Value{}, positioned(lit.Pos, "quantity comparison expects a number with a unit, got %q", lit.Text)
+	}
+	if lit.Unit == "" {
+		return valueobjects.Value{}, positioned(lit.Pos, "quantity comparison requires a unit, e.g. %q", lit.Text+" "+b.baseUnitHint(ctx, attr))
+	}
+	if b.units == nil {
+		return valueobjects.Value{}, positioned(lit.Pos, "unit families are not configured in this deployment")
+	}
+	if attr.UnitFamilyID == "" {
+		return valueobjects.Value{}, positioned(lit.Pos, "quantity attribute %q has no unit family", attr.InternalName)
+	}
+	famID, err := ulid.Parse(attr.UnitFamilyID)
+	if err != nil {
+		return valueobjects.Value{}, positioned(lit.Pos, "invalid unit family: %s", err.Error())
+	}
+	family, err := b.units.Get(ctx, b.tenant, famID)
+	if err != nil {
+		return valueobjects.Value{}, err
+	}
+	base, err := family.ToBase(lit.Text, lit.Unit)
+	if err != nil {
+		if verr, ok := err.(*domainerrors.Error); ok {
+			return valueobjects.Value{}, positioned(lit.Pos, "%s", verr.Message)
+		}
+		return valueobjects.Value{}, err
+	}
+	return valueobjects.NewQuantityValue(lit.Text, lit.Unit, base)
+}
+
+// baseUnitHint returns the family's base unit for an error message, or a
+// generic placeholder when it cannot be resolved.
+func (b *binder) baseUnitHint(ctx context.Context, attr domainattribute.Snapshot) string {
+	if b.units == nil || attr.UnitFamilyID == "" {
+		return "<unit>"
+	}
+	famID, err := ulid.Parse(attr.UnitFamilyID)
+	if err != nil {
+		return "<unit>"
+	}
+	family, err := b.units.Get(ctx, b.tenant, famID)
+	if err != nil || family.BaseUnit == "" {
+		return "<unit>"
+	}
+	return family.BaseUnit
 }
 
 // coerce turns a literal into a typed value via the attribute's data type.

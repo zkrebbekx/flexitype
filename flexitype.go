@@ -182,6 +182,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		MatchRules:      postgres.NewMatchStore(pool),
 		Revisions:       postgres.NewRevisionStore(pool),
 		ChangeSets:      postgres.NewChangeSetStore(pool),
+		UnitFamilies:    postgres.NewUnitFamilyStore(pool),
 	}
 	if o.outbox {
 		store := postgres.NewOutboxStore(transactor)
@@ -249,6 +250,7 @@ func NewInMemory(opts ...Option) *Service {
 	matchRules := memory.NewMatchStore()
 	revisions := memory.NewRevisionStore()
 	changesets := memory.NewChangeSetStore()
+	unitFamilies := memory.NewUnitFamilyStore()
 	// The playground gets a working, process-local media store by default.
 	if o.blobs == nil {
 		o.blobs = blob.NewMemoryStore()
@@ -272,6 +274,7 @@ func NewInMemory(opts ...Option) *Service {
 		MatchRules:      matchRules,
 		Revisions:       revisions,
 		ChangeSets:      changesets,
+		UnitFamilies:    unitFamilies,
 		BlobStore:       o.blobs,
 	})
 	o.dispatcher.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))

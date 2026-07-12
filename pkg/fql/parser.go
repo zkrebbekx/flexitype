@@ -351,6 +351,14 @@ func (p *parser) parseField() (Field, error) {
 	return Field{Scope: ScopeEntity, Name: name, Pos: t.Pos}, nil
 }
 
+// unitStopWords are identifiers that must never be swallowed as a number's
+// unit suffix: the logical connectives and word-form operators that can
+// legitimately follow a bare number (`weight > 5 and ...`).
+var unitStopWords = map[string]bool{
+	"and": true, "or": true, "not": true, "in": true,
+	"eq": true, "neq": true, "gt": true, "gte": true, "lt": true, "lte": true, "isa": true,
+}
+
 // wordOps maps word aliases onto symbolic comparison operators.
 var wordOps = map[string]CompareOp{
 	"eq": CmpEq, "neq": CmpNeq,
@@ -382,7 +390,15 @@ func (p *parser) parseLiteral() (Literal, error) {
 		return Literal{Kind: LitString, Text: t.Text, Pos: t.Pos}, nil
 	case TokenNumber:
 		p.next()
-		return Literal{Kind: LitNumber, Text: t.Text, Pos: t.Pos}, nil
+		lit := Literal{Kind: LitNumber, Text: t.Text, Pos: t.Pos}
+		// Optional unit suffix: `5.5 kg`. A bare identifier right after the
+		// number that is not a logical keyword is the unit; the binder folds
+		// it into the attribute's base unit for quantity comparisons.
+		if u := p.peek(); u.Kind == TokenIdent && !unitStopWords[strings.ToLower(u.Text)] {
+			p.next()
+			lit.Unit = u.Text
+		}
+		return lit, nil
 	case TokenIdent:
 		p.next()
 		if strings.EqualFold(t.Text, "true") || strings.EqualFold(t.Text, "false") {

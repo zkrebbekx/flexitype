@@ -33,6 +33,9 @@ func valueColumnName(dt valueobjects.DataType) string {
 		return "value_time"
 	case valueobjects.DataTypeJSON, valueobjects.DataTypeMedia:
 		return "value_json"
+	case valueobjects.DataTypeQuantity:
+		// Quantities compare on their base magnitude, held in value_float.
+		return "value_float"
 	default:
 		return "value_text"
 	}
@@ -52,6 +55,10 @@ func columnsFromValue(v valueobjects.Value) valueColumns {
 		c.Time = sql.NullTime{Time: v.Time(), Valid: true}
 	case valueobjects.DataTypeJSON, valueobjects.DataTypeMedia:
 		c.JSON = v.JSON()
+	case valueobjects.DataTypeQuantity:
+		// Base magnitude for comparison; original magnitude/unit for display.
+		c.Float = sql.NullFloat64{Float64: v.Quantity().Base, Valid: true}
+		c.JSON = v.JSON()
 	default:
 		c.Text = sql.NullString{String: v.Text(), Valid: true}
 	}
@@ -68,6 +75,8 @@ func valueArg(v valueobjects.Value) any {
 		return v.Int()
 	case valueobjects.DataTypeFloat:
 		return v.Float()
+	case valueobjects.DataTypeQuantity:
+		return v.Quantity().Base
 	case valueobjects.DataTypeDate, valueobjects.DataTypeTime, valueobjects.DataTypeDateTime:
 		return v.Time()
 	case valueobjects.DataTypeJSON, valueobjects.DataTypeMedia:
@@ -108,6 +117,12 @@ func valueFromColumns(dt valueobjects.DataType, c valueColumns) (valueobjects.Va
 		return valueobjects.NewJSONValue(json.RawMessage(c.JSON))
 	case valueobjects.DataTypeMedia:
 		return valueobjects.NewMediaValue(json.RawMessage(c.JSON))
+	case valueobjects.DataTypeQuantity:
+		var q struct{ Magnitude, Unit string }
+		if err := json.Unmarshal(c.JSON, &q); err != nil {
+			return valueobjects.Value{}, fmt.Errorf("decode quantity: %w", err)
+		}
+		return valueobjects.NewQuantityValue(q.Magnitude, q.Unit, c.Float.Float64)
 	default:
 		return valueobjects.Value{}, fmt.Errorf("unknown stored data type %q", dt)
 	}

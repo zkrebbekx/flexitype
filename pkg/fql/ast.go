@@ -91,6 +91,9 @@ const (
 type Literal struct {
 	Kind LiteralKind
 	Text string
+	// Unit is an optional unit suffix on a number literal, e.g. the "kg" in
+	// `weight > 5.5 kg`. The binder converts it to the attribute's base unit.
+	Unit string
 	Pos  int
 }
 

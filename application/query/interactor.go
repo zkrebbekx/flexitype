@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	appunit "github.com/zkrebbekx/flexitype/application/unit"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
@@ -29,12 +30,17 @@ type Interactor struct {
 	relDefs     domainrelationship.DefinitionRepository
 	repo        Repository
 	searchIndex bool
-	now         func() time.Time
+	// units resolves unit families so quantity predicates can normalize a
+	// unit-suffixed literal (`weight > 5.5 kg`) to the base unit. nil when
+	// unit families are disabled.
+	units appunit.Store
+	now   func() time.Time
 }
 
-// NewInteractor wires the query usecases. searchIndex unlocks matches().
-func NewInteractor(typeDefs domaintypedef.Repository, attrs domainattribute.Repository, relDefs domainrelationship.DefinitionRepository, repo Repository, searchIndex bool) *Interactor {
-	return &Interactor{typeDefs: typeDefs, attrs: attrs, relDefs: relDefs, repo: repo, searchIndex: searchIndex, now: time.Now}
+// NewInteractor wires the query usecases. searchIndex unlocks matches();
+// units (nil-able) enables unit-suffixed quantity comparisons.
+func NewInteractor(typeDefs domaintypedef.Repository, attrs domainattribute.Repository, relDefs domainrelationship.DefinitionRepository, repo Repository, searchIndex bool, units appunit.Store) *Interactor {
+	return &Interactor{typeDefs: typeDefs, attrs: attrs, relDefs: relDefs, repo: repo, searchIndex: searchIndex, units: units, now: time.Now}
 }
 
 // ExecuteInput is one query run.
@@ -125,6 +131,7 @@ func (i *Interactor) prepare(ctx context.Context, rootType, queryText string) ([
 		typeDefs:    i.typeDefs,
 		attrs:       i.attrs,
 		relDefs:     i.relDefs,
+		units:       i.units,
 		typesByName: make(map[string]domaintypedef.Snapshot),
 	}
 	allTypes, _, err := i.typeDefs.List(ctx, domaintypedef.Filter{TenantID: tenant}, db.Page{Limit: 500})

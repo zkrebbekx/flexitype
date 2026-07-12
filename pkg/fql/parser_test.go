@@ -103,7 +103,7 @@ func TestParser(t *testing.T) {
 				``:                     "empty query",
 				`price >`:              "expected a value",
 				`(a = 1`:               "expected ')'",
-				`a = 1 banana`:         "unexpected",
+				`a = 1 banana split`:   "unexpected",
 				`child(rel) a = 1`:     "expected '{'",
 				`contains(name)`:       "expected ','",
 				`price ! 5`:            "did you mean",

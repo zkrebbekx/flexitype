@@ -132,7 +132,16 @@ func (i *Interactor) Get(ctx context.Context, rawID string) (*View, error) {
 
 // List returns the tenant's saved views.
 func (i *Interactor) List(ctx context.Context) ([]View, error) {
-	return i.store.List(ctx, tenantOf(ctx))
+	views, err := i.store.List(ctx, tenantOf(ctx))
+	if err != nil {
+		return nil, err
+	}
+	// Always serialize a JSON array, never null: the console reads `.items`
+	// as an array and a nil slice would marshal to `null`.
+	if views == nil {
+		views = []View{}
+	}
+	return views, nil
 }
 
 // Delete removes a view.

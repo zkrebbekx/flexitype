@@ -124,3 +124,79 @@ func TestEntityRevisions(t *testing.T) {
 		})
 	})
 }
+
+func TestEntityRevisionsScoped(t *testing.T) {
+	Convey("Given an entity with locale/channel-scoped values", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		product, err := it.TypeDefinitions().Create(ctx, apptypedef.CreateInput{InternalName: "product", DisplayName: "Product"})
+		So(err, ShouldBeNil)
+		typeID := product.ID.String()
+		desc, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: typeID, InternalName: "description", DisplayName: "Description",
+			DataType: "string", Localizable: true, Scopable: true,
+		})
+		So(err, ShouldBeNil)
+
+		set := func(locale, channel, v string) {
+			raw, _ := json.Marshal(v)
+			_, e := it.Values().Set(ctx, appvalue.SetInput{
+				AttributeDefinitionID: desc.ID.String(), EntityID: "e1", TypeDefinitionID: typeID,
+				Locale: locale, Channel: channel, Value: raw,
+			})
+			So(e, ShouldBeNil)
+		}
+		set("en", "web", "Hello")
+		set("de", "web", "Hallo")
+		set("en", "print", "Hi")
+		set("de", "print", "Hoi")
+
+		r1, err := it.Revisions().Create(ctx, typeID, "e1", "v1")
+		So(err, ShouldBeNil)
+		So(r1.Values, ShouldHaveLength, 4) // every scope captured distinctly
+
+		// Mutate a single scope after the snapshot.
+		set("en", "web", "CHANGED")
+
+		Convey("When r1 is restored", func() {
+			_, err := it.Revisions().Restore(ctx, r1.ID.String())
+			So(err, ShouldBeNil)
+
+			Convey("Then every scope returns to the snapshot with no collapse or spurious base row", func() {
+				snaps, err := it.Values().ListByEntity(ctx, typeID, "e1")
+				So(err, ShouldBeNil)
+				byScope := map[string]string{}
+				for _, s := range snaps {
+					byScope[s.Locale+"/"+s.Channel] = s.Value.String()
+				}
+				So(len(snaps), ShouldEqual, 4) // exactly the four scopes — no base "" row
+				So(byScope, ShouldResemble, map[string]string{
+					"en/web":   "Hello",
+					"de/web":   "Hallo",
+					"en/print": "Hi",
+					"de/print": "Hoi",
+				})
+			})
+		})
+
+		Convey("When the snapshot is diffed against the mutated state", func() {
+			r2, err := it.Revisions().Create(ctx, typeID, "e1", "v2")
+			So(err, ShouldBeNil)
+			diff, err := it.Revisions().Diff(ctx, r1.ID.String(), r2.ID.String())
+			So(err, ShouldBeNil)
+
+			Convey("Then only the mutated scope is reported changed", func() {
+				So(diff.Changes, ShouldHaveLength, 1)
+				c := diff.Changes[0]
+				So(c.InternalName, ShouldEqual, "description")
+				So(c.Locale, ShouldEqual, "en")
+				So(c.Channel, ShouldEqual, "web")
+				So(c.Kind, ShouldEqual, "changed")
+				So(c.Before, ShouldEqual, "Hello")
+				So(c.After, ShouldEqual, "CHANGED")
+			})
+		})
+	})
+}

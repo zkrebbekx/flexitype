@@ -6,6 +6,7 @@ import { api, friendlyError } from '@/lib/api'
 import type { SuggestSchema } from '@/lib/suggest'
 import type { SavedView } from '@/lib/api'
 import { useToasts } from '@/composables/useToasts'
+import { useDismissable } from '@/composables/useDismissable'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import RelativeTime from '@/components/ui/RelativeTime.vue'
 import { usePagedCursor } from '@/composables/usePagedCursor'
@@ -155,11 +156,13 @@ const saveView = useMutation({
   },
   onError: (e) => toasts.error(friendlyError(e)),
 })
+const confirmDeleteView = ref(false)
 const deleteView = useMutation({
   mutationFn: (id: string) => api.deleteSavedView(id),
   onSuccess: () => {
     queryClient.invalidateQueries({ queryKey: ['saved-views'] })
     selectedViewId.value = ''
+    confirmDeleteView.value = false
     router.replace({ query: {} })
     toasts.success('View deleted')
   },
@@ -231,6 +234,9 @@ function onImported() {
 // and looked up per entity, so pagination and the row source are unchanged.
 const gridColumns = ref<string[]>([])
 const columnsOpen = ref(false)
+// Close the columns picker on Escape or an outside click/focus.
+const columnsWrap = ref<HTMLElement>()
+useDismissable(columnsOpen, columnsWrap, () => (columnsOpen.value = false))
 const displayName = (name: string) => importAttributes.value.find((a) => a.internal_name === name)?.display_name ?? name
 function toggleColumn(name: string) {
   gridColumns.value = gridColumns.value.includes(name)
@@ -312,7 +318,7 @@ function exportCurrent() {
       <Button v-if="typeId" size="sm" @click="importOpen = true"><Upload :size="14" /> Import</Button>
       <Button v-if="typeId" size="sm" @click="exportCurrent"><Download :size="14" /> Export</Button>
       <Button v-if="typeId" size="sm" @click="duplicatesOpen = true"><Copy :size="14" /> Duplicates</Button>
-      <div v-if="typeId" class="relative">
+      <div v-if="typeId" ref="columnsWrap" class="relative">
         <Button size="sm" @click="columnsOpen = !columnsOpen">
           <Table2 :size="14" /> Columns<span v-if="gridColumns.length"> ({{ gridColumns.length }})</span>
         </Button>
@@ -341,7 +347,7 @@ function exportCurrent() {
         size="sm"
         variant="ghost"
         aria-label="Delete view"
-        @click="deleteView.mutate(selectedViewId)"
+        @click="confirmDeleteView = true"
       >
         <Trash2 :size="14" />
       </Button>
@@ -470,6 +476,16 @@ function exportCurrent() {
       </div>
     </template>
   </Modal>
+
+  <Modal
+    :open="confirmDeleteView"
+    title="Delete this view?"
+    message="This removes the saved view. The entities it points at are not affected."
+    confirm-label="Delete"
+    danger
+    @close="confirmDeleteView = false"
+    @confirm="deleteView.mutate(selectedViewId)"
+  />
 
   <ImportWizard
     :open="importOpen"

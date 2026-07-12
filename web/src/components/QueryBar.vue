@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, useId, watch } from 'vue'
 import { api, ApiError } from '@/lib/api'
+import { useDismissable } from '@/composables/useDismissable'
 import { suggest } from '@/lib/suggest'
 import type { SuggestSchema, Suggestion } from '@/lib/suggest'
 import { CircleHelp, Search } from 'lucide-vue-next'
@@ -9,6 +10,7 @@ import { CircleHelp, Search } from 'lucide-vue-next'
 // aria-activedescendant at the highlighted option (screen-reader support).
 const listboxId = useId()
 const optionId = (i: number) => `${listboxId}-opt-${i}`
+const errorId = useId()
 
 // QueryBar: FQL input with context-aware completions, debounced server
 // validation with positioned errors, and a syntax cheat-sheet.
@@ -21,6 +23,10 @@ const input = ref<HTMLInputElement>()
 const dropdown = reactive({ open: false, items: [] as Suggestion[], active: 0, replaceFrom: 0 })
 const validation = reactive({ error: '', position: -1 })
 const helpOpen = ref(false)
+
+// Close the syntax-help popover on Escape or an outside click/focus.
+const rootEl = ref<HTMLElement>()
+useDismissable(helpOpen, rootEl, () => (helpOpen.value = false))
 
 function refreshSuggestions() {
   const el = input.value
@@ -114,7 +120,7 @@ const EXAMPLES = [
 </script>
 
 <template>
-  <div class="relative">
+  <div ref="rootEl" class="relative">
     <div class="relative">
       <Search :size="15" class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-(--text-muted)" />
       <input
@@ -127,6 +133,8 @@ const EXAMPLES = [
         :aria-expanded="dropdown.open"
         :aria-controls="listboxId"
         :aria-activedescendant="dropdown.open && dropdown.items[dropdown.active] ? optionId(dropdown.active) : undefined"
+        :aria-invalid="validation.error ? 'true' : undefined"
+        :aria-describedby="validation.error ? errorId : undefined"
         spellcheck="false"
         autocomplete="off"
         placeholder='e.g. category = "bike" and min(price) >= 500 — Tab or Enter completes'
@@ -148,7 +156,7 @@ const EXAMPLES = [
     </div>
 
     <!-- Positioned error -->
-    <div v-if="validation.error" class="mono mt-1 text-[12px] leading-tight text-(--danger)">
+    <div v-if="validation.error" :id="errorId" role="alert" class="mono mt-1 text-[12px] leading-tight text-(--danger)">
       <pre v-if="errorPointer" class="px-8 whitespace-pre">{{ errorPointer }}</pre>
       {{ validation.error }}
     </div>

@@ -102,7 +102,7 @@ const applyTemplate = useMutation({
     </template>
   </PageHeader>
 
-  <div class="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
+  <div class="overflow-x-auto rounded-lg border border-(--border) bg-(--surface)">
     <table class="w-full text-sm">
       <thead>
         <tr class="border-b border-(--border) bg-(--canvas) text-left text-[13px] text-(--text-muted)">

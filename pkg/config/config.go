@@ -3,7 +3,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"time"
@@ -96,40 +98,41 @@ func (d Database) DSN() string {
 // Load reads configuration from the environment with production-safe
 // defaults.
 func Load() (Config, error) {
+	e := &envReader{}
 	cfg := Config{
-		Port:                envInt("FLEXITYPE_PORT", 8080),
+		Port:                e.int("FLEXITYPE_PORT", 8080),
 		ServiceAccountsPath: os.Getenv("FLEXITYPE_SERVICE_ACCOUNTS"),
-		RequireAuth:         envBool("FLEXITYPE_REQUIRE_AUTH", false),
+		RequireAuth:         e.bool("FLEXITYPE_REQUIRE_AUTH", false),
 		LogLevel:            envStr("FLEXITYPE_LOG_LEVEL", "info"),
 		LogFormat:           envStr("FLEXITYPE_LOG_FORMAT", "json"),
-		ShutdownTimeout:     envDuration("FLEXITYPE_SHUTDOWN_TIMEOUT", 30*time.Second),
-		MigrateOnStart:      envBool("FLEXITYPE_MIGRATE_ON_START", true),
-		EnableSearch:        envBool("FLEXITYPE_FEATURE_SEARCH", true),
-		EnableActivity:      envBool("FLEXITYPE_FEATURE_ACTIVITY", true),
-		EnableOutbox:        envBool("FLEXITYPE_OUTBOX", false),
-		EnableSearchIndex:   envBool("FLEXITYPE_FEATURE_SEARCH_INDEX", false),
+		ShutdownTimeout:     e.duration("FLEXITYPE_SHUTDOWN_TIMEOUT", 30*time.Second),
+		MigrateOnStart:      e.bool("FLEXITYPE_MIGRATE_ON_START", true),
+		EnableSearch:        e.bool("FLEXITYPE_FEATURE_SEARCH", true),
+		EnableActivity:      e.bool("FLEXITYPE_FEATURE_ACTIVITY", true),
+		EnableOutbox:        e.bool("FLEXITYPE_OUTBOX", false),
+		EnableSearchIndex:   e.bool("FLEXITYPE_FEATURE_SEARCH_INDEX", false),
 		BlobDir:             os.Getenv("FLEXITYPE_BLOB_DIR"),
-		EventRetention:      envDuration("FLEXITYPE_EVENT_RETENTION", 7*24*time.Hour),
-		WebhookAllowPrivate: envBool("FLEXITYPE_WEBHOOK_ALLOW_PRIVATE", false),
-		EnableMetrics:       envBool("FLEXITYPE_METRICS", true),
-		EnableProvisioning:  envBool("FLEXITYPE_PROVISIONING", false),
-		AuthCacheTTL:        envDuration("FLEXITYPE_AUTH_CACHE_TTL", 30*time.Second),
-		BootstrapAdmin:      envBool("FLEXITYPE_BOOTSTRAP_ADMIN", false),
-		RateLimitRPS:        envFloat("FLEXITYPE_RATE_LIMIT_RPS", 0),
-		RateLimitBurst:      envInt("FLEXITYPE_RATE_LIMIT_BURST", 200),
+		EventRetention:      e.duration("FLEXITYPE_EVENT_RETENTION", 7*24*time.Hour),
+		WebhookAllowPrivate: e.bool("FLEXITYPE_WEBHOOK_ALLOW_PRIVATE", false),
+		EnableMetrics:       e.bool("FLEXITYPE_METRICS", true),
+		EnableProvisioning:  e.bool("FLEXITYPE_PROVISIONING", false),
+		AuthCacheTTL:        e.duration("FLEXITYPE_AUTH_CACHE_TTL", 30*time.Second),
+		BootstrapAdmin:      e.bool("FLEXITYPE_BOOTSTRAP_ADMIN", false),
+		RateLimitRPS:        e.float("FLEXITYPE_RATE_LIMIT_RPS", 0),
+		RateLimitBurst:      e.int("FLEXITYPE_RATE_LIMIT_BURST", 200),
 		PubSubProject:       os.Getenv("FLEXITYPE_PUBSUB_PROJECT"),
 		PubSubTopic:         envStr("FLEXITYPE_PUBSUB_TOPIC", "flexitype-events"),
-		PubSubOrdering:      envBool("FLEXITYPE_PUBSUB_ORDERING", false),
+		PubSubOrdering:      e.bool("FLEXITYPE_PUBSUB_ORDERING", false),
 		Database: Database{
 			Host:            envStr("FLEXITYPE_DB_HOST", "localhost"),
-			Port:            envInt("FLEXITYPE_DB_PORT", 5432),
+			Port:            e.int("FLEXITYPE_DB_PORT", 5432),
 			User:            envStr("FLEXITYPE_DB_USER", "postgres"),
 			Password:        envStr("FLEXITYPE_DB_PASSWORD", "postgres"),
 			Name:            envStr("FLEXITYPE_DB_NAME", "flexitype"),
 			SSLMode:         envStr("FLEXITYPE_DB_SSLMODE", "disable"),
-			MaxOpenConns:    envInt("FLEXITYPE_DB_MAX_OPEN_CONNS", 25),
-			MaxIdleConns:    envInt("FLEXITYPE_DB_MAX_IDLE_CONNS", 10),
-			ConnMaxLifetime: envDuration("FLEXITYPE_DB_CONN_MAX_LIFETIME", 30*time.Minute),
+			MaxOpenConns:    e.int("FLEXITYPE_DB_MAX_OPEN_CONNS", 25),
+			MaxIdleConns:    e.int("FLEXITYPE_DB_MAX_IDLE_CONNS", 10),
+			ConnMaxLifetime: e.duration("FLEXITYPE_DB_CONN_MAX_LIFETIME", 30*time.Minute),
 		},
 	}
 	if cfg.Port <= 0 || cfg.Port > 65535 {
@@ -137,6 +140,15 @@ func Load() (Config, error) {
 	}
 	if cfg.RequireAuth && cfg.ServiceAccountsPath == "" && !cfg.EnableProvisioning {
 		return Config{}, fmt.Errorf("FLEXITYPE_REQUIRE_AUTH is set but no account source is configured: set FLEXITYPE_SERVICE_ACCOUNTS or FLEXITYPE_PROVISIONING=true")
+	}
+	// Unencrypted database traffic is only tolerated to a loopback host (local
+	// dev / a sidecar). A non-loopback host with sslmode=disable would send
+	// credentials and data in the clear, so refuse it.
+	if cfg.Database.SSLMode == "disable" && !isLoopbackHost(cfg.Database.Host) {
+		return Config{}, fmt.Errorf("FLEXITYPE_DB_SSLMODE=disable is not allowed for non-loopback host %q; use require/verify-full", cfg.Database.Host)
+	}
+	if len(e.errs) > 0 {
+		return Config{}, fmt.Errorf("invalid configuration: %w", errors.Join(e.errs...))
 	}
 	return cfg, nil
 }
@@ -148,50 +160,71 @@ func envStr(key, fallback string) string {
 	return fallback
 }
 
-func envInt(key string, fallback int) int {
+// envReader reads typed environment variables, collecting parse errors so a
+// malformed value fails startup loudly instead of silently reverting to the
+// default — which could, for example, leave the outbox off (losing durability)
+// when the operator typed FLEXITYPE_OUTBOX=ture.
+type envReader struct{ errs []error }
+
+func (e *envReader) int(key string, fallback int) int {
 	v := os.Getenv(key)
 	if v == "" {
 		return fallback
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("invalid %s=%q: must be an integer", key, v))
 		return fallback
 	}
 	return n
 }
 
-func envBool(key string, fallback bool) bool {
+func (e *envReader) bool(key string, fallback bool) bool {
 	v := os.Getenv(key)
 	if v == "" {
 		return fallback
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("invalid %s=%q: must be a boolean (true/false)", key, v))
 		return fallback
 	}
 	return b
 }
 
-func envFloat(key string, fallback float64) float64 {
+func (e *envReader) float(key string, fallback float64) float64 {
 	v := os.Getenv(key)
 	if v == "" {
 		return fallback
 	}
 	f, err := strconv.ParseFloat(v, 64)
 	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("invalid %s=%q: must be a number", key, v))
 		return fallback
 	}
 	return f
 }
 
-func envDuration(key string, fallback time.Duration) time.Duration {
+func (e *envReader) duration(key string, fallback time.Duration) time.Duration {
 	v := os.Getenv(key)
 	if v == "" {
 		return fallback
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("invalid %s=%q: must be a duration (e.g. 30s, 5m)", key, v))
 		return fallback
 	}
 	return d
+}
+
+// isLoopbackHost reports whether host is a loopback address or "localhost".
+func isLoopbackHost(host string) bool {
+	if host == "localhost" || host == "" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }

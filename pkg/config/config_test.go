@@ -59,3 +59,38 @@ func TestRequireAuth(t *testing.T) {
 		})
 	})
 }
+
+func TestMalformedValueFailsLoud(t *testing.T) {
+	Convey("Given a malformed boolean value", t, func() {
+		t.Setenv("FLEXITYPE_OUTBOX", "ture") // typo
+
+		Convey("Then Load fails loudly instead of silently defaulting", func() {
+			_, err := config.Load()
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "FLEXITYPE_OUTBOX")
+		})
+	})
+}
+
+func TestSSLModeGuard(t *testing.T) {
+	Convey("Given sslmode=disable and a non-loopback DB host", t, func() {
+		t.Setenv("FLEXITYPE_DB_SSLMODE", "disable")
+		t.Setenv("FLEXITYPE_DB_HOST", "db.internal")
+
+		Convey("Then Load refuses unencrypted traffic", func() {
+			_, err := config.Load()
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "not allowed for non-loopback")
+		})
+	})
+
+	Convey("Given sslmode=disable and a loopback DB host", t, func() {
+		t.Setenv("FLEXITYPE_DB_SSLMODE", "disable")
+		t.Setenv("FLEXITYPE_DB_HOST", "localhost")
+
+		Convey("Then Load allows it (local development)", func() {
+			_, err := config.Load()
+			So(err, ShouldBeNil)
+		})
+	})
+}

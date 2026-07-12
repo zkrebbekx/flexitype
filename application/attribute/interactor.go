@@ -9,6 +9,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/activity"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
+	appunit "github.com/zkrebbekx/flexitype/application/unit"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
@@ -16,6 +17,7 @@ import (
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
+	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
 // Interactor implements the attribute-definition usecases.
@@ -23,12 +25,16 @@ type Interactor struct {
 	uow      uow.UnitOfWork
 	typeDefs domaintypedef.Repository
 	attrs    domainattribute.Repository
-	now      func() time.Time
+	// units resolves unit families so quantity min/max constraint operands
+	// normalize to the base unit; nil when unit families are disabled.
+	units appunit.Store
+	now   func() time.Time
 }
 
-// NewInteractor wires the attribute-definition usecases.
-func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository) *Interactor {
-	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, now: time.Now}
+// NewInteractor wires the attribute-definition usecases. units (nil-able)
+// normalizes quantity constraint operands.
+func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, units appunit.Store) *Interactor {
+	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, units: units, now: time.Now}
 }
 
 // CreateInput holds data for creating an attribute definition. Constraints
@@ -45,6 +51,8 @@ type CreateInput struct {
 	Unique           bool
 	Localizable      bool
 	Scopable         bool
+	UnitFamilyID     string
+	DisplayUnit      string
 	Computed         json.RawMessage
 	Constraints      json.RawMessage
 	DefaultValue     json.RawMessage
@@ -66,6 +74,9 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 	}
 	constraints, defaultValue, err := decodeRules(in.Constraints, in.DefaultValue)
 	if err != nil {
+		return nil, err
+	}
+	if err := i.normalizeQuantityConstraints(ctx, dataType, in.UnitFamilyID, constraints); err != nil {
 		return nil, err
 	}
 	computed, err := decodeComputed(in.Computed)
@@ -156,6 +167,8 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 			Unique:           in.Unique,
 			Localizable:      in.Localizable,
 			Scopable:         in.Scopable,
+			UnitFamilyID:     in.UnitFamilyID,
+			DisplayUnit:      in.DisplayUnit,
 			Computed:         computed,
 			Constraints:      constraints,
 			DefaultValue:     defaultValue,
@@ -196,6 +209,8 @@ type UpdateInput struct {
 	Unique       bool
 	Localizable  bool
 	Scopable     bool
+	UnitFamilyID string
+	DisplayUnit  string
 	Computed     json.RawMessage
 	Constraints  json.RawMessage
 	DefaultValue json.RawMessage
@@ -232,6 +247,10 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 		}
 		before := attr.Snapshot()
 
+		if err := i.normalizeQuantityConstraints(ctx, attr.DataType(), in.UnitFamilyID, constraints); err != nil {
+			return err
+		}
+
 		evts, err := attr.Update(domainattribute.UpdateInput{
 			DisplayName:  in.DisplayName,
 			Description:  in.Description,
@@ -240,6 +259,8 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			Unique:       in.Unique,
 			Localizable:  in.Localizable,
 			Scopable:     in.Scopable,
+			UnitFamilyID: in.UnitFamilyID,
+			DisplayUnit:  in.DisplayUnit,
 			Computed:     computed,
 			Constraints:  constraints,
 			DefaultValue: defaultValue,
@@ -473,6 +494,66 @@ func decodeRules(rawConstraints, rawDefault json.RawMessage) (domainattribute.Co
 		defaultValue = &d
 	}
 	return constraints, defaultValue, nil
+}
+
+// normalizeQuantityConstraints rewrites the base magnitude of quantity
+// min/max operands in place, folding the operand's `{magnitude, unit}` through
+// the attribute's unit family so range checks run in the base dimension. It is
+// a no-op for non-quantity attributes or when unit families are disabled. A
+// unit outside the family is a validation error.
+func (i *Interactor) normalizeQuantityConstraints(ctx context.Context, dt valueobjects.DataType, unitFamilyID string, constraints domainattribute.Constraints) error {
+	if dt != valueobjects.DataTypeQuantity {
+		return nil
+	}
+	needs := false
+	for _, c := range constraints {
+		if c.Kind() == domainattribute.KindMinValue || c.Kind() == domainattribute.KindMaxValue {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return nil
+	}
+	if i.units == nil {
+		return domainerrors.NewValidation("unit families are not configured in this deployment")
+	}
+	if unitFamilyID == "" {
+		return domainerrors.NewValidation("quantity attribute with value constraints requires a unit family")
+	}
+	famID, err := ulid.Parse(unitFamilyID)
+	if err != nil {
+		return domainerrors.NewValidation(err.Error())
+	}
+	family, err := i.units.Get(ctx, uow.TenantFromContext(ctx), famID)
+	if err != nil {
+		return err
+	}
+	rebase := func(v valueobjects.Value) (valueobjects.Value, error) {
+		q := v.Quantity()
+		base, err := family.ToBase(q.Magnitude, q.Unit)
+		if err != nil {
+			return valueobjects.Value{}, err
+		}
+		return valueobjects.NewQuantityValue(q.Magnitude, q.Unit, base)
+	}
+	for idx, c := range constraints {
+		switch cc := c.(type) {
+		case domainattribute.MinValue:
+			nv, err := rebase(cc.Min)
+			if err != nil {
+				return err
+			}
+			constraints[idx] = domainattribute.MinValue{Min: nv}
+		case domainattribute.MaxValue:
+			nv, err := rebase(cc.Max)
+			if err != nil {
+				return err
+			}
+			constraints[idx] = domainattribute.MaxValue{Max: nv}
+		}
+	}
+	return nil
 }
 
 // computedDeps maps each computed-formula attribute in the hierarchy to the

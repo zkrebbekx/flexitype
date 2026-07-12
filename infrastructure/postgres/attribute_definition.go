@@ -20,7 +20,7 @@ import (
 )
 
 const attrColumns = `id, tenant_id, type_definition_id, internal_name, display_name, description,
-	data_type, required, multi_valued, is_unique, localizable, scopable, computed, constraints, default_value, version,
+	data_type, required, multi_valued, is_unique, localizable, scopable, unit_family_id, display_unit, computed, constraints, default_value, version,
 	created_at, updated_at, archived_at, attr_group, sort_order, help_text`
 
 type attrRow struct {
@@ -36,6 +36,8 @@ type attrRow struct {
 	IsUnique         bool         `db:"is_unique"`
 	Localizable      bool         `db:"localizable"`
 	Scopable         bool         `db:"scopable"`
+	UnitFamilyID     string       `db:"unit_family_id"`
+	DisplayUnit      string       `db:"display_unit"`
 	Computed         []byte       `db:"computed"`
 	Constraints      []byte       `db:"constraints"`
 	DefaultValue     []byte       `db:"default_value"`
@@ -84,6 +86,8 @@ func (r attrRow) snapshot() (domainattribute.Snapshot, error) {
 		Unique:           r.IsUnique,
 		Localizable:      r.Localizable,
 		Scopable:         r.Scopable,
+		UnitFamilyID:     r.UnitFamilyID,
+		DisplayUnit:      r.DisplayUnit,
 		Computed:         computed,
 		Constraints:      constraints,
 		DefaultValue:     defaultValue,
@@ -484,9 +488,9 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 	_, err = r.q.ExecContext(ctx, bind(
 		`INSERT INTO flexitype_attribute_definition
 		   (id, tenant_id, type_definition_id, internal_name, display_name, description,
-		    data_type, required, multi_valued, is_unique, localizable, scopable, computed, constraints, default_value, version,
+		    data_type, required, multi_valued, is_unique, localizable, scopable, unit_family_id, display_unit, computed, constraints, default_value, version,
 		    created_at, updated_at, archived_at, attr_group, sort_order, help_text)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   display_name  = EXCLUDED.display_name,
 		   description   = EXCLUDED.description,
@@ -495,6 +499,8 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 		   is_unique     = EXCLUDED.is_unique,
 		   localizable   = EXCLUDED.localizable,
 		   scopable      = EXCLUDED.scopable,
+		   unit_family_id = EXCLUDED.unit_family_id,
+		   display_unit  = EXCLUDED.display_unit,
 		   computed      = EXCLUDED.computed,
 		   constraints   = EXCLUDED.constraints,
 		   default_value = EXCLUDED.default_value,
@@ -506,7 +512,7 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 		   help_text     = EXCLUDED.help_text`),
 		s.ID.String(), s.TenantID.String(), s.TypeDefinitionID.String(), s.InternalName,
 		s.DisplayName, s.Description, s.DataType.String(), s.Required, s.MultiValued,
-		s.Unique, s.Localizable, s.Scopable, jsonbParam(computed), jsonbParam(constraints), jsonbParam(defaultValue), s.Version, s.CreatedAt,
+		s.Unique, s.Localizable, s.Scopable, s.UnitFamilyID, s.DisplayUnit, jsonbParam(computed), jsonbParam(constraints), jsonbParam(defaultValue), s.Version, s.CreatedAt,
 		s.UpdatedAt, nullableTime(s.ArchivedAt), s.Group, s.SortOrder, s.HelpText,
 	)
 	if err != nil {

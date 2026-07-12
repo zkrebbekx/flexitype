@@ -16,6 +16,7 @@ import (
 	appsavedview "github.com/zkrebbekx/flexitype/application/savedview"
 	appschema "github.com/zkrebbekx/flexitype/application/schema"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
+	appunit "github.com/zkrebbekx/flexitype/application/unit"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	"github.com/zkrebbekx/flexitype/application/webhook"
@@ -96,6 +97,10 @@ type FactoryConfig struct {
 	// ChangeSets persists change-management drafts; nil disables the feature.
 	ChangeSets appchangeset.Store
 
+	// UnitFamilies persists unit families for quantity attributes; nil
+	// disables quantity support.
+	UnitFamilies appunit.Store
+
 	// BlobStore backs media attribute values; nil disables media uploads.
 	BlobStore blob.Store
 }
@@ -147,11 +152,11 @@ func (f *factory) New(context.Context) *Interactors {
 
 	i := &Interactors{
 		typeDefs:      apptypedef.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
-		attrs:         appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
+		attrs:         appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, f.cfg.UnitFamilies),
 		values:        appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies, repos.Relationships),
 		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
 		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),
-		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query, f.cfg.Features.SearchIndex),
+		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query, f.cfg.Features.SearchIndex, f.cfg.UnitFamilies),
 		activity:      &ActivityInteractor{log: activityLog},
 		features:      f.cfg.Features,
 	}
@@ -170,6 +175,10 @@ func (f *factory) New(context.Context) *Interactors {
 	}
 	if f.cfg.ChangeSets != nil {
 		i.changesets = appchangeset.NewInteractor(f.cfg.ChangeSets, i.values, f.cfg.Now)
+	}
+	if f.cfg.UnitFamilies != nil {
+		i.units = appunit.NewInteractor(f.cfg.UnitFamilies)
+		i.values.SetUnitFamilies(f.cfg.UnitFamilies)
 	}
 	if f.cfg.Features.EventDelivery {
 		i.webhooks = webhook.NewInteractor(unit, f.cfg.Subscriptions, f.cfg.Deliveries, f.cfg.WebhookURLPolicy)

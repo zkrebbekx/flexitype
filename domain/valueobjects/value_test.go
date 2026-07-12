@@ -102,6 +102,29 @@ func TestValueSemantics(t *testing.T) {
 				So(restored.Equal(original), ShouldBeTrue)
 			})
 		})
+
+		Convey("When comparing quantities normalized to a common base unit", func() {
+			// 6000 g and 5 kg, both folded to grams.
+			grams, _ := NewQuantityValue("6000", "g", 6000)
+			kilos, _ := NewQuantityValue("5", "kg", 5000)
+
+			Convey("Then they order by base magnitude, not display magnitude", func() {
+				cmp, err := grams.Compare(kilos)
+				So(err, ShouldBeNil)
+				So(cmp, ShouldEqual, 1) // 6000 g > 5000 g even though 6000 > 5 in display
+			})
+
+			Convey("And the original unit survives round-tripping", func() {
+				typed, err := kilos.MarshalTyped()
+				So(err, ShouldBeNil)
+				restored, err := UnmarshalTypedValue(typed)
+				So(err, ShouldBeNil)
+				So(restored.DataType(), ShouldEqual, DataTypeQuantity)
+				So(restored.Quantity().Magnitude, ShouldEqual, "5")
+				So(restored.Quantity().Unit, ShouldEqual, "kg")
+				So(restored.Quantity().Base, ShouldEqual, 5000)
+			})
+		})
 	})
 }
 

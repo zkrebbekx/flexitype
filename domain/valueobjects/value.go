@@ -168,6 +168,44 @@ func (v Value) Media() MediaMeta {
 	return m
 }
 
+// Quantity is a magnitude with a unit. Base is the magnitude converted to
+// the family's base unit; comparisons and constraints use it, while
+// Magnitude/Unit are kept for display and round-trip.
+type Quantity struct {
+	Magnitude string  `json:"magnitude"`
+	Unit      string  `json:"unit"`
+	Base      float64 `json:"base"`
+}
+
+// NewQuantityValue builds a quantity value. base is the magnitude expressed
+// in the unit family's base unit (the caller resolves the conversion factor
+// from the tenant's unit registry).
+func NewQuantityValue(magnitude, unit string, base float64) (Value, error) {
+	if magnitude == "" {
+		return Value{}, fmt.Errorf("quantity requires a magnitude")
+	}
+	if unit == "" {
+		return Value{}, fmt.Errorf("quantity requires a unit")
+	}
+	payload, err := json.Marshal(struct {
+		Magnitude string `json:"magnitude"`
+		Unit      string `json:"unit"`
+	}{magnitude, unit})
+	if err != nil {
+		return Value{}, err
+	}
+	return Value{dataType: DataTypeQuantity, floatVal: base, jsonVal: payload}, nil
+}
+
+// Quantity decodes the magnitude/unit payload and pairs it with the stored
+// base (quantity values only).
+func (v Value) Quantity() Quantity {
+	var q Quantity
+	_ = json.Unmarshal(v.jsonVal, &q)
+	q.Base = v.floatVal
+	return q
+}
+
 // ParseValue decodes a raw JSON scalar into a typed Value according to the
 // declared data type. This is the single entry point for values arriving
 // over the API.
@@ -290,6 +328,17 @@ func ParseValue(dt DataType, raw json.RawMessage) (Value, error) {
 	case DataTypeMedia:
 		return NewMediaValue(raw)
 
+	case DataTypeQuantity:
+		var q struct {
+			Magnitude string  `json:"magnitude"`
+			Unit      string  `json:"unit"`
+			Base      float64 `json:"base"`
+		}
+		if err := json.Unmarshal(raw, &q); err != nil {
+			return Value{}, fmt.Errorf("expected a quantity {magnitude, unit}: %w", err)
+		}
+		return NewQuantityValue(q.Magnitude, q.Unit, q.Base)
+
 	default:
 		return Value{}, fmt.Errorf("unknown data type %q", dt)
 	}
@@ -349,6 +398,9 @@ func (v Value) String() string {
 		return string(v.jsonVal)
 	case DataTypeMedia:
 		return v.Media().ObjectKey
+	case DataTypeQuantity:
+		q := v.Quantity()
+		return q.Magnitude + " " + q.Unit
 	default:
 		return v.textVal
 	}
@@ -365,6 +417,9 @@ func (v Value) MarshalJSON() ([]byte, error) {
 		return json.Marshal(v.floatVal)
 	case DataTypeJSON, DataTypeMedia:
 		return v.jsonVal, nil
+	case DataTypeQuantity:
+		q := v.Quantity()
+		return json.Marshal(q)
 	case "":
 		return []byte("null"), nil
 	default:
@@ -424,7 +479,7 @@ func (v Value) Equal(other Value) bool {
 		return v.boolVal == other.boolVal
 	case DataTypeInteger:
 		return v.intVal == other.intVal
-	case DataTypeFloat:
+	case DataTypeFloat, DataTypeQuantity:
 		return v.floatVal == other.floatVal
 	default:
 		return v.textVal == other.textVal
@@ -439,7 +494,9 @@ func (v Value) Compare(other Value) (int, error) {
 	switch v.dataType {
 	case DataTypeInteger:
 		return compareOrdered(v.intVal, other.intVal), nil
-	case DataTypeFloat:
+	case DataTypeFloat, DataTypeQuantity:
+		// Quantities compare on their base-unit magnitude (value_float), so
+		// 6000 g and 6 kg compare equal.
 		return compareOrdered(v.floatVal, other.floatVal), nil
 	case DataTypeDecimal:
 		a, ok := new(big.Rat).SetString(v.textVal)

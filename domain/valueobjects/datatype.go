@@ -23,6 +23,10 @@ const (
 	// the value is metadata (object key, mime, size, checksum, filename),
 	// never the bytes.
 	DataTypeMedia DataType = "media"
+	// DataTypeQuantity is a magnitude with a unit (10 kg, 250 mm). Values
+	// normalize to a base unit for comparison; the original unit is kept
+	// for display.
+	DataTypeQuantity DataType = "quantity"
 )
 
 var dataTypes = map[DataType]struct{}{
@@ -39,6 +43,7 @@ var dataTypes = map[DataType]struct{}{
 	DataTypeEmail:    {},
 	DataTypeJSON:     {},
 	DataTypeMedia:    {},
+	DataTypeQuantity: {},
 }
 
 // ParseDataType validates a data type name.
@@ -68,7 +73,7 @@ func (d DataType) IsTextual() bool {
 // support min/max value and range constraints.
 func (d DataType) IsOrdered() bool {
 	switch d {
-	case DataTypeInteger, DataTypeFloat, DataTypeDecimal, DataTypeDate, DataTypeTime, DataTypeDateTime:
+	case DataTypeInteger, DataTypeFloat, DataTypeDecimal, DataTypeDate, DataTypeTime, DataTypeDateTime, DataTypeQuantity:
 		return true
 	default:
 		return false

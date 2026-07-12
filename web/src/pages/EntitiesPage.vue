@@ -304,7 +304,7 @@ function exportCurrent() {
       Include subtypes
     </label>
 
-    <div v-if="savedViews.data.value?.items.length" class="w-56">
+    <div v-if="savedViews.data.value?.items?.length" class="w-56">
       <Select v-model="selectedViewId" label="View" :options="viewOptions" @update:model-value="onViewPicked" />
     </div>
     <div class="flex items-center gap-1.5 pb-1">
@@ -429,7 +429,7 @@ function exportCurrent() {
       </table>
       <ErrorState v-if="rowsError" :error="rowsError" class="m-4" @retry="activeQuery ? queryResults.refetch() : entities.refetch()" />
       <EmptyState
-        v-else-if="!rowsPending && !rows?.items.length"
+        v-else-if="!rowsPending && !rows?.items?.length"
         :title="activeQuery ? 'No entities match this query' : 'No entities for this type'"
         :body="activeQuery ? 'Adjust the conditions or clear the query.' : 'Entities appear as soon as your systems write values against this type.'"
         class="m-4"

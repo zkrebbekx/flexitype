@@ -58,6 +58,18 @@ jobs:
             --title "$VERSION" \
             --notes "${notes:-See CHANGELOG.md.}"
 
+      - name: Tag the client module
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          # The first-party client is a nested Go module, versioned by
+          # client/vX.Y.Z tags, kept in lockstep with the main tag so
+          # `go get github.com/zkrebbekx/flexitype/client@vX.Y.Z` resolves.
+          gh api "repos/${{ github.repository }}/git/refs" \
+            -f "ref=refs/tags/client/${VERSION}" \
+            -f "sha=${{ github.sha }}" || echo "client/${VERSION} tag already exists"
+
   # Publish the container image (console embedded) to GHCR on the same tag.
   docker:
     runs-on: ubuntu-latest

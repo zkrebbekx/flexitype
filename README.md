@@ -14,12 +14,15 @@ attributes, and attribute dependencies at **runtime** — then attach validated
 values to your own domain objects. Inspired by PLM-class flexible attribute
 systems, built as a production-grade DDD Go service.
 
+> **New here?** The [getting-started guide](docs/getting-started.md) takes you
+> from nothing to a validated, queryable value with a cascading dependency in
+> ten minutes.
+>
 > **Versioning.** Releases are tagged (`vX.Y.Z`) with a
-> [CHANGELOG](CHANGELOG.md); pin a version rather than tracking `main`. The
-> project is pre-1.0 — see [API stability](docs/api-stability.md) for what
-> that guarantees. Embed with `go get github.com/zkrebbekx/flexitype@vX.Y.Z`,
-> or grab a standalone binary from
-> [Releases](https://github.com/zkrebbekx/flexitype/releases).
+> [CHANGELOG](CHANGELOG.md); pin a version rather than tracking `main`. SemVer
+> applies from 1.0 — see [API stability](docs/api-stability.md). Embed with
+> `go get github.com/zkrebbekx/flexitype@vX.Y.Z`, or grab a standalone binary
+> from [Releases](https://github.com/zkrebbekx/flexitype/releases).
 
 Runs two ways from one codebase:
 
@@ -371,7 +374,9 @@ Embedded services register the same handler directly:
 
 Machine-to-machine auth via bearer tokens (`ft_<account>_<secret>`), accounts
 declared in a JSON file with SHA-256 secret hashes and `read`/`write`/`admin`
-scopes; each account is pinned to a tenant:
+scopes plus optional per-attribute field permissions; each account is pinned to
+a tenant. (The human-identity / SSO roadmap is in
+[docs/design/identity.md](docs/design/identity.md).)
 
 ```json
 [
@@ -385,7 +390,27 @@ scopes; each account is pinned to a tenant:
 ]
 ```
 
-No file configured → auth disabled (development mode).
+No file configured → auth disabled (development mode). Set
+`FLEXITYPE_REQUIRE_AUTH=true` in production to refuse booting without an account
+source.
+
+#### Runtime provisioning (multi-tenant control plane)
+
+Instead of (or as well as) a static file, run with `FLEXITYPE_PROVISIONING=true`
+to keep tenants and service accounts in the database and manage them at runtime
+through the admin API — the onboarding path for the hosted, multi-tenant story:
+
+```
+POST/GET/PATCH  /api/v1/tenants
+POST/GET        /api/v1/service-accounts        (token shown once, on create)
+POST/DELETE     /api/v1/service-accounts/{id}/rotate|revoke
+```
+
+All of these require the `admin` scope. Bootstrap the first admin credential
+with `FLEXITYPE_BOOTSTRAP_ADMIN=true` — its token is logged **once** at startup;
+capture it. See [docs/configuration.md](docs/configuration.md) for the full
+env-var reference and [docs/getting-started.md](docs/getting-started.md) for a
+first-run walkthrough.
 
 ### REST API (v1)
 

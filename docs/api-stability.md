@@ -7,14 +7,11 @@ each offers and how changes are communicated.
 
 ## Release versioning
 
-Releases follow [Semantic Versioning](https://semver.org/). The project is
-currently **pre-1.0 (`0.x`)**: minor versions (`0.y`) may contain breaking
-changes, patch versions (`0.y.z`) do not. Every release is a git tag
-(`vX.Y.Z`), a GitHub release, and an entry in
-[CHANGELOG.md](../CHANGELOG.md). Pin a tag; do not depend on `main`.
-
-At **1.0** the usual SemVer guarantees take effect: breaking changes only
-in majors, additive changes in minors, fixes in patches.
+Releases follow [Semantic Versioning](https://semver.org/). From **1.0**, the
+usual guarantees take effect: breaking changes only in majors, additive changes
+in minors, fixes in patches. Every release is a git tag (`vX.Y.Z`), a GitHub
+release, and an entry in [CHANGELOG.md](../CHANGELOG.md). Pin a tag; do not
+depend on `main`.
 
 ## REST API (`/api/v1`)
 
@@ -35,9 +32,18 @@ in majors, additive changes in minors, fixes in patches.
 ## Embedded Go API
 
 - Exported symbols under `github.com/zkrebbekx/flexitype` and its
-  subpackages follow SemVer at 1.0. Before 1.0, signatures may change in
-  minor releases — the changelog lists them.
+  subpackages follow SemVer from 1.0.
 - `internal/` is never part of the public API.
+
+## Go client module
+
+- The first-party client, `github.com/zkrebbekx/flexitype/client`, is a
+  **separate Go module** and is versioned by its own `client/vX.Y.Z` tags,
+  which the release workflow cuts in lockstep with the main `vX.Y.Z` tag. So
+  `go get github.com/zkrebbekx/flexitype/client@vX.Y.Z` resolves to the client
+  as it shipped in that release.
+- Its exported surface follows SemVer from 1.0, tracking the REST API's
+  compatibility guarantees. It depends only on the standard library.
 
 ## Storage schema
 

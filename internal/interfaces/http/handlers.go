@@ -951,11 +951,16 @@ type validateQueryRequest struct {
 	Query string `json:"q"`
 }
 
+// maxQueryBody caps the query-validation request body so an oversized payload
+// is refused before it is buffered (the parser also caps query length).
+const maxQueryBody = 64 << 10 // 64 KiB
+
 func (s *server) validateQuery(w http.ResponseWriter, r *http.Request) {
 	if application.FromContext(r.Context()).Features().DisableSearch {
 		s.featureDisabled(w, "search")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxQueryBody)
 	var req validateQueryRequest
 	if err := decode(r, &req); err != nil {
 		writeError(w, s.log, err)

@@ -140,8 +140,16 @@ func (i *Interactor) Approve(ctx context.Context, rawID string) (*ChangeSet, err
 		if cs.State != StateInReview {
 			return domainerrors.NewValidation("only an in-review change-set can be approved", "state", string(cs.State))
 		}
-		if cs.RequireApproval && actor != "" && actor == cs.Author {
-			return domainerrors.NewForbidden("approval requires a different account than the author")
+		if cs.RequireApproval {
+			// Separation of duties: an unidentified principal (e.g. the
+			// unauthenticated dev actor, id "") cannot satisfy the
+			// distinct-approver rule, and must not fall through it.
+			if actor == "" {
+				return domainerrors.NewForbidden("approval requires an authenticated account distinct from the author")
+			}
+			if actor == cs.Author {
+				return domainerrors.NewForbidden("approval requires a different account than the author")
+			}
 		}
 		cs.State = StateApproved
 		cs.Approver = actor

@@ -92,5 +92,20 @@ func TestDuplicateDetection(t *testing.T) {
 				So(out.Candidates, ShouldBeEmpty)
 			})
 		})
+
+		Convey("When two content-free values are trigram-scanned", func() {
+			setName("e4", "!!!")
+			setName("e5", "@@@")
+			out, err := it.Dedup().Scan(ctx, rule.ID.String())
+
+			Convey("Then they are not flagged as a perfect duplicate", func() {
+				So(err, ShouldBeNil)
+				for _, c := range out.Candidates {
+					pair := c.EntityA + "," + c.EntityB
+					So(pair, ShouldNotContainSubstring, "e4")
+					So(pair, ShouldNotContainSubstring, "e5")
+				}
+			})
+		})
 	})
 }

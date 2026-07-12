@@ -89,3 +89,32 @@ Sequencing: `pg_trgm` migration (A) now; outbox + `SearchIndexer` port
 next (unlocks B/C without churn); option B reference implementation when a
 deployment actually hits the wall; C stays an adapter example, never a
 core dependency.
+
+## Backend parity of `matches()`
+
+`matches("free text")` is full-text search over the entity's searchable
+document. Its exact **tokenization differs between backends**, so it is the one
+FQL construct that is *approximate* rather than byte-for-byte identical across
+memory and Postgres:
+
+- **Postgres** tokenizes with `to_tsvector('simple', …)` / `plainto_tsquery`.
+  Postgres's text-search parser recognizes compound tokens — e.g. an email
+  `jane@example.com` is a single token, so `matches("jane")` does **not** match
+  it.
+- **In-memory** tokenizes by splitting on non-alphanumeric runs, so the same
+  document yields `jane`, `example`, `com` and `matches("jane")` **does** match.
+
+Every other FQL construct (comparisons, `in`, `range`, `has`, `contains` /
+`icontains` / `iequals`, `length`, `type` / `isa`, decimals, dates, quantities,
+NULL three-valued logic) is verified to return identical results on both
+backends by the `TestFQLMemoryPostgresParity` corpus. `matches()` is
+deliberately excluded from that equality assertion: treat it as best-effort
+relevance search, not an exact predicate, and prefer `contains`/`iequals` when
+you need deterministic, backend-identical matching.
+
+> Note on eventual consistency: with the transactional outbox enabled, the
+> search projection (and computed-attribute materialization) update
+> **asynchronously** after a write commits. A read issued immediately after a
+> write may briefly not reflect it in Postgres, whereas the in-memory backend
+> dispatches synchronously. This is expected at-least-once behaviour, not a
+> parity bug.

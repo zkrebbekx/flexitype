@@ -54,6 +54,7 @@ func (i *Interactor) Facets(ctx context.Context, rawTypeID string, attrNames, en
 	if err != nil {
 		return nil, err
 	}
+	i.dropUnreadable(ctx, idByName)
 	wanted := map[valueobjects.AttributeDefinitionID]string{} // id -> internal name
 	for _, name := range attrNames {
 		id, ok := idByName[name]
@@ -140,6 +141,7 @@ func (i *Interactor) GridRows(ctx context.Context, rawTypeID string, attrNames, 
 	if err != nil {
 		return nil, err
 	}
+	i.dropUnreadable(ctx, idByName)
 	wanted := make(map[valueobjects.AttributeDefinitionID]string, len(attrNames)) // id -> column name
 	for _, name := range attrNames {
 		id, ok := idByName[name]
@@ -183,6 +185,24 @@ func (i *Interactor) GridRows(ctx context.Context, rawTypeID string, attrNames, 
 		out.Rows = append(out.Rows, GridRow{EntityID: eid, Values: cells})
 	}
 	return out, nil
+}
+
+// dropUnreadable removes, in place, the attribute names the calling principal
+// may not read from a name→id index. Requesting an unreadable column then
+// resolves as "attribute not in the type schema" — indistinguishable from an
+// absent one, so grid/facets/export never leak or oracle a restricted
+// attribute (mirrors redactUnreadable and the FQL binder). Admins and
+// unauthenticated development keep every name.
+func (i *Interactor) dropUnreadable(ctx context.Context, idByName map[string]valueobjects.AttributeDefinitionID) {
+	access := uow.AccessFromContext(ctx)
+	if access.Admin {
+		return
+	}
+	for name := range idByName {
+		if !access.CanRead(name) {
+			delete(idByName, name)
+		}
+	}
 }
 
 // effectiveAttrIndex maps an entity type's effective attributes both ways

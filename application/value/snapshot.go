@@ -30,17 +30,24 @@ func (i *Interactor) ApplySnapshot(ctx context.Context, rawTypeDefID, rawEntityI
 	}
 	tenant := uow.TenantFromContext(ctx)
 
-	target := make(map[valueobjects.AttributeDefinitionID]bool, len(cells))
+	// The target set is keyed by (attribute, scope): a scoped value lives at
+	// its own (locale, channel), so restore must preserve and archive each
+	// scope independently rather than collapsing them onto the base value.
+	type scopeKey struct {
+		attr  valueobjects.AttributeDefinitionID
+		scope valueobjects.Scope
+	}
+	target := make(map[scopeKey]bool, len(cells))
 	for _, c := range cells {
 		id, err := valueobjects.ParseAttributeDefinitionID(c.AttributeDefinitionID)
 		if err != nil {
 			return domainerrors.NewValidation(err.Error())
 		}
-		target[id] = true
+		target[scopeKey{attr: id, scope: valueobjects.Scope{Locale: c.Locale, Channel: c.Channel}}] = true
 	}
 
 	return i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
-		// Apply every target cell (upsert with full validation).
+		// Apply every target cell (upsert with full validation), at its scope.
 		for _, cell := range cells {
 			raw, err := cellToRaw(valueobjects.DataType(cell.DataType), cell.Value)
 			if err != nil {
@@ -50,13 +57,15 @@ func (i *Interactor) ApplySnapshot(ctx context.Context, rawTypeDefID, rawEntityI
 				AttributeDefinitionID: cell.AttributeDefinitionID,
 				EntityID:              rawEntityID,
 				TypeDefinitionID:      rawTypeDefID,
+				Locale:                cell.Locale,
+				Channel:               cell.Channel,
 				Value:                 raw,
 			}); err != nil {
 				return err
 			}
 		}
 
-		// Archive current values whose attribute is not in the target set.
+		// Archive current values whose (attribute, scope) is not in the target.
 		values := i.values.WithTx(tx)
 		current, err := values.ListByEntity(ctx, domainvalue.EntityKey{
 			TenantID: tenant, TypeDefinitionID: typeDefID, EntityID: entityID,
@@ -65,7 +74,7 @@ func (i *Interactor) ApplySnapshot(ctx context.Context, rawTypeDefID, rawEntityI
 			return fmt.Errorf("list current values: %w", err)
 		}
 		for _, av := range current {
-			if target[av.AttributeDefinitionID()] {
+			if target[scopeKey{attr: av.AttributeDefinitionID(), scope: av.Scope()}] {
 				continue
 			}
 			before := av.Snapshot()

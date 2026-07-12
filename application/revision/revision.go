@@ -21,11 +21,16 @@ import (
 
 // Value is one attribute's value captured in a revision. DataType is
 // retained so a restore can reconstruct the typed value from its string form.
+// Locale and Channel preserve the value's scope so scoped (localized /
+// per-channel) values restore, diff and read back at the exact scope they
+// were captured in rather than collapsing onto the base value.
 type Value struct {
 	AttributeDefinitionID string `json:"attribute_definition_id"`
 	InternalName          string `json:"internal_name"`
 	DisplayName           string `json:"display_name"`
 	DataType              string `json:"data_type"`
+	Locale                string `json:"locale,omitempty"`
+	Channel               string `json:"channel,omitempty"`
 	Value                 string `json:"value"`
 }
 
@@ -60,10 +65,12 @@ type SnapshotApplier interface {
 	ApplySnapshot(ctx context.Context, typeDefID, entityID string, cells []SnapshotCell) error
 }
 
-// SnapshotCell is one attribute value to restore.
+// SnapshotCell is one attribute value to restore, at its captured scope.
 type SnapshotCell struct {
 	AttributeDefinitionID string
 	DataType              string
+	Locale                string
+	Channel               string
 	Value                 string
 }
 
@@ -158,10 +165,12 @@ func (i *Interactor) AsOf(ctx context.Context, rawTypeID, entityID string, at ti
 	return &rev, nil
 }
 
-// Change is one attribute's difference between two revisions.
+// Change is one attribute's difference between two revisions, at one scope.
 type Change struct {
 	AttributeDefinitionID string `json:"attribute_definition_id"`
 	InternalName          string `json:"internal_name"`
+	Locale                string `json:"locale,omitempty"`
+	Channel               string `json:"channel,omitempty"`
 	Kind                  string `json:"kind"` // added | changed | removed
 	Before                string `json:"before,omitempty"`
 	After                 string `json:"after,omitempty"`
@@ -185,35 +194,62 @@ func (i *Interactor) Diff(ctx context.Context, rawFrom, rawTo string) (*DiffOutp
 		return nil, err
 	}
 
-	fromByAttr := map[string]Value{}
+	// Key by (attribute, locale, channel) so each scope of a scoped value is
+	// diffed independently rather than collapsing onto one entry per attribute.
+	fromByScope := map[string]Value{}
 	for _, v := range from.Values {
-		fromByAttr[v.AttributeDefinitionID] = v
+		fromByScope[scopeKey(v)] = v
 	}
-	toByAttr := map[string]Value{}
+	toByScope := map[string]Value{}
 	for _, v := range to.Values {
-		toByAttr[v.AttributeDefinitionID] = v
+		toByScope[scopeKey(v)] = v
 	}
 
 	out := &DiffOutput{FromSeq: from.Seq, ToSeq: to.Seq, Changes: []Change{}}
-	for attr, tv := range toByAttr {
-		if fv, ok := fromByAttr[attr]; !ok {
-			out.Changes = append(out.Changes, Change{AttributeDefinitionID: attr, InternalName: tv.InternalName, Kind: "added", After: tv.Value})
+	for k, tv := range toByScope {
+		if fv, ok := fromByScope[k]; !ok {
+			out.Changes = append(out.Changes, change(tv, "added", "", tv.Value))
 		} else if fv.Value != tv.Value {
-			out.Changes = append(out.Changes, Change{AttributeDefinitionID: attr, InternalName: tv.InternalName, Kind: "changed", Before: fv.Value, After: tv.Value})
+			out.Changes = append(out.Changes, change(tv, "changed", fv.Value, tv.Value))
 		}
 	}
-	for attr, fv := range fromByAttr {
-		if _, ok := toByAttr[attr]; !ok {
-			out.Changes = append(out.Changes, Change{AttributeDefinitionID: attr, InternalName: fv.InternalName, Kind: "removed", Before: fv.Value})
+	for k, fv := range fromByScope {
+		if _, ok := toByScope[k]; !ok {
+			out.Changes = append(out.Changes, change(fv, "removed", fv.Value, ""))
 		}
 	}
 	sort.SliceStable(out.Changes, func(a, b int) bool {
 		if out.Changes[a].InternalName != out.Changes[b].InternalName {
 			return out.Changes[a].InternalName < out.Changes[b].InternalName
 		}
+		if out.Changes[a].Locale != out.Changes[b].Locale {
+			return out.Changes[a].Locale < out.Changes[b].Locale
+		}
+		if out.Changes[a].Channel != out.Changes[b].Channel {
+			return out.Changes[a].Channel < out.Changes[b].Channel
+		}
 		return out.Changes[a].AttributeDefinitionID < out.Changes[b].AttributeDefinitionID
 	})
 	return out, nil
+}
+
+// scopeKey identifies a revision value by attribute and scope, so scoped
+// values of the same attribute are distinct map entries.
+func scopeKey(v Value) string {
+	return v.AttributeDefinitionID + "\x00" + v.Locale + "\x00" + v.Channel
+}
+
+// change builds a Change carrying the value's attribute identity and scope.
+func change(v Value, kind, before, after string) Change {
+	return Change{
+		AttributeDefinitionID: v.AttributeDefinitionID,
+		InternalName:          v.InternalName,
+		Locale:                v.Locale,
+		Channel:               v.Channel,
+		Kind:                  kind,
+		Before:                before,
+		After:                 after,
+	}
 }
 
 // Restore makes the entity's current values match a revision by applying its
@@ -226,7 +262,13 @@ func (i *Interactor) Restore(ctx context.Context, rawRevisionID string) (*Revisi
 	}
 	cells := make([]SnapshotCell, 0, len(rev.Values))
 	for _, v := range rev.Values {
-		cells = append(cells, SnapshotCell{AttributeDefinitionID: v.AttributeDefinitionID, DataType: v.DataType, Value: v.Value})
+		cells = append(cells, SnapshotCell{
+			AttributeDefinitionID: v.AttributeDefinitionID,
+			DataType:              v.DataType,
+			Locale:                v.Locale,
+			Channel:               v.Channel,
+			Value:                 v.Value,
+		})
 	}
 	if err := i.applier.ApplySnapshot(ctx, rev.TypeDefinitionID, rev.EntityID, cells); err != nil {
 		return nil, err
@@ -271,15 +313,26 @@ func (i *Interactor) snapshotValues(ctx context.Context, tenant valueobjects.Ten
 			return nil, err
 		}
 		s := def.Snapshot()
+		scope := av.Scope()
 		out = append(out, Value{
 			AttributeDefinitionID: av.AttributeDefinitionID().String(),
 			InternalName:          s.InternalName,
 			DisplayName:           s.DisplayName,
 			DataType:              string(av.Value().DataType()),
+			Locale:                scope.Locale,
+			Channel:               scope.Channel,
 			Value:                 av.Value().String(),
 		})
 	}
-	sort.SliceStable(out, func(a, b int) bool { return out[a].InternalName < out[b].InternalName })
+	sort.SliceStable(out, func(a, b int) bool {
+		if out[a].InternalName != out[b].InternalName {
+			return out[a].InternalName < out[b].InternalName
+		}
+		if out[a].Locale != out[b].Locale {
+			return out[a].Locale < out[b].Locale
+		}
+		return out[a].Channel < out[b].Channel
+	})
 	return out, nil
 }
 

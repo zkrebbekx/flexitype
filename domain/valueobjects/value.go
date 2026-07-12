@@ -471,7 +471,11 @@ func (v Value) Equal(other Value) bool {
 	case DataTypeDecimal:
 		cmp, err := v.Compare(other)
 		return err == nil && cmp == 0
-	case DataTypeJSON, DataTypeMedia:
+	case DataTypeJSON:
+		// Compare structurally (key order and whitespace insensitive) to match
+		// Postgres jsonb equality, so uniqueness agrees across both backends.
+		return equalJSON(v.jsonVal, other.jsonVal)
+	case DataTypeMedia:
 		return bytes.Equal(v.jsonVal, other.jsonVal)
 	case DataTypeDate, DataTypeTime, DataTypeDateTime:
 		return v.timeVal.Equal(other.timeVal)
@@ -484,6 +488,28 @@ func (v Value) Equal(other Value) bool {
 	default:
 		return v.textVal == other.textVal
 	}
+}
+
+// equalJSON reports structural JSON equality: two documents that differ only
+// in key order or whitespace are equal (matching Postgres jsonb). It falls
+// back to a byte comparison when either side is not valid JSON.
+func equalJSON(a, b []byte) bool {
+	ca, ea := canonicalJSON(a)
+	cb, eb := canonicalJSON(b)
+	if ea != nil || eb != nil {
+		return bytes.Equal(a, b)
+	}
+	return bytes.Equal(ca, cb)
+}
+
+// canonicalJSON re-encodes a JSON document into a canonical form (object keys
+// sorted, insignificant whitespace removed) via a round-trip through any.
+func canonicalJSON(b []byte) ([]byte, error) {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return nil, err
+	}
+	return json.Marshal(v)
 }
 
 // Compare orders two values of the same ordered data type (-1, 0, 1).

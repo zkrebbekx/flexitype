@@ -426,8 +426,20 @@ func (r *attributeValueRepository) FindByDefinitionAndEntity(ctx context.Context
 func (r *attributeValueRepository) CountByDefinitionAndValue(ctx context.Context, defID valueobjects.AttributeDefinitionID, scope valueobjects.Scope, v valueobjects.Value, excludeEntity valueobjects.EntityID) (int, error) {
 	// The value column is an identifier chosen by data type; arguments stay
 	// bound placeholders. Uniqueness is scoped by locale/channel.
+	//
+	// Decimals are stored as text but must compare NUMERICALLY, so "1.5" and
+	// "1.50" collide — matching the in-memory backend (Value.Equal) and the
+	// FQL ::numeric comparison. Without the cast the two backends disagree and
+	// Postgres silently admits a logical duplicate. JSON lives in a jsonb
+	// column, whose `=` is already structural (key-order insensitive).
+	col := valueColumnName(v.DataType())
+	cast := ""
+	if v.DataType() == valueobjects.DataTypeDecimal {
+		col += "::numeric"
+		cast = "::numeric"
+	}
 	query := bind(`SELECT count(*) FROM flexitype_attribute_value
-	 WHERE attribute_definition_id = ? AND ` + valueColumnName(v.DataType()) + ` = ?
+	 WHERE attribute_definition_id = ? AND ` + col + ` = ?` + cast + `
 	   AND entity_id <> ? AND locale = ? AND channel = ? AND archived_at IS NULL`)
 	var count int
 	if err := r.q.GetContext(ctx, &count, query, defID.String(), valueArg(v), excludeEntity.String(), scope.Locale, scope.Channel); err != nil {

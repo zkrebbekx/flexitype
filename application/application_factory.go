@@ -62,6 +62,11 @@ type FactoryConfig struct {
 	// Optional.
 	OnRollback func(ctx context.Context, err error)
 
+	// OnDispatchError observes a synchronous post-commit event-dispatch
+	// failure (non-outbox mode). The write has already committed, so the
+	// error is logged/metered here rather than failing the request. Optional.
+	OnDispatchError func(ctx context.Context, err error)
+
 	// Now overrides the clock. Optional; defaults to time.Now.
 	Now func() time.Time
 
@@ -140,6 +145,9 @@ func (f *factory) New(context.Context) *Interactors {
 	opts := []uow.Option{uow.WithNow(f.cfg.Now)}
 	if f.cfg.OnRollback != nil {
 		opts = append(opts, uow.WithRollbackObserver(f.cfg.OnRollback))
+	}
+	if f.cfg.OnDispatchError != nil {
+		opts = append(opts, uow.WithDispatchObserver(f.cfg.OnDispatchError))
 	}
 	if f.cfg.Outbox != nil {
 		opts = append(opts, uow.WithOutbox(f.cfg.Outbox, f.cfg.OutboxNudge))

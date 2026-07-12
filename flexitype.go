@@ -49,11 +49,14 @@ type Service struct {
 	pruner     *feed.Pruner
 	blobs      blob.Store
 	graphql    *gql.Engine
+	onBgError  func(err error)
 }
 
 type options struct {
 	dispatcher          *events.Dispatcher
 	onRollback          func(ctx context.Context, err error)
+	onDispatch          func(ctx context.Context, err error)
+	onBgError           func(err error)
 	features            application.Features
 	outbox              bool
 	relayOpts           []outbox.RelayOption
@@ -99,6 +102,21 @@ func WithWebhook(name string, cfg events.WebhookConfig, opts ...events.RegisterO
 // WithRollbackObserver observes rolled-back units of work.
 func WithRollbackObserver(fn func(ctx context.Context, err error)) Option {
 	return func(o *options) { o.onRollback = fn }
+}
+
+// WithDispatchObserver observes synchronous post-commit event-dispatch
+// failures. In the default (non-outbox) mode the write is already durable when
+// subscribers run, so a subscriber error is reported here instead of failing
+// the request. Use WithOutbox for at-least-once delivery guarantees.
+func WithDispatchObserver(fn func(ctx context.Context, err error)) Option {
+	return func(o *options) { o.onDispatch = fn }
+}
+
+// WithBackgroundErrorObserver observes errors from the background schedulers
+// (the change-set publisher and the events-feed pruner), which would otherwise
+// be dropped silently. Use it to log or meter them.
+func WithBackgroundErrorObserver(fn func(err error)) Option {
+	return func(o *options) { o.onBgError = fn }
 }
 
 // WithoutSearch disables the FQL query surface for this deployment.
@@ -179,6 +197,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		Dispatcher:      o.dispatcher,
 		ActivityLog:     postgres.NewActivityLog(pool),
 		OnRollback:      o.onRollback,
+		OnDispatchError: o.onDispatch,
 		Features:        o.features,
 		SavedViews:      postgres.NewSavedViewStore(pool),
 		MatchRules:      postgres.NewMatchStore(pool),
@@ -203,7 +222,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 			retention = 7 * 24 * time.Hour
 		}
 		feedStore := postgres.NewFeedStore(pool)
-		pruner = feed.NewPruner(feedStore, retention, nil)
+		pruner = feed.NewPruner(feedStore, retention, o.onBgError)
 
 		cfg.Outbox = store
 		cfg.OutboxNudge = relay.Nudge
@@ -238,6 +257,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		pruner:     pruner,
 		blobs:      o.blobs,
 		graphql:    graphqlEngine,
+		onBgError:  o.onBgError,
 	}
 }
 
@@ -277,6 +297,7 @@ func NewInMemory(opts ...Option) *Service {
 		Dispatcher:      o.dispatcher,
 		ActivityLog:     store.ActivityLog(),
 		OnRollback:      o.onRollback,
+		OnDispatchError: o.onDispatch,
 		Features:        o.features,
 		SavedViews:      savedViews,
 		MatchRules:      matchRules,
@@ -295,6 +316,7 @@ func NewInMemory(opts ...Option) *Service {
 		indexer:    indexer,
 		blobs:      o.blobs,
 		graphql:    graphqlEngine,
+		onBgError:  o.onBgError,
 	}
 }
 
@@ -335,7 +357,9 @@ func (s *Service) RunChangeSetScheduler(ctx context.Context, interval time.Durat
 		case <-ticker.C:
 			cs := s.factory.New(ctx).ChangeSets()
 			if cs != nil {
-				_, _ = cs.PublishDue(ctx)
+				if _, err := cs.PublishDue(ctx); err != nil && s.onBgError != nil {
+					s.onBgError(err)
+				}
 			}
 		}
 	}

@@ -105,6 +105,14 @@ func run(log *logger.Logger) error {
 	opts = append(opts, flexitype.WithRollbackObserver(func(_ context.Context, err error) {
 		log.Warn().Err(err).Msg("unit of work rolled back")
 	}))
+	opts = append(opts, flexitype.WithDispatchObserver(func(_ context.Context, err error) {
+		// The write committed; a subscriber failed after commit. Surface it
+		// without failing the request (at-least-once needs the outbox).
+		log.Error().Err(err).Msg("post-commit event dispatch failed")
+	}))
+	opts = append(opts, flexitype.WithBackgroundErrorObserver(func(err error) {
+		log.Error().Err(err).Msg("background scheduler error")
+	}))
 	if !cfg.EnableSearch {
 		opts = append(opts, flexitype.WithoutSearch())
 		log.Info().Msg("search feature disabled")

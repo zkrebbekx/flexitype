@@ -13,6 +13,7 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/metrics"
 	"github.com/zkrebbekx/flexitype/pkg/ratelimit"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
+	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
 // withInteractors builds one interactor set per request — one dataloader
@@ -85,6 +86,9 @@ func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(ht
 				// EXPLICITLY — scopes and field access — so no request relies
 				// on the implicit context defaults; the trust boundary is set
 				// here in one place rather than fanned out to every reader.
+				if ri := reqInfoFromContext(r.Context()); ri != nil {
+					ri.actor = "dev"
+				}
 				ctx := uow.WithActor(r.Context(), uow.Actor{Name: "dev", Kind: uow.ActorSystem})
 				ctx = context.WithValue(ctx, scopesKey{}, []serviceaccount.Scope{serviceaccount.ScopeAdmin})
 				ctx = uow.WithAccess(ctx, uow.Access{Admin: true})
@@ -113,6 +117,10 @@ func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(ht
 				return
 			}
 
+			if ri := reqInfoFromContext(r.Context()); ri != nil {
+				ri.actor = account.Name
+				ri.tenant = account.Tenant().String()
+			}
 			ctx := uow.WithActor(r.Context(), uow.Actor{
 				ID:   account.ID,
 				Name: account.Name,
@@ -174,19 +182,50 @@ func writeForbidden(w http.ResponseWriter, msg string) {
 	writeJSON(w, http.StatusForbidden, body)
 }
 
-// requestLogger emits one structured line per request.
+// reqInfo carries per-request correlation fields. The logger stamps a pointer
+// on the context before authentication runs; authenticate fills in the tenant
+// and actor so the single request log line can carry them (the authenticated
+// context only flows downstream, not back up to the outer logger).
+type reqInfo struct {
+	id     string
+	tenant string
+	actor  string
+}
+
+type reqInfoKey struct{}
+
+func reqInfoFromContext(ctx context.Context) *reqInfo {
+	if ri, ok := ctx.Value(reqInfoKey{}).(*reqInfo); ok {
+		return ri
+	}
+	return nil
+}
+
+// requestLogger emits one structured line per request, with a generated
+// request id (also returned in the X-Request-Id header) and, once
+// authenticated, the tenant and actor.
 func requestLogger(log *logger.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
+			ri := &reqInfo{id: ulid.New().String()}
+			w.Header().Set("X-Request-Id", ri.id)
+			ctx := context.WithValue(r.Context(), reqInfoKey{}, ri)
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-			next.ServeHTTP(rec, r)
-			log.Info().
+			next.ServeHTTP(rec, r.WithContext(ctx))
+			ev := log.Info().
+				Str("request_id", ri.id).
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Int("status", rec.status).
-				Dur("duration", time.Since(start)).
-				Msg("request")
+				Dur("duration", time.Since(start))
+			if ri.tenant != "" {
+				ev = ev.Str("tenant", ri.tenant)
+			}
+			if ri.actor != "" {
+				ev = ev.Str("actor", ri.actor)
+			}
+			ev.Msg("request")
 		})
 	}
 }

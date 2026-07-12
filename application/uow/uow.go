@@ -50,6 +50,7 @@ type unitOfWork struct {
 	sink       EnvelopeSink // non-nil switches post-commit dispatch to outbox writes
 	afterWrite func()       // relay nudge, called post-commit in outbox mode
 	onRollback func(ctx context.Context, err error)
+	onDispatch func(ctx context.Context, err error) // observes soft-failed sync dispatch
 	now        func() time.Time
 }
 
@@ -60,6 +61,14 @@ type Option func(*unitOfWork)
 // rolls back — the factory's standard rollback commit handler.
 func WithRollbackObserver(fn func(ctx context.Context, err error)) Option {
 	return func(u *unitOfWork) { u.onRollback = fn }
+}
+
+// WithDispatchObserver installs a hook invoked when synchronous post-commit
+// event dispatch fails. In the default (non-outbox) mode the change is already
+// durable when subscribers run, so a subscriber error must not turn a
+// committed write into a request failure — it is observed here and swallowed.
+func WithDispatchObserver(fn func(ctx context.Context, err error)) Option {
+	return func(u *unitOfWork) { u.onDispatch = fn }
 }
 
 // WithNow overrides the clock (tests).
@@ -153,10 +162,19 @@ func (u *unitOfWork) Execute(ctx context.Context, fn func(tx db.Transactor, c *C
 			}
 			return nil
 		}
-		return u.dispatcher.Dispatch(ctx, events.Metadata{
+		if derr := u.dispatcher.Dispatch(ctx, events.Metadata{
 			TenantID: tenant.String(),
 			Actor:    actor.String(),
-		}, collector.events...)
+		}, collector.events...); derr != nil {
+			// The change has committed; a failing subscriber must not surface
+			// as a request error (that would prompt a retry and double-apply
+			// side effects). Observe it and move on — at-least-once delivery is
+			// the outbox's job, not the synchronous path's.
+			if u.onDispatch != nil {
+				u.onDispatch(ctx, derr)
+			}
+		}
+		return nil
 	})
 
 	// Rollback: surface abandoned work to the observability hook.

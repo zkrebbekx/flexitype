@@ -70,6 +70,7 @@ is off. See `api/openapi.yaml` for the full contract.
 | `FLEXITYPE_FEATURE_SEARCH` | `true` | Enable the FQL query surface. |
 | `FLEXITYPE_FEATURE_ACTIVITY` | `true` | Enable the audit log (writes and read API). |
 | `FLEXITYPE_FEATURE_SEARCH_INDEX` | `false` | Maintain the entity search projection and unlock FQL `matches()`. |
+| `FLEXITYPE_BLOB_DIR` | _(unset)_ | Directory backing media-attribute uploads (local-disk blob store). Unset disables media uploads. |
 
 ## Event delivery (with the outbox)
 

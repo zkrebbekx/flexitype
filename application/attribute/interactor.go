@@ -236,6 +236,7 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 
 	var snap domainattribute.Snapshot
 	err = i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
+		typeDefs := i.typeDefs.WithTx(tx)
 		attrs := i.attrs.WithTx(tx)
 
 		attr, err := attrs.GetForUpdate(ctx, id)
@@ -246,6 +247,37 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			return err
 		}
 		before := attr.Snapshot()
+
+		// A computed formula must not introduce a dependency cycle with the
+		// type's other computed attributes — enforced on update as well as
+		// create, otherwise a formula could be edited into a self-reference
+		// and wedge the recompute loop.
+		if computed != nil && computed.Kind == domainattribute.ComputedFormula {
+			refs, verr := computed.Validate()
+			if verr != nil {
+				return verr
+			}
+			td, terr := typeDefs.Get(ctx, attr.TypeDefinitionID())
+			if terr != nil {
+				return terr
+			}
+			hierarchy, herr := apptypedef.Chain(ctx, typeDefs, td)
+			if herr != nil {
+				return herr
+			}
+			descendants, derr := apptypedef.Descendants(ctx, typeDefs, td)
+			if derr != nil {
+				return derr
+			}
+			hierarchy = append(hierarchy, descendants...)
+			deps, derr := i.computedDeps(ctx, attrs, hierarchy)
+			if derr != nil {
+				return derr
+			}
+			if cerr := checkFormulaCycle(attr.InternalName(), refs, deps); cerr != nil {
+				return cerr
+			}
+		}
 
 		if err := i.normalizeQuantityConstraints(ctx, attr.DataType(), in.UnitFamilyID, constraints); err != nil {
 			return err

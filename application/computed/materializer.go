@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/events"
@@ -112,23 +114,40 @@ func (m *Materializer) Recompute(ctx context.Context, typeID, entityID string) e
 		computedValueID[v.AttributeDefinitionID.String()] = v.ID.String()
 	}
 
+	// Defensive net: even though cycles are rejected at create/update, skip any
+	// computed attribute caught in a dependency cycle so a cycle from any source
+	// can never drive the recompute loop without end.
+	cyclic := cyclicNames(computed)
+
 	for _, c := range computed {
+		if cyclic[c.InternalName] {
+			continue
+		}
+		clearStale := func() error {
+			if id := computedValueID[c.ID.String()]; id != "" {
+				// A nested recompute (synchronous dispatch) may already have
+				// cleared it — tolerate an already-removed (archived) value.
+				if _, rerr := it.Values().Remove(ctx, id); rerr != nil &&
+					!domainerrors.IsNotFound(rerr) && !domainerrors.IsArchived(rerr) {
+					return fmt.Errorf("clear computed value: %w", rerr)
+				}
+			}
+			return nil
+		}
+
 		expr, err := formula.Parse(c.Computed.Formula)
 		if err != nil {
 			continue // a malformed formula shouldn't have persisted; skip defensively
 		}
 		result, ok := expr.Eval(inputs)
-		if !ok {
-			// Undefined now: clear any stale materialized value.
-			if id := computedValueID[c.ID.String()]; id != "" {
-				if _, rerr := it.Values().Remove(ctx, id); rerr != nil {
-					return fmt.Errorf("clear computed value: %w", rerr)
-				}
+		raw, representable := numberForType(c.DataType, result, ok)
+		if !representable {
+			// Undefined or non-representable (missing input, division by zero,
+			// NaN, infinity, or integer overflow): clear any stale value rather
+			// than leave a wrong or outdated one.
+			if cerr := clearStale(); cerr != nil {
+				return cerr
 			}
-			continue
-		}
-		raw, err := numberForType(c.DataType, result)
-		if err != nil {
 			continue
 		}
 		if _, err := it.Values().Set(ctx, appvalue.SetInput{
@@ -144,9 +163,64 @@ func (m *Materializer) Recompute(ctx context.Context, typeID, entityID string) e
 	return nil
 }
 
-// toFloat extracts a numeric value from bool/int/float/decimal values.
+// cyclicNames returns the computed attributes that participate in a dependency
+// cycle among the computed set — a defensive guard for the recompute loop.
+func cyclicNames(computed []domainattribute.Snapshot) map[string]bool {
+	names := make(map[string]bool, len(computed))
+	for _, c := range computed {
+		names[c.InternalName] = true
+	}
+	deps := make(map[string][]string, len(computed))
+	for _, c := range computed {
+		if c.Computed == nil {
+			continue
+		}
+		refs, err := c.Computed.Validate()
+		if err != nil {
+			continue
+		}
+		var within []string
+		for _, r := range refs {
+			if names[r] { // only edges to other computed attributes matter
+				within = append(within, r)
+			}
+		}
+		deps[c.InternalName] = within
+	}
+	bad := map[string]bool{}
+	for name := range deps {
+		var visit func(cur string, seen map[string]bool) bool
+		visit = func(cur string, seen map[string]bool) bool {
+			for _, ref := range deps[cur] {
+				if ref == name {
+					return true
+				}
+				if seen[ref] {
+					continue
+				}
+				seen[ref] = true
+				if visit(ref, seen) {
+					return true
+				}
+			}
+			return false
+		}
+		if visit(name, map[string]bool{name: true}) {
+			bad[name] = true
+		}
+	}
+	return bad
+}
+
+// toFloat extracts a numeric value from bool/int/float/decimal values. A
+// bool is 0 or 1 so it can participate in arithmetic.
 func toFloat(v valueobjects.Value) (float64, bool) {
 	switch v.DataType() {
+	case valueobjects.DataTypeBool:
+		if v.Bool() {
+			return 1, true
+		}
+		return 0, true
 	case valueobjects.DataTypeInteger:
 		return float64(v.Int()), true
 	case valueobjects.DataTypeFloat:
@@ -159,17 +233,30 @@ func toFloat(v valueobjects.Value) (float64, bool) {
 	}
 }
 
-// numberForType encodes a computed float as the raw JSON the target data
-// type parses: a number for integer/float, a string for decimal.
-func numberForType(dt valueobjects.DataType, f float64) (json.RawMessage, error) {
+// numberForType encodes a computed float as the raw JSON the target data type
+// parses: a number for integer/float, a string for decimal. It reports
+// representable=false when the result is not a finite value the type can hold
+// (NaN, ±Inf, or an integer out of int64 range), so the caller clears the
+// value instead of writing a wrong one. Integers round to nearest.
+func numberForType(dt valueobjects.DataType, f float64, ok bool) (json.RawMessage, bool) {
+	if !ok || math.IsNaN(f) || math.IsInf(f, 0) {
+		return nil, false
+	}
 	switch dt {
 	case valueobjects.DataTypeInteger:
-		return json.Marshal(int64(f))
+		r := math.Round(f)
+		if r >= float64(math.MaxInt64) || r < float64(math.MinInt64) {
+			return nil, false // out of int64 range
+		}
+		b, _ := json.Marshal(int64(r))
+		return b, true
 	case valueobjects.DataTypeFloat:
-		return json.Marshal(f)
+		b, _ := json.Marshal(f)
+		return b, true
 	case valueobjects.DataTypeDecimal:
-		return json.Marshal(strconv.FormatFloat(f, 'f', -1, 64))
+		b, _ := json.Marshal(strconv.FormatFloat(f, 'f', -1, 64))
+		return b, true
 	default:
-		return nil, fmt.Errorf("computed result cannot target data type %q", dt)
+		return nil, false // no numeric target type
 	}
 }

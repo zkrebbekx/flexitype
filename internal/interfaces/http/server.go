@@ -83,6 +83,7 @@ func NewHandler(cfg ServerConfig) http.Handler {
 			r.Get("/{id}/completeness", s.typeCompleteness)
 			r.Get("/{id}/match-rules", s.listMatchRules)
 			r.Post("/{id}/match-rules", s.createMatchRule)
+			r.Post("/{id}/clone", s.cloneType)
 		})
 
 		api.Route("/match-rules", func(r chi.Router) {
@@ -112,6 +113,9 @@ func NewHandler(cfg ServerConfig) http.Handler {
 		api.Route("/schema", func(r chi.Router) {
 			r.Get("/export", s.exportSchema)
 			r.Post("/import", s.importSchema)
+			r.Get("/templates", s.listTemplates)
+			r.Get("/templates/{name}", s.getTemplate)
+			r.Post("/templates/{name}/apply", s.applyTemplate)
 		})
 
 		api.Route("/saved-views", func(r chi.Router) {

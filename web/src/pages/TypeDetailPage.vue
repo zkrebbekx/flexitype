@@ -14,6 +14,8 @@ import Badge from '@/components/ui/Badge.vue'
 import TypeChip from '@/components/ui/TypeChip.vue'
 import Tabs from '@/components/ui/Tabs.vue'
 import Modal from '@/components/ui/Modal.vue'
+import Drawer from '@/components/ui/Drawer.vue'
+import Input from '@/components/ui/Input.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import SkeletonRows from '@/components/ui/SkeletonRows.vue'
@@ -21,7 +23,7 @@ import AttributeDrawer from '@/components/AttributeDrawer.vue'
 import DependencyDrawer from '@/components/DependencyDrawer.vue'
 import RelationshipDefinitionDrawer from '@/components/RelationshipDefinitionDrawer.vue'
 import TypeDefinitionDrawer from '@/components/TypeDefinitionDrawer.vue'
-import { Plus, Archive, ArchiveRestore, ArrowLeftRight, ArrowRight, History, Pencil } from 'lucide-vue-next'
+import { Plus, Archive, ArchiveRestore, ArrowLeftRight, ArrowRight, History, Pencil, Copy } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
@@ -116,6 +118,23 @@ const archiveType = useMutation({
     confirmTypeArchive.value = false
   },
   onError: (e) => toasts.error(friendlyError(e)),
+})
+
+// Clone: copy this type's attributes + intra-type dependencies into a fresh
+// root type (not its values, not its hierarchy position).
+const cloneDrawer = ref(false)
+const cloneForm = ref({ internal_name: '', display_name: '' })
+const cloneError = ref('')
+const cloneType = useMutation({
+  mutationFn: () => api.cloneType(typeId.value, { internal_name: cloneForm.value.internal_name, display_name: cloneForm.value.display_name || undefined }),
+  onSuccess: (res) => {
+    queryClient.invalidateQueries({ queryKey: ['types'] })
+    toasts.success(`Cloned to "${res.type.display_name}" — ${res.attributes} attribute(s), ${res.dependencies} dependency(ies)`)
+    cloneDrawer.value = false
+    cloneForm.value = { internal_name: '', display_name: '' }
+    router.push(`/types/${res.type.id}`)
+  },
+  onError: (e) => (cloneError.value = friendlyError(e)),
 })
 
 const confirmRelArchive = ref<RelationshipDefinition>()
@@ -228,6 +247,7 @@ function describeEffect(d: Dependency): string {
       <Badge v-if="type.data.value?.archived_at" tone="warn">archived</Badge>
       <template v-if="type.data.value">
         <Button size="sm" @click="viewHistory('type_definition', typeId)"><History :size="14" /> History</Button>
+        <Button size="sm" @click="((cloneDrawer = true), (cloneError = ''))"><Copy :size="14" /> Clone</Button>
         <Button size="sm" @click="typeDrawer = true"><Pencil :size="14" /> Edit</Button>
         <Button
           size="sm"
@@ -546,6 +566,25 @@ function describeEffect(d: Dependency): string {
     @close="confirmTypeArchive = false"
     @confirm="archiveType.mutate()"
   />
+
+  <Drawer :open="cloneDrawer" title="Clone this type" @close="cloneDrawer = false">
+    <form class="flex flex-col gap-4" @submit.prevent="cloneType.mutate()">
+      <p class="text-[13px] text-(--text-muted)">
+        Creates an independent new root type with copies of this type's attributes (including unit
+        families, computed formulas and constraints) and its intra-type dependencies. Values and the
+        hierarchy position are not copied.
+      </p>
+      <Input v-model="cloneForm.internal_name" label="New internal name" mono placeholder="product_copy" hint="snake_case; must be unique" />
+      <Input v-model="cloneForm.display_name" label="Display name" placeholder="Defaults to the source name" />
+      <p v-if="cloneError" class="rounded-md bg-(--danger-soft) px-3 py-2 text-[13px] text-(--danger)">{{ cloneError }}</p>
+    </form>
+    <template #footer>
+      <div class="flex justify-end gap-2">
+        <Button @click="cloneDrawer = false">Cancel</Button>
+        <Button variant="primary" :disabled="cloneType.isPending.value || !cloneForm.internal_name" @click="cloneType.mutate()">Clone type</Button>
+      </div>
+    </template>
+  </Drawer>
 
   <Modal
     :open="!!confirmRelArchive"

@@ -125,3 +125,89 @@ func TestComputedAttributes(t *testing.T) {
 		})
 	})
 }
+
+func TestComputedUpdateCycleAndEdges(t *testing.T) {
+	Convey("Given a computed attribute and numeric inputs", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory(flexitype.WithSearchIndex())
+		it := svc.Interactors(ctx)
+
+		product, err := it.TypeDefinitions().Create(ctx, apptypedef.CreateInput{InternalName: "product", DisplayName: "Product"})
+		So(err, ShouldBeNil)
+		typeID := product.ID.String()
+		mk := func(name, dt, computed string) string {
+			in := appattribute.CreateInput{TypeDefinitionID: typeID, InternalName: name, DisplayName: name, DataType: dt}
+			if computed != "" {
+				in.Computed = json.RawMessage(computed)
+			}
+			s, e := it.Attributes().Create(ctx, in)
+			So(e, ShouldBeNil)
+			return s.ID.String()
+		}
+		setV := func(attrID string, v any) {
+			raw, _ := json.Marshal(v)
+			_, e := it.Values().Set(ctx, appvalue.SetInput{AttributeDefinitionID: attrID, EntityID: "p1", TypeDefinitionID: typeID, Value: raw})
+			So(e, ShouldBeNil)
+		}
+		read := func(attrID string) (valueobjects.Value, bool) {
+			vals, e := it.Values().ListByEntity(ctx, typeID, "p1")
+			So(e, ShouldBeNil)
+			for _, v := range vals {
+				if v.AttributeDefinitionID.String() == attrID {
+					return v.Value, true
+				}
+			}
+			return valueobjects.Value{}, false
+		}
+
+		xx := mk("xx", "float", "")
+		aa := mk("aa", "float", `{"kind":"formula","formula":"xx + 1"}`)
+
+		Convey("When aa's formula is updated into a self-reference", func() {
+			_, err := it.Attributes().Update(ctx, appattribute.UpdateInput{
+				ID: aa, DisplayName: "A",
+				Computed: json.RawMessage(`{"kind":"formula","formula":"aa + 1"}`),
+			})
+			Convey("Then it is rejected as a cycle", func() {
+				So(err, ShouldNotBeNil)
+				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeValidation)
+			})
+		})
+
+		Convey("An integer computed value rounds to nearest", func() {
+			half := mk("half", "integer", `{"kind":"formula","formula":"xx / 2"}`)
+			setV(xx, 5.0) // 2.5 -> 3
+			v, ok := read(half)
+			So(ok, ShouldBeTrue)
+			So(v.Int(), ShouldEqual, 3)
+		})
+
+		Convey("An overflowing (infinite) result clears the value rather than storing it stale", func() {
+			big := mk("big", "float", `{"kind":"formula","formula":"xx * xx"}`)
+			setV(xx, 2.0) // big = 4
+			v, ok := read(big)
+			So(ok, ShouldBeTrue)
+			So(v.Float(), ShouldAlmostEqual, 4.0)
+
+			setV(xx, 1e308) // xx*xx overflows to +Inf
+			_, ok = read(big)
+			So(ok, ShouldBeFalse) // cleared, not left at 4
+		})
+
+		Convey("A bool operand participates in arithmetic as 0/1", func() {
+			active := mk("active", "bool", "")
+			score := mk("score", "float", "")
+			weighted := mk("weighted", "float", `{"kind":"formula","formula":"active * score"}`)
+			setV(score, 10.0)
+			setV(active, true)
+			v, ok := read(weighted)
+			So(ok, ShouldBeTrue)
+			So(v.Float(), ShouldAlmostEqual, 10.0)
+
+			setV(active, false)
+			v, ok = read(weighted)
+			So(ok, ShouldBeTrue)
+			So(v.Float(), ShouldAlmostEqual, 0.0)
+		})
+	})
+}

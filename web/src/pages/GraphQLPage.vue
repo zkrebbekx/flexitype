@@ -7,7 +7,16 @@ import Button from '@/components/ui/Button.vue'
 import { Play } from 'lucide-vue-next'
 
 const DEFAULT_QUERY = `# Read-only GraphQL over your live schema.
-# Discover types, then query one with an optional FQL filter.
+# _schemaTypes lists your types; each is a Relay connection you can page and
+# filter with FQL, e.g.:
+#
+#   {
+#     product(filter: "price > 100", first: 10) {
+#       totalCount
+#       pageInfo { hasNextPage endCursor }
+#       edges { cursor node { entityId } }
+#     }
+#   }
 {
   _schemaTypes
 }`

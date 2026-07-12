@@ -77,6 +77,13 @@ func EncodeCursor(offset int) string {
 	return base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "offset:%d", offset))
 }
 
+// DecodeCursor is the inverse of EncodeCursor: it reads the offset back out of
+// an opaque cursor, so callers that synthesize per-row cursors (e.g. Relay
+// edges) can locate a page within the full result set.
+func DecodeCursor(cursor string) (int, error) {
+	return decodeCursor(cursor)
+}
+
 func decodeCursor(cursor string) (int, error) {
 	b, err := base64.StdEncoding.DecodeString(cursor)
 	if err != nil {

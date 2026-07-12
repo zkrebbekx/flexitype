@@ -84,26 +84,62 @@ func TestGraphQLReadAPI(t *testing.T) {
 			return eng.Execute(application.WithInteractors(c, svc.Interactors(c)), query, nil)
 		}
 
-		Convey("When querying products filtered by FQL with nested suppliers", func() {
-			res := exec(ctx, `{ product(filter:"price > 100") { entityId name suppliers { entityId region } } }`)
+		Convey("When querying a filtered Relay connection with a nested supplier connection", func() {
+			res := exec(ctx, `{
+				product(filter:"price > 100") {
+					totalCount
+					pageInfo { hasNextPage }
+					edges { cursor node { entityId name suppliers { edges { node { entityId region } } } } }
+				}
+			}`)
 
-			Convey("Then only the matching product is returned, with its nested supplier", func() {
+			Convey("Then the connection wraps the matching product and its nested supplier", func() {
 				So(res.Errors, ShouldBeEmpty)
-				data := gqlData(res.Data)
-				products, ok := data["product"].([]interface{})
-				So(ok, ShouldBeTrue)
-				So(len(products), ShouldEqual, 1)
-				p0 := products[0].(map[string]interface{})
-				So(p0["entityId"], ShouldEqual, "prod1")
-				So(p0["name"], ShouldEqual, "Widget")
-				suppliers := p0["suppliers"].([]interface{})
-				So(len(suppliers), ShouldEqual, 1)
-				So(suppliers[0].(map[string]interface{})["region"], ShouldEqual, "EU")
+				conn := gqlData(res.Data)["product"].(map[string]interface{})
+				So(conn["totalCount"], ShouldEqual, 1)
+				edges := conn["edges"].([]interface{})
+				So(len(edges), ShouldEqual, 1)
+				edge := edges[0].(map[string]interface{})
+				So(edge["cursor"], ShouldNotBeNil)
+				node := edge["node"].(map[string]interface{})
+				So(node["entityId"], ShouldEqual, "prod1")
+				So(node["name"], ShouldEqual, "Widget")
+				sConn := node["suppliers"].(map[string]interface{})
+				sEdges := sConn["edges"].([]interface{})
+				So(len(sEdges), ShouldEqual, 1)
+				So(sEdges[0].(map[string]interface{})["node"].(map[string]interface{})["region"], ShouldEqual, "EU")
 			})
 		})
 
-		Convey("When a query nests beyond the depth limit", func() {
-			res := exec(ctx, `{ product { similar { similar { similar { similar { similar { similar { entityId } } } } } } } }`)
+		Convey("When paging a connection with first/after", func() {
+			page1 := exec(ctx, `{ product(first: 1) { totalCount pageInfo { hasNextPage endCursor } edges { node { entityId } } } }`)
+
+			Convey("Then the first page reports more and a cursor resumes the next", func() {
+				So(page1.Errors, ShouldBeEmpty)
+				c1 := gqlData(page1.Data)["product"].(map[string]interface{})
+				So(c1["totalCount"], ShouldEqual, 2)
+				pi := c1["pageInfo"].(map[string]interface{})
+				So(pi["hasNextPage"], ShouldBeTrue)
+				cursor := pi["endCursor"].(string)
+				So(len(gqlData(page1.Data)["product"].(map[string]interface{})["edges"].([]interface{})), ShouldEqual, 1)
+
+				page2 := exec(ctx, `{ product(first: 5, after: "`+cursor+`") { pageInfo { hasNextPage } edges { node { entityId } } } }`)
+				So(page2.Errors, ShouldBeEmpty)
+				c2 := gqlData(page2.Data)["product"].(map[string]interface{})
+				So(c2["pageInfo"].(map[string]interface{})["hasNextPage"], ShouldBeFalse)
+				So(len(c2["edges"].([]interface{})), ShouldEqual, 1)
+			})
+		})
+
+		Convey("When a query nests relationship connections beyond the depth limit", func() {
+			res := exec(ctx, `{ product { edges { node {
+				similar { edges { node {
+				similar { edges { node {
+				similar { edges { node {
+				similar { edges { node {
+				similar { edges { node {
+				similar { edges { node {
+				similar { edges { node { entityId } } } } } } } } } } } } } } } } } } } } } } } } } }`)
 
 			Convey("Then it is rejected", func() {
 				So(res.Errors, ShouldNotBeEmpty)
@@ -111,10 +147,8 @@ func TestGraphQLReadAPI(t *testing.T) {
 		})
 
 		Convey("When an attribute is added after first use", func() {
-			// First use builds and caches the schema.
-			_ = exec(ctx, `{ product { entityId } }`)
-			// A query for a not-yet-existing field fails.
-			before := exec(ctx, `{ product { sku } }`)
+			_ = exec(ctx, `{ product { edges { node { entityId } } } }`)
+			before := exec(ctx, `{ product { edges { node { sku } } } }`)
 			So(before.Errors, ShouldNotBeEmpty)
 
 			_, err := it.Attributes().Create(ctx, appattribute.CreateInput{
@@ -123,7 +157,7 @@ func TestGraphQLReadAPI(t *testing.T) {
 			So(err, ShouldBeNil)
 
 			Convey("Then the schema regenerates within the same definition-event cycle", func() {
-				after := exec(ctx, `{ product { sku } }`)
+				after := exec(ctx, `{ product { edges { node { sku } } } }`)
 				So(after.Errors, ShouldBeEmpty)
 			})
 		})

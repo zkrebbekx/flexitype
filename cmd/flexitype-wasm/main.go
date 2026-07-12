@@ -33,6 +33,7 @@ func main() {
 		Logger:  logger.New(logger.Config{Level: "warn"}),
 		Health:  health.NewService("flexitype", "playground"),
 		Reindex: svc.ReindexSearch,
+		GraphQL: svc.GraphQLEngine(),
 	})
 
 	js.Global().Set("__flexitypeFetch", js.FuncOf(func(_ js.Value, args []js.Value) any {

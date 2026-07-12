@@ -296,6 +296,9 @@ func (r *fakeLinksRepo) FindLive(context.Context, valueobjects.RelationshipDefin
 func (r *fakeLinksRepo) ListByEntity(context.Context, domainrelationship.EntityLinksKey) ([]*domainrelationship.Relationship, error) {
 	return nil, nil
 }
+func (r *fakeLinksRepo) ListByEntities(context.Context, valueobjects.TenantID, []valueobjects.EntityID) ([]*domainrelationship.Relationship, error) {
+	return nil, nil
+}
 func (r *fakeLinksRepo) CountLiveLinks(context.Context, valueobjects.RelationshipDefinitionID, valueobjects.EntityID) (int, int, error) {
 	return 0, 0, nil
 }

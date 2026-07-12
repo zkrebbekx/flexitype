@@ -17,6 +17,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/admin"
 	"github.com/zkrebbekx/flexitype/application/computed"
 	"github.com/zkrebbekx/flexitype/application/feed"
+	"github.com/zkrebbekx/flexitype/application/gql"
 	"github.com/zkrebbekx/flexitype/application/outbox"
 	"github.com/zkrebbekx/flexitype/application/search"
 	"github.com/zkrebbekx/flexitype/application/webhook"
@@ -47,6 +48,7 @@ type Service struct {
 	worker     *webhook.Worker
 	pruner     *feed.Pruner
 	blobs      blob.Store
+	graphql    *gql.Engine
 }
 
 type options struct {
@@ -220,6 +222,11 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	// derived values are ordinary (FQL-queryable) values.
 	o.dispatcher.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
 
+	// The GraphQL schema mirrors the live type definitions; a subscriber
+	// invalidates a tenant's cached schema when its definitions change.
+	graphqlEngine := gql.NewEngine()
+	o.dispatcher.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
+
 	return &Service{
 		pool:       pool,
 		transactor: transactor,
@@ -230,6 +237,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		worker:     worker,
 		pruner:     pruner,
 		blobs:      o.blobs,
+		graphql:    graphqlEngine,
 	}
 }
 
@@ -278,12 +286,15 @@ func NewInMemory(opts ...Option) *Service {
 		BlobStore:       o.blobs,
 	})
 	o.dispatcher.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
+	graphqlEngine := gql.NewEngine()
+	o.dispatcher.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
 	return &Service{
 		transactor: transactor,
 		dispatcher: o.dispatcher,
 		factory:    factory,
 		indexer:    indexer,
 		blobs:      o.blobs,
+		graphql:    graphqlEngine,
 	}
 }
 
@@ -374,6 +385,10 @@ func (s *Service) Interactors(ctx context.Context) *application.Interactors {
 
 // Factory exposes the underlying usecase factory for advanced wiring.
 func (s *Service) Factory() application.Factory { return s.factory }
+
+// GraphQLEngine exposes the read-only GraphQL engine, for embedders that build
+// their own API handler (e.g. the WASM playground).
+func (s *Service) GraphQLEngine() *gql.Engine { return s.graphql }
 
 // Dispatcher exposes the event dispatcher, e.g. to register hooks after
 // construction.
@@ -466,6 +481,7 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 		Metrics:     cfg.Metrics,
 		RateLimiter: cfg.RateLimiter,
 		BlobStore:   s.blobs,
+		GraphQL:     s.graphql,
 	}
 	if cfg.EnableProvisioning {
 		server.Admin = s.AdminInteractor()

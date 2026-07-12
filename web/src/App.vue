@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
 import { useQuery } from '@tanstack/vue-query'
-import { Shapes, Boxes, ScrollText, Radio, Settings, Moon, Sun } from 'lucide-vue-next'
+import { Shapes, Boxes, ScrollText, Radio, Settings, Moon, Sun, Braces } from 'lucide-vue-next'
 import { useTheme } from '@/composables/useTheme'
 import Toasts from '@/components/ui/Toasts.vue'
 
@@ -25,6 +25,7 @@ const features = useQuery({
 const nav = computed(() => [
   { to: '/types', label: 'Types', icon: Shapes },
   { to: '/entities', label: 'Entities', icon: Boxes },
+  { to: '/graphql', label: 'GraphQL', icon: Braces },
   ...(features.data.value?.event_delivery ? [{ to: '/delivery', label: 'Delivery', icon: Radio }] : []),
   ...(features.data.value?.activity === false ? [] : [{ to: '/activity', label: 'Activity', icon: ScrollText }]),
   { to: '/settings', label: 'Settings', icon: Settings },

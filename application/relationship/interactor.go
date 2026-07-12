@@ -699,6 +699,30 @@ func (i *Interactor) ListByEntity(ctx context.Context, rawEntityID string) ([]En
 	return out, nil
 }
 
+// LinksByEntities loads every live link touching any of the given entities in
+// one query, returned as raw snapshots. It is the no-N+1 fan-out used by the
+// GraphQL resolver, which already knows each relationship's definition and
+// direction from the schema and matches on them itself.
+func (i *Interactor) LinksByEntities(ctx context.Context, rawEntityIDs []string) ([]domainrelationship.Snapshot, error) {
+	ids := make([]valueobjects.EntityID, 0, len(rawEntityIDs))
+	for _, raw := range rawEntityIDs {
+		id, err := valueobjects.ParseEntityID(raw)
+		if err != nil {
+			return nil, domainerrors.NewValidation(err.Error())
+		}
+		ids = append(ids, id)
+	}
+	rels, err := i.links.ListByEntities(ctx, uow.TenantFromContext(ctx), ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domainrelationship.Snapshot, 0, len(rels))
+	for _, rel := range rels {
+		out = append(out, rel.Snapshot())
+	}
+	return out, nil
+}
+
 // ListInput holds filter and pagination arguments for List.
 type ListInput struct {
 	DefinitionID    string

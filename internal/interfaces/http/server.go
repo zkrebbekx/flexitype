@@ -9,6 +9,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/admin"
+	"github.com/zkrebbekx/flexitype/application/gql"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/blob"
 	"github.com/zkrebbekx/flexitype/pkg/health"
@@ -34,12 +35,14 @@ type ServerConfig struct {
 	RateLimiter *ratelimit.Limiter
 	// BlobStore serves media downloads; nil when media is disabled.
 	BlobStore blob.Store
+	// GraphQL serves the read-only GraphQL API; nil disables the endpoint.
+	GraphQL *gql.Engine
 }
 
 // NewHandler builds the service's HTTP handler: versioned API plus
 // operational endpoints, instrumented with OpenTelemetry.
 func NewHandler(cfg ServerConfig) http.Handler {
-	s := &server{factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex, admin: cfg.Admin, blobs: cfg.BlobStore}
+	s := &server{factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex, admin: cfg.Admin, blobs: cfg.BlobStore, graphql: cfg.GraphQL}
 
 	r := chi.NewRouter()
 	r.Use(recoverer(cfg.Logger))
@@ -199,6 +202,8 @@ func NewHandler(cfg ServerConfig) http.Handler {
 		api.Get("/features", s.features)
 		api.Get("/query", s.runQuery)
 		api.Post("/query/validate", s.validateQuery)
+		api.Get("/graphql", s.graphqlQuery)
+		api.Post("/graphql", s.graphqlQuery)
 		api.Post("/search/reindex", s.reindexSearch)
 
 		api.Get("/activity", s.listActivity)
@@ -248,4 +253,5 @@ type server struct {
 	reindex func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
 	admin   *admin.Interactor
 	blobs   blob.Store
+	graphql *gql.Engine
 }

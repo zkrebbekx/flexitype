@@ -75,6 +75,11 @@ type Repository interface {
 	// either side (batched across entities — the inspector hot path).
 	ListByEntity(ctx context.Context, key EntityLinksKey) ([]*Relationship, error)
 
+	// ListByEntities loads every live link touching any of the given
+	// entities, in one query — the no-N+1 path for fanning out a set of
+	// entities to their relationships (e.g. the GraphQL resolver).
+	ListByEntities(ctx context.Context, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) ([]*Relationship, error)
+
 	// CountLiveLinks returns how many live links of a definition have the
 	// entity as parent and as child. Used under the definition lock to
 	// enforce cardinality.

@@ -84,5 +84,48 @@ func TestFieldLevelAccess(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(len(out.Items), ShouldEqual, 1)
 		})
+
+		Convey("A none-on-cost principal cannot leak cost via grid, facets, or export", func() {
+			ic := svc.Interactors(noCost)
+
+			Convey("Grid drops the restricted column and rejects it by name", func() {
+				grid, err := ic.Values().GridRows(noCost, typeID, []string{"sku"}, []string{"p1"})
+				So(err, ShouldBeNil)
+				So(grid.Rows, ShouldHaveLength, 1)
+				_, hasCost := grid.Rows[0].Values["cost"]
+				So(hasCost, ShouldBeFalse)
+
+				_, err = ic.Values().GridRows(noCost, typeID, []string{"sku", "cost"}, []string{"p1"})
+				So(err, ShouldNotBeNil)
+				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeValidation)
+			})
+
+			Convey("Facets refuse to bucket the restricted attribute", func() {
+				_, err := ic.Values().Facets(noCost, typeID, []string{"cost"}, []string{"p1"})
+				So(err, ShouldNotBeNil)
+				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeValidation)
+			})
+
+			Convey("Export omits the restricted column by default and rejects it by name", func() {
+				out, err := ic.Values().Export(noCost, appvalue.ExportInput{TypeDefinitionID: typeID})
+				So(err, ShouldBeNil)
+				So(out.Columns, ShouldContain, "sku")
+				So(out.Columns, ShouldNotContain, "cost")
+
+				_, err = ic.Values().Export(noCost, appvalue.ExportInput{TypeDefinitionID: typeID, Attributes: []string{"cost"}})
+				So(err, ShouldNotBeNil)
+				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeValidation)
+			})
+		})
+
+		Convey("The admin principal still sees cost in grid and export", func() {
+			grid, err := ia.Values().GridRows(admin, typeID, []string{"sku", "cost"}, []string{"p1"})
+			So(err, ShouldBeNil)
+			So(grid.Rows[0].Values["cost"], ShouldEqual, "250")
+
+			out, err := ia.Values().Export(admin, appvalue.ExportInput{TypeDefinitionID: typeID})
+			So(err, ShouldBeNil)
+			So(out.Columns, ShouldContain, "cost")
+		})
 	})
 }

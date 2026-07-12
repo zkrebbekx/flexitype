@@ -393,6 +393,17 @@ func (i *Interactor) Export(ctx context.Context, in ExportInput) (*ExportOutput,
 			order = append(order, s.InternalName)
 		}
 	}
+	// Enforce field-level read permissions: drop attributes the principal may
+	// not read so they are neither exported by default nor addressable by name
+	// (an explicit unreadable column resolves as "not in the type schema").
+	i.dropUnreadable(ctx, byName)
+	readableOrder := order[:0]
+	for _, name := range order {
+		if _, ok := byName[name]; ok {
+			readableOrder = append(readableOrder, name)
+		}
+	}
+	order = readableOrder
 	var cols []attrCol
 	if len(in.Attributes) > 0 {
 		for _, name := range in.Attributes {

@@ -10,7 +10,7 @@ import (
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 )
 
-func (s *server) listTemplates(w http.ResponseWriter, r *http.Request) {
+func (s *server) listTemplates(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": templates.List()})
 }
 

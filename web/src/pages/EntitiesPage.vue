@@ -22,7 +22,7 @@ import Modal from '@/components/ui/Modal.vue'
 import QueryBar from '@/components/QueryBar.vue'
 import ImportWizard from '@/components/ImportWizard.vue'
 import DuplicatesDrawer from '@/components/DuplicatesDrawer.vue'
-import { Bookmark, Copy, Download, Table2, Trash2, Upload } from 'lucide-vue-next'
+import { Bookmark, Copy, Download, Plus, Table2, Trash2, Upload } from 'lucide-vue-next'
 
 const types = useQuery({ queryKey: ['types-all'], queryFn: () => api.listTypes({ limit: 200 }) })
 const typeId = ref('')
@@ -129,6 +129,17 @@ watch(
     }
   },
 )
+
+// New-entity flow: an entity is created by giving it its first value, so we
+// take an identifier here and hand off to the detail page to fill it in.
+const newEntity = reactive({ open: false, id: '' })
+function createEntity() {
+  const id = newEntity.id.trim()
+  if (!id || !typeId.value) return
+  newEntity.open = false
+  newEntity.id = ''
+  router.push(`/entities/${typeId.value}/${encodeURIComponent(id)}`)
+}
 
 const saveModal = reactive({ open: false, name: '', existingId: '' })
 function openSave() {
@@ -314,6 +325,7 @@ function exportCurrent() {
       <Select v-model="selectedViewId" label="View" :options="viewOptions" @update:model-value="onViewPicked" />
     </div>
     <div class="flex items-center gap-1.5 pb-1">
+      <Button v-if="typeId" size="sm" variant="primary" @click="newEntity.open = true"><Plus :size="14" /> New entity</Button>
       <Button v-if="typeId" size="sm" @click="openSave"><Bookmark :size="14" /> Save view</Button>
       <Button v-if="typeId" size="sm" @click="importOpen = true"><Upload :size="14" /> Import</Button>
       <Button v-if="typeId" size="sm" @click="exportCurrent"><Download :size="14" /> Export</Button>
@@ -453,6 +465,28 @@ function exportCurrent() {
   </template>
 
   <EmptyState v-else title="Pick a type to browse its entities" />
+
+  <Modal
+    :open="newEntity.open"
+    role="dialog"
+    title="New entity"
+    @close="newEntity.open = false"
+    @confirm="createEntity"
+  >
+    <template #actions>
+      <div class="w-full">
+        <Input v-model="newEntity.id" label="Entity ID" placeholder="sku-1001" @keyup.enter="createEntity" />
+        <p class="mt-2 text-[13px] text-(--text-muted)">
+          Your own identifier for the new {{ selectedType?.display_name ?? 'entity' }} — a SKU, code or UUID.
+          It becomes a real entity once you add its first value on the next screen.
+        </p>
+        <div class="mt-4 flex justify-end gap-2">
+          <Button @click="newEntity.open = false">Cancel</Button>
+          <Button variant="primary" :disabled="!newEntity.id.trim()" @click="createEntity">Create</Button>
+        </div>
+      </div>
+    </template>
+  </Modal>
 
   <Modal
     :open="saveModal.open"

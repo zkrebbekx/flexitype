@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
 import type { AttributeDefinition, AttributeValue, EffectiveSchema, EntityLink, RelationshipDefinition } from '@/lib/api'
@@ -510,10 +510,22 @@ const removeValue = useMutation({
       </button>
 
       <EmptyState
-        v-if="!links.isPending.value && !allLinks.length"
+        v-if="!links.isPending.value && !allLinks.length && relDefs.data.value?.items.length"
         title="No relationships"
-        body="Links connect this entity to entities of related types, with their own attributes and version binding."
+        body="Links connect this entity to entities of related types, with their own attributes and version binding. Use “Link entity” above."
       />
+
+      <EmptyState
+        v-else-if="!links.isPending.value && !allLinks.length && relDefs.isSuccess.value"
+        title="No relationship types defined"
+        body="Define a relationship type between this type and another, then you can link this entity to entities of that type."
+      >
+        <template #action>
+          <RouterLink :to="`/types/${typeId}`" class="text-[13px] font-medium text-(--accent) hover:underline">
+            Define a relationship type →
+          </RouterLink>
+        </template>
+      </EmptyState>
     </div>
   </section>
 

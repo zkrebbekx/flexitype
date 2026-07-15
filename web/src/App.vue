@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
 import { useQuery } from '@tanstack/vue-query'
-import { Shapes, Boxes, ScrollText, Radio, Settings, Moon, Sun, Braces, LogOut, Menu } from 'lucide-vue-next'
+import { Shapes, Boxes, ScrollText, Radio, Settings, Moon, Sun, Braces, LogOut, Menu, Github } from 'lucide-vue-next'
 import { useTheme } from '@/composables/useTheme'
 import Toasts from '@/components/ui/Toasts.vue'
 import { authRequired, isAuthenticated, setToken, signOut, bearerHeader, challenge } from '@/lib/auth'
@@ -130,6 +130,16 @@ const health = useQuery({
           {{ health.data.value?.version ?? '—' }}
         </span>
         <div class="flex items-center gap-1">
+          <a
+            href="https://github.com/zkrebbekx/flexitype"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="rounded-md p-1.5 text-(--text-muted) hover:bg-(--canvas) hover:text-(--text)"
+            aria-label="View source on GitHub"
+            title="View source on GitHub"
+          >
+            <Github :size="16" />
+          </a>
           <button
             v-if="isAuthenticated"
             class="rounded-md p-1.5 text-(--text-muted) hover:bg-(--canvas) hover:text-(--text)"

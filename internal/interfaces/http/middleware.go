@@ -28,6 +28,40 @@ func withInteractors(factory application.Factory) func(http.Handler) http.Handle
 	}
 }
 
+// securityCSP is the Content-Security-Policy applied to every response. It
+// keeps the console's script, data-fetching and framing pinned to its own
+// origin. 'unsafe-inline' is required because index.html ships an inline
+// pre-paint theme script and inline boot styles and Vue binds inline style
+// attributes; 'wasm-unsafe-eval' lets the in-browser playground build
+// instantiate its WebAssembly service. Tightening script-src to hashes or a
+// nonce is a follow-up that needs build-tool support. Handlers that serve raw
+// uploads (media) override this with a stricter, content-free policy.
+const securityCSP = "default-src 'self'; " +
+	"script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; " +
+	"style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data: blob:; " +
+	"font-src 'self' data:; " +
+	"connect-src 'self'; " +
+	"object-src 'none'; " +
+	"base-uri 'self'; " +
+	"form-action 'self'; " +
+	"frame-ancestors 'none'"
+
+// securityHeaders sets defensive response headers on every response — console
+// and API alike: nosniff stops content-type guessing, DENY blocks framing
+// (clickjacking), no-referrer keeps URLs (which carry media keys and ids) out
+// of the Referer header, and the CSP is the origin lockdown above.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy", securityCSP)
+		next.ServeHTTP(w, r)
+	})
+}
+
 type scopesKey struct{}
 
 // scopesFromContext returns the authenticated account's scopes. In

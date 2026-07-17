@@ -14,9 +14,14 @@ import (
 
 // --- type definitions -----------------------------------------------------
 
-type typeDefRepo struct{ s *Store }
+type typeDefRepo struct {
+	s *Store
+	j *undoJournal
+}
 
-func (r *typeDefRepo) WithTx(db.QueryExecer) domaintypedef.Repository { return r }
+func (r *typeDefRepo) WithTx(tx db.QueryExecer) domaintypedef.Repository {
+	return &typeDefRepo{s: r.s, j: journalOf(tx)}
+}
 
 func (r *typeDefRepo) Get(_ context.Context, id valueobjects.TypeDefinitionID) (*domaintypedef.TypeDefinition, error) {
 	r.s.mu.RLock()
@@ -90,6 +95,7 @@ func (r *typeDefRepo) Save(_ context.Context, t *domaintypedef.TypeDefinition) e
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	snap := t.Snapshot()
+	captureMap(r.j, collTypeDefs, r.s.typeDefs, snap.ID.String())
 	r.s.typeDefs[snap.ID.String()] = snap
 	r.s.bumpSchemaVersion(snap.TenantID.String()) // a type change reshapes the GraphQL schema
 	return nil
@@ -97,9 +103,14 @@ func (r *typeDefRepo) Save(_ context.Context, t *domaintypedef.TypeDefinition) e
 
 // --- attribute definitions ------------------------------------------------
 
-type attrRepo struct{ s *Store }
+type attrRepo struct {
+	s *Store
+	j *undoJournal
+}
 
-func (r *attrRepo) WithTx(db.QueryExecer) domainattribute.Repository { return r }
+func (r *attrRepo) WithTx(tx db.QueryExecer) domainattribute.Repository {
+	return &attrRepo{s: r.s, j: journalOf(tx)}
+}
 
 func (r *attrRepo) Get(_ context.Context, id valueobjects.AttributeDefinitionID) (*domainattribute.Definition, error) {
 	r.s.mu.RLock()
@@ -204,6 +215,7 @@ func (r *attrRepo) Save(_ context.Context, a *domainattribute.Definition) error 
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	snap := a.Snapshot()
+	captureMap(r.j, collAttrs, r.s.attrs, snap.ID.String())
 	r.s.attrs[snap.ID.String()] = snap
 	r.s.bumpSchemaVersion(snap.TenantID.String()) // an attribute change adds/removes a schema field
 	return nil
@@ -213,9 +225,13 @@ func (r *attrRepo) Save(_ context.Context, a *domainattribute.Definition) error 
 
 type activityLog struct{ s *Store }
 
-func (l *activityLog) Write(_ context.Context, _ db.QueryExecer, entries []activity.Entry) error {
+func (l *activityLog) Write(_ context.Context, tx db.QueryExecer, entries []activity.Entry) error {
 	l.s.mu.Lock()
 	defer l.s.mu.Unlock()
+	// The audit log is written from a pre-commit hook; journal its length so a
+	// later pre-commit hook failing (which aborts the commit) also unwinds the
+	// entries just appended.
+	captureActivities(journalOf(tx), l.s)
 	l.s.activities = append(l.s.activities, entries...)
 	return nil
 }

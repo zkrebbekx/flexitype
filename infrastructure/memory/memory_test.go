@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
 
@@ -358,6 +359,60 @@ func TestMemoryTransactor(t *testing.T) {
 				So(fired, ShouldBeFalse)
 				So(tx.Commit(ctx), ShouldBeNil)
 				So(fired, ShouldBeTrue)
+			})
+		})
+
+		Convey("When two transactions interleave, one committing and one rolling back", func() {
+			// Reproduces the isolation bug in the old whole-store snapshot: A
+			// begins, B begins, B writes and commits, then A rolls back. A
+			// snapshot restore reverts the ENTIRE store to A's begin-time state,
+			// silently erasing B's committed write. The undo journal must revert
+			// only the keys A itself wrote.
+			repos := store.Repositories()
+			newType := func(name string) *domaintypedef.TypeDefinition {
+				td, _, err := domaintypedef.New(domaintypedef.NewInput{
+					TenantID: valueobjects.DefaultTenant, InternalName: name, DisplayName: name,
+				}, time.Now())
+				So(err, ShouldBeNil)
+				return td
+			}
+
+			txA, err := store.Transactor().Begin(ctx)
+			So(err, ShouldBeNil)
+			txB, err := store.Transactor().Begin(ctx)
+			So(err, ShouldBeNil)
+
+			// B writes its own type and commits.
+			bType := newType("beta")
+			So(repos.TypeDefinitions.WithTx(txB).Save(ctx, bType), ShouldBeNil)
+			So(txB.Commit(ctx), ShouldBeNil)
+
+			// A writes a different type, then rolls back.
+			aType := newType("alpha")
+			So(repos.TypeDefinitions.WithTx(txA).Save(ctx, aType), ShouldBeNil)
+			So(txA.Rollback(ctx), ShouldBeNil)
+
+			Convey("Then B's committed write survives and A's rolled-back write is gone", func() {
+				gotB, err := repos.TypeDefinitions.Get(ctx, bType.ID())
+				So(err, ShouldBeNil)
+				So(gotB.InternalName(), ShouldEqual, "beta")
+
+				_, err = repos.TypeDefinitions.Get(ctx, aType.ID())
+				So(err, ShouldNotBeNil) // rolled back: never persisted
+			})
+		})
+
+		Convey("When a nested transaction rolls back", func() {
+			// The depth guard must decline to undo at a nested frame; only the
+			// outermost rollback performs the actual reversal.
+			tx, err := store.Transactor().Begin(ctx)
+			So(err, ShouldBeNil)
+			inner, err := tx.Begin(ctx)
+			So(err, ShouldBeNil)
+
+			Convey("Then the nested rollback is reported and the outer frame still governs undo", func() {
+				So(inner.Rollback(ctx), ShouldNotBeNil) // rollback inside nested transaction
+				So(tx.Rollback(ctx), ShouldBeNil)       // outermost unwinds cleanly
 			})
 		})
 

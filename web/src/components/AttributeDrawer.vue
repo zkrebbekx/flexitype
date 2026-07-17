@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { useMutation, useQueryClient } from '@tanstack/vue-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { api, ApiError, DATA_TYPES, friendlyError } from '@/lib/api'
 import type { AttributeDefinition, Constraint, DataType } from '@/lib/api'
 import { renderTyped, toApiValue, typedValue } from '@/lib/values'
@@ -47,6 +47,8 @@ const form = reactive({
   pattern: '',
   enumMembers: [] as string[],
   newMember: '',
+  unitFamilyId: '',
+  displayUnit: '',
   group: '',
   sortOrder: '',
   helpText: '',
@@ -78,6 +80,8 @@ watch(
     form.localizable = a?.localizable ?? false
     form.scopable = a?.scopable ?? false
     form.computedFormula = a?.computed?.formula ?? ''
+    form.unitFamilyId = a?.unit_family_id ?? ''
+    form.displayUnit = a?.display_unit ?? ''
     form.group = a?.group ?? ''
     form.sortOrder = a?.sort_order != null ? String(a.sort_order) : ''
     form.helpText = a?.help_text ?? ''
@@ -102,6 +106,28 @@ watch(
 const isTextual = computed(() => TEXTUAL.includes(form.data_type))
 const isOrdered = computed(() => ORDERED.includes(form.data_type))
 const isEnum = computed(() => form.data_type === 'enum')
+const isQuantity = computed(() => form.data_type === 'quantity')
+
+// A quantity attribute pins one of the tenant's unit families; its units then
+// populate the display-unit picker.
+const unitFamilies = useQuery({
+  queryKey: ['unit-families'],
+  queryFn: () => api.listUnitFamilies(),
+  enabled: computed(() => props.open),
+})
+const selectedFamily = computed(() =>
+  unitFamilies.data.value?.items.find((f) => f.id === form.unitFamilyId),
+)
+const displayUnitOptions = computed(() => Object.keys(selectedFamily.value?.units ?? {}))
+
+// Keep display_unit consistent with the chosen family: clear it when it is no
+// longer a member (e.g. after switching families).
+watch(
+  () => form.unitFamilyId,
+  () => {
+    if (form.displayUnit && !displayUnitOptions.value.includes(form.displayUnit)) form.displayUnit = ''
+  },
+)
 
 function buildConstraints(): Constraint[] {
   const cs: Constraint[] = []
@@ -143,6 +169,8 @@ const save = useMutation({
         unique: form.unique,
         localizable: form.localizable,
         scopable: form.scopable,
+        unit_family_id: isQuantity.value ? form.unitFamilyId || undefined : undefined,
+        display_unit: isQuantity.value ? form.displayUnit || undefined : undefined,
         computed,
         constraints,
         ...presentation,
@@ -159,6 +187,8 @@ const save = useMutation({
       unique: form.unique,
       localizable: form.localizable,
       scopable: form.scopable,
+      unit_family_id: isQuantity.value ? form.unitFamilyId || undefined : undefined,
+      display_unit: isQuantity.value ? form.displayUnit || undefined : undefined,
       computed,
       constraints,
       ...presentation,
@@ -288,7 +318,32 @@ async function tryValue() {
           </div>
         </div>
 
-        <p v-if="!isTextual && !isOrdered && !isEnum" class="text-[13px] text-(--text-muted)">
+        <div v-if="isQuantity" class="grid grid-cols-2 gap-3">
+          <Select
+            v-model="form.unitFamilyId"
+            label="Unit family"
+            :options="[
+              { value: '', label: 'Select…' },
+              ...(unitFamilies.data.value?.items ?? []).map((f) => ({ value: f.id, label: f.name })),
+            ]"
+            hint="Values are entered in one of this family's units"
+          />
+          <Select
+            v-model="form.displayUnit"
+            label="Display unit"
+            :disabled="!displayUnitOptions.length"
+            :options="[
+              { value: '', label: 'Family default' },
+              ...displayUnitOptions.map((u) => ({ value: u, label: u })),
+            ]"
+            hint="Preferred unit for showing values"
+          />
+          <p v-if="!unitFamilies.data.value?.items.length" class="col-span-2 text-[13px] text-(--text-muted)">
+            No unit families exist yet. Create one via the API before saving a quantity attribute.
+          </p>
+        </div>
+
+        <p v-if="!isTextual && !isOrdered && !isEnum && !isQuantity" class="text-[13px] text-(--text-muted)">
           {{ form.data_type }} attributes have no additional constraints.
         </p>
       </fieldset>
@@ -303,6 +358,8 @@ async function tryValue() {
               v-model="tester.value"
               :data-type="attribute.data_type"
               :allowed-values="isEnum ? form.enumMembers : undefined"
+              :unit-family-id="attribute.unit_family_id"
+              :display-unit="attribute.display_unit"
             />
           </div>
           <Button :disabled="tester.busy" @click="tryValue">Test</Button>

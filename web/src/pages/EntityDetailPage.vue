@@ -661,6 +661,8 @@ const removeValue = useMutation({
           v-model="editor.input"
           :data-type="editor.attribute.data_type"
           :allowed-values="editorAllowed"
+          :unit-family-id="editor.attribute.unit_family_id"
+          :display-unit="editor.attribute.display_unit"
           label="Value"
           :error="editor.error"
         />

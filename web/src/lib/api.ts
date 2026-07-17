@@ -9,6 +9,7 @@ export type DataType =
   | 'integer'
   | 'float'
   | 'decimal'
+  | 'quantity'
   | 'date'
   | 'time'
   | 'datetime'
@@ -23,6 +24,7 @@ export const DATA_TYPES: DataType[] = [
   'integer',
   'float',
   'decimal',
+  'quantity',
   'bool',
   'enum',
   'date',
@@ -123,6 +125,9 @@ export interface AttributeDefinition {
   unique: boolean
   localizable?: boolean
   scopable?: boolean
+  // Quantity attributes pin a unit family and a preferred display unit.
+  unit_family_id?: string
+  display_unit?: string
   computed?: ComputedSpec
   constraints: Constraint[]
   default_value?: DefaultValue
@@ -148,6 +153,18 @@ export interface AttributeValue {
   created_at: string
   updated_at: string
   archived_at?: string
+}
+
+// UnitFamily is a set of units sharing a base unit, with each unit's
+// conversion factor to that base. It backs quantity attributes: the editor
+// offers the family's units and every value normalises to the base for
+// comparison. `units` maps a unit symbol to its factor (the base unit's is 1).
+export interface UnitFamily {
+  id: string
+  tenant_id: string
+  name: string
+  base_unit: string
+  units: Record<string, number>
 }
 
 export interface Condition {
@@ -487,6 +504,8 @@ export const api = {
     unique?: boolean
     localizable?: boolean
     scopable?: boolean
+    unit_family_id?: string
+    display_unit?: string
     computed?: ComputedSpec
     constraints?: Constraint[]
     default_value?: DefaultValue
@@ -504,6 +523,8 @@ export const api = {
       unique?: boolean
       localizable?: boolean
       scopable?: boolean
+      unit_family_id?: string
+      display_unit?: string
       computed?: ComputedSpec
       constraints?: Constraint[]
       default_value?: DefaultValue
@@ -516,6 +537,10 @@ export const api = {
   validateAttributeValue: (id: string, value: unknown) =>
     request<{ valid: boolean }>('POST', `/attributes/${id}/validate-value`, { value }),
   restoreAttribute: (id: string) => request<AttributeDefinition>('POST', `/attributes/${id}/restore`),
+
+  // Unit families — the unit vocabulary quantity attributes draw on.
+  listUnitFamilies: () => request<{ items: UnitFamily[] }>('GET', '/unit-families'),
+  getUnitFamily: (id: string) => request<UnitFamily>('GET', `/unit-families/${id}`),
 
   // Values & entities
   listEntities: (typeId: string, q: PageQuery & { include_descendants?: boolean } = {}) =>

@@ -185,9 +185,16 @@ func NewAccountLookup(q db.QueryExecer) *AccountLookup {
 	return &AccountLookup{q: q}
 }
 
-// Authenticate resolves a token to an account, verifying the secret hash in
-// constant time and rejecting inactive accounts.
+// Authenticate resolves a token with a background context. The auth middleware
+// prefers AuthenticateCtx (via the AuthenticatorCtx assertion) so the request
+// context — cancellation, deadline, trace — reaches this per-request query.
 func (l *AccountLookup) Authenticate(token string) (serviceaccount.Account, error) {
+	return l.AuthenticateCtx(context.Background(), token)
+}
+
+// AuthenticateCtx resolves a token to an account, verifying the secret hash in
+// constant time and rejecting inactive accounts, under the caller's context.
+func (l *AccountLookup) AuthenticateCtx(ctx context.Context, token string) (serviceaccount.Account, error) {
 	id, secret, err := serviceaccount.SplitToken(token)
 	if err != nil {
 		return serviceaccount.Account{}, err
@@ -200,7 +207,7 @@ func (l *AccountLookup) Authenticate(token string) (serviceaccount.Account, erro
 		Scopes     pq.StringArray `db:"scopes"`
 		Active     bool           `db:"active"`
 	}
-	err = l.q.GetContext(context.Background(), &row, bind(
+	err = l.q.GetContext(ctx, &row, bind(
 		`SELECT tenant_id, name, secret_hash, scopes, active
 		 FROM flexitype_service_account WHERE id = ?`), id)
 	if isNoRows(err) {

@@ -34,7 +34,7 @@ type Interactor struct {
 
 // NewInteractor wires the relationship usecases.
 func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, defs domainrelationship.DefinitionRepository, links domainrelationship.Repository) *Interactor {
-	return &Interactor{uow: u, typeDefs: typeDefs, defs: defs, links: links, now: time.Now}
+	return &Interactor{uow: u, typeDefs: typeDefs, defs: defs, links: links, now: uow.UTCNow}
 }
 
 // CreateDefinitionInput holds data for creating a relationship definition.

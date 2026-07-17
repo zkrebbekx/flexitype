@@ -32,7 +32,7 @@ type Interactor struct {
 
 // NewInteractor wires the dependency usecases.
 func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, deps domaindependency.Repository) *Interactor {
-	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, deps: deps, now: time.Now}
+	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, deps: deps, now: uow.UTCNow}
 }
 
 // CreateInput holds data for creating a dependency. Conditions and Effect

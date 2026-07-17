@@ -77,7 +77,10 @@ type FactoryConfig struct {
 	// logging/metering rather than lost. Optional.
 	OnCleanupError func(error)
 
-	// Now overrides the clock. Optional; defaults to time.Now.
+	// Now overrides the clock. Optional; defaults to uow.UTCNow. A custom clock
+	// MUST return UTC wall-clock time (not a local or monotonic reading): the
+	// value is stored in aggregates and compared across the app/DB boundary, so
+	// a non-UTC clock can flip ordering-sensitive behavior in other timezones.
 	Now func() time.Time
 
 	// Features toggles optional capabilities.
@@ -155,7 +158,7 @@ func NewFactory(cfg FactoryConfig) Factory {
 		panic("application: " + strings.Join(probs, "; "))
 	}
 	if cfg.Now == nil {
-		cfg.Now = time.Now
+		cfg.Now = uow.UTCNow
 	}
 	return &factory{cfg: cfg}
 }

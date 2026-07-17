@@ -65,7 +65,7 @@ type Interactor struct {
 
 // NewInteractor wires the feed usecases.
 func NewInteractor(store Store, cursors CursorStore) *Interactor {
-	return &Interactor{store: store, cursors: cursors, now: time.Now}
+	return &Interactor{store: store, cursors: cursors, now: uow.UTCNow}
 }
 
 // ListInput is one feed page request.
@@ -137,7 +137,7 @@ func (i *Interactor) CommitCursor(ctx context.Context, consumer string, position
 	if position < expected {
 		return domainerrors.NewValidation("cursor cannot move backwards")
 	}
-	return i.cursors.Commit(ctx, uow.TenantFromContext(ctx), consumer, position, expected, i.now().UTC())
+	return i.cursors.Commit(ctx, uow.TenantFromContext(ctx), consumer, position, expected, i.now())
 }
 
 // Pruner deletes events past retention on an interval.
@@ -156,7 +156,7 @@ func NewPruner(store Store, retention time.Duration, onError func(error)) *Prune
 		retention: retention,
 		interval:  time.Hour,
 		onError:   onError,
-		now:       time.Now,
+		now:       uow.UTCNow,
 	}
 }
 
@@ -165,7 +165,7 @@ func (p *Pruner) Run(ctx context.Context) {
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 	for {
-		if _, err := p.store.Prune(ctx, p.now().UTC().Add(-p.retention)); err != nil && p.onError != nil {
+		if _, err := p.store.Prune(ctx, p.now().Add(-p.retention)); err != nil && p.onError != nil {
 			p.onError(err)
 		}
 		select {

@@ -9,6 +9,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/revision"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
@@ -22,6 +23,72 @@ type revisionStore struct {
 // NewRevisionStore builds an in-memory entity-revision store.
 func NewRevisionStore() revision.Store {
 	return &revisionStore{revs: map[string]revision.Revision{}}
+}
+
+// WithTx binds the store to a memory transaction so an erasure's revision purge
+// joins the value write's unit of work: the removed revisions are captured and
+// a rollback hook re-inserts them, so an aborted value transaction also un-does
+// the revision purge — matching the Postgres backend, where the DELETE runs
+// inside the same SQL transaction and rolls back with it. Reads and Create pass
+// straight through. Outside a transaction (the executer is not a memory
+// transaction) the base store is returned unchanged.
+func (s *revisionStore) WithTx(tx db.QueryExecer) revision.Store {
+	if t, ok := tx.(db.Transactor); ok {
+		return &txRevisionStore{revisionStore: s, tx: t}
+	}
+	return s
+}
+
+// txRevisionStore is a revision store bound to a memory transaction; its purges
+// register a rollback hook restoring the removed revisions, giving the same
+// atomicity the SQL DELETE has inside its transaction.
+type txRevisionStore struct {
+	*revisionStore
+	tx db.Transactor
+}
+
+func (s *txRevisionStore) PurgeEntity(_ context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error) {
+	s.mu.Lock()
+	var removed []revision.Revision
+	for id, r := range s.revs {
+		if r.TenantID == tenant && r.TypeDefinitionID == typeDefID && r.EntityID == entityID {
+			removed = append(removed, r)
+			delete(s.revs, id)
+		}
+	}
+	s.mu.Unlock()
+	s.restoreOnRollback(removed)
+	return len(removed), nil
+}
+
+func (s *txRevisionStore) PurgeTenant(_ context.Context, tenant valueobjects.TenantID) (int, error) {
+	s.mu.Lock()
+	var removed []revision.Revision
+	for id, r := range s.revs {
+		if r.TenantID == tenant {
+			removed = append(removed, r)
+			delete(s.revs, id)
+		}
+	}
+	s.mu.Unlock()
+	s.restoreOnRollback(removed)
+	return len(removed), nil
+}
+
+// restoreOnRollback re-inserts the removed revisions if the bound transaction
+// rolls back, so the revision purge is atomic with the value write it joined.
+func (s *txRevisionStore) restoreOnRollback(removed []revision.Revision) {
+	if len(removed) == 0 {
+		return
+	}
+	s.tx.OnRollback(func(context.Context) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, r := range removed {
+			s.revs[r.ID.String()] = r
+		}
+		return nil
+	})
 }
 
 func (s *revisionStore) Create(_ context.Context, r revision.Revision) error {

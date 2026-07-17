@@ -711,59 +711,50 @@ func buildNodes(ctx context.Context, inter *application.Interactors, typeInterna
 	return nodes, nil
 }
 
-// attachRelationship batch-loads one relationship for every parent entity and
-// attaches a paged connection of related nodes to each parent node.
+// attachRelationship windows one relationship for every parent entity — one
+// query, filtered by the relationship definition and paged PER parent in SQL —
+// and attaches the resulting connection of related nodes to each parent node.
+// It fetches only first+1 related entities per parent (the +1 drives
+// hasNextPage) rather than loading every child and slicing, so a first:N page
+// over many parents never materializes the whole fan-out.
 func attachRelationship(ctx context.Context, inter *application.Interactors, sel selection, rm relMeta, entityIDs []string, nodeByID map[string]map[string]any, metas map[string]typeMeta) error {
-	links, err := inter.Relationships().LinksByEntities(ctx, entityIDs)
+	first := clampFirst(sel.args["first"])
+	after := argString(sel.args["after"])
+	wantTotal := selectionHasField(sel.sub, "totalCount")
+
+	// The schema already knows this field's definition and which side of the
+	// link the parent entity sits on, so the window is filtered on both in SQL.
+	side := domainrelationship.ChildSide
+	switch {
+	case rm.symmetric:
+		side = domainrelationship.EitherSide
+	case rm.entityIsParent:
+		side = domainrelationship.ParentSide
+	}
+	pages, err := inter.Relationships().WindowedLinks(ctx, apprelationship.LinkWindowInput{
+		DefinitionID: rm.defID,
+		Side:         side,
+		First:        first,
+		After:        after,
+		WantTotal:    wantTotal,
+	}, entityIDs)
 	if err != nil {
 		return err
 	}
-	want := make(map[string]bool, len(entityIDs))
-	for _, id := range entityIDs {
-		want[id] = true
-	}
-	childrenByParent := map[string][]string{}
-	var allChildren []string
-	seen := map[string]bool{}
-	for _, l := range links {
-		if l.DefinitionID.String() != rm.defID {
-			continue
-		}
-		pid := l.ParentEntityID.String()
-		cid := l.ChildEntityID.String()
-		var self, other string
-		switch {
-		case rm.symmetric:
-			switch {
-			case want[pid]:
-				self, other = pid, cid
-			case want[cid]:
-				self, other = cid, pid
-			default:
-				continue
-			}
-		case rm.entityIsParent:
-			if !want[pid] {
-				continue
-			}
-			self, other = pid, cid
-		default:
-			if !want[cid] {
-				continue
-			}
-			self, other = cid, pid
-		}
-		if len(childrenByParent[self]) >= maxRelChildren {
-			continue
-		}
-		childrenByParent[self] = append(childrenByParent[self], other)
-		if !seen[other] {
-			seen[other] = true
-			allChildren = append(allChildren, other)
-		}
-	}
 
-	// Build every related node once (batched), then slice per parent.
+	// Collect the deduped union of related entity ids across parents (each
+	// parent contributes at most first+1), build their nodes once (the batched
+	// recursion continues from here), then attach each parent's page.
+	seen := map[string]bool{}
+	var allChildren []string
+	for _, eid := range entityIDs {
+		for _, cid := range pages[eid].Others {
+			if !seen[cid] {
+				seen[cid] = true
+				allChildren = append(allChildren, cid)
+			}
+		}
+	}
 	childNodes, err := buildNodes(ctx, inter, rm.otherType, allChildren, nodeSelections(sel.sub), metas)
 	if err != nil {
 		return err
@@ -775,42 +766,31 @@ func attachRelationship(ctx context.Context, inter *application.Interactors, sel
 		}
 	}
 
-	// Nested connections page in memory over the batch-loaded children, keyset
-	// on the child entity id so the shape matches the top-level connections.
-	first := clampFirst(sel.args["first"])
-	afterID := ""
-	if raw := argString(sel.args["after"]); raw != "" {
-		if vals, derr := db.DecodeKeyset(raw); derr == nil && len(vals) == 1 {
-			afterID = vals[0]
-		}
-	}
-	wantTotal := selectionHasField(sel.sub, "totalCount")
 	for _, eid := range entityIDs {
-		all := append([]string(nil), childrenByParent[eid]...)
-		sort.Strings(all)
-		start := 0
-		for start < len(all) && all[start] <= afterID {
-			if afterID == "" {
-				break
-			}
-			start++
-		}
-		end := start + first
-		if end > len(all) {
-			end = len(all)
-		}
-		edges := make([]map[string]any, 0, end-start)
-		for _, cid := range all[start:end] {
+		page := pages[eid]
+		edges := make([]map[string]any, 0, len(page.Others))
+		for _, cid := range page.Others {
 			if cn := childByID[cid]; cn != nil {
+				// Keyset the child entity id so the cursor shape matches the
+				// top-level connections' nested cursors.
 				edges = append(edges, map[string]any{"node": cn, "cursor": db.EncodeKeyset(cid)})
 			}
 		}
 		var total *int
 		if wantTotal {
-			t := len(all)
+			t := 0
+			if page.Total != nil {
+				t = *page.Total
+			}
+			// maxRelChildren stays the documented upper bound on a relationship
+			// connection's reported size, so a pathological fan-out cannot claim
+			// an unbounded total.
+			if t > maxRelChildren {
+				t = maxRelChildren
+			}
 			total = &t
 		}
-		nodeByID[eid][sel.name] = connection(edges, end < len(all), afterID != "", total)
+		nodeByID[eid][sel.name] = connection(edges, page.HasMore, after != "", total)
 	}
 	return nil
 }

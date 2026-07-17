@@ -14,9 +14,14 @@ import (
 
 // --- attribute values -----------------------------------------------------
 
-type valueRepo struct{ s *Store }
+type valueRepo struct {
+	s *Store
+	j *undoJournal
+}
 
-func (r *valueRepo) WithTx(db.QueryExecer) domainvalue.Repository { return r }
+func (r *valueRepo) WithTx(tx db.QueryExecer) domainvalue.Repository {
+	return &valueRepo{s: r.s, j: journalOf(tx)}
+}
 
 func (r *valueRepo) Get(_ context.Context, id valueobjects.AttributeValueID) (*domainvalue.AttributeValue, error) {
 	r.s.mu.RLock()
@@ -177,7 +182,9 @@ func (r *valueRepo) ListEntities(_ context.Context, tenant valueobjects.TenantID
 func (r *valueRepo) Save(_ context.Context, av *domainvalue.AttributeValue) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	r.s.values[av.ID().String()] = av.Snapshot()
+	id := av.ID().String()
+	captureMap(r.j, collValues, r.s.values, id)
+	r.s.values[id] = av.Snapshot()
 	return nil
 }
 
@@ -210,6 +217,7 @@ func (r *valueRepo) PurgeEntity(_ context.Context, key domainvalue.EntityKey) ([
 				mediaKeys = append(mediaKeys, k)
 			}
 		}
+		captureMap(r.j, collValues, r.s.values, id)
 		delete(r.s.values, id)
 		count++
 	}
@@ -230,6 +238,7 @@ func (r *valueRepo) PurgeTenant(_ context.Context, tenant valueobjects.TenantID)
 				mediaKeys = append(mediaKeys, k)
 			}
 		}
+		captureMap(r.j, collValues, r.s.values, id)
 		delete(r.s.values, id)
 		count++
 	}
@@ -238,9 +247,14 @@ func (r *valueRepo) PurgeTenant(_ context.Context, tenant valueobjects.TenantID)
 
 // --- dependencies -----------------------------------------------------------
 
-type depRepo struct{ s *Store }
+type depRepo struct {
+	s *Store
+	j *undoJournal
+}
 
-func (r *depRepo) WithTx(db.QueryExecer) domaindependency.Repository { return r }
+func (r *depRepo) WithTx(tx db.QueryExecer) domaindependency.Repository {
+	return &depRepo{s: r.s, j: journalOf(tx)}
+}
 
 func (r *depRepo) Get(_ context.Context, id valueobjects.DependencyID) (*domaindependency.Dependency, error) {
 	r.s.mu.RLock()
@@ -304,15 +318,22 @@ func (r *depRepo) List(_ context.Context, filter domaindependency.Filter, page d
 func (r *depRepo) Save(_ context.Context, d *domaindependency.Dependency) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	r.s.deps[d.ID().String()] = d.Snapshot()
+	id := d.ID().String()
+	captureMap(r.j, collDeps, r.s.deps, id)
+	r.s.deps[id] = d.Snapshot()
 	return nil
 }
 
 // --- relationship definitions -------------------------------------------------
 
-type relDefRepo struct{ s *Store }
+type relDefRepo struct {
+	s *Store
+	j *undoJournal
+}
 
-func (r *relDefRepo) WithTx(db.QueryExecer) domainrelationship.DefinitionRepository { return r }
+func (r *relDefRepo) WithTx(tx db.QueryExecer) domainrelationship.DefinitionRepository {
+	return &relDefRepo{s: r.s, j: journalOf(tx)}
+}
 
 func (r *relDefRepo) Get(_ context.Context, id valueobjects.RelationshipDefinitionID) (*domainrelationship.Definition, error) {
 	r.s.mu.RLock()
@@ -369,6 +390,7 @@ func (r *relDefRepo) Save(_ context.Context, d *domainrelationship.Definition) e
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	snap := d.Snapshot()
+	captureMap(r.j, collRelDefs, r.s.relDefs, snap.ID.String())
 	r.s.relDefs[snap.ID.String()] = snap
 	r.s.bumpSchemaVersion(snap.TenantID.String()) // a relationship change adds/removes a connection field
 	return nil
@@ -376,9 +398,14 @@ func (r *relDefRepo) Save(_ context.Context, d *domainrelationship.Definition) e
 
 // --- relationships ----------------------------------------------------------
 
-type relRepo struct{ s *Store }
+type relRepo struct {
+	s *Store
+	j *undoJournal
+}
 
-func (r *relRepo) WithTx(db.QueryExecer) domainrelationship.Repository { return r }
+func (r *relRepo) WithTx(tx db.QueryExecer) domainrelationship.Repository {
+	return &relRepo{s: r.s, j: journalOf(tx)}
+}
 
 func (r *relRepo) Get(_ context.Context, id valueobjects.RelationshipID) (*domainrelationship.Relationship, error) {
 	r.s.mu.RLock()
@@ -462,6 +489,96 @@ func (r *relRepo) ListByEntities(_ context.Context, tenant valueobjects.TenantID
 	return out, nil
 }
 
+// WindowedLinks mirrors the Postgres row-number window in memory: for each
+// self entity it gathers the opposite endpoints of one relationship definition
+// in one direction, orders them by opposite id ascending, applies the keyset
+// cursor, and keeps at most Page.Limit+1 (the sentinel drives hasNextPage). It
+// never materializes a self's whole fan-out into the result — the parity twin
+// of the no-N+1 GraphQL path.
+func (r *relRepo) WindowedLinks(_ context.Context, w domainrelationship.LinkWindow, selves []valueobjects.EntityID) (map[valueobjects.EntityID]domainrelationship.LinkPage, error) {
+	out := make(map[valueobjects.EntityID]domainrelationship.LinkPage, len(selves))
+	if len(selves) == 0 {
+		return out, nil
+	}
+	want := make(map[valueobjects.EntityID]bool, len(selves))
+	for _, s := range selves {
+		want[s] = true
+	}
+
+	// The nested-connection cursor is a single-value keyset of the opposite
+	// entity id; a malformed cursor pages from the start (matching Postgres,
+	// whose keyset predicate treats a bad cursor as absent).
+	afterID := ""
+	if w.Page.Cursor != "" {
+		if vals, err := db.DecodeKeyset(w.Page.Cursor); err == nil && len(vals) == 1 {
+			afterID = vals[0]
+		}
+	}
+
+	r.s.mu.RLock()
+	others := make(map[valueobjects.EntityID][]valueobjects.EntityID, len(selves))
+	add := func(self, other valueobjects.EntityID) {
+		if want[self] {
+			others[self] = append(others[self], other)
+		}
+	}
+	for _, snap := range r.s.rels {
+		if snap.TenantID != w.TenantID || snap.ArchivedAt != nil || !snap.DefinitionID.Equals(w.DefinitionID) {
+			continue
+		}
+		p, c := snap.ParentEntityID, snap.ChildEntityID
+		switch w.Side {
+		case domainrelationship.ChildSide:
+			add(c, p)
+		case domainrelationship.EitherSide:
+			add(p, c)
+			if p != c { // a self-loop is emitted once (by the parent arm above)
+				add(c, p)
+			}
+		default: // ParentSide
+			add(p, c)
+		}
+	}
+	r.s.mu.RUnlock()
+
+	for self, os := range others {
+		sort.Slice(os, func(i, j int) bool { return os[i] < os[j] })
+		var total *int
+		if w.Page.WantTotal { // the full fan-out, independent of the cursor
+			t := len(os)
+			total = &t
+		}
+		start := 0
+		if afterID != "" {
+			for start < len(os) && string(os[start]) <= afterID {
+				start++
+			}
+		}
+		window := os[start:]
+		hasMore := len(window) > w.Page.Limit
+		if hasMore {
+			window = window[:w.Page.Limit]
+		}
+		out[self] = domainrelationship.LinkPage{
+			Others:  append([]valueobjects.EntityID(nil), window...),
+			HasMore: hasMore,
+			Total:   total,
+		}
+	}
+	// Selves with no matching links still answer a totalCount selection.
+	for _, self := range selves {
+		if _, ok := out[self]; !ok {
+			var total *int
+			if w.Page.WantTotal {
+				z := 0
+				total = &z
+			}
+			out[self] = domainrelationship.LinkPage{Total: total}
+		}
+	}
+	return out, nil
+}
+
 func (r *relRepo) List(_ context.Context, filter domainrelationship.Filter, page db.Page) ([]*domainrelationship.Relationship, int, error) {
 	r.s.mu.RLock()
 	var out []*domainrelationship.Relationship
@@ -492,7 +609,9 @@ func (r *relRepo) List(_ context.Context, filter domainrelationship.Filter, page
 func (r *relRepo) Save(_ context.Context, rel *domainrelationship.Relationship) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	r.s.rels[rel.ID().String()] = rel.Snapshot()
+	id := rel.ID().String()
+	captureMap(r.j, collRels, r.s.rels, id)
+	r.s.rels[id] = rel.Snapshot()
 	return nil
 }
 
@@ -503,6 +622,7 @@ func (r *relRepo) PurgeEntity(_ context.Context, tenant valueobjects.TenantID, e
 	// Erase every link touching the entity on either side, archived included.
 	for id, snap := range r.s.rels {
 		if snap.TenantID == tenant && (snap.ParentEntityID == entityID || snap.ChildEntityID == entityID) {
+			captureMap(r.j, collRels, r.s.rels, id)
 			delete(r.s.rels, id)
 			count++
 		}
@@ -516,6 +636,7 @@ func (r *relRepo) PurgeTenant(_ context.Context, tenant valueobjects.TenantID) (
 	count := 0
 	for id, snap := range r.s.rels {
 		if snap.TenantID == tenant {
+			captureMap(r.j, collRels, r.s.rels, id)
 			delete(r.s.rels, id)
 			count++
 		}

@@ -726,6 +726,69 @@ func (i *Interactor) LinksByEntities(ctx context.Context, rawEntityIDs []string)
 	return out, nil
 }
 
+// LinkWindowInput describes one relationship field's per-parent windowed child
+// page for the GraphQL resolver: the definition, the direction the field faces,
+// and the Relay page (first/after/totalCount) applied PER parent.
+type LinkWindowInput struct {
+	DefinitionID string
+	Side         domainrelationship.LinkSide
+	First        int
+	After        string
+	WantTotal    bool
+}
+
+// RelPage is one parent's windowed page of related entity ids for the GraphQL
+// resolver: the opposite entity ids in cursor order, whether a further page
+// exists, and the full fan-out count (set only when totalCount was requested).
+type RelPage struct {
+	Others  []string
+	HasMore bool
+	Total   *int
+}
+
+// WindowedLinks returns, for each parent entity, a keyset page of the opposite
+// endpoints of one relationship definition in one direction — the no-N+1,
+// no-full-materialization path the GraphQL resolver uses to attach a nested
+// relationship connection. Windowing and the definition/direction filter happen
+// in the repository (one query per relationship field), so a first:N page over
+// many parents never loads every child. Parent ids that fail to parse are
+// skipped rather than failing the whole batch (they cannot be link endpoints).
+func (i *Interactor) WindowedLinks(ctx context.Context, in LinkWindowInput, rawParents []string) (map[string]RelPage, error) {
+	defID, err := valueobjects.ParseRelationshipDefinitionID(in.DefinitionID)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	selves := make([]valueobjects.EntityID, 0, len(rawParents))
+	for _, raw := range rawParents {
+		id, perr := valueobjects.ParseEntityID(raw)
+		if perr != nil {
+			continue
+		}
+		selves = append(selves, id)
+	}
+
+	window := domainrelationship.LinkWindow{
+		TenantID:     uow.TenantFromContext(ctx),
+		DefinitionID: defID,
+		Side:         in.Side,
+		Page:         db.Page{Limit: in.First, Cursor: in.After, WantTotal: in.WantTotal},
+	}
+	pages, err := i.links.WindowedLinks(ctx, window, selves)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]RelPage, len(pages))
+	for self, page := range pages {
+		others := make([]string, 0, len(page.Others))
+		for _, o := range page.Others {
+			others = append(others, o.String())
+		}
+		out[self.String()] = RelPage{Others: others, HasMore: page.HasMore, Total: page.Total}
+	}
+	return out, nil
+}
+
 // ListInput holds filter and pagination arguments for List.
 type ListInput struct {
 	DefinitionID    string

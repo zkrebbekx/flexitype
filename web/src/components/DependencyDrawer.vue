@@ -232,6 +232,8 @@ const CONDITION_KINDS = [
             v-model="row.value"
             :data-type="source.data_type"
             :allowed-values="membersOf(source)"
+            :unit-family-id="source.unit_family_id"
+            :display-unit="source.display_unit"
           />
 
           <div v-else-if="row.kind === 'in'">

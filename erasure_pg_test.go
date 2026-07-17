@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	. "github.com/smartystreets/goconvey/convey"
@@ -12,12 +15,33 @@ import (
 	"github.com/zkrebbekx/flexitype"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
+	apprevision "github.com/zkrebbekx/flexitype/application/revision"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/blob"
+	"github.com/zkrebbekx/flexitype/pkg/db"
+	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
+
+// failingBlobStore stores objects normally but fails every Delete, so an
+// erasure's post-commit blob GC cannot complete. It proves the Postgres-backed
+// erasure reports the residual data honestly rather than a false success.
+type failingBlobStore struct{ inner blob.Store }
+
+func (f failingBlobStore) Put(ctx context.Context, key string, r io.Reader, mime string) error {
+	return f.inner.Put(ctx, key, r, mime)
+}
+
+func (f failingBlobStore) Open(ctx context.Context, key string) (io.ReadCloser, string, error) {
+	return f.inner.Open(ctx, key)
+}
+
+func (f failingBlobStore) Delete(context.Context, string) error {
+	return errors.New("blob storage unavailable")
+}
 
 // countRows is a tiny helper to assert against the physical tables, so the
 // test proves the rows are truly DELETEd (not merely archived or filtered).
@@ -172,6 +196,121 @@ func TestPurgeTenantPostgres(t *testing.T) {
 
 			Convey("Then tenant B's rows survive", func() {
 				So(countRows(t, pool, `SELECT count(*) FROM flexitype_attribute_value WHERE tenant_id='tenant-b'`), ShouldEqual, 1)
+			})
+		})
+	})
+}
+
+// TestPurgeEntityReportsBlobFailuresPostgres is the Postgres twin of the memory
+// blob-failure test: an erasure whose backing-blob deletions fail reports
+// MediaBlobsFailed and the unpurged keys — not a false success — and surfaces
+// the failure to the cleanup observer.
+func TestPurgeEntityReportsBlobFailuresPostgres(t *testing.T) {
+	pool := openTestDB(t)
+	defer func() { _ = pool.Close() }()
+
+	blobs := failingBlobStore{inner: blob.NewMemoryStore()}
+	var observed []error
+	svc := flexitype.New(pool,
+		flexitype.WithBlobStore(blobs),
+		flexitype.WithSearchIndex(),
+		flexitype.WithCleanupObserver(func(err error) { observed = append(observed, err) }),
+	)
+	if err := svc.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	Convey("Given a Postgres entity with a media blob and a blob store whose deletes fail", t, func() {
+		truncateAll(t, pool)
+		ctx := uow.WithTenant(context.Background(), valueobjects.TenantID("tenant-a"))
+		it := svc.Interactors(ctx)
+
+		typeDef, err := it.TypeDefinitions().Create(ctx, apptypedef.CreateInput{InternalName: "product", DisplayName: "Product"})
+		So(err, ShouldBeNil)
+		typeID := typeDef.ID.String()
+		image, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: typeID, InternalName: "image", DisplayName: "Image", DataType: "media",
+		})
+		So(err, ShouldBeNil)
+		png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte("x"), 50)...)
+		mediaSnap, err := it.Values().UploadMedia(ctx, typeID, "e1", image.ID.String(), bytes.NewReader(png), "logo.png")
+		So(err, ShouldBeNil)
+		blobKey := mediaSnap.Value.Media().ObjectKey
+
+		Convey("When e1 is purged", func() {
+			report, err := it.Values().PurgeEntity(ctx, typeID, "e1")
+			So(err, ShouldBeNil) // erasure commits; blob GC is post-commit best effort
+
+			Convey("Then the report tells the truth about the failed blob delete", func() {
+				So(report.ValuesPurged, ShouldEqual, 1)
+				So(report.MediaBlobsPurged, ShouldEqual, 0)
+				So(report.MediaBlobsFailed, ShouldEqual, 1)
+				So(report.UnpurgedBlobKeys, ShouldContain, blobKey)
+			})
+
+			Convey("Then the values are still physically gone (the erasure committed)", func() {
+				So(countRows(t, pool, `SELECT count(*) FROM flexitype_attribute_value WHERE tenant_id='tenant-a' AND entity_id='e1'`), ShouldEqual, 0)
+			})
+
+			Convey("Then the cleanup failure is surfaced to the observer", func() {
+				So(observed, ShouldNotBeEmpty)
+			})
+		})
+	})
+}
+
+// TestRevisionPurgeJoinsTransactionPostgres is the Postgres parity twin of the
+// memory revision-tx test: the revision DELETE runs inside the value write's
+// transaction (via WithTx), so a rollback leaves the revisions intact and a
+// commit removes them.
+func TestRevisionPurgeJoinsTransactionPostgres(t *testing.T) {
+	pool := openTestDB(t)
+	defer func() { _ = pool.Close() }()
+
+	svc := flexitype.New(pool)
+	if err := svc.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	Convey("Given two revisions of an entity in Postgres", t, func() {
+		truncateAll(t, pool)
+		ctx := context.Background()
+		tenant := valueobjects.TenantID("tenant-a")
+		revStore := postgres.NewRevisionStore(pool)
+		transactor := db.NewTransactor(pool)
+		mk := func(seq int) apprevision.Revision {
+			return apprevision.Revision{
+				ID: ulid.New(), TenantID: tenant, TypeDefinitionID: "t1", EntityID: "e1",
+				Seq: seq, CreatedAt: time.Now().UTC(), Values: []apprevision.Value{},
+			}
+		}
+		So(revStore.Create(ctx, mk(1)), ShouldBeNil)
+		So(revStore.Create(ctx, mk(2)), ShouldBeNil)
+		So(countRows(t, pool, `SELECT count(*) FROM flexitype_entity_revision WHERE tenant_id='tenant-a' AND entity_id='e1'`), ShouldEqual, 2)
+
+		Convey("When they are purged inside a transaction that rolls back", func() {
+			tx, err := transactor.Begin(ctx)
+			So(err, ShouldBeNil)
+			n, err := revStore.WithTx(tx).PurgeEntity(ctx, tenant, "t1", "e1")
+			So(err, ShouldBeNil)
+			So(n, ShouldEqual, 2)
+			So(tx.Rollback(ctx), ShouldBeNil)
+
+			Convey("Then the revision rows survive — the DELETE joined the rolled-back tx", func() {
+				So(countRows(t, pool, `SELECT count(*) FROM flexitype_entity_revision WHERE tenant_id='tenant-a' AND entity_id='e1'`), ShouldEqual, 2)
+			})
+		})
+
+		Convey("When they are purged inside a transaction that commits", func() {
+			tx, err := transactor.Begin(ctx)
+			So(err, ShouldBeNil)
+			n, err := revStore.WithTx(tx).PurgeEntity(ctx, tenant, "t1", "e1")
+			So(err, ShouldBeNil)
+			So(n, ShouldEqual, 2)
+			So(tx.Commit(ctx), ShouldBeNil)
+
+			Convey("Then the revision rows are gone", func() {
+				So(countRows(t, pool, `SELECT count(*) FROM flexitype_entity_revision WHERE tenant_id='tenant-a' AND entity_id='e1'`), ShouldEqual, 0)
 			})
 		})
 	})

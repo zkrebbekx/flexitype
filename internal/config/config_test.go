@@ -5,7 +5,7 @@ import (
 
 	. "github.com/smartystreets/goconvey/convey"
 
-	"github.com/zkrebbekx/flexitype/pkg/config"
+	"github.com/zkrebbekx/flexitype/internal/config"
 )
 
 func TestRequireAuth(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/uow"
+	"github.com/zkrebbekx/flexitype/internal/safedial"
 	"github.com/zkrebbekx/flexitype/pkg/events"
-	"github.com/zkrebbekx/flexitype/pkg/safedial"
 )
 
 // Worker drains due deliveries: claim (short tx) → POST (no tx) → record

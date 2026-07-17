@@ -28,7 +28,7 @@ type Interactor struct {
 
 // NewInteractor wires the type-definition usecases.
 func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository) *Interactor {
-	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, now: time.Now}
+	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, now: uow.UTCNow}
 }
 
 // CreateInput holds data for creating a type definition.

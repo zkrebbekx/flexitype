@@ -50,7 +50,7 @@ type Materializer struct {
 
 // NewMaterializer builds the computed-attribute subscriber.
 func NewMaterializer(factory application.Factory) *Materializer {
-	return &Materializer{factory: factory, now: time.Now, hasComputed: map[string]bool{}}
+	return &Materializer{factory: factory, now: uow.UTCNow, hasComputed: map[string]bool{}}
 }
 
 // Name implements events.Handler.

@@ -11,8 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zkrebbekx/flexitype/application/uow"
+	"github.com/zkrebbekx/flexitype/internal/safedial"
 	"github.com/zkrebbekx/flexitype/pkg/events"
-	"github.com/zkrebbekx/flexitype/pkg/safedial"
 )
 
 // Worker drains due deliveries: claim (short tx) → POST (no tx) → record
@@ -75,7 +76,7 @@ func NewWorker(deliveries DeliveryStore, opts ...WorkerOption) *Worker {
 		concurrency: 4,
 		maxAttempts: 25,
 		nudge:       make(chan struct{}, 1),
-		now:         time.Now,
+		now:         uow.UTCNow,
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -111,7 +112,7 @@ func (w *Worker) Run(ctx context.Context) {
 // pass releases expired leases, then claims and delivers until nothing
 // is due.
 func (w *Worker) pass(ctx context.Context) {
-	if _, err := w.deliveries.ReleaseExpired(ctx, w.now().UTC()); err != nil {
+	if _, err := w.deliveries.ReleaseExpired(ctx, w.now()); err != nil {
 		w.report(fmt.Errorf("release expired leases: %w", err))
 		return
 	}
@@ -120,7 +121,7 @@ func (w *Worker) pass(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		claimed, err := w.deliveries.ClaimDue(ctx, w.batch, w.lease, w.now().UTC())
+		claimed, err := w.deliveries.ClaimDue(ctx, w.batch, w.lease, w.now())
 		if err != nil {
 			w.report(fmt.Errorf("claim deliveries: %w", err))
 			return
@@ -143,7 +144,7 @@ func (w *Worker) pass(ctx context.Context) {
 		}
 		wg.Wait()
 
-		if err := w.deliveries.Record(ctx, w.now().UTC(), outcomes...); err != nil {
+		if err := w.deliveries.Record(ctx, w.now(), outcomes...); err != nil {
 			w.report(fmt.Errorf("record outcomes: %w", err))
 			return
 		}
@@ -178,7 +179,7 @@ func (w *Worker) deliver(ctx context.Context, d ClaimedDelivery) Outcome {
 	req.Header.Set(events.HeaderEventID, d.EnvelopeID)
 	req.Header.Set(events.HeaderDelivery, d.ID.String())
 	if d.Secret != "" {
-		ts := w.now().UTC().Format(time.RFC3339)
+		ts := w.now().Format(time.RFC3339)
 		req.Header.Set(events.HeaderTimestamp, ts)
 		req.Header.Set(events.HeaderSignature, events.Sign(d.Secret, ts, body))
 	}
@@ -206,7 +207,7 @@ func (w *Worker) retryOrDead(out Outcome, d ClaimedDelivery, errMsg string) Outc
 		out.Dead = true
 		return out
 	}
-	out.NextAttemptAt = w.now().UTC().Add(Backoff(d.Attempts + 1))
+	out.NextAttemptAt = w.now().Add(Backoff(d.Attempts + 1))
 	return out
 }
 

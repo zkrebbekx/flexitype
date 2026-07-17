@@ -2,6 +2,9 @@ package application
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
@@ -74,7 +77,10 @@ type FactoryConfig struct {
 	// logging/metering rather than lost. Optional.
 	OnCleanupError func(error)
 
-	// Now overrides the clock. Optional; defaults to time.Now.
+	// Now overrides the clock. Optional; defaults to uow.UTCNow. A custom clock
+	// MUST return UTC wall-clock time (not a local or monotonic reading): the
+	// value is stored in aggregates and compared across the app/DB boundary, so
+	// a non-UTC clock can flip ordering-sensitive behavior in other timezones.
 	Now func() time.Time
 
 	// Features toggles optional capabilities.
@@ -144,10 +150,44 @@ func NewFactory(cfg FactoryConfig) Factory {
 	if cfg.ActivityLog == nil && !cfg.Features.DisableActivity {
 		panic("application: FactoryConfig.ActivityLog is required unless activity is disabled")
 	}
+	// A feature flag whose backing stores are not wired would nil-deref at
+	// request time, not boot. Fail closed here with a wiring message so the
+	// mistake surfaces on startup. (The flexitype facade wires flag + stores
+	// together; this guards direct FactoryConfig callers.)
+	if probs := featureWiringErrors(cfg); len(probs) > 0 {
+		panic("application: " + strings.Join(probs, "; "))
+	}
 	if cfg.Now == nil {
-		cfg.Now = time.Now
+		cfg.Now = uow.UTCNow
 	}
 	return &factory{cfg: cfg}
+}
+
+// featureWiringErrors reports any feature flag enabled without the stores its
+// interactors dereference. It is the single consistency check between the
+// Features booleans and store presence, kept pure so it is unit-testable.
+func featureWiringErrors(cfg FactoryConfig) []string {
+	var problems []string
+	if cfg.Features.EventDelivery {
+		var missing []string
+		for name, present := range map[string]bool{
+			"Outbox":        cfg.Outbox != nil,
+			"Subscriptions": cfg.Subscriptions != nil,
+			"Deliveries":    cfg.Deliveries != nil,
+			"FeedStore":     cfg.FeedStore != nil,
+			"CursorStore":   cfg.CursorStore != nil,
+		} {
+			if !present {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			problems = append(problems,
+				fmt.Sprintf("Features.EventDelivery requires the outbox and webhook/feed stores; missing: %s", strings.Join(missing, ", ")))
+		}
+	}
+	return problems
 }
 
 // New builds the request-scoped interactor set.

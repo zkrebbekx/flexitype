@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/zkrebbekx/flexitype/application/uow"
+
 	"github.com/zkrebbekx/flexitype/application"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
@@ -51,7 +53,7 @@ type Indexer struct {
 // NewIndexer builds the indexer. newRepos supplies fresh repositories per
 // rebuild (the indexer runs outside any request scope).
 func NewIndexer(newRepos func() application.Repositories, store DocumentStore) *Indexer {
-	return &Indexer{newRepos: newRepos, store: store, now: time.Now}
+	return &Indexer{newRepos: newRepos, store: store, now: uow.UTCNow}
 }
 
 // Name implements events.Handler.

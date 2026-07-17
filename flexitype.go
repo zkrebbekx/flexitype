@@ -27,6 +27,7 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/memory"
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	httpapi "github.com/zkrebbekx/flexitype/internal/interfaces/http"
+	"github.com/zkrebbekx/flexitype/internal/safedial"
 	"github.com/zkrebbekx/flexitype/pkg/blob"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
@@ -34,7 +35,6 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/logger"
 	"github.com/zkrebbekx/flexitype/pkg/metrics"
 	"github.com/zkrebbekx/flexitype/pkg/ratelimit"
-	"github.com/zkrebbekx/flexitype/pkg/safedial"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 )
 

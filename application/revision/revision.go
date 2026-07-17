@@ -109,7 +109,7 @@ func NewInteractor(
 	now func() time.Time,
 ) *Interactor {
 	if now == nil {
-		now = time.Now
+		now = uow.UTCNow
 	}
 	return &Interactor{store: store, typeDefs: typeDefs, attrs: attrs, values: values, applier: applier, now: now}
 }

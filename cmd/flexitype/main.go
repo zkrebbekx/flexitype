@@ -19,16 +19,16 @@ import (
 	"github.com/zkrebbekx/flexitype/application/outbox"
 	"github.com/zkrebbekx/flexitype/application/webhook"
 	"github.com/zkrebbekx/flexitype/infrastructure/gcppubsub"
+	"github.com/zkrebbekx/flexitype/internal/config"
+	"github.com/zkrebbekx/flexitype/internal/shutdown"
+	"github.com/zkrebbekx/flexitype/internal/telemetry"
 	"github.com/zkrebbekx/flexitype/pkg/blob"
-	"github.com/zkrebbekx/flexitype/pkg/config"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
 	"github.com/zkrebbekx/flexitype/pkg/metrics"
 	"github.com/zkrebbekx/flexitype/pkg/ratelimit"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
-	"github.com/zkrebbekx/flexitype/pkg/shutdown"
-	"github.com/zkrebbekx/flexitype/pkg/telemetry"
 )
 
 // version is the service's reported version (health + traces). It is

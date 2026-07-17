@@ -68,7 +68,7 @@ type Interactor struct {
 // NewInteractor wires the change-set usecases.
 func NewInteractor(store Store, values *appvalue.Interactor, now func() time.Time) *Interactor {
 	if now == nil {
-		now = time.Now
+		now = uow.UTCNow
 	}
 	return &Interactor{store: store, values: values, now: now}
 }

@@ -40,7 +40,7 @@ type Interactor struct {
 // NewInteractor wires the query usecases. searchIndex unlocks matches();
 // units (nil-able) enables unit-suffixed quantity comparisons.
 func NewInteractor(typeDefs domaintypedef.Repository, attrs domainattribute.Repository, relDefs domainrelationship.DefinitionRepository, repo Repository, searchIndex bool, units appunit.Store) *Interactor {
-	return &Interactor{typeDefs: typeDefs, attrs: attrs, relDefs: relDefs, repo: repo, searchIndex: searchIndex, units: units, now: time.Now}
+	return &Interactor{typeDefs: typeDefs, attrs: attrs, relDefs: relDefs, repo: repo, searchIndex: searchIndex, units: units, now: uow.UTCNow}
 }
 
 // ExecuteInput is one query run.

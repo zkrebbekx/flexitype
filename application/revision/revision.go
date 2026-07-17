@@ -16,6 +16,7 @@ import (
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
@@ -48,6 +49,12 @@ type Revision struct {
 
 // Store persists entity revisions, scoped by tenant.
 type Store interface {
+	// WithTx binds the store to a transaction so an erasure's revision purge
+	// joins the value write's atomic unit of work — a rollback then also
+	// un-does the revision delete, and the audit trail is never orphaned by a
+	// value-tx abort. It mirrors the value repository's WithTx.
+	WithTx(tx db.QueryExecer) Store
+
 	Create(ctx context.Context, r Revision) error
 	Get(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) (Revision, error)
 	List(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) ([]Revision, error)

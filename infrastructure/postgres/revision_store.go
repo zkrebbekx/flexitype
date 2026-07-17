@@ -22,6 +22,13 @@ func NewRevisionStore(q db.QueryExecer) revision.Store {
 	return &revisionStore{q: q}
 }
 
+// WithTx binds the store to a transaction so a revision purge runs inside the
+// value write's transaction and rolls back with it — mirroring the value
+// repository's WithTx.
+func (s *revisionStore) WithTx(tx db.QueryExecer) revision.Store {
+	return &revisionStore{q: tx}
+}
+
 type revisionRow struct {
 	ID               ulid.ID   `db:"id"`
 	TenantID         string    `db:"tenant_id"`

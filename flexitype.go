@@ -57,6 +57,7 @@ type options struct {
 	dispatcher          *events.Dispatcher
 	onRollback          func(ctx context.Context, err error)
 	onDispatch          func(ctx context.Context, err error)
+	onCleanup           func(err error)
 	onBgError           func(err error)
 	features            application.Features
 	outbox              bool
@@ -118,6 +119,16 @@ func WithDispatchObserver(fn func(ctx context.Context, err error)) Option {
 // be dropped silently. Use it to log or meter them.
 func WithBackgroundErrorObserver(fn func(err error)) Option {
 	return func(o *options) { o.onBgError = fn }
+}
+
+// WithCleanupObserver observes swallowed post-erasure cleanup failures — a
+// media-blob GC or search-projection removal that could not be completed after
+// a committed erasure. These are best-effort by design (they must not undo a
+// durable erasure), so use this to log or meter them rather than lose them.
+// Media-blob failures are additionally reported in PurgeReport.MediaBlobsFailed
+// / UnpurgedBlobKeys.
+func WithCleanupObserver(fn func(err error)) Option {
+	return func(o *options) { o.onCleanup = fn }
 }
 
 // WithoutSearch disables the FQL query surface for this deployment.
@@ -201,6 +212,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		ActivityLog:     postgres.NewActivityLog(pool),
 		OnRollback:      o.onRollback,
 		OnDispatchError: o.onDispatch,
+		OnCleanupError:  o.onCleanup,
 		Features:        o.features,
 		SavedViews:      postgres.NewSavedViewStore(pool),
 		MatchRules:      postgres.NewMatchStore(pool),
@@ -304,6 +316,7 @@ func NewInMemory(opts ...Option) *Service {
 		ActivityLog:     store.ActivityLog(),
 		OnRollback:      o.onRollback,
 		OnDispatchError: o.onDispatch,
+		OnCleanupError:  o.onCleanup,
 		Features:        o.features,
 		SavedViews:      savedViews,
 		MatchRules:      matchRules,

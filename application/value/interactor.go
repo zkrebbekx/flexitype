@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	apprevision "github.com/zkrebbekx/flexitype/application/revision"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	appunit "github.com/zkrebbekx/flexitype/application/unit"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -39,23 +40,36 @@ type Interactor struct {
 	links     domainrelationship.Repository
 	blobs     blobStore
 	units     unitStore
-	revisions revisionPurger
+	revisions apprevision.Store
 	search    SearchStore
 	now       func() time.Time
-}
-
-// revisionPurger hard-deletes an entity's or a tenant's revisions during an
-// erasure. Nil disables revision purging (the revision feature is off). It is
-// the erasure-facing slice of the revision store; kept local so the value
-// package does not import the revision package.
-type revisionPurger interface {
-	PurgeEntity(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error)
-	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error)
+	// onCleanupError surfaces a swallowed post-erasure cleanup failure (a blob
+	// GC or search-projection removal that could not be completed). Nil-safe:
+	// wired from the factory like the other observers.
+	onCleanupError func(error)
 }
 
 // SetRevisionStore installs the revision store an erasure purges. Called once
-// at wiring time when the revision feature is enabled.
-func (i *Interactor) SetRevisionStore(s revisionPurger) { i.revisions = s }
+// at wiring time when the revision feature is enabled. The store is
+// transaction-bindable (WithTx), so the erasure's revision purge joins the
+// value write's atomic unit of work rather than hard-deleting on a
+// non-tx-bound store that a value-tx rollback could not undo.
+func (i *Interactor) SetRevisionStore(s apprevision.Store) { i.revisions = s }
+
+// SetCleanupObserver installs the hook that surfaces swallowed post-erasure
+// cleanup failures (blob GC, search-projection removal). Called once at wiring
+// time; nil disables it.
+func (i *Interactor) SetCleanupObserver(fn func(error)) { i.onCleanupError = fn }
+
+// observeCleanup reports a swallowed cleanup failure to the configured
+// observer. Nil-safe: without an observer the failure is still reflected in the
+// PurgeReport (MediaBlobsFailed / UnpurgedBlobKeys), so an erasure never
+// reports a false success.
+func (i *Interactor) observeCleanup(err error) {
+	if i.onCleanupError != nil {
+		i.onCleanupError(err)
+	}
+}
 
 // SearchStore is the erasure-facing slice of the search-projection port: an
 // entity's document is dropped with Remove, a tenant's with PurgeTenant. It is
@@ -454,7 +468,11 @@ func (i *Interactor) RemoveEntity(ctx context.Context, rawTypeDefID, rawEntityID
 }
 
 // PurgeReport counts what an erasure permanently removed. It is the audited
-// receipt of a hard delete.
+// receipt of a hard delete, so it reports only CONFIRMED deletions: a media
+// blob is counted in MediaBlobsPurged only once storage acknowledges its
+// deletion. Blobs whose deletion failed are counted in MediaBlobsFailed and
+// their keys listed in UnpurgedBlobKeys, so a right-to-erasure caller sees the
+// residual data honestly rather than a false success.
 type PurgeReport struct {
 	// EntityID is set for a per-entity purge; empty for a tenant purge.
 	EntityID          string `json:"entity_id,omitempty"`
@@ -462,7 +480,12 @@ type PurgeReport struct {
 	RevisionsPurged   int    `json:"revisions_purged"`
 	RelationshipsGone int    `json:"relationships_gone"`
 	SearchDocsPurged  int    `json:"search_docs_purged"`
-	MediaBlobsPurged  int    `json:"media_blobs_purged"`
+	// MediaBlobsPurged counts blobs storage confirmed deleted (post-commit).
+	MediaBlobsPurged int `json:"media_blobs_purged"`
+	// MediaBlobsFailed counts blobs whose deletion failed; UnpurgedBlobKeys
+	// lists their still-orphaned object keys for operator reconciliation.
+	MediaBlobsFailed int      `json:"media_blobs_failed"`
+	UnpurgedBlobKeys []string `json:"unpurged_blob_keys,omitempty"`
 }
 
 // PurgeEntity permanently ERASES one entity: it hard-deletes every attribute
@@ -472,12 +495,16 @@ type PurgeReport struct {
 // RemoveEntity, which only archives — and the erasure itself is audited. An
 // entity with nothing to erase is reported NotFound.
 //
-// The value and relationship deletes plus the audit entry are one atomic unit
-// of work. The revision and search projections are maintained outside the
-// value write transaction in this architecture (revisions are created
-// non-transactionally; the search index is an event-driven projection), so
-// their purge runs on their own stores within the same call; on the happy path
-// every trace is removed, and the deletes are idempotent under retry.
+// The value deletes, the relationship deletes, the REVISION purge and the audit
+// entry are one atomic unit of work: the revision store joins the transaction
+// via WithTx, so a value-tx rollback also un-does the revision purge and never
+// hard-deletes an entity's audit trail behind a failed erasure. The search
+// projection (a derived, self-healing index maintained by post-commit event
+// subscribers everywhere else) and the media-blob GC run POST-COMMIT with
+// observation — a storage hiccup must not undo a committed erasure — and any
+// failure is surfaced (search: to the cleanup observer; blobs: in the report's
+// MediaBlobsFailed / UnpurgedBlobKeys and the observer), never silently
+// swallowed. The deletes are idempotent under retry.
 func (i *Interactor) PurgeEntity(ctx context.Context, rawTypeDefID, rawEntityID string) (*PurgeReport, error) {
 	typeDefID, err := valueobjects.ParseTypeDefinitionID(rawTypeDefID)
 	if err != nil {
@@ -510,7 +537,9 @@ func (i *Interactor) PurgeEntity(ctx context.Context, rawTypeDefID, rawEntityID 
 		report.RelationshipsGone = rcount
 
 		if i.revisions != nil {
-			n, err := i.revisions.PurgeEntity(ctx, tenant, typeDefID.String(), entityID.String())
+			// Join the value transaction: a rollback un-does this purge too, so a
+			// failed erasure never leaves revisions hard-deleted with no audit.
+			n, err := i.revisions.WithTx(tx).PurgeEntity(ctx, tenant, typeDefID.String(), entityID.String())
 			if err != nil {
 				return fmt.Errorf("purge entity revisions: %w", err)
 			}
@@ -522,11 +551,11 @@ func (i *Interactor) PurgeEntity(ctx context.Context, rawTypeDefID, rawEntityID 
 			return domainerrors.NewNotFound("entity", rawEntityID)
 		}
 
-		// Drop the search document (best effort: the projection is derived and
-		// self-heals, and a storage hiccup must not fail the erasure).
-		if i.search != nil {
-			_ = i.search.Remove(ctx, tenant, entityID)
-		}
+		// Drop the search document post-commit with observation (same policy as
+		// PurgeTenant): the projection is derived and self-healing, so a removal
+		// failure must not undo the committed erasure, but it is surfaced to the
+		// cleanup observer rather than swallowed.
+		i.removeSearchDocAfterCommit(tx, tenant, entityID)
 
 		c.RecordChange(activity.Change{
 			Entity:   domainvalue.AggregateType,
@@ -541,8 +570,7 @@ func (i *Interactor) PurgeEntity(ctx context.Context, rawTypeDefID, rawEntityID 
 			},
 		})
 
-		i.gcBlobsAfterCommit(tx, mediaKeys)
-		report.MediaBlobsPurged = len(mediaKeys)
+		i.gcErasedBlobs(tx, mediaKeys, report)
 		return nil
 	})
 	if err != nil {
@@ -585,19 +613,19 @@ func (i *Interactor) PurgeTenant(ctx context.Context) (*PurgeReport, error) {
 		report.RelationshipsGone = rcount
 
 		if i.revisions != nil {
-			n, err := i.revisions.PurgeTenant(ctx, tenant)
+			// Join the value transaction (as in PurgeEntity): a rollback un-does
+			// the revision purge, keeping the audit trail atomic with the erasure.
+			n, err := i.revisions.WithTx(tx).PurgeTenant(ctx, tenant)
 			if err != nil {
 				return fmt.Errorf("purge tenant revisions: %w", err)
 			}
 			report.RevisionsPurged = n
 		}
-		if i.search != nil {
-			n, err := i.search.PurgeTenant(ctx, tenant)
-			if err != nil {
-				return fmt.Errorf("purge tenant search documents: %w", err)
-			}
-			report.SearchDocsPurged = n
-		}
+		// Purge the search projection post-commit with observation — one policy
+		// shared with PurgeEntity (previously this path failed the erasure on a
+		// projection error while PurgeEntity swallowed it). The count lands in the
+		// report before Execute returns, since post-commit hooks run inside Commit.
+		i.purgeTenantSearchAfterCommit(tx, tenant, report)
 
 		c.RecordChange(activity.Change{
 			Entity:   "tenant",
@@ -608,12 +636,10 @@ func (i *Interactor) PurgeTenant(ctx context.Context) (*PurgeReport, error) {
 				"values_purged":      report.ValuesPurged,
 				"revisions_purged":   report.RevisionsPurged,
 				"relationships_gone": report.RelationshipsGone,
-				"search_docs_purged": report.SearchDocsPurged,
 			},
 		})
 
-		i.gcBlobsAfterCommit(tx, mediaKeys)
-		report.MediaBlobsPurged = len(mediaKeys)
+		i.gcErasedBlobs(tx, mediaKeys, report)
 		return nil
 	})
 	if err != nil {
@@ -622,21 +648,66 @@ func (i *Interactor) PurgeTenant(ctx context.Context) (*PurgeReport, error) {
 	return report, nil
 }
 
-// gcBlobsAfterCommit schedules the backing blobs of purged media values for
-// deletion once the surrounding transaction commits (best effort — a storage
-// error never fails the erasure; a later sweep can reconcile), mirroring
-// gcMediaAfterCommit for the multi-key purge path.
-func (i *Interactor) gcBlobsAfterCommit(tx db.Transactor, keys []string) {
+// gcErasedBlobs deletes the backing blobs of purged media values once the
+// erasure transaction commits, recording the true outcome on the report. Blob
+// GC is post-commit best effort — a storage error must not undo a committed
+// erasure — but the report does not lie: it counts only blobs storage confirmed
+// deleted (MediaBlobsPurged), tallies the failures (MediaBlobsFailed) and lists
+// the still-orphaned keys (UnpurgedBlobKeys) so an operator can reconcile them.
+// Post-commit hooks run inside Commit, so these counts are set before the
+// erasure call returns. Each failure is also surfaced to the cleanup observer.
+func (i *Interactor) gcErasedBlobs(tx db.Transactor, keys []string, report *PurgeReport) {
 	if i.blobs == nil || len(keys) == 0 {
 		return
 	}
 	keys = append([]string(nil), keys...) // capture: the caller may reuse the slice
 	tx.OnPostCommit(func(ctx context.Context) error {
 		for _, key := range keys {
-			if key != "" {
-				_ = i.blobs.Delete(ctx, key)
+			if key == "" {
+				continue
 			}
+			if err := i.blobs.Delete(ctx, key); err != nil {
+				report.MediaBlobsFailed++
+				report.UnpurgedBlobKeys = append(report.UnpurgedBlobKeys, key)
+				i.observeCleanup(fmt.Errorf("purge media blob %s: %w", key, err))
+				continue
+			}
+			report.MediaBlobsPurged++
 		}
+		return nil
+	})
+}
+
+// removeSearchDocAfterCommit drops one entity's search document once the erasure
+// commits (post-commit with observation): the search index is a derived,
+// self-healing projection, so a removal failure is observed, never fatal to the
+// committed erasure.
+func (i *Interactor) removeSearchDocAfterCommit(tx db.Transactor, tenant valueobjects.TenantID, entityID valueobjects.EntityID) {
+	if i.search == nil {
+		return
+	}
+	tx.OnPostCommit(func(ctx context.Context) error {
+		if err := i.search.Remove(ctx, tenant, entityID); err != nil {
+			i.observeCleanup(fmt.Errorf("purge search document for entity %s: %w", entityID, err))
+		}
+		return nil
+	})
+}
+
+// purgeTenantSearchAfterCommit drops a tenant's search documents once the
+// erasure commits, recording the confirmed count on the report and observing a
+// failure — the same post-commit-with-observation policy as PurgeEntity.
+func (i *Interactor) purgeTenantSearchAfterCommit(tx db.Transactor, tenant valueobjects.TenantID, report *PurgeReport) {
+	if i.search == nil {
+		return
+	}
+	tx.OnPostCommit(func(ctx context.Context) error {
+		n, err := i.search.PurgeTenant(ctx, tenant)
+		if err != nil {
+			i.observeCleanup(fmt.Errorf("purge tenant search documents: %w", err))
+			return nil
+		}
+		report.SearchDocsPurged = n
 		return nil
 	})
 }
@@ -734,27 +805,31 @@ func (i *Interactor) Remove(ctx context.Context, rawID string) (*domainvalue.Sna
 	}
 	// Deletion lifecycle: once the archival has committed, drop the backing
 	// blob of a media value (best effort; storage errors don't fail the API
-	// call — a later sweep can reconcile).
+	// call, but a failure is surfaced to the cleanup observer, not swallowed).
 	i.gcMedia(ctx, snap.Value)
 	return &snap, nil
 }
 
 // gcMedia removes the object backing a media value from storage. It is a
-// no-op for non-media values or when no blob store is configured.
+// no-op for non-media values or when no blob store is configured. A delete
+// failure is surfaced to the cleanup observer rather than silently dropped.
 func (i *Interactor) gcMedia(ctx context.Context, v valueobjects.Value) {
 	if i.blobs == nil || v.DataType() != valueobjects.DataTypeMedia {
 		return
 	}
 	if key := v.Media().ObjectKey; key != "" {
-		_ = i.blobs.Delete(ctx, key)
+		if err := i.blobs.Delete(ctx, key); err != nil {
+			i.observeCleanup(fmt.Errorf("gc media blob %s: %w", key, err))
+		}
 	}
 }
 
 // gcMediaAfterCommit schedules the blob backing an archived or overwritten
 // media value for deletion once the surrounding transaction commits (best
-// effort — a storage error never fails the write). Registering on the
-// transaction keeps GC correct across every archival path — overwrite, entity
-// removal, mutation apply and snapshot restore — not just single-value Remove.
+// effort — a storage error never fails the write, but is surfaced to the
+// cleanup observer). Registering on the transaction keeps GC correct across
+// every archival path — overwrite, entity removal, mutation apply and snapshot
+// restore — not just single-value Remove.
 func (i *Interactor) gcMediaAfterCommit(tx db.Transactor, v valueobjects.Value) {
 	if i.blobs == nil || v.DataType() != valueobjects.DataTypeMedia {
 		return
@@ -764,7 +839,9 @@ func (i *Interactor) gcMediaAfterCommit(tx db.Transactor, v valueobjects.Value) 
 		return
 	}
 	tx.OnPostCommit(func(ctx context.Context) error {
-		_ = i.blobs.Delete(ctx, key)
+		if err := i.blobs.Delete(ctx, key); err != nil {
+			i.observeCleanup(fmt.Errorf("gc media blob %s: %w", key, err))
+		}
 		return nil
 	})
 }

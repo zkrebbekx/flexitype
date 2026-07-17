@@ -51,6 +51,20 @@ func (s *server) downloadMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := chi.URLParam(r, "objectKey")
+	// Confirm the caller's tenant owns this object key before serving it. Keys
+	// are flat ULIDs in a shared blob namespace and leak into value payloads,
+	// exports and revision snapshots, so streaming one unchecked is a
+	// cross-tenant file read (IDOR). A mismatch is a NotFound — the same
+	// response as a missing key, so ownership isn't probeable.
+	owned, err := application.FromContext(r.Context()).Values().MediaKeyOwned(r.Context(), key)
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	if !owned {
+		writeError(w, s.log, domainerrors.NewNotFound("media", key))
+		return
+	}
 	rc, mime, err := s.blobs.Open(r.Context(), key)
 	if err != nil {
 		writeError(w, s.log, domainerrors.NewNotFound("media", key))

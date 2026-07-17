@@ -700,6 +700,15 @@ func (i *Interactor) Remove(ctx context.Context, rawID string) (*domainvalue.Sna
 		if err := uow.EnsureTenant(ctx, av.TenantID(), domainvalue.AggregateType, rawID); err != nil {
 			return err
 		}
+		// Field-level ACL: removing a value is a write; a principal that may not
+		// write the attribute may not delete its value either.
+		def, err := i.attrs.WithTx(tx).Get(ctx, av.AttributeDefinitionID())
+		if err != nil {
+			return err
+		}
+		if !uow.AccessFromContext(ctx).CanWrite(def.InternalName()) {
+			return domainerrors.NewForbidden("not permitted to write this attribute", "attribute", def.InternalName())
+		}
 		before := av.Snapshot()
 
 		evts, err := av.Remove(i.now())
@@ -772,6 +781,15 @@ func (i *Interactor) Get(ctx context.Context, rawID string) (*domainvalue.Snapsh
 	}
 	if err := uow.EnsureTenant(ctx, av.TenantID(), domainvalue.AggregateType, rawID); err != nil {
 		return nil, err
+	}
+	// Field-level ACL: an unreadable attribute's value is invisible, not leaked
+	// — the same contract ListByEntity/facets/the FQL binder enforce.
+	def, err := i.attrs.Get(ctx, av.AttributeDefinitionID())
+	if err != nil {
+		return nil, err
+	}
+	if !uow.AccessFromContext(ctx).CanRead(def.InternalName()) {
+		return nil, domainerrors.NewNotFound(domainvalue.AggregateType, rawID)
 	}
 	snap := av.Snapshot()
 	return &snap, nil

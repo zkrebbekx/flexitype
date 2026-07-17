@@ -7,6 +7,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/activity"
 	"github.com/zkrebbekx/flexitype/application/uow"
+	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -138,12 +139,29 @@ func (i *Interactor) removeScopedWithin(ctx context.Context, tx db.Transactor, c
 	if err != nil {
 		return domainerrors.NewValidation(err.Error())
 	}
+	// Authorize before touching data: the attribute must belong to the caller's
+	// tenant (a change-set mutation carrying another tenant's ids must not
+	// archive its values on publish) and be writable by the principal.
+	def, err := i.attrs.WithTx(tx).Get(ctx, defID)
+	if err != nil {
+		return err
+	}
+	if err := uow.EnsureTenant(ctx, def.TenantID(), domainattribute.AggregateType, m.AttributeDefinitionID); err != nil {
+		return err
+	}
+	if !uow.AccessFromContext(ctx).CanWrite(def.InternalName()) {
+		return domainerrors.NewForbidden("not permitted to write this attribute", "attribute", def.InternalName())
+	}
+
 	values := i.values.WithTx(tx)
 	existing, err := values.FindByDefinitionAndEntity(ctx, defID, entityID)
 	if err != nil {
 		return fmt.Errorf("load value to remove: %w", err)
 	}
 	for _, av := range existing {
+		if av.TenantID() != tenant {
+			continue // defence in depth: never cross tenant, even by id collision
+		}
 		if av.Scope().Locale != m.Locale || av.Scope().Channel != m.Channel {
 			continue
 		}
@@ -164,6 +182,5 @@ func (i *Interactor) removeScopedWithin(ctx context.Context, tx db.Transactor, c
 			Before:   before,
 		})
 	}
-	_ = tenant
 	return nil
 }

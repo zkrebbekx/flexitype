@@ -9,6 +9,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
+	appchangeset "github.com/zkrebbekx/flexitype/application/changeset"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -55,6 +56,32 @@ func TestFieldLevelAccess(t *testing.T) {
 
 			// sku (unrestricted) is still writable.
 			So(set(readonlyCost, sku.ID.String(), "XYZ"), ShouldBeNil)
+		})
+
+		Convey("Field ACL applies to reading and deleting a value by id", func() {
+			vals, err := ia.Values().ListByEntity(admin, typeID, "p1")
+			So(err, ShouldBeNil)
+			var costValueID string
+			for _, v := range vals {
+				if v.AttributeDefinitionID.String() == cost.ID.String() {
+					costValueID = v.ID.String()
+				}
+			}
+			So(costValueID, ShouldNotBeBlank)
+
+			// none-on-cost: Get by id is invisible (NotFound), not leaked.
+			_, err = svc.Interactors(noCost).Values().Get(noCost, costValueID)
+			So(domainerrors.IsNotFound(err), ShouldBeTrue)
+
+			// read-only-on-cost: delete is a write, so it is forbidden.
+			_, err = svc.Interactors(readonlyCost).Values().Remove(readonlyCost, costValueID)
+			So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeForbidden)
+
+			// admin reads and deletes it.
+			_, err = ia.Values().Get(admin, costValueID)
+			So(err, ShouldBeNil)
+			_, err = ia.Values().Remove(admin, costValueID)
+			So(err, ShouldBeNil)
 		})
 
 		Convey("A none-on-cost principal cannot see or query cost", func() {
@@ -126,6 +153,45 @@ func TestFieldLevelAccess(t *testing.T) {
 			out, err := ia.Values().Export(admin, appvalue.ExportInput{TypeDefinitionID: typeID})
 			So(err, ShouldBeNil)
 			So(out.Columns, ShouldContain, "cost")
+		})
+	})
+}
+
+func TestChangeSetCannotCrossTenant(t *testing.T) {
+	Convey("Given tenant A holds a value and tenant B runs a change-set", t, func() {
+		svc := flexitype.NewInMemory()
+		ctxA := uow.WithTenant(context.Background(), valueobjects.TenantID("tenant-a"))
+		ctxB := uow.WithTenant(context.Background(), valueobjects.TenantID("tenant-b"))
+		a := svc.Interactors(ctxA)
+
+		product, err := a.TypeDefinitions().Create(ctxA, apptypedef.CreateInput{InternalName: "product", DisplayName: "Product"})
+		So(err, ShouldBeNil)
+		cost, err := a.Attributes().Create(ctxA, appattribute.CreateInput{
+			TypeDefinitionID: product.ID.String(), InternalName: "cost", DisplayName: "Cost", DataType: "float",
+		})
+		So(err, ShouldBeNil)
+		_, err = a.Values().Set(ctxA, appvalue.SetInput{
+			AttributeDefinitionID: cost.ID.String(), EntityID: "p1", TypeDefinitionID: product.ID.String(),
+			Value: json.RawMessage(`250`),
+		})
+		So(err, ShouldBeNil)
+
+		Convey("When tenant B publishes a change-set removing tenant A's value", func() {
+			b := svc.Interactors(ctxB)
+			cs, err := b.ChangeSets().Create(ctxB, appchangeset.CreateInput{Name: "cross-tenant"})
+			So(err, ShouldBeNil)
+			// tenant B references tenant A's attribute id (ids are not secrets).
+			_, _ = b.ChangeSets().AddMutation(ctxB, cs.ID.String(), appvalue.Mutation{
+				Kind: appvalue.MutationRemove, AttributeDefinitionID: cost.ID.String(), EntityID: "p1",
+			})
+			_, _ = b.ChangeSets().Submit(ctxB, cs.ID.String())
+			_, _ = b.ChangeSets().Publish(ctxB, cs.ID.String())
+
+			Convey("Then tenant A's value survives", func() {
+				vals, err := a.Values().ListByEntity(ctxA, product.ID.String(), "p1")
+				So(err, ShouldBeNil)
+				So(len(vals), ShouldEqual, 1)
+			})
 		})
 	})
 }

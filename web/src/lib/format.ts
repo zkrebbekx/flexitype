@@ -1,5 +1,7 @@
 // Small formatting helpers shared across screens.
 
+import { formatQuantity, isQuantityValue } from './values'
+
 const dtf = new Intl.DateTimeFormat(undefined, {
   dateStyle: 'medium',
   timeStyle: 'short',
@@ -27,6 +29,9 @@ export function formatRelative(iso: string): string {
 // renderValue shows a stored value compactly in tables.
 export function renderValue(v: unknown): string {
   if (v === null || v === undefined) return '—'
+  // A quantity value is an object; show its "{magnitude} {unit}" display form
+  // rather than raw JSON so grids and detail views read naturally.
+  if (isQuantityValue(v)) return formatQuantity(v)
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
 }

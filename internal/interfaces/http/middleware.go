@@ -140,7 +140,17 @@ func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(ht
 				writeUnauthorized(w, "missing bearer token")
 				return
 			}
-			account, err := auth.Authenticate(token)
+			// Prefer the context-aware form so the request's cancellation,
+			// deadline and trace reach the credential lookup (a per-request SQL
+			// query for the database-backed store); fall back for any
+			// Authenticator that predates it.
+			var account serviceaccount.Account
+			var err error
+			if ctxAuth, ok := auth.(serviceaccount.AuthenticatorCtx); ok {
+				account, err = ctxAuth.AuthenticateCtx(r.Context(), token)
+			} else {
+				account, err = auth.Authenticate(token)
+			}
 			if err != nil {
 				log.Warn().Err(err).Msg("authentication failed")
 				writeUnauthorized(w, "invalid credentials")

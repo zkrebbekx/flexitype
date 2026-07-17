@@ -8,6 +8,7 @@
 package memory
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/activity"
+	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainrelationship "github.com/zkrebbekx/flexitype/domain/relationship"
@@ -35,6 +37,14 @@ type Store struct {
 	rels       map[string]domainrelationship.Snapshot
 	activities []activity.Entry
 	searchDocs map[string]searchDoc // key: tenant + "\x00" + entity
+	// schemaVersions is the per-tenant schema version, bumped on any definition
+	// (type/attribute/relationship) write, mirroring the Postgres trigger of
+	// migration 000020 (issue #192). It backs the GraphQL engine's schema-cache
+	// staleness check. Memory mode is single-process, so it only has to move on
+	// a definition change. It is deliberately NOT part of the transaction
+	// snapshot: a rolled-back definition write leaving the counter advanced only
+	// causes a harmless schema rebuild, never a stale schema.
+	schemaVersions map[string]uint64
 }
 
 type searchDoc struct {
@@ -48,14 +58,33 @@ type searchDoc struct {
 // NewStore creates an empty in-memory store.
 func NewStore() *Store {
 	return &Store{
-		typeDefs:   map[string]domaintypedef.Snapshot{},
-		attrs:      map[string]domainattribute.Snapshot{},
-		values:     map[string]domainvalue.Snapshot{},
-		deps:       map[string]domaindependency.Snapshot{},
-		relDefs:    map[string]domainrelationship.DefinitionSnapshot{},
-		rels:       map[string]domainrelationship.Snapshot{},
-		searchDocs: map[string]searchDoc{},
+		typeDefs:       map[string]domaintypedef.Snapshot{},
+		attrs:          map[string]domainattribute.Snapshot{},
+		values:         map[string]domainvalue.Snapshot{},
+		deps:           map[string]domaindependency.Snapshot{},
+		relDefs:        map[string]domainrelationship.DefinitionSnapshot{},
+		rels:           map[string]domainrelationship.Snapshot{},
+		searchDocs:     map[string]searchDoc{},
+		schemaVersions: map[string]uint64{},
 	}
+}
+
+// bumpSchemaVersion advances a tenant's schema version. The definition-repo
+// Save methods that call it already hold s.mu, so it takes no lock of its own.
+func (s *Store) bumpSchemaVersion(tenant string) {
+	s.schemaVersions[tenant]++
+}
+
+// schemaVersionReader serves the persisted per-tenant schema version so the
+// GraphQL engine's cross-replica cache check works identically over the memory
+// backend (issue #192).
+type schemaVersionReader struct{ s *Store }
+
+func (r *schemaVersionReader) SchemaVersion(ctx context.Context) (uint64, error) {
+	tenant := uow.TenantFromContext(ctx)
+	r.s.mu.RLock()
+	defer r.s.mu.RUnlock()
+	return r.s.schemaVersions[tenant.String()], nil
 }
 
 // Repositories returns the full repository set over this store, including
@@ -69,6 +98,7 @@ func (s *Store) Repositories() application.Repositories {
 		RelationshipDefinitions: &relDefRepo{s},
 		Relationships:           &relRepo{s},
 		Query:                   &queryRepo{s},
+		SchemaVersions:          &schemaVersionReader{s},
 	}
 }
 

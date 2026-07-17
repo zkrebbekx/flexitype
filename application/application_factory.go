@@ -171,6 +171,7 @@ func (f *factory) New(context.Context) *Interactors {
 		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),
 		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query, f.cfg.Features.SearchIndex, f.cfg.UnitFamilies),
 		activity:      &ActivityInteractor{log: activityLog},
+		schemaVersion: repos.SchemaVersions,
 		features:      f.cfg.Features,
 	}
 	if f.cfg.BlobStore != nil {

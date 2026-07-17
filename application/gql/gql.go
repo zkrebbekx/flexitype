@@ -5,11 +5,14 @@
 // Relay connections — edges/node/cursor plus pageInfo and totalCount — paged
 // with first/after. The schema is built per tenant and per caller-permission
 // set (an attribute the caller may not read is not a field, so introspection
-// never leaks it) and is regenerated after any definition event. FQL is
-// exposed as a filter argument on each top-level field.
+// never leaks it) and is rebuilt whenever the tenant's persisted schema version
+// changes, so a definition change made on any replica propagates to every
+// replica (issue #192). FQL is exposed as a filter argument on each top-level
+// field.
 package gql
 
 import (
+	"container/list"
 	"context"
 	"fmt"
 	"sort"
@@ -103,20 +106,84 @@ func checkQueryCost(query string) error {
 
 // Engine builds and caches per-tenant GraphQL schemas and executes queries.
 // It is safe for concurrent use.
+//
+// A tenant's schema is derived from its live definitions; each cached schema is
+// keyed by tenant+access and tagged with the tenant's PERSISTED schema version
+// (flexitype_schema_version, bumped by a trigger on any definition change —
+// issue #192). Deriving staleness from that persisted version, rather than an
+// in-process event counter, is what makes the cache correct across replicas:
+// event delivery is once-per-cluster, but every replica reads the same
+// persisted version. A short-TTL per-tenant memo keeps the common path off the
+// database, and a definition event invalidates the writing replica's memo so it
+// observes its own change at once. The schema cache is LRU-bounded so it cannot
+// grow without limit.
 type Engine struct {
-	mu          sync.Mutex
-	generations map[string]uint64       // tenant -> schema generation
-	cache       map[string]cachedSchema // tenant|access -> built schema
+	mu       sync.Mutex
+	memo     map[string]versionMemo   // tenant -> last-read persisted version
+	memoTTL  time.Duration            // how long a memo entry is trusted
+	cacheCap int                      // max cached schemas (LRU-evicted past it)
+	ll       *list.List               // LRU recency order; front = most recent
+	cache    map[string]*list.Element // tenant|access -> *cacheEntry element
+	now      func() time.Time         // clock; swappable in tests
 }
 
-type cachedSchema struct {
+// versionMemo caches a tenant's persisted schema version to spare a database
+// read on every query; it is trusted for memoTTL, then re-read.
+type versionMemo struct {
+	version   uint64
+	fetchedAt time.Time
+}
+
+// cacheEntry is one built schema tagged with the persisted version it was built
+// against; it lives in the LRU list.
+type cacheEntry struct {
+	key    string
 	gen    uint64
 	schema graphql.Schema
 }
 
-// NewEngine builds a GraphQL engine.
-func NewEngine() *Engine {
-	return &Engine{generations: map[string]uint64{}, cache: map[string]cachedSchema{}}
+// Defaults balance a cross-replica staleness window against database load and
+// memory: the memo re-reads a tenant's version at most every defaultMemoTTL, and
+// at most defaultCacheCap (tenant|access) schemas are retained.
+const (
+	defaultMemoTTL  = 5 * time.Second
+	defaultCacheCap = 256
+)
+
+// EngineOption configures an Engine.
+type EngineOption func(*Engine)
+
+// WithMemoTTL sets how long a tenant's persisted schema version is trusted
+// before it is re-read. Zero forces a read on every query (used in tests to
+// observe a cross-replica change deterministically).
+func WithMemoTTL(d time.Duration) EngineOption { return func(e *Engine) { e.memoTTL = d } }
+
+// WithCacheCap bounds the number of cached (tenant|access) schemas; the
+// least-recently-used entry is evicted once the cap is exceeded. Non-positive
+// values are ignored.
+func WithCacheCap(n int) EngineOption {
+	return func(e *Engine) {
+		if n > 0 {
+			e.cacheCap = n
+		}
+	}
+}
+
+// NewEngine builds a GraphQL engine. The zero-argument form uses the defaults
+// (5s version memo, 256-schema LRU) so existing call sites keep working.
+func NewEngine(opts ...EngineOption) *Engine {
+	e := &Engine{
+		memo:     map[string]versionMemo{},
+		memoTTL:  defaultMemoTTL,
+		cacheCap: defaultCacheCap,
+		ll:       list.New(),
+		cache:    map[string]*list.Element{},
+		now:      time.Now,
+	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // Name identifies the dispatcher subscriber.
@@ -134,13 +201,18 @@ func (e *Engine) EventTypes() []events.Type {
 	}
 }
 
-// Handle bumps the tenant's schema generation so the next query rebuilds.
+// Handle is a fast-path hint, not the correctness mechanism: on a definition
+// event it drops the tenant's version memo so the replica that made the change
+// re-reads the (now bumped) persisted version on its next query and rebuilds
+// immediately, without waiting for the memo TTL. Replicas that never receive
+// the event still converge, once their memo expires, via the persisted version
+// alone — so correctness never depends on event delivery (issue #192).
 func (e *Engine) Handle(_ context.Context, env events.Envelope) error {
 	if env.TenantID == "" {
 		return nil
 	}
 	e.mu.Lock()
-	e.generations[env.TenantID]++
+	delete(e.memo, env.TenantID)
 	e.mu.Unlock()
 	return nil
 }
@@ -176,17 +248,27 @@ func (e *Engine) Execute(ctx context.Context, query string, variables map[string
 	})
 }
 
-// schemaFor returns the tenant+access schema, rebuilding on a generation bump
-// or a permission set not seen before.
+// schemaFor returns the tenant+access schema, rebuilding when the tenant's
+// persisted schema version has moved past the cached entry's, or when this
+// permission set has not been seen. The version is read through the
+// request-scoped interactors (the same handle buildSchema uses) and memoised
+// per tenant for a short TTL to keep the hot path off the database.
 func (e *Engine) schemaFor(ctx context.Context, inter *application.Interactors) (graphql.Schema, error) {
 	tenant := uow.TenantFromContext(ctx).String()
 	key := tenant + "|" + accessSignature(uow.AccessFromContext(ctx))
 
+	gen, gotVersion := e.versionFor(ctx, inter, tenant)
+
 	e.mu.Lock()
-	gen := e.generations[tenant]
-	cached, ok := e.cache[key]
+	cached, ok := e.cacheGet(key)
 	e.mu.Unlock()
-	if ok && cached.gen == gen {
+	switch {
+	case ok && gotVersion && cached.gen == gen:
+		// Cache hit at the current version.
+		return cached.schema, nil
+	case ok && !gotVersion:
+		// The version read failed: never fail the query over a stale-check miss
+		// — reuse the last good schema for this key rather than rebuild blindly.
 		return cached.schema, nil
 	}
 
@@ -195,9 +277,66 @@ func (e *Engine) schemaFor(ctx context.Context, inter *application.Interactors) 
 		return graphql.Schema{}, err
 	}
 	e.mu.Lock()
-	e.cache[key] = cachedSchema{gen: gen, schema: schema}
+	e.cachePut(key, gen, schema)
 	e.mu.Unlock()
 	return schema, nil
+}
+
+// versionFor returns the tenant's persisted schema version, memoised for
+// memoTTL. The bool is false only when the version had to be read (memo empty or
+// expired) and that read failed; callers then fall back to the cached schema
+// rather than surface the error.
+func (e *Engine) versionFor(ctx context.Context, inter *application.Interactors, tenant string) (uint64, bool) {
+	now := e.now()
+	e.mu.Lock()
+	m, ok := e.memo[tenant]
+	fresh := ok && e.memoTTL > 0 && now.Sub(m.fetchedAt) < e.memoTTL
+	e.mu.Unlock()
+	if fresh {
+		return m.version, true
+	}
+
+	v, err := inter.SchemaVersion(ctx)
+	if err != nil {
+		// Leave any prior memo untouched; report the miss so schemaFor falls
+		// back to the cached schema.
+		return 0, false
+	}
+	e.mu.Lock()
+	e.memo[tenant] = versionMemo{version: v, fetchedAt: now}
+	e.mu.Unlock()
+	return v, true
+}
+
+// cacheGet returns key's cache entry and marks it most-recently-used. The
+// caller holds e.mu.
+func (e *Engine) cacheGet(key string) (cacheEntry, bool) {
+	el, ok := e.cache[key]
+	if !ok {
+		return cacheEntry{}, false
+	}
+	e.ll.MoveToFront(el)
+	return *el.Value.(*cacheEntry), true
+}
+
+// cachePut inserts or refreshes key's schema, marks it most-recently-used and
+// evicts the least-recently-used entry once the cap is exceeded. The caller
+// holds e.mu.
+func (e *Engine) cachePut(key string, gen uint64, schema graphql.Schema) {
+	if el, ok := e.cache[key]; ok {
+		ent := el.Value.(*cacheEntry)
+		ent.gen = gen
+		ent.schema = schema
+		e.ll.MoveToFront(el)
+		return
+	}
+	e.cache[key] = e.ll.PushFront(&cacheEntry{key: key, gen: gen, schema: schema})
+	if e.cacheCap > 0 && e.ll.Len() > e.cacheCap {
+		if oldest := e.ll.Back(); oldest != nil {
+			e.ll.Remove(oldest)
+			delete(e.cache, oldest.Value.(*cacheEntry).key)
+		}
+	}
 }
 
 // accessSignature keys the schema cache by the caller's readable-attribute set

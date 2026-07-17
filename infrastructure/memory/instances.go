@@ -355,7 +355,9 @@ func (r *relDefRepo) List(_ context.Context, filter domainrelationship.Definitio
 func (r *relDefRepo) Save(_ context.Context, d *domainrelationship.Definition) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	r.s.relDefs[d.ID().String()] = d.Snapshot()
+	snap := d.Snapshot()
+	r.s.relDefs[snap.ID.String()] = snap
+	r.s.bumpSchemaVersion(snap.TenantID.String()) // a relationship change adds/removes a connection field
 	return nil
 }
 

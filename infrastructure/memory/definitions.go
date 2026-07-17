@@ -89,7 +89,9 @@ func (r *typeDefRepo) ListChildren(_ context.Context, parentID valueobjects.Type
 func (r *typeDefRepo) Save(_ context.Context, t *domaintypedef.TypeDefinition) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	r.s.typeDefs[t.ID().String()] = t.Snapshot()
+	snap := t.Snapshot()
+	r.s.typeDefs[snap.ID.String()] = snap
+	r.s.bumpSchemaVersion(snap.TenantID.String()) // a type change reshapes the GraphQL schema
 	return nil
 }
 
@@ -201,7 +203,9 @@ func (r *attrRepo) List(_ context.Context, filter domainattribute.Filter, page d
 func (r *attrRepo) Save(_ context.Context, a *domainattribute.Definition) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	r.s.attrs[a.ID().String()] = a.Snapshot()
+	snap := a.Snapshot()
+	r.s.attrs[snap.ID.String()] = snap
+	r.s.bumpSchemaVersion(snap.TenantID.String()) // an attribute change adds/removes a schema field
 	return nil
 }
 

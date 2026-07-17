@@ -45,6 +45,19 @@ type Repositories struct {
 	RelationshipDefinitions relationshipDefinitionRepository
 	Relationships           relationshipRepository
 	Query                   appquery.Repository
+	// SchemaVersions reports a tenant's persisted schema version; the GraphQL
+	// engine reads it to keep its per-replica schema cache correct (issue #192).
+	SchemaVersions SchemaVersionReader
+}
+
+// SchemaVersionReader reports a tenant's persisted schema version: a counter
+// bumped whenever any type, attribute or relationship definition is created,
+// updated, archived, restored or deleted. The GraphQL engine reads it to decide
+// whether its cached, per-replica schema is stale, so a definition change made
+// on one replica is observed by every replica (issue #192). It reads the tenant
+// from the context and returns 0 when the tenant has no definitions yet.
+type SchemaVersionReader interface {
+	SchemaVersion(ctx context.Context) (uint64, error)
 }
 
 // Narrow aliases keep the struct readable without re-importing domain
@@ -99,11 +112,23 @@ type Interactors struct {
 	revisions     *apprevision.Interactor
 	changesets    *appchangeset.Interactor
 	units         *appunit.Interactor
+	schemaVersion SchemaVersionReader
 	features      Features
 }
 
 // Features reports the deployment's enabled capabilities.
 func (i *Interactors) Features() Features { return i.features }
+
+// SchemaVersion returns the tenant's persisted schema version — the counter the
+// GraphQL engine reads to detect a cross-replica definition change (issue #192).
+// It returns 0 when no reader is configured (a repository set built without
+// one).
+func (i *Interactors) SchemaVersion(ctx context.Context) (uint64, error) {
+	if i.schemaVersion == nil {
+		return 0, nil
+	}
+	return i.schemaVersion.SchemaVersion(ctx)
+}
 
 // TypeDefinitions returns the type-definition usecases.
 func (i *Interactors) TypeDefinitions() *apptypedef.Interactor { return i.typeDefs }

@@ -185,7 +185,7 @@ func run(log *logger.Logger) error {
 				return fmt.Errorf("bootstrap admin: %w", berr)
 			}
 			if token != "" {
-				fmt.Fprintf(os.Stdout, "bootstrap admin account created — store this token now, it will not be shown again:\n%s\n", token)
+				_, _ = fmt.Fprintf(os.Stdout, "bootstrap admin account created — store this token now, it will not be shown again:\n%s\n", token)
 			}
 		}
 	case cfg.ServiceAccountsPath != "":

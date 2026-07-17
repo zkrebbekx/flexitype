@@ -150,11 +150,15 @@ type fakeDeliveryStore struct {
 	due      []ClaimedDelivery
 	outcomes []Outcome
 	released int
+	perCall  int // when >0, cap how many rows one ClaimDue returns (models the per-subscription claim)
 }
 
 func (s *fakeDeliveryStore) ClaimDue(_ context.Context, limit int, _ time.Duration, _ time.Time) ([]ClaimedDelivery, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.perCall > 0 && s.perCall < limit {
+		limit = s.perCall
+	}
 	batch := s.due
 	if len(batch) > limit {
 		batch = batch[:limit]
@@ -382,6 +386,21 @@ func TestWorker(t *testing.T) {
 				ts := received[0].Header.Get(events.HeaderTimestamp)
 				So(events.VerifySignature("s3cret", ts, bodies[0], sig), ShouldBeTrue)
 				So(received[0].Header.Get(events.HeaderDelivery), ShouldNotBeEmpty)
+			})
+		})
+
+		Convey("When there is a backlog and each claim yields one delivery", func() {
+			// Models the real per-subscription claim: ClaimDue returns one row
+			// per poll. A single pass must still drain the whole backlog.
+			store.perCall = 1
+			store.due = []ClaimedDelivery{
+				claimed(receiver.URL, 0), claimed(receiver.URL, 1), claimed(receiver.URL, 2),
+				claimed(receiver.URL, 3), claimed(receiver.URL, 4),
+			}
+			worker.pass(ctx)
+
+			Convey("Then the whole backlog drains in one pass", func() {
+				So(store.outcomes, ShouldHaveLength, 5)
 			})
 		})
 

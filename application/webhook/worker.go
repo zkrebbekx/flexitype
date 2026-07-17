@@ -147,9 +147,11 @@ func (w *Worker) pass(ctx context.Context) {
 			w.report(fmt.Errorf("record outcomes: %w", err))
 			return
 		}
-		if len(claimed) < w.batch {
-			return
-		}
+		// Keep claiming until nothing is due (the top of the loop returns on an
+		// empty claim). ClaimDue takes the earliest pending delivery per
+		// subscription, so successive rounds advance each subscription's backlog
+		// in feed order — a backlog drains RTT-bound in one pass instead of one
+		// delivery per subscription per poll.
 	}
 }
 

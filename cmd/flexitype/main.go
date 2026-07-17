@@ -175,16 +175,17 @@ func run(log *logger.Logger) error {
 	case cfg.EnableProvisioning:
 		accounts = svc.NewAccountLookup(cfg.AuthCacheTTL)
 		log.Info().Msg("provisioning enabled; database-backed authentication active")
-		// Seed the first admin credential if the store is empty. The token
-		// is logged exactly once — capture it, it is not recoverable.
+		// Seed the first admin credential if the store is empty. The token is a
+		// permanent superuser credential, so it is written straight to stdout
+		// once — never through the structured logger, which fans out to
+		// journald / log aggregation where it would be retained and searchable.
 		if cfg.BootstrapAdmin {
 			token, berr := svc.BootstrapAdmin(ctx, "default", "bootstrap-admin")
 			if berr != nil {
 				return fmt.Errorf("bootstrap admin: %w", berr)
 			}
 			if token != "" {
-				log.Warn().Str("token", token).
-					Msg("bootstrap admin account created — store this token now, it will not be shown again")
+				fmt.Fprintf(os.Stdout, "bootstrap admin account created — store this token now, it will not be shown again:\n%s\n", token)
 			}
 		}
 	case cfg.ServiceAccountsPath != "":

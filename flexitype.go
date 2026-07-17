@@ -7,6 +7,7 @@ package flexitype
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -472,7 +473,14 @@ func (s *Service) BootstrapAdmin(ctx context.Context, tenantName, accountName st
 	}
 	a := s.AdminInteractor()
 
-	if existing, err := a.ListAccounts(ctx, tenantName); err == nil && len(existing) > 0 {
+	// Fail closed: a transient error on the existence check must NOT fall
+	// through to minting a fresh admin credential — that would defeat the
+	// documented idempotency and hand out a superuser token on a blip.
+	existing, err := a.ListAccounts(ctx, tenantName)
+	if err != nil {
+		return "", fmt.Errorf("check existing accounts: %w", err)
+	}
+	if len(existing) > 0 {
 		return "", nil // already bootstrapped
 	}
 	if _, err := a.CreateTenant(ctx, tenantName); err != nil && !domainerrors.IsConflict(err) {

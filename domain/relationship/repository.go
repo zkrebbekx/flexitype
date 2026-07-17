@@ -61,14 +61,14 @@ type EntityLinksKey struct {
 type LinkSide int
 
 const (
-	// ParentSide: self entities sit on the parent side; the paged opposite is
-	// the child endpoint (an entity-is-parent relationship field).
+	// ParentSide means the self entities sit on the parent side; the paged
+	// opposite is the child endpoint (an entity-is-parent relationship field).
 	ParentSide LinkSide = iota
-	// ChildSide: self entities sit on the child side; the paged opposite is the
-	// parent endpoint (an entity-is-child relationship field).
+	// ChildSide means the self entities sit on the child side; the paged
+	// opposite is the parent endpoint (an entity-is-child relationship field).
 	ChildSide
-	// EitherSide: a symmetric relationship — self may sit on either side; the
-	// paged opposite is whichever endpoint is not self.
+	// EitherSide means a symmetric relationship — self may sit on either side;
+	// the paged opposite is whichever endpoint is not self.
 	EitherSide
 )
 

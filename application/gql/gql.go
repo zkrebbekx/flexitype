@@ -724,14 +724,12 @@ func attachRelationship(ctx context.Context, inter *application.Interactors, sel
 
 	// The schema already knows this field's definition and which side of the
 	// link the parent entity sits on, so the window is filtered on both in SQL.
-	side := domainrelationship.ParentSide
+	side := domainrelationship.ChildSide
 	switch {
 	case rm.symmetric:
 		side = domainrelationship.EitherSide
 	case rm.entityIsParent:
 		side = domainrelationship.ParentSide
-	default:
-		side = domainrelationship.ChildSide
 	}
 	pages, err := inter.Relationships().WindowedLinks(ctx, apprelationship.LinkWindowInput{
 		DefinitionID: rm.defID,

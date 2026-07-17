@@ -126,6 +126,14 @@ func (b *binder) linkAttrsFor(ctx context.Context, def domainrelationship.Defini
 			if a.IsArchived() {
 				continue
 			}
+			// Field-level access control, mirroring scopeFor's entity path: a
+			// link attribute the principal may not read is invisible to the
+			// binder. Without this, filtering on a restricted link attribute
+			// (e.g. child(rel, link.compensation > 100000)) returns a boolean
+			// that leaks the value one bit at a time (binary-search oracle).
+			if !b.access.CanRead(a.InternalName()) {
+				continue
+			}
 			if _, exists := out[a.InternalName()]; !exists {
 				out[a.InternalName()] = a.Snapshot()
 			}

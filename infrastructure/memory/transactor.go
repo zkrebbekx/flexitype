@@ -11,9 +11,10 @@ import (
 
 // transactor satisfies db.Transactor without a database. It honours the
 // commit-hook contract (pre-commit before commit, post-commit after,
-// rollback hooks on abort) and — via the store snapshot taken at Begin —
-// restores the store on rollback, so a failed unit of work leaves no
-// partial data, matching PostgreSQL atomicity.
+// rollback hooks on abort) and — via a per-transaction undo journal — restores
+// exactly the keys a rolled-back unit of work wrote, so a failed unit of work
+// leaves no partial data (matching PostgreSQL atomicity) without disturbing the
+// committed writes of any interleaved transaction.
 type transactor struct{ store *Store }
 
 var errNoSQL = errors.New("memory: repositories do not execute SQL")
@@ -29,12 +30,20 @@ func (t *transactor) QueryContext(context.Context, string, ...any) (*sql.Rows, e
 func (t *transactor) QueryRowContext(context.Context, string, ...any) *sql.Row { return nil }
 
 func (t *transactor) Begin(context.Context) (db.Transactor, error) {
-	tx := &memTx{store: t.store}
-	if t.store != nil {
-		snap := t.store.snapshot()
-		tx.snapshot = &snap
+	// A fresh undo journal per transaction: repositories bound to this tx (via
+	// WithTx) record the prior value of each key they touch into it, and
+	// Rollback replays it. No whole-store copy is taken.
+	return &memTx{store: t.store, journal: newUndoJournal()}, nil
+}
+
+// journalOf returns the undo journal of a memory transaction, or nil when q is
+// not a memory transaction — a write made outside any transaction is not
+// journalled, since there is nothing to roll back to.
+func journalOf(q db.QueryExecer) *undoJournal {
+	if tx, ok := q.(*memTx); ok {
+		return tx.journal
 	}
-	return tx, nil
+	return nil
 }
 
 func (t *transactor) Commit(context.Context) error   { return db.ErrNotInTransaction }
@@ -53,11 +62,11 @@ func (t *transactor) OnPreCommit(db.Hook)  { panic("memory: OnPreCommit outside 
 func (t *transactor) OnPostCommit(db.Hook) { panic("memory: OnPostCommit outside transaction") }
 func (t *transactor) OnRollback(db.Hook)   { panic("memory: OnRollback outside transaction") }
 
-// memTx is one logical transaction: hook bookkeeping plus the pre-write
-// store snapshot used to undo data mutations on rollback.
+// memTx is one logical transaction: hook bookkeeping plus the undo journal
+// that reverses the data mutations its bound repositories make on rollback.
 type memTx struct {
 	store    *Store
-	snapshot *storeSnapshot
+	journal  *undoJournal
 	depth    int
 	done     bool
 	pre      []db.Hook
@@ -111,11 +120,19 @@ func (t *memTx) Rollback(ctx context.Context) error {
 	if t.done {
 		return nil
 	}
+	// A nested rollback only unwinds one nesting level; the outermost frame
+	// performs the actual undo. Mirrors the SQL transactor's depth guard, which
+	// the snapshot-based memTx used to ignore.
+	if t.depth > 0 {
+		t.depth--
+		return errors.New("memory: rollback inside nested transaction")
+	}
 	t.done = true
-	// Undo any data written during the transaction, then run the rollback
-	// observers.
-	if t.store != nil && t.snapshot != nil {
-		t.store.restore(*t.snapshot)
+	// Undo only the keys this transaction wrote (its journal), then run the
+	// rollback observers. Restoring just those keys — not the whole store —
+	// preserves any writes a concurrently interleaved transaction has committed.
+	if t.store != nil && t.journal != nil {
+		t.store.rollback(t.journal)
 	}
 	var errs []error
 	for _, h := range t.rollback {

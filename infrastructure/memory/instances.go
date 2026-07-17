@@ -14,9 +14,14 @@ import (
 
 // --- attribute values -----------------------------------------------------
 
-type valueRepo struct{ s *Store }
+type valueRepo struct {
+	s *Store
+	j *undoJournal
+}
 
-func (r *valueRepo) WithTx(db.QueryExecer) domainvalue.Repository { return r }
+func (r *valueRepo) WithTx(tx db.QueryExecer) domainvalue.Repository {
+	return &valueRepo{s: r.s, j: journalOf(tx)}
+}
 
 func (r *valueRepo) Get(_ context.Context, id valueobjects.AttributeValueID) (*domainvalue.AttributeValue, error) {
 	r.s.mu.RLock()
@@ -177,7 +182,9 @@ func (r *valueRepo) ListEntities(_ context.Context, tenant valueobjects.TenantID
 func (r *valueRepo) Save(_ context.Context, av *domainvalue.AttributeValue) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	r.s.values[av.ID().String()] = av.Snapshot()
+	id := av.ID().String()
+	captureMap(r.j, collValues, r.s.values, id)
+	r.s.values[id] = av.Snapshot()
 	return nil
 }
 
@@ -210,6 +217,7 @@ func (r *valueRepo) PurgeEntity(_ context.Context, key domainvalue.EntityKey) ([
 				mediaKeys = append(mediaKeys, k)
 			}
 		}
+		captureMap(r.j, collValues, r.s.values, id)
 		delete(r.s.values, id)
 		count++
 	}
@@ -230,6 +238,7 @@ func (r *valueRepo) PurgeTenant(_ context.Context, tenant valueobjects.TenantID)
 				mediaKeys = append(mediaKeys, k)
 			}
 		}
+		captureMap(r.j, collValues, r.s.values, id)
 		delete(r.s.values, id)
 		count++
 	}
@@ -238,9 +247,14 @@ func (r *valueRepo) PurgeTenant(_ context.Context, tenant valueobjects.TenantID)
 
 // --- dependencies -----------------------------------------------------------
 
-type depRepo struct{ s *Store }
+type depRepo struct {
+	s *Store
+	j *undoJournal
+}
 
-func (r *depRepo) WithTx(db.QueryExecer) domaindependency.Repository { return r }
+func (r *depRepo) WithTx(tx db.QueryExecer) domaindependency.Repository {
+	return &depRepo{s: r.s, j: journalOf(tx)}
+}
 
 func (r *depRepo) Get(_ context.Context, id valueobjects.DependencyID) (*domaindependency.Dependency, error) {
 	r.s.mu.RLock()
@@ -304,15 +318,22 @@ func (r *depRepo) List(_ context.Context, filter domaindependency.Filter, page d
 func (r *depRepo) Save(_ context.Context, d *domaindependency.Dependency) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	r.s.deps[d.ID().String()] = d.Snapshot()
+	id := d.ID().String()
+	captureMap(r.j, collDeps, r.s.deps, id)
+	r.s.deps[id] = d.Snapshot()
 	return nil
 }
 
 // --- relationship definitions -------------------------------------------------
 
-type relDefRepo struct{ s *Store }
+type relDefRepo struct {
+	s *Store
+	j *undoJournal
+}
 
-func (r *relDefRepo) WithTx(db.QueryExecer) domainrelationship.DefinitionRepository { return r }
+func (r *relDefRepo) WithTx(tx db.QueryExecer) domainrelationship.DefinitionRepository {
+	return &relDefRepo{s: r.s, j: journalOf(tx)}
+}
 
 func (r *relDefRepo) Get(_ context.Context, id valueobjects.RelationshipDefinitionID) (*domainrelationship.Definition, error) {
 	r.s.mu.RLock()
@@ -369,6 +390,7 @@ func (r *relDefRepo) Save(_ context.Context, d *domainrelationship.Definition) e
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	snap := d.Snapshot()
+	captureMap(r.j, collRelDefs, r.s.relDefs, snap.ID.String())
 	r.s.relDefs[snap.ID.String()] = snap
 	r.s.bumpSchemaVersion(snap.TenantID.String()) // a relationship change adds/removes a connection field
 	return nil
@@ -376,9 +398,14 @@ func (r *relDefRepo) Save(_ context.Context, d *domainrelationship.Definition) e
 
 // --- relationships ----------------------------------------------------------
 
-type relRepo struct{ s *Store }
+type relRepo struct {
+	s *Store
+	j *undoJournal
+}
 
-func (r *relRepo) WithTx(db.QueryExecer) domainrelationship.Repository { return r }
+func (r *relRepo) WithTx(tx db.QueryExecer) domainrelationship.Repository {
+	return &relRepo{s: r.s, j: journalOf(tx)}
+}
 
 func (r *relRepo) Get(_ context.Context, id valueobjects.RelationshipID) (*domainrelationship.Relationship, error) {
 	r.s.mu.RLock()
@@ -582,7 +609,9 @@ func (r *relRepo) List(_ context.Context, filter domainrelationship.Filter, page
 func (r *relRepo) Save(_ context.Context, rel *domainrelationship.Relationship) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	r.s.rels[rel.ID().String()] = rel.Snapshot()
+	id := rel.ID().String()
+	captureMap(r.j, collRels, r.s.rels, id)
+	r.s.rels[id] = rel.Snapshot()
 	return nil
 }
 
@@ -593,6 +622,7 @@ func (r *relRepo) PurgeEntity(_ context.Context, tenant valueobjects.TenantID, e
 	// Erase every link touching the entity on either side, archived included.
 	for id, snap := range r.s.rels {
 		if snap.TenantID == tenant && (snap.ParentEntityID == entityID || snap.ChildEntityID == entityID) {
+			captureMap(r.j, collRels, r.s.rels, id)
 			delete(r.s.rels, id)
 			count++
 		}
@@ -606,6 +636,7 @@ func (r *relRepo) PurgeTenant(_ context.Context, tenant valueobjects.TenantID) (
 	count := 0
 	for id, snap := range r.s.rels {
 		if snap.TenantID == tenant {
+			captureMap(r.j, collRels, r.s.rels, id)
 			delete(r.s.rels, id)
 			count++
 		}

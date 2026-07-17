@@ -2,9 +2,11 @@
 // memory: no database, no migrations. It powers the browser playground and
 // gives embedding consumers a zero-dependency test double with the same
 // semantics as the PostgreSQL implementation (soft archiving, hierarchies,
-// pagination, FQL). Writes are NOT transactional — the memory transactor
-// honours the commit-hook contract (activity, events) but data mutations
-// apply immediately.
+// pagination, FQL). Writes apply to the shared maps immediately, but the
+// memory transactor honours the commit-hook contract (activity, events) AND
+// keeps a per-transaction undo journal, so a rollback reverses exactly the keys
+// that transaction wrote — leaving a concurrently interleaved transaction's
+// committed writes intact, matching PostgreSQL atomicity.
 package memory
 
 import (
@@ -41,9 +43,9 @@ type Store struct {
 	// (type/attribute/relationship) write, mirroring the Postgres trigger of
 	// migration 000020 (issue #192). It backs the GraphQL engine's schema-cache
 	// staleness check. Memory mode is single-process, so it only has to move on
-	// a definition change. It is deliberately NOT part of the transaction
-	// snapshot: a rolled-back definition write leaving the counter advanced only
-	// causes a harmless schema rebuild, never a stale schema.
+	// a definition change. It is deliberately NOT journalled: a rolled-back
+	// definition write leaving the counter advanced only causes a harmless
+	// schema rebuild, never a stale schema.
 	schemaVersions map[string]uint64
 }
 
@@ -91,12 +93,12 @@ func (r *schemaVersionReader) SchemaVersion(ctx context.Context) (uint64, error)
 // the in-process FQL executor.
 func (s *Store) Repositories() application.Repositories {
 	return application.Repositories{
-		TypeDefinitions:         &typeDefRepo{s},
-		Attributes:              &attrRepo{s},
-		Values:                  &valueRepo{s},
-		Dependencies:            &depRepo{s},
-		RelationshipDefinitions: &relDefRepo{s},
-		Relationships:           &relRepo{s},
+		TypeDefinitions:         &typeDefRepo{s: s},
+		Attributes:              &attrRepo{s: s},
+		Values:                  &valueRepo{s: s},
+		Dependencies:            &depRepo{s: s},
+		RelationshipDefinitions: &relDefRepo{s: s},
+		Relationships:           &relRepo{s: s},
 		Query:                   &queryRepo{s},
 		SchemaVersions:          &schemaVersionReader{s},
 	}
@@ -106,61 +108,99 @@ func (s *Store) Repositories() application.Repositories {
 func (s *Store) ActivityLog() activity.Log { return &activityLog{s} }
 
 // Transactor returns a transactor honouring the pre/post/rollback hook
-// contract. On rollback it restores the store to its pre-transaction
-// state, so a unit of work that writes then fails leaves no partial data
-// — matching PostgreSQL's atomicity.
+// contract. On rollback it replays the transaction's undo journal — restoring
+// exactly the keys that transaction wrote — so a unit of work that writes then
+// fails leaves no partial data (matching PostgreSQL's atomicity) WITHOUT
+// disturbing the writes any other in-flight transaction has committed.
 func (s *Store) Transactor() db.Transactor { return &transactor{store: s} }
 
-// storeSnapshot is a shallow copy of every collection. Entries are
-// immutable value snapshots, so copying the maps is enough to undo any
-// writes made during a transaction.
-type storeSnapshot struct {
-	typeDefs   map[string]domaintypedef.Snapshot
-	attrs      map[string]domainattribute.Snapshot
-	values     map[string]domainvalue.Snapshot
-	deps       map[string]domaindependency.Snapshot
-	relDefs    map[string]domainrelationship.DefinitionSnapshot
-	rels       map[string]domainrelationship.Snapshot
-	activities []activity.Entry
-	searchDocs map[string]searchDoc
+// The collection tags below name the map a journalled key belongs to, so the
+// same id in two different collections gets two independent undo entries.
+const (
+	collTypeDefs   = "type_definitions"
+	collAttrs      = "attributes"
+	collValues     = "values"
+	collDeps       = "dependencies"
+	collRelDefs    = "relationship_definitions"
+	collRels       = "relationships"
+	collActivities = "activities"
+)
+
+// journalKey identifies one journalled store entry: its collection and its id.
+type journalKey struct {
+	coll string
+	id   string
 }
 
-// snapshot captures the current state for a potential rollback.
-func (s *Store) snapshot() storeSnapshot {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return storeSnapshot{
-		typeDefs:   cloneMap(s.typeDefs),
-		attrs:      cloneMap(s.attrs),
-		values:     cloneMap(s.values),
-		deps:       cloneMap(s.deps),
-		relDefs:    cloneMap(s.relDefs),
-		rels:       cloneMap(s.rels),
-		activities: append([]activity.Entry(nil), s.activities...),
-		searchDocs: cloneMap(s.searchDocs),
+// undoJournal records how to reverse a single transaction's writes. On the
+// FIRST mutation of a given key within the transaction it captures that key's
+// prior value (or its absence); Rollback replays the entries to restore exactly
+// those keys and Commit simply discards the journal.
+//
+// It replaces the old whole-store snapshot, which broke isolation — a rollback
+// restored the ENTIRE store, silently erasing writes another interleaved
+// transaction had already committed — and cost O(dataset) per write
+// transaction. The journal touches only the keys a transaction actually wrote,
+// so interleaved transactions no longer clobber one another and a write
+// transaction is O(touched keys).
+type undoJournal struct {
+	seen  map[journalKey]struct{} // keys already captured (first-write-wins)
+	undos []func()                // restore closures, replayed in reverse
+}
+
+func newUndoJournal() *undoJournal {
+	return &undoJournal{seen: map[journalKey]struct{}{}}
+}
+
+// captureMap records, once per transaction, the prior state of key id in map m
+// before the caller overwrites or deletes it, so a rollback can put it back
+// (its prior value, or a delete when it did not exist). The caller holds s.mu.
+// A nil journal — a write made outside any transaction — is a no-op, since
+// there is nothing to roll back to. The map header is captured, never
+// reassigned, so restoring mutates the live store map in place.
+func captureMap[V any](j *undoJournal, coll string, m map[string]V, id string) {
+	if j == nil {
+		return
 	}
+	k := journalKey{coll: coll, id: id}
+	if _, done := j.seen[k]; done {
+		return
+	}
+	j.seen[k] = struct{}{}
+	prior, existed := m[id]
+	j.undos = append(j.undos, func() {
+		if existed {
+			m[id] = prior
+		} else {
+			delete(m, id)
+		}
+	})
 }
 
-// restore reverts the store to a captured snapshot.
-func (s *Store) restore(snap storeSnapshot) {
+// captureActivities records the activity log's slice header at the first append
+// in the transaction so a rollback truncates the appended entries back off. The
+// log is append-only, so restoring the pre-append header is enough.
+func captureActivities(j *undoJournal, s *Store) {
+	if j == nil {
+		return
+	}
+	k := journalKey{coll: collActivities}
+	if _, done := j.seen[k]; done {
+		return
+	}
+	j.seen[k] = struct{}{}
+	prior := s.activities
+	j.undos = append(j.undos, func() { s.activities = prior })
+}
+
+// rollback replays the journal under the store lock, restoring every captured
+// key to its pre-transaction state (newest entry first).
+func (s *Store) rollback(j *undoJournal) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.typeDefs = snap.typeDefs
-	s.attrs = snap.attrs
-	s.values = snap.values
-	s.deps = snap.deps
-	s.relDefs = snap.relDefs
-	s.rels = snap.rels
-	s.activities = snap.activities
-	s.searchDocs = snap.searchDocs
-}
-
-func cloneMap[K comparable, V any](m map[K]V) map[K]V {
-	out := make(map[K]V, len(m))
-	for k, v := range m {
-		out[k] = v
+	for i := len(j.undos) - 1; i >= 0; i-- {
+		j.undos[i]()
 	}
-	return out
 }
 
 // paginate returns the keyset page of a result set already sorted in the

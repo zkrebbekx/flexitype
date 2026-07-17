@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -78,7 +79,7 @@ func (i *Interactor) UploadMedia(ctx context.Context, rawTypeID, entityID, rawAt
 	}
 	raw, err := json.Marshal(meta)
 	if err != nil {
-		_ = i.blobs.Delete(ctx, key)
+		i.deleteOrphanedUpload(ctx, key)
 		return nil, err
 	}
 	snap, err := i.Set(ctx, SetInput{
@@ -88,8 +89,18 @@ func (i *Interactor) UploadMedia(ctx context.Context, rawTypeID, entityID, rawAt
 		Value:                 raw,
 	})
 	if err != nil {
-		_ = i.blobs.Delete(ctx, key) // constraint rejected the value; don't orphan the blob
+		i.deleteOrphanedUpload(ctx, key) // constraint rejected the value; don't orphan the blob
 		return nil, err
 	}
 	return snap, nil
+}
+
+// deleteOrphanedUpload removes a freshly stored object whose value write did not
+// go through, so a rejected upload never orphans a blob. Best effort — the
+// upload has already failed — but a delete failure is surfaced to the cleanup
+// observer rather than silently swallowed.
+func (i *Interactor) deleteOrphanedUpload(ctx context.Context, key string) {
+	if err := i.blobs.Delete(ctx, key); err != nil {
+		i.observeCleanup(fmt.Errorf("delete orphaned upload blob %s: %w", key, err))
+	}
 }

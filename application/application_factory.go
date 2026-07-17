@@ -67,6 +67,13 @@ type FactoryConfig struct {
 	// error is logged/metered here rather than failing the request. Optional.
 	OnDispatchError func(ctx context.Context, err error)
 
+	// OnCleanupError observes a swallowed post-erasure cleanup failure — a
+	// media-blob GC or search-projection removal that could not be completed
+	// after a committed erasure. These are best-effort by design (they must not
+	// undo a durable erasure), so the failure is surfaced here for
+	// logging/metering rather than lost. Optional.
+	OnCleanupError func(error)
+
 	// Now overrides the clock. Optional; defaults to time.Now.
 	Now func() time.Time
 
@@ -176,6 +183,9 @@ func (f *factory) New(context.Context) *Interactors {
 	}
 	if f.cfg.BlobStore != nil {
 		i.values.SetBlobStore(f.cfg.BlobStore)
+	}
+	if f.cfg.OnCleanupError != nil {
+		i.values.SetCleanupObserver(f.cfg.OnCleanupError)
 	}
 	if f.cfg.SavedViews != nil {
 		i.savedViews = appsavedview.NewInteractor(f.cfg.SavedViews)

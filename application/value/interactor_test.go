@@ -382,7 +382,7 @@ func TestSetValueUsecase(t *testing.T) {
 		})
 
 		unit := uow.New(&fakeTransactor{}, dispatcher, log)
-		interactor := NewInteractor(unit, typeDefs, attrs, values, deps, &fakeLinksRepo{})
+		interactor := NewInteractor(unit, typeDefs, attrs, values, deps, &fakeLinksRepo{}, Config{})
 		ctx := context.Background()
 
 		serial := mustAttr(domainattribute.NewInput{

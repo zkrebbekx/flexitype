@@ -13,6 +13,7 @@ import (
 	appchangeset "github.com/zkrebbekx/flexitype/application/changeset"
 	appdedup "github.com/zkrebbekx/flexitype/application/dedup"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
+	apperasure "github.com/zkrebbekx/flexitype/application/erasure"
 	"github.com/zkrebbekx/flexitype/application/feed"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
@@ -212,21 +213,33 @@ func (f *factory) New(context.Context) *Interactors {
 	unit := uow.New(f.cfg.Transactor, f.cfg.Dispatcher, activityLog, opts...)
 
 	i := &Interactors{
-		typeDefs:      apptypedef.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
-		attrs:         appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, f.cfg.UnitFamilies),
-		values:        appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies, repos.Relationships),
+		typeDefs: apptypedef.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
+		attrs:    appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, f.cfg.UnitFamilies),
+		values: appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies, repos.Relationships, appvalue.Config{
+			Blobs:          f.cfg.BlobStore,
+			UnitFamilies:   f.cfg.UnitFamilies,
+			OnCleanupError: f.cfg.OnCleanupError,
+		}),
+		// Erasure owns the cross-store right-to-erasure hard delete: the
+		// revision-purge tx-join, the post-commit search-projection removal and
+		// the honest media-blob GC. Nil optional stores disable the corresponding
+		// step; the interactor is constructed totally, with no post-construction
+		// setters to leave it half-wired.
+		erasure: apperasure.NewInteractor(apperasure.Config{
+			UnitOfWork:     unit,
+			Values:         repos.Values,
+			Links:          repos.Relationships,
+			Revisions:      f.cfg.Revisions,
+			Search:         f.cfg.SearchStore,
+			Blobs:          f.cfg.BlobStore,
+			OnCleanupError: f.cfg.OnCleanupError,
+		}),
 		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
 		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),
 		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query, f.cfg.Features.SearchIndex, f.cfg.UnitFamilies),
 		activity:      &ActivityInteractor{log: activityLog},
 		schemaVersion: repos.SchemaVersions,
 		features:      f.cfg.Features,
-	}
-	if f.cfg.BlobStore != nil {
-		i.values.SetBlobStore(f.cfg.BlobStore)
-	}
-	if f.cfg.OnCleanupError != nil {
-		i.values.SetCleanupObserver(f.cfg.OnCleanupError)
 	}
 	if f.cfg.SavedViews != nil {
 		i.savedViews = appsavedview.NewInteractor(f.cfg.SavedViews)
@@ -236,19 +249,12 @@ func (f *factory) New(context.Context) *Interactors {
 	}
 	if f.cfg.Revisions != nil {
 		i.revisions = apprevision.NewInteractor(f.cfg.Revisions, repos.TypeDefinitions, repos.Attributes, repos.Values, i.values, f.cfg.Now)
-		// The erasure usecase purges revisions too.
-		i.values.SetRevisionStore(f.cfg.Revisions)
-	}
-	if f.cfg.SearchStore != nil {
-		// The erasure usecase purges the search projection too.
-		i.values.SetSearchStore(f.cfg.SearchStore)
 	}
 	if f.cfg.ChangeSets != nil {
 		i.changesets = appchangeset.NewInteractor(f.cfg.ChangeSets, i.values, f.cfg.Now)
 	}
 	if f.cfg.UnitFamilies != nil {
 		i.units = appunit.NewInteractor(f.cfg.UnitFamilies)
-		i.values.SetUnitFamilies(f.cfg.UnitFamilies)
 	}
 	// Schema orchestrates the aggregate interactors; built after units so
 	// bundle export/import and clone carry quantity families.

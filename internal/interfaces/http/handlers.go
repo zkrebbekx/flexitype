@@ -537,7 +537,7 @@ func (s *server) purgeEntity(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	report, err := application.FromContext(r.Context()).Values().PurgeEntity(
+	report, err := application.FromContext(r.Context()).Erasure().PurgeEntity(
 		r.Context(), chi.URLParam(r, "typeDefinitionID"), chi.URLParam(r, "entityID"))
 	if err != nil {
 		writeError(w, s.log, err)
@@ -553,7 +553,7 @@ func (s *server) purgeTenant(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	report, err := application.FromContext(r.Context()).Values().PurgeTenant(r.Context())
+	report, err := application.FromContext(r.Context()).Erasure().PurgeTenant(r.Context())
 	if err != nil {
 		writeError(w, s.log, err)
 		return

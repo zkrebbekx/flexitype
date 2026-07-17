@@ -68,7 +68,7 @@ func TestPurgeEntityReportsBlobFailures(t *testing.T) {
 		blobKey := mediaSnap.Value.Media().ObjectKey
 
 		Convey("When e1 is purged", func() {
-			report, err := it.Values().PurgeEntity(ctx, typeID, "e1")
+			report, err := it.Erasure().PurgeEntity(ctx, typeID, "e1")
 			// The erasure still commits: blob GC is post-commit best effort and
 			// must not undo a durable erasure.
 			So(err, ShouldBeNil)

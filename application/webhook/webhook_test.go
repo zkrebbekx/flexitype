@@ -17,9 +17,9 @@ import (
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/internal/safedial"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
-	"github.com/zkrebbekx/flexitype/pkg/safedial"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 

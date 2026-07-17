@@ -1,6 +1,8 @@
 package serviceaccount
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -8,6 +10,50 @@ import (
 
 	. "github.com/smartystreets/goconvey/convey"
 )
+
+// ctxRecordingAuth is a context-aware store that records the context it was
+// called with and honors cancellation.
+type ctxRecordingAuth struct {
+	gotCtx context.Context
+}
+
+func (f *ctxRecordingAuth) Authenticate(token string) (Account, error) {
+	return f.AuthenticateCtx(context.Background(), token)
+}
+
+func (f *ctxRecordingAuth) AuthenticateCtx(ctx context.Context, _ string) (Account, error) {
+	f.gotCtx = ctx
+	if err := ctx.Err(); err != nil {
+		return Account{}, err
+	}
+	return Account{ID: "acct", Name: "svc"}, nil
+}
+
+func TestCachingAuthenticatorThreadsContext(t *testing.T) {
+	Convey("Given a caching authenticator over a context-aware store", t, func() {
+		inner := &ctxRecordingAuth{}
+		auth := NewCachingAuthenticator(inner, time.Minute)
+		ctxAuth, ok := auth.(AuthenticatorCtx)
+		So(ok, ShouldBeTrue)
+
+		Convey("A cancelled context reaches the store and is honored", func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, err := ctxAuth.AuthenticateCtx(ctx, "ft_acct_secret")
+			So(err, ShouldNotBeNil)
+			So(errors.Is(err, context.Canceled), ShouldBeTrue)
+		})
+
+		Convey("A live context is passed through to the store on a cache miss", func() {
+			type ctxKey struct{}
+			ctx := context.WithValue(context.Background(), ctxKey{}, "v")
+			acct, err := ctxAuth.AuthenticateCtx(ctx, "ft_acct_secret")
+			So(err, ShouldBeNil)
+			So(acct.ID, ShouldEqual, "acct")
+			So(inner.gotCtx.Value(ctxKey{}), ShouldEqual, "v")
+		})
+	})
+}
 
 // countingAuth records how many times the backing store is hit and can be
 // flipped to revoke a token.

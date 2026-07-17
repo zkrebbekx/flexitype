@@ -4,6 +4,7 @@
 package serviceaccount
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -67,6 +68,17 @@ func (a Account) Tenant() valueobjects.TenantID {
 // middleware works the same over either.
 type Authenticator interface {
 	Authenticate(token string) (Account, error)
+}
+
+// AuthenticatorCtx is the context-aware form of Authenticator: it threads the
+// request's context (cancellation, deadline, trace span) into the credential
+// lookup — which matters for the database-backed store, whose Authenticate
+// runs a per-request SQL query on the hottest path (before every handler).
+// The auth middleware prefers it via a type assertion and falls back to
+// Authenticate, so existing Authenticator implementations keep working (1.0
+// compatibility).
+type AuthenticatorCtx interface {
+	AuthenticateCtx(ctx context.Context, token string) (Account, error)
 }
 
 // Store holds the configured accounts.
@@ -164,4 +176,11 @@ func (s *Store) Authenticate(token string) (Account, error) {
 		return Account{}, err
 	}
 	return account, nil
+}
+
+// AuthenticateCtx satisfies AuthenticatorCtx. The file store is entirely
+// in-memory, so the context is unused; the method exists so a file-backed
+// deployment takes the same middleware path as a database-backed one.
+func (s *Store) AuthenticateCtx(_ context.Context, token string) (Account, error) {
+	return s.Authenticate(token)
 }

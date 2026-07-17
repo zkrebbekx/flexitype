@@ -1,6 +1,7 @@
 package serviceaccount
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -38,7 +39,16 @@ func NewCachingAuthenticator(auth Authenticator, ttl time.Duration) Authenticato
 	}
 }
 
+// Authenticate satisfies Authenticator; it resolves with a background context.
+// The middleware calls AuthenticateCtx instead so the request context flows to
+// the backing store.
 func (c *cachingAuthenticator) Authenticate(token string) (Account, error) {
+	return c.AuthenticateCtx(context.Background(), token)
+}
+
+// AuthenticateCtx resolves a token, threading ctx to the wrapped store when it
+// is context-aware. A cache hit returns without touching the store or ctx.
+func (c *cachingAuthenticator) AuthenticateCtx(ctx context.Context, token string) (Account, error) {
 	now := c.now()
 
 	c.mu.RLock()
@@ -48,7 +58,13 @@ func (c *cachingAuthenticator) Authenticate(token string) (Account, error) {
 		return entry.account, nil
 	}
 
-	account, err := c.inner.Authenticate(token)
+	var account Account
+	var err error
+	if inner, ok := c.inner.(AuthenticatorCtx); ok {
+		account, err = inner.AuthenticateCtx(ctx, token)
+	} else {
+		account, err = c.inner.Authenticate(token)
+	}
 	if err != nil {
 		return Account{}, err
 	}

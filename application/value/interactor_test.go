@@ -249,6 +249,16 @@ func (r *fakeValueRepo) PurgeTenant(context.Context, valueobjects.TenantID) ([]s
 	return nil, 0, nil
 }
 
+func (r *fakeValueRepo) MediaKeyBelongsToTenant(_ context.Context, tenant valueobjects.TenantID, objectKey string) (bool, error) {
+	for _, snap := range r.values {
+		if snap.TenantID == tenant && snap.Value.DataType() == valueobjects.DataTypeMedia &&
+			snap.Value.Media().ObjectKey == objectKey {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 type fakeDepRepo struct {
 	deps []*domaindependency.Dependency
 }

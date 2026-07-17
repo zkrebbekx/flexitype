@@ -181,6 +181,19 @@ func (r *valueRepo) Save(_ context.Context, av *domainvalue.AttributeValue) erro
 	return nil
 }
 
+func (r *valueRepo) MediaKeyBelongsToTenant(_ context.Context, tenant valueobjects.TenantID, objectKey string) (bool, error) {
+	r.s.mu.RLock()
+	defer r.s.mu.RUnlock()
+	for _, snap := range r.s.values {
+		if snap.TenantID == tenant &&
+			snap.Value.DataType() == valueobjects.DataTypeMedia &&
+			snap.Value.Media().ObjectKey == objectKey {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (r *valueRepo) PurgeEntity(_ context.Context, key domainvalue.EntityKey) ([]string, int, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()

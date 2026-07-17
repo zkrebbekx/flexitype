@@ -61,6 +61,14 @@ func (s *server) downloadMedia(w http.ResponseWriter, r *http.Request) {
 	if mime != "" {
 		w.Header().Set("Content-Type", mime)
 	}
+	// Force a download and forbid sniffing: an unrestricted media attribute
+	// accepts any bytes, so HTML/JS uploaded to it must never render inline
+	// from this origin (stored XSS). attachment downloads it, nosniff stops
+	// the browser second-guessing the declared type, and the locked CSP
+	// neutralises any active content should it be viewed anyway.
+	w.Header().Set("Content-Disposition", "attachment")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	_, _ = io.Copy(w, rc)
 }

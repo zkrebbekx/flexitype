@@ -22,7 +22,15 @@ import (
 	"net/textproto"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// defaultTimeout bounds a single API request when the caller supplies no
+// custom client. It guards against a stalled or black-holed server hanging a
+// caller that passed no context deadline — notably the c.Query iterators,
+// where one hung request would wedge a long multi-request loop. Override the
+// whole client (timeout, transport, tracing) with WithHTTPClient.
+const defaultTimeout = 30 * time.Second
 
 // Client talks to a standalone flexitype service's REST API. It is safe for
 // concurrent use.
@@ -43,7 +51,9 @@ func WithToken(token string) Option {
 	return func(c *Client) { c.token = token }
 }
 
-// WithHTTPClient supplies a custom *http.Client (timeouts, transport, tracing).
+// WithHTTPClient supplies a custom *http.Client (timeouts, transport,
+// tracing), replacing the default client and its 30s per-request timeout. A
+// nil argument is ignored.
 func WithHTTPClient(h *http.Client) Option {
 	return func(c *Client) {
 		if h != nil {
@@ -71,7 +81,7 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	if !strings.HasSuffix(base, "/api/v1") {
 		base += "/api/v1"
 	}
-	c := &Client{base: base, http: http.DefaultClient, userAgent: "flexitype-go-client"}
+	c := &Client{base: base, http: &http.Client{Timeout: defaultTimeout}, userAgent: "flexitype-go-client"}
 	for _, opt := range opts {
 		opt(c)
 	}

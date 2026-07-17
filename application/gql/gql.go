@@ -21,6 +21,8 @@ import (
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"
 	"github.com/graphql-go/graphql/language/ast"
+	"github.com/graphql-go/graphql/language/parser"
+	"github.com/graphql-go/graphql/language/source"
 
 	"github.com/zkrebbekx/flexitype/application"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
@@ -37,12 +39,67 @@ import (
 
 // Limits bound query cost.
 const (
-	maxRelDepth    = 6   // nested relationship-connection hops
-	defaultFirst   = 50  // connection page size when unspecified
-	maxFirst       = 200 // hard cap on a connection page
-	typeListLimit  = 500 // schema-build enumeration page size
-	maxRelChildren = 500 // per-parent relationship fan-out cap
+	maxRelDepth    = 6                // nested relationship-connection hops
+	defaultFirst   = 50               // connection page size when unspecified
+	maxFirst       = 200              // hard cap on a connection page
+	typeListLimit  = 500              // schema-build enumeration page size
+	maxRelChildren = 500              // per-parent relationship fan-out cap
+	maxQueryFields = 2000             // total field selections in one document
+	execTimeout    = 30 * time.Second // whole-query execution budget
 )
+
+// checkQueryCost bounds a document's total field-selection count before any
+// resolution runs. The relationship-depth cap limits nesting, but not width:
+// a field aliased K times per level, or thousands of aliased top-level
+// connections, expands into K+K^2+... field nodes — each a full FQL/DB
+// execution. Counting selections (expanding fragment spreads) rejects such an
+// amplified document up front. A syntactically invalid query passes here and is
+// reported by graphql.Do.
+func checkQueryCost(query string) error {
+	doc, err := parser.Parse(parser.ParseParams{Source: source.NewSource(&source.Source{Body: []byte(query)})})
+	if err != nil {
+		return nil
+	}
+	frags := map[string]*ast.FragmentDefinition{}
+	for _, d := range doc.Definitions {
+		if f, ok := d.(*ast.FragmentDefinition); ok {
+			frags[f.Name.Value] = f
+		}
+	}
+	total := 0
+	var walk func(sel *ast.SelectionSet, depth int)
+	walk = func(sel *ast.SelectionSet, depth int) {
+		// depth guards against cyclic fragment spreads; total>max short-circuits.
+		if sel == nil || depth > 64 || total > maxQueryFields {
+			return
+		}
+		for _, s := range sel.Selections {
+			switch n := s.(type) {
+			case *ast.Field:
+				total++
+				walk(n.SelectionSet, depth+1)
+			case *ast.InlineFragment:
+				walk(n.SelectionSet, depth+1)
+			case *ast.FragmentSpread:
+				if f := frags[n.Name.Value]; f != nil {
+					walk(f.SelectionSet, depth+1)
+				}
+			}
+			if total > maxQueryFields {
+				return
+			}
+		}
+	}
+	for _, d := range doc.Definitions {
+		if op, ok := d.(*ast.OperationDefinition); ok {
+			walk(op.SelectionSet, 0)
+		}
+	}
+	if total > maxQueryFields {
+		return fmt.Errorf("query too complex: over %d total field selections", maxQueryFields)
+	}
+	return nil
+}
 
 // Engine builds and caches per-tenant GraphQL schemas and executes queries.
 // It is safe for concurrent use.
@@ -100,10 +157,17 @@ func (e *Engine) Execute(ctx context.Context, query string, variables map[string
 	if inter == nil {
 		return resultErr(fmt.Errorf("no interactors on context"))
 	}
+	if err := checkQueryCost(query); err != nil {
+		return resultErr(err)
+	}
 	schema, err := e.schemaFor(ctx, inter)
 	if err != nil {
 		return resultErr(err)
 	}
+	// Bound total execution: a costly query cannot run indefinitely holding a
+	// goroutine and database connections.
+	ctx, cancel := context.WithTimeout(ctx, execTimeout)
+	defer cancel()
 	return graphql.Do(graphql.Params{
 		Schema:         schema,
 		RequestString:  query,

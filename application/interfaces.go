@@ -11,6 +11,7 @@ import (
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	appchangeset "github.com/zkrebbekx/flexitype/application/changeset"
 	appdedup "github.com/zkrebbekx/flexitype/application/dedup"
@@ -26,50 +27,17 @@ import (
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	appwebhook "github.com/zkrebbekx/flexitype/application/webhook"
-	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
-	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
-	domainrelationship "github.com/zkrebbekx/flexitype/domain/relationship"
-	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
-	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
 
-// Repositories is one request-scoped set of domain repositories. A fresh
-// set means fresh dataloader caches, so nothing leaks across requests or
-// tenants.
-type Repositories struct {
-	TypeDefinitions         typedefRepository
-	Attributes              attributeRepository
-	Values                  valueRepository
-	Dependencies            dependencyRepository
-	RelationshipDefinitions relationshipDefinitionRepository
-	Relationships           relationshipRepository
-	Query                   appquery.Repository
-	// SchemaVersions reports a tenant's persisted schema version; the GraphQL
-	// engine reads it to keep its per-replica schema cache correct (issue #192).
-	SchemaVersions SchemaVersionReader
-}
+// Repositories is one request-scoped set of domain repositories. It is defined
+// in the appctx leaf so the search subpackage can consume it without importing
+// this composition root; re-exported here for the facade wiring.
+type Repositories = appctx.Repositories
 
-// SchemaVersionReader reports a tenant's persisted schema version: a counter
-// bumped whenever any type, attribute or relationship definition is created,
-// updated, archived, restored or deleted. The GraphQL engine reads it to decide
-// whether its cached, per-replica schema is stale, so a definition change made
-// on one replica is observed by every replica (issue #192). It reads the tenant
-// from the context and returns 0 when the tenant has no definitions yet.
-type SchemaVersionReader interface {
-	SchemaVersion(ctx context.Context) (uint64, error)
-}
-
-// Narrow aliases keep the struct readable without re-importing domain
-// packages at every call site.
-type (
-	typedefRepository                = domaintypedef.Repository
-	attributeRepository              = domainattribute.Repository
-	valueRepository                  = domainvalue.Repository
-	dependencyRepository             = domaindependency.Repository
-	relationshipDefinitionRepository = domainrelationship.DefinitionRepository
-	relationshipRepository           = domainrelationship.Repository
-)
+// SchemaVersionReader reports a tenant's persisted schema version (issue #192).
+// It lives in the appctx leaf; re-exported here for the facade wiring.
+type SchemaVersionReader = appctx.SchemaVersionReader
 
 // Factory creates request-scoped interactor sets.
 type Factory interface {

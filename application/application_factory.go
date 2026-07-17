@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	appchangeset "github.com/zkrebbekx/flexitype/application/changeset"
 	appdedup "github.com/zkrebbekx/flexitype/application/dedup"
@@ -113,9 +114,9 @@ type FactoryConfig struct {
 	Revisions apprevision.Store
 
 	// SearchStore is the entity search projection an erasure purges; nil when
-	// the search index is off. Typed as the value package's erasure-facing
-	// slice (search.DocumentStore satisfies it) to avoid an import cycle.
-	SearchStore appvalue.SearchStore
+	// the search index is off. Typed as the canonical appctx.SearchStore
+	// erasure port (search.DocumentStore satisfies it).
+	SearchStore appctx.SearchStore
 
 	// ChangeSets persists change-management drafts; nil disables the feature.
 	ChangeSets appchangeset.Store

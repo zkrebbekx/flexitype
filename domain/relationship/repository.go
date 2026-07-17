@@ -55,6 +55,46 @@ type EntityLinksKey struct {
 	EntityID valueobjects.EntityID
 }
 
+// LinkSide selects which endpoint of a link is the "self" entity whose opposite
+// endpoints a windowed page returns — i.e. the direction a GraphQL relationship
+// field faces.
+type LinkSide int
+
+const (
+	// ParentSide: self entities sit on the parent side; the paged opposite is
+	// the child endpoint (an entity-is-parent relationship field).
+	ParentSide LinkSide = iota
+	// ChildSide: self entities sit on the child side; the paged opposite is the
+	// parent endpoint (an entity-is-child relationship field).
+	ChildSide
+	// EitherSide: a symmetric relationship — self may sit on either side; the
+	// paged opposite is whichever endpoint is not self.
+	EitherSide
+)
+
+// LinkWindow specifies one relationship field's per-self windowed child load:
+// the definition, the direction, and the keyset page applied PER self entity.
+// It backs the GraphQL nested-connection resolver, which knows each field's
+// definition and direction from the schema.
+type LinkWindow struct {
+	TenantID     valueobjects.TenantID
+	DefinitionID valueobjects.RelationshipDefinitionID
+	Side         LinkSide
+	Page         db.Page
+}
+
+// LinkPage is one self entity's keyset page of opposite endpoints, ordered by
+// opposite entity id ascending (the same ordering top-level connections page
+// on). HasMore reports whether a further page exists — the repository
+// over-fetches one row (Page.Limit+1) to decide, then trims it. Total is the
+// full per-self fan-out (independent of the cursor) and is set only when the
+// page requested it (Page.WantTotal).
+type LinkPage struct {
+	Others  []valueobjects.EntityID
+	HasMore bool
+	Total   *int
+}
+
 // Repository is the persistence port for relationship instances.
 type Repository interface {
 	// WithTx returns a repository bound to the given transaction.
@@ -77,8 +117,19 @@ type Repository interface {
 
 	// ListByEntities loads every live link touching any of the given
 	// entities, in one query — the no-N+1 path for fanning out a set of
-	// entities to their relationships (e.g. the GraphQL resolver).
+	// entities to their relationships (e.g. the entity inspector).
 	ListByEntities(ctx context.Context, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) ([]*Relationship, error)
+
+	// WindowedLinks returns, for each self entity, a keyset page of the
+	// opposite endpoints of ONE relationship definition in one direction. The
+	// page is applied PER self via a row-number window, so each self reads at
+	// most Page.Limit+1 links regardless of its total fan-out — the no-N+1,
+	// no-full-materialization path backing GraphQL nested relationship
+	// connections. Sibling selves collapse into one windowed query, and the
+	// definition/direction filter is pushed into SQL rather than applied after
+	// loading every link. The returned map omits selves with no matching links
+	// (unless a total was requested, in which case they carry a zero total).
+	WindowedLinks(ctx context.Context, w LinkWindow, selves []valueobjects.EntityID) (map[valueobjects.EntityID]LinkPage, error)
 
 	// CountLiveLinks returns how many live links of a definition have the
 	// entity as parent and as child. Used under the definition lock to

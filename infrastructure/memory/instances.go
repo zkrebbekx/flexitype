@@ -462,6 +462,96 @@ func (r *relRepo) ListByEntities(_ context.Context, tenant valueobjects.TenantID
 	return out, nil
 }
 
+// WindowedLinks mirrors the Postgres row-number window in memory: for each
+// self entity it gathers the opposite endpoints of one relationship definition
+// in one direction, orders them by opposite id ascending, applies the keyset
+// cursor, and keeps at most Page.Limit+1 (the sentinel drives hasNextPage). It
+// never materializes a self's whole fan-out into the result — the parity twin
+// of the no-N+1 GraphQL path.
+func (r *relRepo) WindowedLinks(_ context.Context, w domainrelationship.LinkWindow, selves []valueobjects.EntityID) (map[valueobjects.EntityID]domainrelationship.LinkPage, error) {
+	out := make(map[valueobjects.EntityID]domainrelationship.LinkPage, len(selves))
+	if len(selves) == 0 {
+		return out, nil
+	}
+	want := make(map[valueobjects.EntityID]bool, len(selves))
+	for _, s := range selves {
+		want[s] = true
+	}
+
+	// The nested-connection cursor is a single-value keyset of the opposite
+	// entity id; a malformed cursor pages from the start (matching Postgres,
+	// whose keyset predicate treats a bad cursor as absent).
+	afterID := ""
+	if w.Page.Cursor != "" {
+		if vals, err := db.DecodeKeyset(w.Page.Cursor); err == nil && len(vals) == 1 {
+			afterID = vals[0]
+		}
+	}
+
+	r.s.mu.RLock()
+	others := make(map[valueobjects.EntityID][]valueobjects.EntityID, len(selves))
+	add := func(self, other valueobjects.EntityID) {
+		if want[self] {
+			others[self] = append(others[self], other)
+		}
+	}
+	for _, snap := range r.s.rels {
+		if snap.TenantID != w.TenantID || snap.ArchivedAt != nil || !snap.DefinitionID.Equals(w.DefinitionID) {
+			continue
+		}
+		p, c := snap.ParentEntityID, snap.ChildEntityID
+		switch w.Side {
+		case domainrelationship.ChildSide:
+			add(c, p)
+		case domainrelationship.EitherSide:
+			add(p, c)
+			if p != c { // a self-loop is emitted once (by the parent arm above)
+				add(c, p)
+			}
+		default: // ParentSide
+			add(p, c)
+		}
+	}
+	r.s.mu.RUnlock()
+
+	for self, os := range others {
+		sort.Slice(os, func(i, j int) bool { return os[i] < os[j] })
+		var total *int
+		if w.Page.WantTotal { // the full fan-out, independent of the cursor
+			t := len(os)
+			total = &t
+		}
+		start := 0
+		if afterID != "" {
+			for start < len(os) && string(os[start]) <= afterID {
+				start++
+			}
+		}
+		window := os[start:]
+		hasMore := len(window) > w.Page.Limit
+		if hasMore {
+			window = window[:w.Page.Limit]
+		}
+		out[self] = domainrelationship.LinkPage{
+			Others:  append([]valueobjects.EntityID(nil), window...),
+			HasMore: hasMore,
+			Total:   total,
+		}
+	}
+	// Selves with no matching links still answer a totalCount selection.
+	for _, self := range selves {
+		if _, ok := out[self]; !ok {
+			var total *int
+			if w.Page.WantTotal {
+				z := 0
+				total = &z
+			}
+			out[self] = domainrelationship.LinkPage{Total: total}
+		}
+	}
+	return out, nil
+}
+
 func (r *relRepo) List(_ context.Context, filter domainrelationship.Filter, page db.Page) ([]*domainrelationship.Relationship, int, error) {
 	r.s.mu.RLock()
 	var out []*domainrelationship.Relationship

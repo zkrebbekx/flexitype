@@ -70,11 +70,23 @@ func writeError(w http.ResponseWriter, log *logger.Logger, err error) {
 	writeJSON(w, status, body)
 }
 
-// decode strictly parses a JSON request body into dst.
+// maxJSONBody caps a JSON request body so a single request cannot exhaust
+// memory by decoding an unbounded array/object. Multipart uploads (media,
+// import) set their own, larger limits and do not go through decode.
+const maxJSONBody = 4 << 20 // 4 MiB
+
+// decode strictly parses a JSON request body into dst, bounding its size.
 func decode(r *http.Request, dst any) error {
+	// nil ResponseWriter: MaxBytesReader still returns a *MaxBytesError on
+	// overrun, it just cannot hint the server to close the connection.
+	r.Body = http.MaxBytesReader(nil, r.Body, maxJSONBody)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return domainerrors.NewValidation("request body too large", "max_bytes", maxJSONBody)
+		}
 		return domainerrors.NewValidation("invalid request body", "error", err.Error())
 	}
 	return nil

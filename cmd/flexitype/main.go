@@ -230,6 +230,12 @@ func run(log *logger.Logger) error {
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		// Bound slow-drip request bodies. Upload size is capped separately
+		// (media/import/JSON limits), so this only limits how long a body may
+		// take to arrive. No WriteTimeout: the events feed (SSE) streams
+		// long-lived responses that a write deadline would sever.
+		ReadTimeout: 60 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 
 	shutdownHandler := shutdown.New(shutdown.Config{Logger: log, Timeout: cfg.ShutdownTimeout})

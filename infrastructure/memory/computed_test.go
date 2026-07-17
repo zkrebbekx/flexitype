@@ -126,6 +126,70 @@ func TestComputedAttributes(t *testing.T) {
 	})
 }
 
+func TestComputedMaterializesAfterCoalescedImport(t *testing.T) {
+	Convey("Given a product type with a computed margin over price and cost", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory(flexitype.WithSearchIndex())
+		it := svc.Interactors(ctx)
+
+		product, err := it.TypeDefinitions().Create(ctx, apptypedef.CreateInput{InternalName: "product", DisplayName: "Product"})
+		So(err, ShouldBeNil)
+		typeID := product.ID.String()
+		mk := func(name, dt string) {
+			_, e := it.Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: typeID, InternalName: name, DisplayName: name, DataType: dt,
+			})
+			So(e, ShouldBeNil)
+		}
+		mk("price", "float")
+		mk("cost", "float")
+		margin, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: typeID, InternalName: "margin", DisplayName: "Margin", DataType: "float",
+			Computed: json.RawMessage(`{"kind":"formula","formula":"(price - cost) / price"}`),
+		})
+		So(err, ShouldBeNil)
+
+		Convey("When two entities are imported, each setting price and cost in one commit", func() {
+			// Each row emits two value events for one entity in a single commit;
+			// the coalesced recompute must still materialize margin exactly once
+			// per entity with the correct value.
+			rep, err := it.Values().Import(ctx, appvalue.ImportInput{
+				TypeDefinitionID: typeID,
+				KeyColumn:        "id",
+				Mapping:          map[string]string{"price": "price", "cost": "cost"},
+				Columns:          []string{"id", "price", "cost"},
+				Rows: [][]string{
+					{"p1", "100", "40"}, // margin = 0.6
+					{"p2", "200", "50"}, // margin = 0.75
+				},
+				Mode: appvalue.ImportBestEffort,
+			})
+			So(err, ShouldBeNil)
+			So(rep.RowsWritten, ShouldEqual, 2)
+
+			readMargin := func(entity string) (float64, bool) {
+				vals, e := it.Values().ListByEntity(ctx, typeID, entity)
+				So(e, ShouldBeNil)
+				for _, v := range vals {
+					if v.AttributeDefinitionID.String() == margin.ID.String() {
+						return v.Value.Float(), true
+					}
+				}
+				return 0, false
+			}
+
+			Convey("Then each entity's margin materializes to the right value", func() {
+				m1, ok1 := readMargin("p1")
+				So(ok1, ShouldBeTrue)
+				So(m1, ShouldAlmostEqual, 0.6)
+				m2, ok2 := readMargin("p2")
+				So(ok2, ShouldBeTrue)
+				So(m2, ShouldAlmostEqual, 0.75)
+			})
+		})
+	})
+}
+
 func TestComputedUpdateCycleAndEdges(t *testing.T) {
 	Convey("Given a computed attribute and numeric inputs", t, func() {
 		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)

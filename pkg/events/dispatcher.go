@@ -18,6 +18,23 @@ type Handler interface {
 	Handle(ctx context.Context, env Envelope) error
 }
 
+// BatchHandler is an optional Handler extension. When a handler implements it,
+// the dispatcher hands it every envelope of one dispatch that matches its
+// filter in a single HandleBatch call, instead of one Handle call per
+// envelope. A projection subscriber uses this to coalesce redundant work: an
+// import that writes ten values to one entity in a single commit rebuilds that
+// entity's projection once, not ten times. HandleBatch must remain safe for
+// concurrent use and must leave the same end state as processing each envelope
+// individually — the batch is purely a chance to deduplicate.
+type BatchHandler interface {
+	Handler
+
+	// HandleBatch processes a whole dispatch's matching envelopes at once, in
+	// dispatch order. Like Handle, an error is collected, never fatal to other
+	// handlers.
+	HandleBatch(ctx context.Context, envs []Envelope) error
+}
+
 // HandlerFunc adapts a plain function into a Handler — the simplest client
 // hook: any func they want to execute per event.
 type HandlerFunc struct {
@@ -95,10 +112,11 @@ func (d *Dispatcher) RegisterFunc(name string, fn func(ctx context.Context, env 
 	d.Register(NewHandlerFunc(name, fn), opts...)
 }
 
-// Dispatch envelopes each event and delivers it to every matching handler.
-// A failing or panicking handler never blocks the others; all failures are
-// joined into the returned error.
+// Dispatch envelopes each event and delivers the whole set to every matching
+// handler. A failing or panicking handler never blocks the others; all
+// failures are joined into the returned error.
 func (d *Dispatcher) Dispatch(ctx context.Context, meta Metadata, evts ...Event) error {
+	envs := make([]Envelope, 0, len(evts))
 	var errs []error
 	for _, e := range evts {
 		env, err := NewEnvelope(e, meta, d.now())
@@ -106,33 +124,55 @@ func (d *Dispatcher) Dispatch(ctx context.Context, meta Metadata, evts ...Event)
 			errs = append(errs, err)
 			continue
 		}
-		for _, reg := range d.registrations {
-			if !reg.wants(env.Type) {
-				continue
-			}
-			if err := d.deliver(ctx, reg.handler, env); err != nil {
-				errs = append(errs, fmt.Errorf("handler %s: %w", reg.handler.Name(), err))
-			}
-		}
+		envs = append(envs, env)
 	}
+	errs = append(errs, d.deliverAll(ctx, envs)...)
 	return errors.Join(errs...)
 }
 
 // DispatchEnvelopes delivers pre-built envelopes (the outbox relay path):
 // no re-enveloping, same fan-out and panic isolation as Dispatch.
 func (d *Dispatcher) DispatchEnvelopes(ctx context.Context, envs ...Envelope) error {
+	return errors.Join(d.deliverAll(ctx, envs)...)
+}
+
+// deliverAll routes one dispatch's envelopes to every handler. It iterates
+// per registration (not per event) so a BatchHandler can see all of its
+// matching envelopes at once and coalesce redundant work; a plain Handler
+// still receives one Handle call per matching envelope, in dispatch order.
+// Handlers are independent subscribers, so delivering handler-by-handler
+// rather than event-by-event is equivalent — only per-handler event order
+// matters, and that is preserved.
+func (d *Dispatcher) deliverAll(ctx context.Context, envs []Envelope) []error {
 	var errs []error
-	for _, env := range envs {
-		for _, reg := range d.registrations {
-			if !reg.wants(env.Type) {
-				continue
+	for _, reg := range d.registrations {
+		// Narrow to the envelopes this handler subscribes to. An unfiltered
+		// handler (empty type set) sees them all without copying.
+		matched := envs
+		if len(reg.types) != 0 {
+			matched = make([]Envelope, 0, len(envs))
+			for _, env := range envs {
+				if reg.wants(env.Type) {
+					matched = append(matched, env)
+				}
 			}
+		}
+		if len(matched) == 0 {
+			continue
+		}
+		if bh, ok := reg.handler.(BatchHandler); ok {
+			if err := d.deliverBatch(ctx, bh, matched); err != nil {
+				errs = append(errs, fmt.Errorf("handler %s: %w", reg.handler.Name(), err))
+			}
+			continue
+		}
+		for _, env := range matched {
 			if err := d.deliver(ctx, reg.handler, env); err != nil {
 				errs = append(errs, fmt.Errorf("handler %s: %w", reg.handler.Name(), err))
 			}
 		}
 	}
-	return errors.Join(errs...)
+	return errs
 }
 
 func (d *Dispatcher) deliver(ctx context.Context, h Handler, env Envelope) (err error) {
@@ -142,4 +182,13 @@ func (d *Dispatcher) deliver(ctx context.Context, h Handler, env Envelope) (err 
 		}
 	}()
 	return h.Handle(ctx, env)
+}
+
+func (d *Dispatcher) deliverBatch(ctx context.Context, h BatchHandler, envs []Envelope) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return h.HandleBatch(ctx, envs)
 }

@@ -95,6 +95,60 @@ func TestDispatcher(t *testing.T) {
 	})
 }
 
+// batchRecorder implements BatchHandler, counting how many HandleBatch calls
+// it receives and the total envelopes across them.
+type batchRecorder struct {
+	batches int
+	envs    int
+}
+
+func (b *batchRecorder) Name() string { return "batch-recorder" }
+func (b *batchRecorder) Handle(_ context.Context, _ Envelope) error {
+	b.batches++
+	b.envs++
+	return nil
+}
+func (b *batchRecorder) HandleBatch(_ context.Context, envs []Envelope) error {
+	b.batches++
+	b.envs += len(envs)
+	return nil
+}
+
+func TestDispatcherBatchDelivery(t *testing.T) {
+	Convey("Given a dispatcher with a BatchHandler and a plain Handler", t, func() {
+		d := NewDispatcher()
+		batch := &batchRecorder{}
+		var plain []Envelope
+		d.Register(batch)
+		d.RegisterFunc("plain", func(_ context.Context, env Envelope) error {
+			plain = append(plain, env)
+			return nil
+		})
+
+		meta := Metadata{TenantID: "acme"}
+		at := time.Now()
+		evts := []Event{
+			testEvent{ID: "agg-1", At: at},
+			testEvent{ID: "agg-2", At: at},
+			testEvent{ID: "agg-3", At: at},
+		}
+
+		Convey("When three events are dispatched in one call", func() {
+			err := d.Dispatch(context.Background(), meta, evts...)
+
+			Convey("Then the BatchHandler is called once with all three envelopes", func() {
+				So(err, ShouldBeNil)
+				So(batch.batches, ShouldEqual, 1)
+				So(batch.envs, ShouldEqual, 3)
+			})
+
+			Convey("Then the plain handler still receives one call per event", func() {
+				So(plain, ShouldHaveLength, 3)
+			})
+		})
+	})
+}
+
 type fakePublisher struct {
 	topics   []string
 	messages [][]byte

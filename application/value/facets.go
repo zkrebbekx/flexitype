@@ -75,22 +75,21 @@ func (i *Interactor) Facets(ctx context.Context, rawTypeID string, attrNames, en
 		entityIDs = entityIDs[:maxFacetEntities]
 		out.Truncated = true
 	}
+	ids := make([]valueobjects.EntityID, 0, len(entityIDs))
 	for _, raw := range entityIDs {
-		entityID, err := valueobjects.ParseEntityID(raw)
+		id, err := valueobjects.ParseEntityID(raw)
 		if err != nil {
 			return nil, domainerrors.NewValidation(err.Error())
 		}
-		vals, err := i.values.ListByEntity(ctx, domainvalue.EntityKey{
-			TenantID: tenant, TypeDefinitionID: typeID, EntityID: entityID,
-		})
-		if err != nil {
-			return nil, err
+		ids = append(ids, id)
+	}
+	// One batched query per chunk instead of one per entity (up to 5000).
+	if err := i.forEachValueBatched(ctx, tenant, ids, func(av *domainvalue.AttributeValue) {
+		if name, ok := wanted[av.AttributeDefinitionID()]; ok {
+			counts[name][av.Value().String()]++
 		}
-		for _, av := range vals {
-			if name, ok := wanted[av.AttributeDefinitionID()]; ok {
-				counts[name][av.Value().String()]++
-			}
-		}
+	}); err != nil {
+		return nil, err
 	}
 
 	for name, byValue := range counts {
@@ -185,6 +184,27 @@ func (i *Interactor) GridRows(ctx context.Context, rawTypeID string, attrNames, 
 		out.Rows = append(out.Rows, GridRow{EntityID: eid, Values: cells})
 	}
 	return out, nil
+}
+
+// forEachValueBatched loads every live value of the given entities in bounded
+// chunks — one query per chunk, not one per entity — and calls fn for each.
+// The IN list is capped so a large entity set can't produce an unbounded query.
+func (i *Interactor) forEachValueBatched(ctx context.Context, tenant valueobjects.TenantID, ids []valueobjects.EntityID, fn func(*domainvalue.AttributeValue)) error {
+	const chunk = 500
+	for start := 0; start < len(ids); start += chunk {
+		end := start + chunk
+		if end > len(ids) {
+			end = len(ids)
+		}
+		vals, err := i.values.ListByEntities(ctx, tenant, ids[start:end])
+		if err != nil {
+			return err
+		}
+		for _, av := range vals {
+			fn(av)
+		}
+	}
+	return nil
 }
 
 // dropUnreadable removes, in place, the attribute names the calling principal

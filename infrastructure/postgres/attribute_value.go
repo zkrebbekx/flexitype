@@ -434,12 +434,17 @@ func (r *attributeValueRepository) CountByDefinitionAndValue(ctx context.Context
 	// column, whose `=` is already structural (key-order insensitive).
 	col := valueColumnName(v.DataType())
 	cast := ""
+	extra := ""
 	if v.DataType() == valueobjects.DataTypeDecimal {
 		col += "::numeric"
 		cast = "::numeric"
+		// data_type='decimal' is a no-op filter for a decimal attribute, but it
+		// lets the planner use the partial expression index on
+		// (attribute_definition_id, (value_text::numeric)) scoped to decimal rows.
+		extra = " AND data_type = 'decimal'"
 	}
 	query := bind(`SELECT count(*) FROM flexitype_attribute_value
-	 WHERE attribute_definition_id = ? AND ` + col + ` = ?` + cast + `
+	 WHERE attribute_definition_id = ? AND ` + col + ` = ?` + cast + extra + `
 	   AND entity_id <> ? AND locale = ? AND channel = ? AND archived_at IS NULL`)
 	var count int
 	if err := r.q.GetContext(ctx, &count, query, defID.String(), valueArg(v), excludeEntity.String(), scope.Locale, scope.Channel); err != nil {

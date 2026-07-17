@@ -52,6 +52,9 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 
 	r := chi.NewRouter()
 	r.Use(recoverer(cfg.Logger))
+	// Defensive response headers on everything, including the SPA shell and
+	// the NotFound-served client routes.
+	r.Use(securityHeaders)
 	if cfg.Metrics != nil {
 		// Before the request logger so the route pattern is resolved and
 		// /metrics itself is measured.

@@ -795,6 +795,15 @@ func (i *Interactor) Get(ctx context.Context, rawID string) (*domainvalue.Snapsh
 	return &snap, nil
 }
 
+// MediaKeyOwned reports whether the caller's tenant owns a media value backed
+// by objectKey. The media download handler calls it before streaming a blob:
+// object keys are shared-namespace ULIDs that leak into value payloads, exports
+// and revision snapshots, so serving one without an ownership check is a
+// cross-tenant file read (IDOR).
+func (i *Interactor) MediaKeyOwned(ctx context.Context, objectKey string) (bool, error) {
+	return i.values.MediaKeyBelongsToTenant(ctx, uow.TenantFromContext(ctx), objectKey)
+}
+
 // ListByEntity loads every live value of one entity — the hydration hot
 // path; concurrent calls for different entities batch into one query.
 func (i *Interactor) ListByEntity(ctx context.Context, rawTypeDefID, rawEntityID string) ([]domainvalue.Snapshot, error) {

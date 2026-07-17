@@ -577,6 +577,25 @@ func typeDefPredicate(ids []string) (string, any) {
 	return "type_definition_id = ANY(?)", pq.Array(ids)
 }
 
+// MediaKeyBelongsToTenant reports whether the tenant holds a media value backed
+// by objectKey. The object key lives inside the media metadata JSON; the
+// tenant + data_type filter narrows the scan to the tenant's media rows, which
+// is ample for the infrequent download-authorization path. Archived rows are
+// included: an archived media value's blob may still exist and is still the
+// tenant's.
+func (r *attributeValueRepository) MediaKeyBelongsToTenant(ctx context.Context, tenant valueobjects.TenantID, objectKey string) (bool, error) {
+	var exists bool
+	if err := r.q.GetContext(ctx, &exists, bind(
+		`SELECT EXISTS (
+		   SELECT 1 FROM flexitype_attribute_value
+		   WHERE tenant_id = ? AND data_type = ? AND value_json->>'object_key' = ?
+		 )`),
+		tenant.String(), valueobjects.DataTypeMedia.String(), objectKey); err != nil {
+		return false, fmt.Errorf("media key ownership: %w", err)
+	}
+	return exists, nil
+}
+
 func (r *attributeValueRepository) Save(ctx context.Context, av *domainvalue.AttributeValue) error {
 	s := av.Snapshot()
 	cols := columnsFromValue(s.Value)

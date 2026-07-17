@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
+	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
+	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -26,6 +29,78 @@ const (
 	maxImportRows = 5000
 	maxExportRows = 10000
 )
+
+// importChunkSize is how many rows a best-effort import commits per unit of
+// work. One transaction per chunk (rather than per row) amortizes the
+// definition locks and the existing-value prefetch across the chunk while
+// still bounding how much a single failure re-runs on the fallback path.
+const importChunkSize = 100
+
+// importCache memoizes the per-import lookups the value write path otherwise
+// repeats for every cell. It is created per write transaction (a chunk, or the
+// whole transactional import) and stashed on the context; setWithin consults it
+// when present and keeps it consistent with its own writes. Absent, the normal
+// single-write path runs unchanged.
+type importCache struct {
+	// defs holds definitions locked (GetForUpdate) within THIS transaction, so
+	// a shared column is locked once per chunk rather than once per row.
+	defs map[string]*domainattribute.Definition
+	// deps memoizes each definition's incoming dependencies, keyed by target
+	// attribute id. Definitions and dependencies are immutable during an import.
+	deps map[string][]*domaindependency.Dependency
+	// existing holds every live value of each entity touched in THIS
+	// transaction, seeded by one ListByEntities and then kept in step with the
+	// values setWithin writes. A non-nil map switches the write path off its
+	// per-cell FindByDefinitionAndEntity query.
+	existing map[string][]*domainvalue.AttributeValue
+}
+
+func newImportCache() *importCache {
+	return &importCache{
+		defs: map[string]*domainattribute.Definition{},
+		deps: map[string][]*domaindependency.Dependency{},
+	}
+}
+
+// prefetch seeds the existing-value cache with one query for every entity the
+// chunk touches, so the write path reads them from memory instead of a query
+// per cell.
+func (c *importCache) prefetch(ctx context.Context, values domainvalue.Repository, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) error {
+	c.existing = map[string][]*domainvalue.AttributeValue{}
+	if len(entityIDs) == 0 {
+		return nil
+	}
+	vals, err := values.ListByEntities(ctx, tenant, entityIDs)
+	if err != nil {
+		return fmt.Errorf("prefetch existing values: %w", err)
+	}
+	for _, av := range vals {
+		key := av.EntityID().String()
+		c.existing[key] = append(c.existing[key], av)
+	}
+	return nil
+}
+
+type importCacheKey struct{}
+
+// withImportCache stashes the per-transaction import cache on the context.
+func withImportCache(ctx context.Context, c *importCache) context.Context {
+	return context.WithValue(ctx, importCacheKey{}, c)
+}
+
+// importCacheFromContext returns the active import cache, or nil for the normal
+// single-write path.
+func importCacheFromContext(ctx context.Context) *importCache {
+	c, _ := ctx.Value(importCacheKey{}).(*importCache)
+	return c
+}
+
+// preparedRow is one import row whose cells have converted cleanly to value
+// inputs, ready to write.
+type preparedRow struct {
+	row    int
+	inputs []SetInput
+}
 
 // errRowValid is the sentinel a dry-run row returns to force its unit of
 // work to roll back after validating cleanly — nothing is written, but the
@@ -88,10 +163,26 @@ type mappedColumn struct {
 }
 
 // Import loads tabular rows into a type's entities. It resolves the column
-// mapping against the type's effective schema, validates every row, then
-// either reports (dry run), writes the valid rows (best effort) or writes
+// mapping against the type's effective schema, converts every row's cells,
+// then either reports (dry run), writes the valid rows (best effort) or writes
 // all rows atomically (transactional, refusing the whole set if any row is
 // invalid).
+//
+// Cell conversion is a single pure-Go pass (no database). The write path then
+// diverges by mode:
+//
+//   - dry run keeps the original per-row rollback validation, so each row is
+//     checked against committed data independently (a preview never lets one
+//     row's would-be write mask another's), and nothing is written;
+//   - best effort commits rows in chunk-sized transactions, falling back to
+//     per-row transactions for a chunk that fails so every writable row is
+//     still written and only the bad rows are reported;
+//   - transactional stays one logical unit — the whole import is a single
+//     transaction, so any bad row rolls the whole set back — preserving its
+//     all-or-nothing semantics.
+//
+// RowsValid is the number of rows that produced no error; RowsWritten the
+// number persisted.
 func (i *Interactor) Import(ctx context.Context, in ImportInput) (*ImportReport, error) {
 	if len(in.Rows) > maxImportRows {
 		return nil, domainerrors.NewValidation("import exceeds the maximum row count", "max", maxImportRows)
@@ -111,57 +202,147 @@ func (i *Interactor) Import(ctx context.Context, in ImportInput) (*ImportReport,
 
 	report := &ImportReport{RowsTotal: len(in.Rows), DryRun: in.DryRun, Mode: mode, Errors: []ImportError{}}
 
-	// Phase 1: validate every row against committed data (rollback UoW).
-	// Cell conversion errors are caught here without touching the database.
-	type prepared struct {
-		row    int
-		inputs []SetInput
-	}
-	valid := make([]prepared, 0, len(in.Rows))
+	// Pure-Go pass: convert every row's cells to value inputs, collecting
+	// cell-level errors without a single database round-trip. erroredRows
+	// tracks which rows failed anywhere, so RowsValid = total - failed.
+	erroredRows := map[int]bool{}
+	valid := make([]preparedRow, 0, len(in.Rows))
 	for r, row := range in.Rows {
 		rowNum := r + 1 // 1-based; header is row 0 for humans
 		inputs, cellErrs := i.rowInputs(in.TypeDefinitionID, cols, keyIdx, rowNum, row)
 		if len(cellErrs) > 0 {
 			report.Errors = append(report.Errors, cellErrs...)
+			erroredRows[rowNum] = true
 			continue
 		}
-		if writeErr := i.applyRow(ctx, inputs, false); writeErr != nil {
-			report.Errors = append(report.Errors, importErrorFrom(rowNum, writeErr))
-			continue
-		}
-		report.RowsValid++
-		valid = append(valid, prepared{row: rowNum, inputs: inputs})
+		valid = append(valid, preparedRow{row: rowNum, inputs: inputs})
 	}
 
 	if in.DryRun {
+		// Validate each convertible row against committed data in its own
+		// rollback unit of work, exactly as before, so the preview is
+		// independent per row and writes nothing.
+		for _, p := range valid {
+			if err := i.applyRow(ctx, p.inputs, false); err != nil {
+				report.Errors = append(report.Errors, importErrorFrom(p.row, err))
+				erroredRows[p.row] = true
+			}
+		}
+		report.RowsValid = len(in.Rows) - len(erroredRows)
 		return report, nil
 	}
 
+	tenant := uow.TenantFromContext(ctx)
 	switch mode {
 	case ImportTransactional:
-		if len(report.Errors) > 0 {
-			return report, nil // atomic: refuse the whole set
-		}
-		all := make([]SetInput, 0, report.RowsValid)
-		for _, p := range valid {
-			all = append(all, p.inputs...)
-		}
-		if err := i.applyRow(ctx, all, true); err != nil {
-			// Should not happen after phase 1; surface it defensively.
-			report.Errors = append(report.Errors, importErrorFrom(0, err))
-			return report, nil
-		}
-		report.RowsWritten = report.RowsValid
+		i.importTransactional(ctx, tenant, valid, erroredRows, report)
 	case ImportBestEffort:
+		i.importBestEffort(ctx, tenant, valid, erroredRows, report)
+	}
+	report.RowsValid = len(in.Rows) - len(erroredRows)
+	return report, nil
+}
+
+// importTransactional writes every row in ONE transaction (one logical unit):
+// a cell error anywhere, or a write failure on any row, leaves nothing written,
+// preserving the mode's all-or-nothing semantics. Validation is folded into the
+// write — there is no separate re-validation pass.
+func (i *Interactor) importTransactional(ctx context.Context, tenant valueobjects.TenantID, valid []preparedRow, erroredRows map[int]bool, report *ImportReport) {
+	if len(report.Errors) > 0 {
+		return // a cell error already refuses the whole set; write nothing
+	}
+	failedRow := 0
+	err := i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
+		cache := newImportCache()
+		cctx := withImportCache(ctx, cache)
+		if err := cache.prefetch(cctx, i.values.WithTx(tx), tenant, preparedEntityIDs(valid)); err != nil {
+			return err
+		}
 		for _, p := range valid {
+			for _, item := range p.inputs {
+				if _, err := i.setWithin(cctx, tx, c, item); err != nil {
+					failedRow = p.row
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		report.Errors = append(report.Errors, importErrorFrom(failedRow, err))
+		if failedRow != 0 {
+			erroredRows[failedRow] = true
+		}
+		return // atomic: the transaction rolled back, nothing written
+	}
+	report.RowsWritten = len(valid)
+}
+
+// importBestEffort commits rows in chunk-sized transactions. A chunk that
+// commits cleanly writes all its rows at once (amortizing definition locks and
+// the existing-value prefetch); a chunk that fails rolls back as a unit and is
+// re-run row by row, so every writable row is still written and only the bad
+// rows are reported — matching the per-row semantics best effort had before.
+func (i *Interactor) importBestEffort(ctx context.Context, tenant valueobjects.TenantID, valid []preparedRow, erroredRows map[int]bool, report *ImportReport) {
+	for start := 0; start < len(valid); start += importChunkSize {
+		end := min(start+importChunkSize, len(valid))
+		chunk := valid[start:end]
+		if err := i.writeChunk(ctx, tenant, chunk); err == nil {
+			report.RowsWritten += len(chunk)
+			continue
+		}
+		// The chunk rolled back atomically; fall back to per-row transactions so
+		// good rows still land and only the offending rows are reported.
+		for _, p := range chunk {
 			if err := i.applyRow(ctx, p.inputs, true); err != nil {
 				report.Errors = append(report.Errors, importErrorFrom(p.row, err))
+				erroredRows[p.row] = true
 				continue
 			}
 			report.RowsWritten++
 		}
 	}
-	return report, nil
+}
+
+// writeChunk applies every row of a chunk in one unit of work with a shared
+// import cache. On any failure the transaction rolls back and the error is
+// returned so the caller can fall back to per-row writes.
+func (i *Interactor) writeChunk(ctx context.Context, tenant valueobjects.TenantID, chunk []preparedRow) error {
+	return i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
+		cache := newImportCache()
+		cctx := withImportCache(ctx, cache)
+		if err := cache.prefetch(cctx, i.values.WithTx(tx), tenant, preparedEntityIDs(chunk)); err != nil {
+			return err
+		}
+		for _, p := range chunk {
+			for _, item := range p.inputs {
+				if _, err := i.setWithin(cctx, tx, c, item); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// preparedEntityIDs returns the distinct, parseable entity ids a set of rows
+// touches — the keys to prefetch existing values for. An unparseable id is
+// skipped here; setWithin surfaces the validation error when it writes the row.
+func preparedEntityIDs(rows []preparedRow) []valueobjects.EntityID {
+	seen := map[string]bool{}
+	ids := make([]valueobjects.EntityID, 0, len(rows))
+	for _, p := range rows {
+		for _, item := range p.inputs {
+			if seen[item.EntityID] {
+				continue
+			}
+			seen[item.EntityID] = true
+			if id, err := valueobjects.ParseEntityID(item.EntityID); err == nil {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
 }
 
 // resolveMapping binds each mapped CSV column to an attribute in the type's

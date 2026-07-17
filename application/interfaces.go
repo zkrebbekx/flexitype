@@ -16,6 +16,7 @@ import (
 	appchangeset "github.com/zkrebbekx/flexitype/application/changeset"
 	appdedup "github.com/zkrebbekx/flexitype/application/dedup"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
+	apperasure "github.com/zkrebbekx/flexitype/application/erasure"
 	appfeed "github.com/zkrebbekx/flexitype/application/feed"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
@@ -68,6 +69,7 @@ type Interactors struct {
 	typeDefs      *apptypedef.Interactor
 	attrs         *appattribute.Interactor
 	values        *appvalue.Interactor
+	erasure       *apperasure.Interactor
 	deps          *appdependency.Interactor
 	relationships *apprelationship.Interactor
 	query         *appquery.Interactor
@@ -106,6 +108,10 @@ func (i *Interactors) Attributes() *appattribute.Interactor { return i.attrs }
 
 // Values returns the attribute-value usecases.
 func (i *Interactors) Values() *appvalue.Interactor { return i.values }
+
+// Erasure returns the right-to-erasure usecases: the irreversible, audited
+// hard delete of an entity's or a tenant's data (PurgeEntity / PurgeTenant).
+func (i *Interactors) Erasure() *apperasure.Interactor { return i.erasure }
 
 // Dependencies returns the dependency usecases.
 func (i *Interactors) Dependencies() *appdependency.Interactor { return i.deps }

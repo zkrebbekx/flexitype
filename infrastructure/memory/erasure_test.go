@@ -82,7 +82,7 @@ func TestPurgeEntity(t *testing.T) {
 		So(err, ShouldBeNil)
 
 		Convey("When e1 is purged", func() {
-			report, err := it.Values().PurgeEntity(ctx, typeID, "e1")
+			report, err := it.Erasure().PurgeEntity(ctx, typeID, "e1")
 			So(err, ShouldBeNil)
 
 			Convey("Then the report counts every erased trace", func() {
@@ -127,7 +127,7 @@ func TestPurgeEntity(t *testing.T) {
 		})
 
 		Convey("When an entity with nothing to erase is purged", func() {
-			_, err := it.Values().PurgeEntity(ctx, typeID, "ghost")
+			_, err := it.Erasure().PurgeEntity(ctx, typeID, "ghost")
 
 			Convey("Then it is reported NotFound", func() {
 				So(err, ShouldNotBeNil)
@@ -179,7 +179,7 @@ func TestPurgeTenant(t *testing.T) {
 		So(err, ShouldBeNil)
 
 		Convey("When tenant A's data is purged", func() {
-			report, err := a.Values().PurgeTenant(ctxA)
+			report, err := a.Erasure().PurgeTenant(ctxA)
 			So(err, ShouldBeNil)
 
 			Convey("Then A's report shows what was erased", func() {

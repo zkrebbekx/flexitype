@@ -117,7 +117,7 @@ func TestPurgeEntityPostgres(t *testing.T) {
 		So(countRows(t, pool, `SELECT count(*) FROM flexitype_attribute_value WHERE tenant_id='tenant-a' AND entity_id='e1'`), ShouldEqual, 3)
 
 		Convey("When e1 is purged", func() {
-			report, err := it.Values().PurgeEntity(ctx, typeID, "e1")
+			report, err := it.Erasure().PurgeEntity(ctx, typeID, "e1")
 			So(err, ShouldBeNil)
 			So(report.ValuesPurged, ShouldEqual, 3)
 			So(report.RevisionsPurged, ShouldEqual, 1)
@@ -185,7 +185,7 @@ func TestPurgeTenantPostgres(t *testing.T) {
 		So(err, ShouldBeNil)
 
 		Convey("When tenant A's entity data is purged", func() {
-			_, err := a.Values().PurgeTenant(ctxA)
+			_, err := a.Erasure().PurgeTenant(ctxA)
 			So(err, ShouldBeNil)
 
 			Convey("Then A's entity rows are gone and A's schema survives", func() {
@@ -238,7 +238,7 @@ func TestPurgeEntityReportsBlobFailuresPostgres(t *testing.T) {
 		blobKey := mediaSnap.Value.Media().ObjectKey
 
 		Convey("When e1 is purged", func() {
-			report, err := it.Values().PurgeEntity(ctx, typeID, "e1")
+			report, err := it.Erasure().PurgeEntity(ctx, typeID, "e1")
 			So(err, ShouldBeNil) // erasure commits; blob GC is post-commit best effort
 
 			Convey("Then the report tells the truth about the failed blob delete", func() {

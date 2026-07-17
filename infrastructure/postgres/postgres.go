@@ -28,6 +28,7 @@ func NewRepositories(pool db.QueryExecer) application.Repositories {
 		RelationshipDefinitions: NewRelationshipDefinitionRepository(pool),
 		Relationships:           NewRelationshipRepository(pool),
 		Query:                   NewQueryRepository(pool),
+		SchemaVersions:          NewSchemaVersionReader(pool),
 	}
 }
 

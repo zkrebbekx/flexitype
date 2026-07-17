@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/zkrebbekx/flexitype/application/uow"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
@@ -64,7 +65,7 @@ type Interactor struct {
 
 // NewInteractor wires the admin usecases.
 func NewInteractor(store Store) *Interactor {
-	return &Interactor{store: store, now: time.Now}
+	return &Interactor{store: store, now: uow.UTCNow}
 }
 
 // CreateTenant provisions a new tenant.
@@ -78,7 +79,7 @@ func (i *Interactor) CreateTenant(ctx context.Context, name string) (*Tenant, er
 		return nil, err
 	}
 
-	now := i.now().UTC()
+	now := i.now()
 	t := Tenant{ID: ulid.New(), Name: name, Active: true, CreatedAt: now, UpdatedAt: now}
 	if err := i.store.CreateTenant(ctx, t); err != nil {
 		return nil, err
@@ -98,7 +99,7 @@ func (i *Interactor) SetTenantActive(ctx context.Context, name string, active bo
 	if _, err := i.store.GetTenantByName(ctx, name); err != nil {
 		return err
 	}
-	return i.store.SetTenantActive(ctx, name, active, i.now().UTC())
+	return i.store.SetTenantActive(ctx, name, active, i.now())
 }
 
 // AccountWithToken pairs a created/rotated account with its one-time
@@ -135,7 +136,7 @@ func (i *Interactor) CreateAccount(ctx context.Context, in CreateAccountInput) (
 	if err != nil {
 		return nil, err
 	}
-	now := i.now().UTC()
+	now := i.now()
 	acct := ServiceAccount{
 		ID:        ulid.New(),
 		TenantID:  tenant.Name,
@@ -171,7 +172,7 @@ func (i *Interactor) RotateSecret(ctx context.Context, rawID string) (*AccountWi
 	if err != nil {
 		return nil, err
 	}
-	if err := i.store.UpdateSecret(ctx, id, serviceaccount.HashSecret(secret), i.now().UTC()); err != nil {
+	if err := i.store.UpdateSecret(ctx, id, serviceaccount.HashSecret(secret), i.now()); err != nil {
 		return nil, err
 	}
 	return &AccountWithToken{Account: acct, Token: serviceaccount.MintToken(id.String(), secret)}, nil
@@ -187,7 +188,7 @@ func (i *Interactor) Revoke(ctx context.Context, rawID string) error {
 	if _, err := i.store.GetAccount(ctx, id); err != nil {
 		return err
 	}
-	return i.store.SetAccountActive(ctx, id, false, i.now().UTC())
+	return i.store.SetAccountActive(ctx, id, false, i.now())
 }
 
 func parseScopes(raw []string) ([]serviceaccount.Scope, error) {

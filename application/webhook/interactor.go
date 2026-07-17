@@ -27,7 +27,7 @@ type Interactor struct {
 // NewInteractor wires the webhook usecases. policy governs which
 // subscription URLs are accepted (SSRF guard).
 func NewInteractor(u uow.UnitOfWork, subs SubscriptionStore, deliveries DeliveryStore, policy URLPolicy) *Interactor {
-	return &Interactor{uow: u, subs: subs, deliveries: deliveries, policy: policy, now: time.Now}
+	return &Interactor{uow: u, subs: subs, deliveries: deliveries, policy: policy, now: uow.UTCNow}
 }
 
 // CreateInput registers a new subscription.
@@ -42,7 +42,7 @@ type CreateInput struct {
 // Create registers a webhook subscription.
 func (i *Interactor) Create(ctx context.Context, in CreateInput) (*Subscription, error) {
 	tenant := uow.TenantFromContext(ctx)
-	now := i.now().UTC()
+	now := i.now()
 
 	sub := Subscription{
 		ID:         ulid.New(),
@@ -151,7 +151,7 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*Subscription,
 			sub.PreviousSecret = sub.Secret
 			sub.Secret = *in.RotateSecret
 		}
-		sub.UpdatedAt = i.now().UTC()
+		sub.UpdatedAt = i.now()
 		if err := sub.Validate(i.policy); err != nil {
 			return err
 		}
@@ -271,7 +271,7 @@ func (i *Interactor) Redeliver(ctx context.Context, rawID string) error {
 	if err != nil {
 		return domainerrors.NewValidation(err.Error())
 	}
-	return i.deliveries.Redeliver(ctx, uow.TenantFromContext(ctx), id, i.now().UTC())
+	return i.deliveries.Redeliver(ctx, uow.TenantFromContext(ctx), id, i.now())
 }
 
 // redact strips secrets from activity descriptors.

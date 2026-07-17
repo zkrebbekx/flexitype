@@ -47,7 +47,7 @@ type Interactor struct {
 
 // NewInteractor wires the saved-view usecases.
 func NewInteractor(store Store) *Interactor {
-	return &Interactor{store: store, now: time.Now}
+	return &Interactor{store: store, now: uow.UTCNow}
 }
 
 // Input carries the mutable fields of a view.
@@ -74,7 +74,7 @@ func (i *Interactor) Create(ctx context.Context, in Input) (*View, error) {
 	if err := in.validate(); err != nil {
 		return nil, err
 	}
-	now := i.now().UTC()
+	now := i.now()
 	v := View{
 		ID:        ulid.New(),
 		TenantID:  tenantOf(ctx),
@@ -110,7 +110,7 @@ func (i *Interactor) Update(ctx context.Context, rawID string, in Input) (*View,
 	existing.Query = in.Query
 	existing.Columns = normalizeColumns(in.Columns)
 	existing.Sort = in.Sort
-	existing.UpdatedAt = i.now().UTC()
+	existing.UpdatedAt = i.now()
 	if err := i.store.Update(ctx, existing); err != nil {
 		return nil, err
 	}

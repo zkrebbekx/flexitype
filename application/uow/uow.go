@@ -71,6 +71,15 @@ func WithDispatchObserver(fn func(ctx context.Context, err error)) Option {
 	return func(u *unitOfWork) { u.onDispatch = fn }
 }
 
+// UTCNow is the canonical clock for every usecase constructor: wall-clock in
+// UTC, with the monotonic reading stripped. Timestamps produced here are
+// stored in aggregates and compared across the app/DB boundary, so they must
+// be UTC — a raw time.Now() carries the local zone (and a monotonic reading),
+// which reads as maybe-a-bug and can flip ordering-sensitive tests in non-UTC
+// timezones. Duration/TTL clocks (rate limiting, auth cache, backoff) keep
+// time.Now() instead, since they need the monotonic reading.
+func UTCNow() time.Time { return time.Now().UTC() }
+
 // WithNow overrides the clock (tests).
 func WithNow(now func() time.Time) Option {
 	return func(u *unitOfWork) { u.now = now }
@@ -94,7 +103,7 @@ func New(tx db.Transactor, dispatcher *events.Dispatcher, log activity.Log, opts
 		tx:         tx,
 		dispatcher: dispatcher,
 		log:        log,
-		now:        time.Now,
+		now:        UTCNow,
 	}
 	for _, opt := range opts {
 		opt(u)

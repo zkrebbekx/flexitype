@@ -34,7 +34,7 @@ type Interactor struct {
 // NewInteractor wires the attribute-definition usecases. units (nil-able)
 // normalizes quantity constraint operands.
 func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, units appunit.Store) *Interactor {
-	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, units: units, now: time.Now}
+	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, units: units, now: uow.UTCNow}
 }
 
 // CreateInput holds data for creating an attribute definition. Constraints

@@ -109,7 +109,7 @@ func (i *Interactor) SetBlobStore(s blobStore) { i.blobs = s }
 
 // NewInteractor wires the attribute-value usecases.
 func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, deps domaindependency.Repository, links domainrelationship.Repository) *Interactor {
-	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, deps: deps, links: links, now: time.Now}
+	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, deps: deps, links: links, now: uow.UTCNow}
 }
 
 // SetInput holds data for writing one attribute value. Value is the raw

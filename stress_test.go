@@ -179,6 +179,16 @@ func TestStress(t *testing.T) {
 		}
 	}
 
+	// The entity-summary projection is maintained by a per-row trigger on
+	// flexitype_attribute_value (migration 000019). Under a bulk COPY that fires
+	// once per value row and would dominate the seed, so disable it for the load
+	// and rebuild the projection in one grouped INSERT afterwards — the same
+	// trade-off as dropping the trigram GIN indexes above.
+	if _, err := pool.Exec(
+		"ALTER TABLE flexitype_attribute_value DISABLE TRIGGER flexitype_entity_summary_maintain"); err != nil {
+		t.Fatalf("disable entity-summary trigger: %v", err)
+	}
+
 	// ---- SEED ----
 	seedStart := time.Now()
 	graph := buildTypeGraph(ctx, t, svc, cfg)
@@ -189,11 +199,30 @@ func TestStress(t *testing.T) {
 
 	valueRows := bulkSeedEntities(t, pool, cfg, graph)
 
+	// Re-enable the trigger (so post-seed CRUD scenarios keep the projection in
+	// sync) and backfill the summary once over the freshly loaded values.
+	if _, err := pool.Exec(
+		"ALTER TABLE flexitype_attribute_value ENABLE TRIGGER flexitype_entity_summary_maintain"); err != nil {
+		t.Fatalf("enable entity-summary trigger: %v", err)
+	}
+	t.Log("seed: backfilling flexitype_entity_summary...")
+	if _, err := pool.Exec(
+		`INSERT INTO flexitype_entity_summary
+		     (tenant_id, type_definition_id, entity_id, value_count, last_updated_at)
+		 SELECT tenant_id, type_definition_id, entity_id, count(*), max(updated_at)
+		   FROM flexitype_attribute_value
+		  WHERE archived_at IS NULL
+		  GROUP BY tenant_id, type_definition_id, entity_id
+		 ON CONFLICT (tenant_id, type_definition_id, entity_id) DO NOTHING`); err != nil {
+		t.Fatalf("backfill entity summary: %v", err)
+	}
+
 	t.Log("seed: ANALYZE...")
 	for _, tbl := range []string{
 		"flexitype_type_definition",
 		"flexitype_attribute_definition",
 		"flexitype_attribute_value",
+		"flexitype_entity_summary",
 	} {
 		if _, err := pool.Exec("ANALYZE " + tbl); err != nil {
 			t.Fatalf("analyze %s: %v", tbl, err)

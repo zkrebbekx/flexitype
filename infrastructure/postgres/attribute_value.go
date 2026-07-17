@@ -509,29 +509,33 @@ func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valu
 		ValueCount       int       `db:"value_count"`
 		LastUpdatedAt    time.Time `db:"last_updated_at"`
 	}
-	// Keyset on the ordered aggregate (last update) with entity_id as the
-	// unique tiebreaker; the predicate is a HAVING clause because it compares
-	// an aggregate.
-	entityKeyset := []db.KeysetColumn{{Expr: "max(updated_at)", Desc: true, Cast: "::timestamptz"}, {Expr: "entity_id"}}
-	pred, pargs, _ := db.KeysetPredicate(entityKeyset, page.Cursor)
-	having := ""
-	if pred != "" {
-		having = "\n\t\t HAVING " + pred
-	}
-	args := []any{tenant.String(), pq.Array(ids)}
-	args = append(args, pargs...)
+	// The summary projection (flexitype_entity_summary, maintained by a trigger
+	// on flexitype_attribute_value) already holds one row per live entity with
+	// its value_count and last_updated_at, so a page is a keyset window over it
+	// — no per-page aggregation of the value table. Keyset on the ordered
+	// (last update, entity id): newest-first with entity_id as the unique
+	// tiebreaker. The predicate is now a plain WHERE, not a HAVING.
+	//
+	// The single-type case (the entity browser without descendants, facet-set
+	// resolution and Reindex) is emitted as an equality on type_definition_id,
+	// not `= ANY`: with tenant_id + type_definition_id fixed, the ordering index
+	// idx_flexitype_entity_summary_order (…, last_updated_at DESC, entity_id)
+	// satisfies the ORDER BY directly, so a page is a bounded index scan of
+	// `limit` rows. A ScalarArrayOp (`= ANY`) over the leading index column
+	// cannot preserve that ordering in one scan, so the multi-type (descendants)
+	// case scans the — still small, one-row-per-entity — summary and sorts,
+	// which remains far cheaper than aggregating the value table.
+	typePred, typeArg := typeDefPredicate(ids)
+	entityKeyset := []db.KeysetColumn{{Expr: "last_updated_at", Desc: true, Cast: "::timestamptz"}, {Expr: "entity_id"}}
+	where := []string{"tenant_id = ?", typePred}
+	args := []any{tenant.String(), typeArg}
+	where, args = keysetWhere(where, args, entityKeyset, page.Cursor)
 	args = append(args, page.FetchLimit())
-	// An entity's rows all carry its declared type, so grouping by both keeps
-	// one row per entity while surfacing the subtype.
 	err := r.q.SelectContext(ctx, &rows, bind(
-		`SELECT entity_id,
-		        type_definition_id,
-		        count(*)        AS value_count,
-		        max(updated_at) AS last_updated_at
-		 FROM flexitype_attribute_value
-		 WHERE tenant_id = ? AND type_definition_id = ANY(?) AND archived_at IS NULL
-		 GROUP BY entity_id, type_definition_id`+having+`
-		 ORDER BY max(updated_at) DESC, entity_id
+		`SELECT entity_id, type_definition_id, value_count, last_updated_at
+		 FROM flexitype_entity_summary
+		 WHERE `+strings.Join(where, " AND ")+`
+		 ORDER BY last_updated_at DESC, entity_id
 		 LIMIT ?`),
 		args...,
 	)
@@ -550,16 +554,27 @@ func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valu
 	}
 	total := 0
 	if page.WantTotal {
+		// The projection holds exactly one row per live entity, so the total is
+		// a plain count of the matching summary rows.
 		if err := r.q.GetContext(ctx, &total, bind(
-			`SELECT count(*) FROM (
-			   SELECT 1 FROM flexitype_attribute_value
-			   WHERE tenant_id = ? AND type_definition_id = ANY(?) AND archived_at IS NULL
-			   GROUP BY entity_id, type_definition_id
-			 ) g`), tenant.String(), pq.Array(ids)); err != nil {
+			`SELECT count(*) FROM flexitype_entity_summary
+			 WHERE tenant_id = ? AND `+typePred),
+			tenant.String(), typeArg); err != nil {
 			return nil, 0, fmt.Errorf("count entities: %w", err)
 		}
 	}
 	return out, total, nil
+}
+
+// typeDefPredicate renders the type_definition_id filter for the entity-summary
+// reads. A single type becomes an equality so the ordering index can serve the
+// page as a bounded index scan; multiple types (subtype browsing) fall back to
+// `= ANY`. It returns the `?`-placeholdered predicate and its bound argument.
+func typeDefPredicate(ids []string) (string, any) {
+	if len(ids) == 1 {
+		return "type_definition_id = ?", ids[0]
+	}
+	return "type_definition_id = ANY(?)", pq.Array(ids)
 }
 
 func (r *attributeValueRepository) Save(ctx context.Context, av *domainvalue.AttributeValue) error {

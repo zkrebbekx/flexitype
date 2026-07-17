@@ -441,21 +441,30 @@ func (i *Interactor) Export(ctx context.Context, in ExportInput) (*ExportOutput,
 		out.Columns = append(out.Columns, c.name)
 	}
 
+	// Batch the value load: one query per chunk instead of one per entity (up
+	// to 10000). Group results by entity id, then emit rows in request order.
+	ids := make([]valueobjects.EntityID, 0, len(entityIDs))
 	for _, eid := range entityIDs {
-		entityID, err := valueobjects.ParseEntityID(eid)
+		id, err := valueobjects.ParseEntityID(eid)
 		if err != nil {
 			return nil, domainerrors.NewValidation(err.Error())
 		}
-		vals, err := i.values.ListByEntity(ctx, domainvalue.EntityKey{
-			TenantID: tenant, TypeDefinitionID: typeID, EntityID: entityID,
-		})
-		if err != nil {
-			return nil, err
+		ids = append(ids, id)
+	}
+	byEntity := make(map[string]map[valueobjects.AttributeDefinitionID]string, len(entityIDs))
+	if err := i.forEachValueBatched(ctx, tenant, ids, func(av *domainvalue.AttributeValue) {
+		eid := av.EntityID().String()
+		cells := byEntity[eid]
+		if cells == nil {
+			cells = map[valueobjects.AttributeDefinitionID]string{}
+			byEntity[eid] = cells
 		}
-		byAttr := map[valueobjects.AttributeDefinitionID]string{}
-		for _, av := range vals {
-			byAttr[av.AttributeDefinitionID()] = av.Value().String()
-		}
+		cells[av.AttributeDefinitionID()] = av.Value().String()
+	}); err != nil {
+		return nil, err
+	}
+	for _, eid := range entityIDs {
+		byAttr := byEntity[eid]
 		row := make([]string, 0, len(cols)+1)
 		row = append(row, eid)
 		for _, c := range cols {

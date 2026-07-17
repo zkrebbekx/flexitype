@@ -49,13 +49,23 @@ Provisioning wins if both it and a file are set.
 | `FLEXITYPE_SERVICE_ACCOUNTS` | _(unset)_ | Path to the service-account JSON file (file mode). |
 | `FLEXITYPE_PROVISIONING` | `false` | Enable database-backed auth and the admin-scoped tenant/service-account API. |
 | `FLEXITYPE_REQUIRE_AUTH` | `false` | Refuse to boot unless an account source (file or provisioning) is configured. Set to `true` in production to prevent accidentally running with authentication disabled. |
-| `FLEXITYPE_BOOTSTRAP_ADMIN` | `false` | On startup, if no accounts exist, seed a `default` tenant and `bootstrap-admin` admin account. Its token is logged **once** — capture it. |
+| `FLEXITYPE_BOOTSTRAP_ADMIN` | `false` | On startup, if no accounts exist, seed a `default` tenant and `bootstrap-admin` admin account. Its token is printed to **stdout once** (never to the structured log) — capture it. |
 | `FLEXITYPE_AUTH_CACHE_TTL` | `30s` | How long a database-backed auth result is cached. Bounds how quickly a revoked or rotated credential stops working. |
 
 ### Provisioning API
 
 All endpoints require the `admin` scope and return `501` when provisioning
 is off. See `api/openapi.yaml` for the full contract.
+
+> **The `admin` scope is a platform-operator (global) privilege, not a
+> tenant-admin one.** The provisioning control plane operates *across*
+> tenants: an `admin`-scoped account takes the target tenant from the request
+> body, so it can create write tokens in any tenant, list every tenant, and
+> rotate or revoke any account — effectively a global superuser. Issue `admin`
+> tokens only to trusted platform operators, never to per-tenant
+> administrators; use `read`/`write`-scoped accounts for tenant users. (A
+> future major version may split platform-operator from tenant-admin; until
+> then the boundary is operational, not enforced by the scope.)
 
 | Method & path | Purpose |
 | --- | --- |

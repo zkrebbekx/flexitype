@@ -85,7 +85,12 @@ func hasScope(ctx context.Context, want serviceaccount.Scope) bool {
 	return false
 }
 
-// requireAdmin gates the provisioning endpoints on the admin scope.
+// requireAdmin gates the provisioning endpoints on the admin scope. Note that
+// `admin` is a platform-operator (global) privilege, not a tenant-admin one:
+// the provisioning control plane takes the target tenant from the request, so
+// an admin-scoped caller can provision in, and enumerate, any tenant. This is
+// intentional and documented (docs/configuration.md) — issue only to trusted
+// operators, never to per-tenant admins.
 func (s *server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if !hasScope(r.Context(), serviceaccount.ScopeAdmin) {
 		writeForbidden(w, "missing scope admin")

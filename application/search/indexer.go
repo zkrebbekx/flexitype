@@ -12,9 +12,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	"github.com/zkrebbekx/flexitype/application/uow"
 
-	"github.com/zkrebbekx/flexitype/application"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -34,25 +34,24 @@ type EntityDocument struct {
 	UpdatedAt time.Time
 }
 
-// DocumentStore persists the projection.
+// DocumentStore persists the projection. It extends the canonical
+// appctx.SearchStore erasure port (Remove, PurgeTenant) with the projection
+// write the indexer needs, so the erasure methods keep a single definition.
 type DocumentStore interface {
 	Upsert(ctx context.Context, doc EntityDocument) error
-	Remove(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) error
-	// PurgeTenant HARD-deletes every search document of a tenant — the
-	// right-to-erasure primitive — returning the row count.
-	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error)
+	appctx.SearchStore
 }
 
 // Indexer rebuilds entity documents from value events.
 type Indexer struct {
-	newRepos func() application.Repositories
+	newRepos func() appctx.Repositories
 	store    DocumentStore
 	now      func() time.Time
 }
 
 // NewIndexer builds the indexer. newRepos supplies fresh repositories per
 // rebuild (the indexer runs outside any request scope).
-func NewIndexer(newRepos func() application.Repositories, store DocumentStore) *Indexer {
+func NewIndexer(newRepos func() appctx.Repositories, store DocumentStore) *Indexer {
 	return &Indexer{newRepos: newRepos, store: store, now: uow.UTCNow}
 }
 

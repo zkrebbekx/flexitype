@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	apprevision "github.com/zkrebbekx/flexitype/application/revision"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	appunit "github.com/zkrebbekx/flexitype/application/unit"
@@ -41,7 +42,7 @@ type Interactor struct {
 	blobs     blobStore
 	units     unitStore
 	revisions apprevision.Store
-	search    SearchStore
+	search    appctx.SearchStore
 	now       func() time.Time
 	// onCleanupError surfaces a swallowed post-erasure cleanup failure (a blob
 	// GC or search-projection removal that could not be completed). Nil-safe:
@@ -71,20 +72,10 @@ func (i *Interactor) observeCleanup(err error) {
 	}
 }
 
-// SearchStore is the erasure-facing slice of the search-projection port: an
-// entity's document is dropped with Remove, a tenant's with PurgeTenant. It is
-// declared here (rather than imported from the search package) because the
-// search package depends on the application root, which depends on this
-// package — importing it would cycle. Nil disables search purging (the index
-// is off).
-type SearchStore interface {
-	Remove(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) error
-	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error)
-}
-
 // SetSearchStore installs the search projection an erasure purges. Called once
-// at wiring time when the search index is enabled.
-func (i *Interactor) SetSearchStore(s SearchStore) { i.search = s }
+// at wiring time when the search index is enabled. The port is the canonical
+// appctx.SearchStore (the erasure-facing slice of the search-projection port).
+func (i *Interactor) SetSearchStore(s appctx.SearchStore) { i.search = s }
 
 // unitStore resolves the unit family a quantity attribute pins, for
 // converting a magnitude to its base unit. Nil disables quantity writes.

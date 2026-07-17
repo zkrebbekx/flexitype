@@ -13,9 +13,11 @@ package computed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application"
@@ -23,6 +25,7 @@ import (
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/events"
@@ -34,19 +37,51 @@ import (
 type Materializer struct {
 	factory application.Factory
 	now     func() time.Time
+
+	// hasComputed caches, per type definition id, whether its effective schema
+	// holds any computed formula attribute. A value event for a type known to
+	// have none early-outs before touching the database, so a bulk import into
+	// a type with no computed attributes stops re-walking the inheritance chain
+	// and re-listing the entity on every one of its value events. The cache is
+	// flushed wholesale on any attribute/type definition event (see invalidate).
+	mu          sync.RWMutex
+	hasComputed map[string]bool
 }
 
 // NewMaterializer builds the computed-attribute subscriber.
 func NewMaterializer(factory application.Factory) *Materializer {
-	return &Materializer{factory: factory, now: time.Now}
+	return &Materializer{factory: factory, now: time.Now, hasComputed: map[string]bool{}}
 }
 
 // Name implements events.Handler.
 func (m *Materializer) Name() string { return "computed-materializer" }
 
-// EventTypes lists the events that trigger a recompute.
+// EventTypes lists the events the materializer subscribes to: value changes
+// drive a recompute, and definition changes invalidate the per-type
+// "has computed attributes" cache (a formula attribute added to or removed
+// from a type — or any of its ancestors — changes whether its entities need
+// recomputing).
 func EventTypes() []events.Type {
-	return []events.Type{domainvalue.EventSet, domainvalue.EventUpdated, domainvalue.EventRemoved}
+	return []events.Type{
+		domainvalue.EventSet, domainvalue.EventUpdated, domainvalue.EventRemoved,
+		domainattribute.EventCreated, domainattribute.EventUpdated,
+		domainattribute.EventArchived, domainattribute.EventRestored,
+		domaintypedef.EventCreated, domaintypedef.EventUpdated,
+		domaintypedef.EventArchived, domaintypedef.EventRestored,
+	}
+}
+
+// isDefinitionEvent reports whether an event type is a schema (attribute or
+// type definition) change — the trigger to invalidate the has-computed cache.
+func isDefinitionEvent(t events.Type) bool {
+	switch t {
+	case domainattribute.EventCreated, domainattribute.EventUpdated,
+		domainattribute.EventArchived, domainattribute.EventRestored,
+		domaintypedef.EventCreated, domaintypedef.EventUpdated,
+		domaintypedef.EventArchived, domaintypedef.EventRestored:
+		return true
+	}
+	return false
 }
 
 type valuePayload struct {
@@ -56,8 +91,13 @@ type valuePayload struct {
 	AttributeDefID   string `json:"attribute_definition_id"`
 }
 
-// Handle implements events.Handler.
+// Handle implements events.Handler. A definition event invalidates the cache;
+// a value event recomputes the one entity it names.
 func (m *Materializer) Handle(ctx context.Context, env events.Envelope) error {
+	if isDefinitionEvent(env.Type) {
+		m.invalidate()
+		return nil
+	}
 	var p valuePayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return fmt.Errorf("decode value event payload: %w", err)
@@ -70,10 +110,91 @@ func (m *Materializer) Handle(ctx context.Context, env events.Envelope) error {
 	return m.Recompute(ctx, p.TypeDefinitionID, p.EntityID)
 }
 
+// HandleBatch implements events.BatchHandler. It coalesces one commit's value
+// events per (tenant, type, entity) so each touched entity is recomputed once,
+// not once per value event: a row that sets ten attributes emits ten events
+// but needs a single recompute. A definition event anywhere in the batch
+// flushes the cache first, so a recompute later in the same commit sees the
+// fresh schema.
+func (m *Materializer) HandleBatch(ctx context.Context, envs []events.Envelope) error {
+	type key struct{ tenant, typeID, entityID string }
+	seen := make(map[key]struct{}, len(envs))
+	order := make([]key, 0, len(envs))
+	invalidated := false
+	var errs []error
+
+	for _, env := range envs {
+		if isDefinitionEvent(env.Type) {
+			if !invalidated {
+				m.invalidate()
+				invalidated = true
+			}
+			continue
+		}
+		var p valuePayload
+		if err := json.Unmarshal(env.Payload, &p); err != nil {
+			errs = append(errs, fmt.Errorf("decode value event payload: %w", err))
+			continue
+		}
+		k := key{tenant: p.TenantID, typeID: p.TypeDefinitionID, entityID: p.EntityID}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		order = append(order, k)
+	}
+
+	for _, k := range order {
+		tenant, err := valueobjects.ParseTenantID(k.tenant)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		rctx := uow.WithTenant(ctx, tenant)
+		if err := m.Recompute(rctx, k.typeID, k.entityID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// cachedHasComputed reports the cached has-computed flag for a type; known is
+// false when the type has not been seen since the last invalidation.
+func (m *Materializer) cachedHasComputed(typeID string) (known, has bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	has, known = m.hasComputed[typeID]
+	return known, has
+}
+
+// setCachedHasComputed records whether a type's effective schema has any
+// computed formula attribute.
+func (m *Materializer) setCachedHasComputed(typeID string, has bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.hasComputed[typeID] = has
+}
+
+// invalidate flushes the whole has-computed cache. A definition change on any
+// type can alter a descendant's effective schema through inheritance, so
+// per-type invalidation would be unsound — clearing everything is cheap
+// relative to the value-write traffic the cache accelerates.
+func (m *Materializer) invalidate() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	clear(m.hasComputed)
+}
+
 // Recompute evaluates every computed formula attribute of the entity's type
 // and materializes the results. Missing inputs (or division by zero) remove
 // a stale computed value rather than writing a wrong one.
 func (m *Materializer) Recompute(ctx context.Context, typeID, entityID string) error {
+	// Fast path: a type known to hold no computed attribute needs no work and
+	// no query at all.
+	if known, has := m.cachedHasComputed(typeID); known && !has {
+		return nil
+	}
+
 	it := m.factory.New(ctx)
 
 	attrs, err := it.TypeDefinitions().EffectiveAttributes(ctx, typeID)
@@ -86,6 +207,9 @@ func (m *Materializer) Recompute(ctx context.Context, typeID, entityID string) e
 			computed = append(computed, a.Attribute)
 		}
 	}
+	// Cache the outcome so subsequent value events for this type take (or skip)
+	// the fast path above until the next definition change.
+	m.setCachedHasComputed(typeID, len(computed) > 0)
 	if len(computed) == 0 {
 		return nil
 	}

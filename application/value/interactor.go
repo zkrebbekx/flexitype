@@ -174,8 +174,10 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 		values := i.values.WithTx(tx)
 
 		// Lock the definition: value validity depends on it, so definition
-		// updates and value writes serialize.
-		def, err := attrs.GetForUpdate(ctx, defID)
+		// updates and value writes serialize. During an import the same
+		// definition is locked once per chunk transaction and reused across its
+		// cells (see importCache), instead of re-locking it for every value.
+		def, err := i.lockDefinition(ctx, attrs, defID)
 		if err != nil {
 			return err
 		}
@@ -255,7 +257,7 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			}
 		}
 
-		all, err := values.FindByDefinitionAndEntity(ctx, defID, entityID)
+		all, err := i.existingValues(ctx, values, defID, entityID)
 		if err != nil {
 			return fmt.Errorf("load existing values: %w", err)
 		}
@@ -314,6 +316,10 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 		if err := values.Save(ctx, av); err != nil {
 			return fmt.Errorf("save attribute value: %w", err)
 		}
+		// Keep the import prefetch cache in step with this insert, so a later
+		// row in the same chunk touching the same entity sees the value just
+		// written (upsert/append decisions stay correct without a re-read).
+		i.recordImportedValue(ctx, entityID, av)
 
 		snap = av.Snapshot()
 		c.CollectEvents(evts...)
@@ -725,7 +731,7 @@ func (i *Interactor) checkDependencies(
 	deps := i.deps.WithTx(tx)
 	values := i.values.WithTx(tx)
 
-	targeting, err := deps.ListByTarget(ctx, def.ID())
+	targeting, err := i.targetingDependencies(ctx, deps, def.ID())
 	if err != nil {
 		return fmt.Errorf("load dependencies: %w", err)
 	}
@@ -751,6 +757,74 @@ func (i *Interactor) checkDependencies(
 		return fmt.Errorf("resolve effective schema: %w", err)
 	}
 	return schema.Check(v)
+}
+
+// lockDefinition loads and row-locks an attribute definition. During an import
+// (an importCache on the context) the same definition is locked once per chunk
+// transaction and the locked aggregate reused for every cell, so a chunk of
+// rows sharing a column no longer re-locks that definition once per row.
+// Definitions are only read in the write path, so sharing one aggregate is safe.
+func (i *Interactor) lockDefinition(ctx context.Context, attrs domainattribute.Repository, defID valueobjects.AttributeDefinitionID) (*domainattribute.Definition, error) {
+	c := importCacheFromContext(ctx)
+	if c == nil {
+		return attrs.GetForUpdate(ctx, defID)
+	}
+	if def, ok := c.defs[defID.String()]; ok {
+		return def, nil
+	}
+	def, err := attrs.GetForUpdate(ctx, defID)
+	if err != nil {
+		return nil, err
+	}
+	c.defs[defID.String()] = def
+	return def, nil
+}
+
+// targetingDependencies loads the dependencies whose effect applies to an
+// attribute. Definitions and dependencies do not change during an import, so
+// the result is memoized on the importCache and fetched at most once per target.
+func (i *Interactor) targetingDependencies(ctx context.Context, deps domaindependency.Repository, targetID valueobjects.AttributeDefinitionID) ([]*domaindependency.Dependency, error) {
+	c := importCacheFromContext(ctx)
+	if c == nil {
+		return deps.ListByTarget(ctx, targetID)
+	}
+	if d, ok := c.deps[targetID.String()]; ok {
+		return d, nil
+	}
+	d, err := deps.ListByTarget(ctx, targetID)
+	if err != nil {
+		return nil, err
+	}
+	c.deps[targetID.String()] = d
+	return d, nil
+}
+
+// existingValues returns the live values one entity holds for a definition.
+// During an import it reads the prefetched-and-maintained per-entity value set
+// (one ListByEntities per chunk) instead of a FindByDefinitionAndEntity query
+// per cell.
+func (i *Interactor) existingValues(ctx context.Context, values domainvalue.Repository, defID valueobjects.AttributeDefinitionID, entityID valueobjects.EntityID) ([]*domainvalue.AttributeValue, error) {
+	c := importCacheFromContext(ctx)
+	if c == nil || c.existing == nil {
+		return values.FindByDefinitionAndEntity(ctx, defID, entityID)
+	}
+	var out []*domainvalue.AttributeValue
+	for _, av := range c.existing[entityID.String()] {
+		if av.AttributeDefinitionID().Equals(defID) {
+			out = append(out, av)
+		}
+	}
+	return out, nil
+}
+
+// recordImportedValue appends a value written during an import to the prefetch
+// cache so subsequent cells of the same entity in the same chunk observe it. It
+// is a no-op outside an import.
+func (i *Interactor) recordImportedValue(ctx context.Context, entityID valueobjects.EntityID, av *domainvalue.AttributeValue) {
+	if c := importCacheFromContext(ctx); c != nil && c.existing != nil {
+		key := entityID.String()
+		c.existing[key] = append(c.existing[key], av)
+	}
 }
 
 // Remove archives a stored value.

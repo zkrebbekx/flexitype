@@ -38,8 +38,14 @@ const (
 	StrategyTrigram Strategy = "trigram"
 )
 
-// maxScanEntities bounds a scan's O(n^2) comparison.
+// maxScanEntities bounds a scan's comparison work at the entity count.
 const maxScanEntities = 5000
+
+// maxScanDuration is a soft budget for the trigram matching phase. When the
+// inverted-index scan of a pathological, densely-overlapping set still runs
+// long, the scan bails out gracefully with the matches found so far and marks
+// the result truncated — it never silently caps the output.
+const maxScanDuration = 5 * time.Second
 
 // Rule declares how to detect duplicates for one attribute of a type.
 type Rule struct {
@@ -234,7 +240,8 @@ func (i *Interactor) Scan(ctx context.Context, rawRuleID string) (*ScanOutput, e
 		return nil, err
 	}
 
-	candidates := matchPairs(rule, entities, values, dismissed)
+	candidates, budgetHit := matchPairs(rule, entities, values, dismissed, i.now().Add(maxScanDuration), i.now)
+	truncated = truncated || budgetHit
 	sort.SliceStable(candidates, func(a, b int) bool {
 		if candidates[a].Score != candidates[b].Score {
 			return candidates[a].Score > candidates[b].Score
@@ -291,10 +298,14 @@ func (i *Interactor) dismissedSet(ctx context.Context, tenant valueobjects.Tenan
 	return set, nil
 }
 
-// matchPairs produces candidate pairs for a rule. Exact and
-// case-insensitive strategies bucket by a normalized key (O(n)); trigram
-// compares all pairs (O(n^2)).
-func matchPairs(rule Rule, entities, values []string, dismissed map[string]bool) []Candidate {
+// matchPairs produces candidate pairs for a rule. Exact and case-insensitive
+// strategies bucket by a normalized key (O(n)). The trigram strategy builds an
+// inverted index (trigram -> the values containing it) and only compares pairs
+// that share at least one trigram, so it never materializes the full O(n^2)
+// pair space — pairs with no shared trigram score 0 and (with a threshold in
+// (0,1]) could never be candidates anyway. It returns whether it stopped early
+// on the soft time budget. deadline is ignored when zero.
+func matchPairs(rule Rule, entities, values []string, dismissed map[string]bool, deadline time.Time, now func() time.Time) ([]Candidate, bool) {
 	out := []Candidate{}
 	add := func(ai, bi int, score float64) {
 		a, b := canonicalPair(entities[ai], entities[bi])
@@ -326,20 +337,44 @@ func matchPairs(rule Rule, entities, values []string, dismissed map[string]bool)
 			}
 		}
 	case StrategyTrigram:
-		grams := make([]map[string]struct{}, len(values))
+		// Extract each value's sorted trigram set and index which values hold
+		// each trigram.
+		grams := make([][]string, len(values))
+		index := map[string][]int{}
 		for idx, v := range values {
-			grams[idx] = trigrams(v)
+			g := trigrams(v)
+			grams[idx] = g
+			for _, t := range g {
+				index[t] = append(index[t], idx)
+			}
 		}
+		// For each value, the only possible partners are the ones sharing a
+		// trigram; gather them from the index (keeping y > x so each unordered
+		// pair is scored once) and Jaccard just those.
+		partners := map[int]struct{}{}
 		for x := 0; x < len(values); x++ {
-			for y := x + 1; y < len(values); y++ {
-				score := jaccard(grams[x], grams[y])
-				if score >= rule.Threshold {
+			if len(grams[x]) == 0 {
+				continue
+			}
+			if !deadline.IsZero() && x%512 == 0 && now().After(deadline) {
+				return out, true
+			}
+			clear(partners)
+			for _, t := range grams[x] {
+				for _, y := range index[t] {
+					if y > x {
+						partners[y] = struct{}{}
+					}
+				}
+			}
+			for y := range partners {
+				if score := jaccard(grams[x], grams[y]); score >= rule.Threshold {
 					add(x, y, score)
 				}
 			}
 		}
 	}
-	return out
+	return out, false
 }
 
 // canonicalPair orders two entity ids so a pair has one representation
@@ -351,10 +386,12 @@ func canonicalPair(a, b string) (string, string) {
 	return b, a
 }
 
-// trigrams returns the set of padded 3-grams of s, lowercased. Each
-// alphanumeric word is padded with two leading and one trailing space
-// before extraction, so similar words share boundary trigrams.
-func trigrams(s string) map[string]struct{} {
+// trigrams returns the sorted, de-duplicated padded 3-grams of s, lowercased.
+// Each alphanumeric word is padded with two leading and one trailing space
+// before extraction, so similar words share boundary trigrams. The result is
+// sorted so jaccard can intersect two sets by a linear merge and so the
+// inverted index sees each trigram once per value.
+func trigrams(s string) []string {
 	set := map[string]struct{}{}
 	for _, word := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
@@ -365,21 +402,33 @@ func trigrams(s string) map[string]struct{} {
 			set[string(runes[k:k+3])] = struct{}{}
 		}
 	}
-	return set
+	out := make([]string, 0, len(set))
+	for g := range set {
+		out = append(out, g)
+	}
+	sort.Strings(out)
+	return out
 }
 
-// jaccard is the size of the intersection over the union of two trigram sets.
-// A value with no trigrams (no alphanumeric content — punctuation or emoji
-// only) is treated as matching nothing, so two content-free values do not
-// score as a perfect duplicate.
-func jaccard(a, b map[string]struct{}) float64 {
+// jaccard is the size of the intersection over the union of two sorted trigram
+// sets, computed by a linear merge. A value with no trigrams (no alphanumeric
+// content — punctuation or emoji only) is treated as matching nothing, so two
+// content-free values do not score as a perfect duplicate.
+func jaccard(a, b []string) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
 	}
 	inter := 0
-	for g := range a {
-		if _, ok := b[g]; ok {
+	for i, j := 0, 0; i < len(a) && j < len(b); {
+		switch {
+		case a[i] == b[j]:
 			inter++
+			i++
+			j++
+		case a[i] < b[j]:
+			i++
+		default:
+			j++
 		}
 	}
 	union := len(a) + len(b) - inter

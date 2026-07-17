@@ -8,6 +8,7 @@ package search
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -88,6 +89,53 @@ func (i *Indexer) Handle(ctx context.Context, env events.Envelope) error {
 		return err
 	}
 	return i.Rebuild(ctx, tenant, typeID, entityID)
+}
+
+// HandleBatch implements events.BatchHandler. It coalesces one commit's value
+// events per (tenant, type, entity) so each touched entity's document is
+// rebuilt once, not once per value event — a row that sets ten attributes
+// emits ten events but its document need only be flattened a single time.
+func (i *Indexer) HandleBatch(ctx context.Context, envs []events.Envelope) error {
+	type key struct{ tenant, typeID, entityID string }
+	seen := make(map[key]struct{}, len(envs))
+	order := make([]key, 0, len(envs))
+	var errs []error
+
+	for _, env := range envs {
+		var p valuePayload
+		if err := json.Unmarshal(env.Payload, &p); err != nil {
+			errs = append(errs, fmt.Errorf("decode value event payload: %w", err))
+			continue
+		}
+		k := key{tenant: p.TenantID, typeID: p.TypeDefinitionID, entityID: p.EntityID}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		order = append(order, k)
+	}
+
+	for _, k := range order {
+		tenant, err := valueobjects.ParseTenantID(k.tenant)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		typeID, err := valueobjects.ParseTypeDefinitionID(k.typeID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		entityID, err := valueobjects.ParseEntityID(k.entityID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := i.Rebuild(ctx, tenant, typeID, entityID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Rebuild recomputes one entity's document from its live values, removing

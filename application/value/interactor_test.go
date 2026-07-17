@@ -317,6 +317,9 @@ func (r *fakeLinksRepo) ListByEntity(context.Context, domainrelationship.EntityL
 func (r *fakeLinksRepo) ListByEntities(context.Context, valueobjects.TenantID, []valueobjects.EntityID) ([]*domainrelationship.Relationship, error) {
 	return nil, nil
 }
+func (r *fakeLinksRepo) WindowedLinks(context.Context, domainrelationship.LinkWindow, []valueobjects.EntityID) (map[valueobjects.EntityID]domainrelationship.LinkPage, error) {
+	return nil, nil
+}
 func (r *fakeLinksRepo) CountLiveLinks(context.Context, valueobjects.RelationshipDefinitionID, valueobjects.EntityID) (int, int, error) {
 	return 0, 0, nil
 }

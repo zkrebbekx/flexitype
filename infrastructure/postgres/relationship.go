@@ -433,6 +433,7 @@ type relationshipRepository struct {
 	byID     *dataloader.Loader[string, domainrelationship.Snapshot]
 	byEntity *dataloader.Loader[relEntityKey, []domainrelationship.Snapshot]
 	byList   *dataloader.Loader[string, pagedResult[domainrelationship.Snapshot]]
+	byWindow *dataloader.Loader[relWindowKey, domainrelationship.LinkPage]
 }
 
 // NewRelationshipRepository builds a dataloader-backed repository over the
@@ -442,6 +443,7 @@ func NewRelationshipRepository(q db.QueryExecer) domainrelationship.Repository {
 	r.byID = newLoader(r.batchByID)
 	r.byEntity = newLoader(r.batchByEntity)
 	r.byList = newLoader(r.batchList)
+	r.byWindow = newLoader(r.batchWindowLinks)
 	return r
 }
 
@@ -566,6 +568,216 @@ func (r *relationshipRepository) batchList(ctx context.Context, keys []string) (
 		pr := out[row.LoaderKey]
 		pr.Items = append(pr.Items, row.snapshot())
 		out[row.LoaderKey] = pr
+	}
+	return out, nil
+}
+
+// --- windowed relationship child pages (GraphQL nested connections) ----------
+//
+// relWindowKey batches a per-self windowed page of one relationship's opposite
+// endpoints, in one direction. Keys that share (tenant, def, side, limit,
+// cursor, wantTotal) window together in a single row-number query; the self
+// entity is the partition. This is the relationship analogue of the value
+// repository's per-definition windowed page (pageKey/batchByDefinitionPage).
+type relWindowKey struct {
+	Tenant    string
+	DefID     string
+	Side      domainrelationship.LinkSide
+	Self      string
+	Limit     int
+	Cursor    string
+	WantTotal bool
+}
+
+// relWindowGroup is the shared shape of a batch of window keys: every key with
+// the same group runs in one windowed query over the group's self entities.
+type relWindowGroup struct {
+	Tenant    string
+	DefID     string
+	Side      domainrelationship.LinkSide
+	Limit     int
+	Cursor    string
+	WantTotal bool
+}
+
+// relWindowGroups partitions window keys by their shared (def, side, limit,
+// cursor, wantTotal) so each group is one windowed query; the values are the
+// group's self entity ids.
+func relWindowGroups(keys []relWindowKey) map[relWindowGroup][]string {
+	groups := make(map[relWindowGroup][]string)
+	for _, k := range keys {
+		g := relWindowGroup{Tenant: k.Tenant, DefID: k.DefID, Side: k.Side, Limit: k.Limit, Cursor: k.Cursor, WantTotal: k.WantTotal}
+		groups[g] = append(groups[g], k.Self)
+	}
+	return groups
+}
+
+// relWindowArms builds the normalized (self, other, link_id) SELECT arms for a
+// relationship window: one row per link, projecting whichever endpoint is the
+// "self" and its opposite for the requested direction. Non-symmetric sides use
+// a single arm; a symmetric relationship UNIONs the parent-as-self and
+// child-as-self arms, the latter excluding self-loops (parent = child) so a
+// self-related entity is not counted twice. withKeyset appends the per-arm
+// keyset predicate (opposite id > cursor) so the window numbers rows starting
+// after the cursor; the count arm omits it to total the full fan-out.
+func relWindowArms(g relWindowGroup, selves []string, withKeyset bool) (string, []any) {
+	arm := func(selfCol, otherCol string, excludeLoops bool) (string, []any) {
+		where := []string{"tenant_id = ?", "relationship_definition_id = ?", "archived_at IS NULL", selfCol + " = ANY(?)"}
+		args := []any{g.Tenant, g.DefID, pq.Array(selves)}
+		if excludeLoops {
+			where = append(where, "parent_entity_id <> child_entity_id")
+		}
+		if withKeyset {
+			// The opposite endpoint is the cursor column, matching the ORDER BY
+			// the window (and the top-level connections) page on.
+			where, args = keysetWhere(where, args, []db.KeysetColumn{{Expr: otherCol}}, g.Cursor)
+		}
+		q := `SELECT ` + selfCol + ` AS self, ` + otherCol + ` AS other, id AS link_id
+		 FROM flexitype_relationship
+		 WHERE ` + strings.Join(where, " AND ")
+		return q, args
+	}
+	switch g.Side {
+	case domainrelationship.ChildSide:
+		return arm("child_entity_id", "parent_entity_id", false)
+	case domainrelationship.EitherSide:
+		a1, args1 := arm("parent_entity_id", "child_entity_id", false)
+		a2, args2 := arm("child_entity_id", "parent_entity_id", true)
+		return a1 + "\nUNION ALL\n" + a2, append(args1, args2...)
+	default: // ParentSide
+		return arm("parent_entity_id", "child_entity_id", false)
+	}
+}
+
+// batchWindowLinks resolves every window key by running one windowed query per
+// (def, side, limit, cursor, wantTotal) group. Each group over-fetches one row
+// per self (row_number() OVER (PARTITION BY self ...) filtered to limit+1) so
+// the caller can report hasNextPage without loading a parent's whole fan-out.
+func (r *relationshipRepository) batchWindowLinks(ctx context.Context, keys []relWindowKey) (map[relWindowKey]domainrelationship.LinkPage, error) {
+	out := make(map[relWindowKey]domainrelationship.LinkPage, len(keys))
+	for g, selves := range relWindowGroups(keys) {
+		pages, err := r.windowGroup(ctx, g, selves)
+		if err != nil {
+			return nil, err
+		}
+		for _, self := range selves {
+			out[relWindowKey{Tenant: g.Tenant, DefID: g.DefID, Side: g.Side, Self: self, Limit: g.Limit, Cursor: g.Cursor, WantTotal: g.WantTotal}] = pages[self]
+		}
+	}
+	return out, nil
+}
+
+// windowGroup runs one group's windowed page (and, when requested, a grouped
+// count for totals) and returns each self's page.
+func (r *relationshipRepository) windowGroup(ctx context.Context, g relWindowGroup, selves []string) (map[string]domainrelationship.LinkPage, error) {
+	arms, args := relWindowArms(g, selves, true)
+	// The keyset predicate is applied INSIDE the window subquery (in the arms)
+	// so row_number restarts at 1 at the first row after the cursor; taking
+	// rn <= limit+1 yields one page plus the sentinel that drives hasNextPage.
+	query := bind(`SELECT self, other FROM (
+	   SELECT self, other,
+	          row_number() OVER (PARTITION BY self ORDER BY other, link_id) AS rn
+	   FROM (` + arms + `) n
+	 ) w
+	 WHERE rn <= ?
+	 ORDER BY self, rn`)
+	args = append(args, g.Limit+1)
+
+	var rows []struct {
+		Self  string `db:"self"`
+		Other string `db:"other"`
+	}
+	if err := r.q.SelectContext(ctx, &rows, query, args...); err != nil {
+		return nil, fmt.Errorf("window relationship links: %w", err)
+	}
+
+	pages := make(map[string]domainrelationship.LinkPage, len(selves))
+	for _, row := range rows {
+		p := pages[row.Self]
+		p.Others = append(p.Others, valueobjects.EntityID(row.Other))
+		pages[row.Self] = p
+	}
+	// Trim the over-fetched sentinel row and flag hasMore per self.
+	for self, p := range pages {
+		if len(p.Others) > g.Limit {
+			p.Others = p.Others[:g.Limit]
+			p.HasMore = true
+			pages[self] = p
+		}
+	}
+
+	if g.WantTotal {
+		if err := r.windowTotals(ctx, g, selves, pages); err != nil {
+			return nil, err
+		}
+	}
+	return pages, nil
+}
+
+// windowTotals fills each self's full fan-out count (ignoring the cursor) with
+// one grouped count query — run only when the caller selected totalCount.
+func (r *relationshipRepository) windowTotals(ctx context.Context, g relWindowGroup, selves []string, pages map[string]domainrelationship.LinkPage) error {
+	arms, args := relWindowArms(g, selves, false)
+	query := bind(`SELECT self, count(*) AS total FROM (` + arms + `) n GROUP BY self`)
+	var rows []struct {
+		Self  string `db:"self"`
+		Total int    `db:"total"`
+	}
+	if err := r.q.SelectContext(ctx, &rows, query, args...); err != nil {
+		return fmt.Errorf("count relationship links: %w", err)
+	}
+	counted := make(map[string]int, len(rows))
+	for _, row := range rows {
+		counted[row.Self] = row.Total
+	}
+	// Every requested self carries a total (0 when it has no matching links),
+	// so a totalCount selection is always answered.
+	for _, self := range selves {
+		p := pages[self]
+		total := counted[self]
+		p.Total = &total
+		pages[self] = p
+	}
+	return nil
+}
+
+// WindowedLinks resolves a keyset page of opposite endpoints for each self
+// entity through the request-scoped window loader. Every self's Load is issued
+// before any thunk is awaited, so the dataloader coalesces the whole batch —
+// sibling selves (and distinct relationship fields resolved concurrently)
+// collapse into one windowed query.
+func (r *relationshipRepository) WindowedLinks(ctx context.Context, w domainrelationship.LinkWindow, selves []valueobjects.EntityID) (map[valueobjects.EntityID]domainrelationship.LinkPage, error) {
+	out := make(map[valueobjects.EntityID]domainrelationship.LinkPage, len(selves))
+	if len(selves) == 0 {
+		return out, nil
+	}
+	keys := make([]relWindowKey, len(selves))
+	for i, self := range selves {
+		keys[i] = relWindowKey{
+			Tenant: w.TenantID.String(), DefID: w.DefinitionID.String(), Side: w.Side,
+			Self: self.String(), Limit: w.Page.Limit, Cursor: w.Page.Cursor, WantTotal: w.Page.WantTotal,
+		}
+	}
+	if r.inTx {
+		fetched, err := r.batchWindowLinks(ctx, keys)
+		if err != nil {
+			return nil, err
+		}
+		for i, self := range selves {
+			out[self] = fetched[keys[i]]
+		}
+		return out, nil
+	}
+	thunks := make([]func() (domainrelationship.LinkPage, error), len(keys))
+	for i, k := range keys {
+		thunks[i] = r.byWindow.Load(ctx, k)
+	}
+	for i, self := range selves {
+		page, err := thunks[i]()
+		if err != nil {
+			return nil, err
+		}
+		out[self] = page
 	}
 	return out, nil
 }

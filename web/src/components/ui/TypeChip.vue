@@ -9,6 +9,7 @@ const glyphs: Record<DataType, string> = {
   integer: '#',
   float: '1.0',
   decimal: '1.00',
+  quantity: '⚖',
   bool: '◧',
   enum: '⋯',
   date: '⏱',

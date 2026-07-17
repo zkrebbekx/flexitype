@@ -3,7 +3,9 @@
 import type { DataType, TypedValue } from './api'
 
 // inputKind picks the native control for a data type.
-export function inputKind(dt: DataType): 'text' | 'number' | 'bool' | 'date' | 'time' | 'datetime' | 'json' {
+export function inputKind(
+  dt: DataType,
+): 'text' | 'number' | 'bool' | 'date' | 'time' | 'datetime' | 'json' | 'quantity' {
   switch (dt) {
     case 'bool':
       return 'bool'
@@ -18,8 +20,44 @@ export function inputKind(dt: DataType): 'text' | 'number' | 'bool' | 'date' | '
       return 'datetime'
     case 'json':
       return 'json'
+    case 'quantity':
+      // A magnitude + unit pair — ValueInput renders a dedicated editor.
+      return 'quantity'
     default:
       return 'text'
+  }
+}
+
+// A quantity value is a magnitude paired with a unit from the attribute's
+// unit family. It travels through the string-based ValueInput model as JSON.
+export interface Quantity {
+  magnitude: string
+  unit: string
+}
+
+// isQuantityValue narrows a stored value to the {magnitude, unit} shape.
+export function isQuantityValue(v: unknown): v is Quantity {
+  if (typeof v !== 'object' || v === null) return false
+  const q = v as Record<string, unknown>
+  return typeof q.magnitude === 'string' && typeof q.unit === 'string'
+}
+
+// formatQuantity renders a quantity as its display form, "{magnitude} {unit}".
+export function formatQuantity(q: Quantity): string {
+  return `${q.magnitude} ${q.unit}`.trim()
+}
+
+// parseQuantity reads the JSON string ValueInput carries back into its parts,
+// tolerating an empty or malformed model (a freshly opened editor).
+export function parseQuantity(raw: string): Quantity {
+  try {
+    const q = JSON.parse(raw) as Partial<Quantity>
+    return {
+      magnitude: typeof q.magnitude === 'string' ? q.magnitude : '',
+      unit: typeof q.unit === 'string' ? q.unit : '',
+    }
+  } catch {
+    return { magnitude: '', unit: '' }
   }
 }
 
@@ -43,6 +81,16 @@ export function toApiValue(dt: DataType, raw: string | boolean): unknown {
     case 'decimal':
       if (!/^[+-]?\d+(\.\d+)?$/.test(s)) throw new Error('must be a decimal like 12.50')
       return s
+    case 'quantity': {
+      // The server stores the base-unit magnitude itself; the client sends
+      // only {magnitude, unit}. The magnitude is kept as a string so exact
+      // decimals survive the round-trip.
+      const q = parseQuantity(s)
+      if (q.magnitude.trim() === '') throw new Error('a magnitude is required')
+      if (!/^[+-]?\d+(\.\d+)?$/.test(q.magnitude.trim())) throw new Error('magnitude must be a number like 2.5')
+      if (q.unit.trim() === '') throw new Error('a unit is required')
+      return { magnitude: q.magnitude.trim(), unit: q.unit.trim() }
+    }
     case 'datetime': {
       // datetime-local yields "2026-07-11T14:30" — normalise to RFC 3339.
       const d = new Date(s)
@@ -69,6 +117,12 @@ export function fromApiValue(dt: DataType, value: unknown): string {
   switch (dt) {
     case 'json':
       return JSON.stringify(value, null, 2)
+    case 'quantity':
+      // Carry the magnitude/unit pair as JSON so ValueInput can split it back
+      // into its two controls.
+      return isQuantityValue(value)
+        ? JSON.stringify({ magnitude: value.magnitude, unit: value.unit })
+        : ''
     case 'datetime': {
       const d = new Date(String(value))
       if (Number.isNaN(d.getTime())) return String(value)

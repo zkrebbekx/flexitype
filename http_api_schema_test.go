@@ -776,8 +776,8 @@ func TestHTTPUnitFamilyRoutes(t *testing.T) {
 		Convey("When an unknown family is deleted", func() {
 			resp := a.delete("/api/v1/unit-families/" + missingULID)
 
-			Convey("Then DELETE is idempotent: 204, not 404", func() {
-				So(resp.Status, ShouldEqual, http.StatusNoContent)
+			Convey("Then it is 404, matching every other by-id operation", func() {
+				So(resp.Status, ShouldEqual, http.StatusNotFound)
 			})
 		})
 
@@ -1043,8 +1043,8 @@ func TestHTTPDedupRoutes(t *testing.T) {
 		Convey("When an unknown rule is deleted", func() {
 			resp := a.delete("/api/v1/match-rules/" + missingULID)
 
-			Convey("Then DELETE is idempotent: 204, not 404", func() {
-				So(resp.Status, ShouldEqual, http.StatusNoContent)
+			Convey("Then it is 404, matching every other by-id operation", func() {
+				So(resp.Status, ShouldEqual, http.StatusNotFound)
 			})
 		})
 

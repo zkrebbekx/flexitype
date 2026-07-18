@@ -184,6 +184,13 @@ func (i *Interactor) DeleteRule(ctx context.Context, rawRuleID string) error {
 	if err != nil {
 		return domainerrors.NewValidation(err.Error())
 	}
+	// Confirm it exists (within this tenant) first, so deleting something that
+	// is not there reports NotFound like every other by-id operation, rather
+	// than a misleading success. The lookup is tenant-scoped, so another
+	// tenant's rule is indistinguishable from a missing one.
+	if _, err := i.store.GetRule(ctx, uow.TenantFromContext(ctx), id); err != nil {
+		return err
+	}
 	return i.store.DeleteRule(ctx, uow.TenantFromContext(ctx), id)
 }
 

@@ -346,8 +346,11 @@ func TestFamilyGetListDelete(t *testing.T) {
 		Convey("When a nonexistent family is deleted", func() {
 			derr := i.Delete(ctx, ulid.New().String())
 
-			Convey("Then the delete is idempotent and the existing family survives", func() {
-				So(derr, ShouldBeNil)
+			// Reports NotFound like every other by-id operation, rather than a
+			// misleading success for something that was never there.
+			Convey("Then it reports NotFound and the existing family survives", func() {
+				So(derr, ShouldNotBeNil)
+				So(domainerrors.IsNotFound(derr), ShouldBeTrue)
 				list, lerr := i.List(ctx)
 				So(lerr, ShouldBeNil)
 				So(list, ShouldHaveLength, 1)
@@ -358,8 +361,10 @@ func TestFamilyGetListDelete(t *testing.T) {
 			otherCtx := uow.WithTenant(context.Background(), valueobjects.TenantID("other"))
 			derr := i.Delete(otherCtx, created.ID.String())
 
-			Convey("Then the owning tenant still has it", func() {
-				So(derr, ShouldBeNil)
+			// The existence check is tenant-scoped, so another tenant's family is
+			// indistinguishable from a missing one — no cross-tenant probe.
+			Convey("Then it is NotFound for them and the owning tenant still has it", func() {
+				So(domainerrors.IsNotFound(derr), ShouldBeTrue)
 				f, gerr := i.Get(ctx, created.ID.String())
 				So(gerr, ShouldBeNil)
 				So(f.ID.String(), ShouldEqual, created.ID.String())

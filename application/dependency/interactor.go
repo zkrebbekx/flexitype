@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
@@ -25,13 +26,13 @@ type Interactor struct {
 	uow      uow.UnitOfWork
 	typeDefs domaintypedef.Repository
 	attrs    domainattribute.Repository
-	values   domainvalue.Repository
+	values   appctx.ValueReader
 	deps     domaindependency.Repository
 	now      func() time.Time
 }
 
 // NewInteractor wires the dependency usecases.
-func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, deps domaindependency.Repository) *Interactor {
+func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values appctx.ValueReader, deps domaindependency.Repository) *Interactor {
 	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, deps: deps, now: uow.UTCNow}
 }
 

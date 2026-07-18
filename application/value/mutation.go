@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
@@ -154,7 +155,8 @@ func (i *Interactor) removeScopedWithin(ctx context.Context, tx db.Transactor, c
 	}
 
 	values := i.values.WithTx(tx)
-	existing, err := values.FindByDefinitionAndEntity(ctx, defID, entityID)
+	reads := values.(appctx.ValueReader)
+	existing, err := reads.FindByDefinitionAndEntity(ctx, defID, entityID)
 	if err != nil {
 		return fmt.Errorf("load value to remove: %w", err)
 	}

@@ -36,8 +36,12 @@ type EntitySummary struct {
 	LastUpdatedAt    time.Time
 }
 
-// Repository is the persistence port for attribute values. Reads are
-// dataloader-batched; writes run on a transaction-bound repository.
+// Repository is the aggregate persistence port for attribute values: the true
+// persistence operations on the AttributeValue aggregate — point loads, the
+// upsert, and the erasure primitives. The read-model queries (paginated lists,
+// entity summaries, upsert/uniqueness probes) live on the application-owned
+// value read port, which the same backend struct also satisfies. Writes run on
+// a transaction-bound repository from WithTx.
 type Repository interface {
 	// WithTx returns a repository bound to the given transaction.
 	WithTx(tx db.Tx) Repository
@@ -48,39 +52,6 @@ type Repository interface {
 	// GetForUpdate loads one value with a row lock. Only valid on a
 	// transaction-bound repository.
 	GetForUpdate(ctx context.Context, id valueobjects.AttributeValueID) (*AttributeValue, error)
-
-	// ListByEntity loads every live value of one entity. Loads for
-	// different entities batch into one query — the hot path for
-	// hydrating consumer objects.
-	ListByEntity(ctx context.Context, key EntityKey) ([]*AttributeValue, error)
-
-	// ListByDefinition returns one page of a definition's values plus the
-	// total count (pages batch across definitions).
-	ListByDefinition(ctx context.Context, defID valueobjects.AttributeDefinitionID, page db.Page) ([]*AttributeValue, int, error)
-
-	// ListByEntities loads every live value held by any of the given
-	// entities, in one query — the grid's projection path, so rendering a
-	// page of rows never fans out to one query per entity.
-	ListByEntities(ctx context.Context, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) ([]*AttributeValue, error)
-
-	// FindByDefinitionAndEntity returns the live values one entity holds
-	// for one attribute. Used inside write transactions for multi-value
-	// and upsert decisions.
-	FindByDefinitionAndEntity(ctx context.Context, defID valueobjects.AttributeDefinitionID, entityID valueobjects.EntityID) ([]*AttributeValue, error)
-
-	// CountByDefinitionAndValue counts live values of a definition equal to
-	// v, excluding entity excludeEntity. Used to enforce unique attributes
-	// inside write transactions.
-	CountByDefinitionAndValue(ctx context.Context, defID valueobjects.AttributeDefinitionID, scope valueobjects.Scope, v valueobjects.Value, excludeEntity valueobjects.EntityID) (int, error)
-
-	// List returns a page of values and the total count for the filter.
-	List(ctx context.Context, filter Filter, page db.Page) ([]*AttributeValue, int, error)
-
-	// ListEntities returns a page of distinct entities holding live values
-	// of any of the given type definitions (a type plus, optionally, its
-	// descendants), most recently changed first, plus the total
-	// distinct-entity count.
-	ListEntities(ctx context.Context, tenant valueobjects.TenantID, typeDefIDs []valueobjects.TypeDefinitionID, page db.Page) ([]EntitySummary, int, error)
 
 	// Save upserts the aggregate.
 	Save(ctx context.Context, av *AttributeValue) error

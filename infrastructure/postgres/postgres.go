@@ -20,10 +20,14 @@ import (
 // NewRepositories builds one request-scoped repository set over the pool.
 // Call once per request so dataloader caches die with the request.
 func NewRepositories(pool db.QueryExecer) application.Repositories {
+	// One value repository serves both the aggregate write port (Values) and
+	// the read-model port (ValueReader): the same struct implements both.
+	values := NewAttributeValueRepository(pool)
 	return application.Repositories{
 		TypeDefinitions:         NewTypeDefinitionRepository(pool),
 		Attributes:              NewAttributeDefinitionRepository(pool),
-		Values:                  NewAttributeValueRepository(pool),
+		Values:                  values,
+		ValueReader:             values.(application.ValueReader),
 		Dependencies:            NewDependencyRepository(pool),
 		RelationshipDefinitions: NewRelationshipDefinitionRepository(pool),
 		Relationships:           NewRelationshipRepository(pool),

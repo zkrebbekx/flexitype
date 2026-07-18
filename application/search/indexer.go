@@ -144,7 +144,7 @@ func (i *Indexer) HandleBatch(ctx context.Context, envs []events.Envelope) error
 func (i *Indexer) Rebuild(ctx context.Context, tenant valueobjects.TenantID, typeID valueobjects.TypeDefinitionID, entityID valueobjects.EntityID) error {
 	repos := i.newRepos()
 
-	values, err := repos.Values.ListByEntity(ctx, domainvalue.EntityKey{
+	values, err := repos.ValueReader.ListByEntity(ctx, domainvalue.EntityKey{
 		TenantID:         tenant,
 		TypeDefinitionID: typeID,
 		EntityID:         entityID,
@@ -209,7 +209,7 @@ func (i *Indexer) Reindex(ctx context.Context, tenant valueobjects.TenantID) (in
 	for _, t := range types {
 		page := db.Page{Limit: 200}
 		for {
-			entities, _, err := repos.Values.ListEntities(ctx, tenant,
+			entities, _, err := repos.ValueReader.ListEntities(ctx, tenant,
 				[]valueobjects.TypeDefinitionID{t.ID()}, page)
 			if err != nil {
 				return count, err

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	appunit "github.com/zkrebbekx/flexitype/application/unit"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -35,11 +36,17 @@ type Interactor struct {
 	typeDefs domaintypedef.Repository
 	attrs    domainattribute.Repository
 	values   domainvalue.Repository
-	deps     domaindependency.Repository
-	links    domainrelationship.Repository
-	blobs    blobStore
-	units    unitStore
-	now      func() time.Time
+	// reads is the value read-model port: the paginated lists and projection
+	// loads the usecases serve outside a write transaction. It is the same
+	// backend struct as values; the in-transaction reads (uniqueness counts,
+	// upsert lookups) instead go through values.WithTx(tx) bound to the unit of
+	// work, so they observe its uncommitted writes.
+	reads appctx.ValueReader
+	deps  domaindependency.Repository
+	links domainrelationship.Repository
+	blobs blobStore
+	units unitStore
+	now   func() time.Time
 	// onCleanupError surfaces a swallowed media-GC cleanup failure (a blob that
 	// could not be deleted after an archived, overwritten or rejected-upload
 	// value). Nil-safe: wired from the factory like the other observers.
@@ -84,12 +91,13 @@ type Config struct {
 // NewInteractor wires the attribute-value usecases. Required collaborators are
 // positional; optional ones arrive through cfg so the returned interactor is
 // always fully wired.
-func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, deps domaindependency.Repository, links domainrelationship.Repository, cfg Config) *Interactor {
+func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, reads appctx.ValueReader, deps domaindependency.Repository, links domainrelationship.Repository, cfg Config) *Interactor {
 	return &Interactor{
 		uow:            u,
 		typeDefs:       typeDefs,
 		attrs:          attrs,
 		values:         values,
+		reads:          reads,
 		deps:           deps,
 		links:          links,
 		blobs:          cfg.Blobs,
@@ -159,6 +167,7 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 	err = func() error {
 		attrs := i.attrs.WithTx(tx)
 		values := i.values.WithTx(tx)
+		reads := values.(appctx.ValueReader) // read port bound to the same tx
 
 		// Lock the definition: value validity depends on it, so definition
 		// updates and value writes serialize. During an import the same
@@ -234,7 +243,7 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 		if def.Unique() {
 			// Uniqueness applies per scope: the same value may exist in a
 			// different locale/channel.
-			count, err := values.CountByDefinitionAndValue(ctx, defID, scope, v, entityID)
+			count, err := reads.CountByDefinitionAndValue(ctx, defID, scope, v, entityID)
 			if err != nil {
 				return fmt.Errorf("check uniqueness: %w", err)
 			}
@@ -244,7 +253,7 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			}
 		}
 
-		all, err := i.existingValues(ctx, values, defID, entityID)
+		all, err := i.existingValues(ctx, reads, defID, entityID)
 		if err != nil {
 			return fmt.Errorf("load existing values: %w", err)
 		}
@@ -396,9 +405,10 @@ func (i *Interactor) RemoveEntity(ctx context.Context, rawTypeDefID, rawEntityID
 	err = i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
 		out.ValuesRemoved, out.RelationshipsGone = 0, 0
 		values := i.values.WithTx(tx)
+		reads := values.(appctx.ValueReader) // read port bound to the same tx
 		links := i.links.WithTx(tx)
 
-		vals, err := values.ListByEntity(ctx, domainvalue.EntityKey{
+		vals, err := reads.ListByEntity(ctx, domainvalue.EntityKey{
 			TenantID: tenant, TypeDefinitionID: typeDefID, EntityID: entityID,
 		})
 		if err != nil {
@@ -471,7 +481,7 @@ func (i *Interactor) checkDependencies(
 	v valueobjects.Value,
 ) error {
 	deps := i.deps.WithTx(tx)
-	values := i.values.WithTx(tx)
+	reads := i.values.WithTx(tx).(appctx.ValueReader) // read port bound to the same tx
 
 	targeting, err := i.targetingDependencies(ctx, deps, def.ID())
 	if err != nil {
@@ -481,7 +491,7 @@ func (i *Interactor) checkDependencies(
 		return nil
 	}
 
-	entityValues, err := values.ListByEntity(ctx, domainvalue.EntityKey{
+	entityValues, err := reads.ListByEntity(ctx, domainvalue.EntityKey{
 		TenantID:         def.TenantID(),
 		TypeDefinitionID: entityType,
 		EntityID:         entityID,
@@ -545,10 +555,10 @@ func (i *Interactor) targetingDependencies(ctx context.Context, deps domaindepen
 // During an import it reads the prefetched-and-maintained per-entity value set
 // (one ListByEntities per chunk) instead of a FindByDefinitionAndEntity query
 // per cell.
-func (i *Interactor) existingValues(ctx context.Context, values domainvalue.Repository, defID valueobjects.AttributeDefinitionID, entityID valueobjects.EntityID) ([]*domainvalue.AttributeValue, error) {
+func (i *Interactor) existingValues(ctx context.Context, reads appctx.ValueReader, defID valueobjects.AttributeDefinitionID, entityID valueobjects.EntityID) ([]*domainvalue.AttributeValue, error) {
 	c := importCacheFromContext(ctx)
 	if c == nil || c.existing == nil {
-		return values.FindByDefinitionAndEntity(ctx, defID, entityID)
+		return reads.FindByDefinitionAndEntity(ctx, defID, entityID)
 	}
 	var out []*domainvalue.AttributeValue
 	for _, av := range c.existing[entityID.String()] {
@@ -709,7 +719,7 @@ func (i *Interactor) ListByEntity(ctx context.Context, rawTypeDefID, rawEntityID
 		return nil, domainerrors.NewValidation(err.Error())
 	}
 
-	items, err := i.values.ListByEntity(ctx, domainvalue.EntityKey{
+	items, err := i.reads.ListByEntity(ctx, domainvalue.EntityKey{
 		TenantID:         uow.TenantFromContext(ctx),
 		TypeDefinitionID: typeDefID,
 		EntityID:         entityID,
@@ -737,7 +747,7 @@ func (i *Interactor) ListByEntities(ctx context.Context, rawEntityIDs []string) 
 		}
 		ids = append(ids, id)
 	}
-	items, err := i.values.ListByEntities(ctx, uow.TenantFromContext(ctx), ids)
+	items, err := i.reads.ListByEntities(ctx, uow.TenantFromContext(ctx), ids)
 	if err != nil {
 		return nil, err
 	}
@@ -823,7 +833,7 @@ func (i *Interactor) ListEntities(ctx context.Context, rawTypeDefID string, incl
 		}
 	}
 
-	items, total, err := i.values.ListEntities(ctx, uow.TenantFromContext(ctx), typeIDs, page)
+	items, total, err := i.reads.ListEntities(ctx, uow.TenantFromContext(ctx), typeIDs, page)
 	if err != nil {
 		return nil, err
 	}
@@ -888,7 +898,7 @@ func (i *Interactor) List(ctx context.Context, in ListInput) (*ListOutput, error
 		}
 	}
 
-	items, total, err := i.values.List(ctx, filter, page)
+	items, total, err := i.reads.List(ctx, filter, page)
 	if err != nil {
 		return nil, err
 	}

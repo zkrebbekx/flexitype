@@ -40,6 +40,10 @@ type Repositories = appctx.Repositories
 // It lives in the appctx leaf; re-exported here for the facade wiring.
 type SchemaVersionReader = appctx.SchemaVersionReader
 
+// ValueReader is the application-owned read-model port over stored attribute
+// values. It lives in the appctx leaf; re-exported here for the facade wiring.
+type ValueReader = appctx.ValueReader
+
 // Factory creates request-scoped interactor sets.
 type Factory interface {
 	New(ctx context.Context) *Interactors

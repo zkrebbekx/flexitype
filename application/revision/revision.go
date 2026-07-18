@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
@@ -94,7 +95,7 @@ type Interactor struct {
 	store    Store
 	typeDefs domaintypedef.Repository
 	attrs    domainattribute.Repository
-	values   domainvalue.Repository
+	values   appctx.ValueReader
 	applier  SnapshotApplier
 	now      func() time.Time
 }
@@ -104,7 +105,7 @@ func NewInteractor(
 	store Store,
 	typeDefs domaintypedef.Repository,
 	attrs domainattribute.Repository,
-	values domainvalue.Repository,
+	values appctx.ValueReader,
 	applier SnapshotApplier,
 	now func() time.Time,
 ) *Interactor {

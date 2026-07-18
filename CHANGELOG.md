@@ -7,6 +7,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Changed — REST behaviour
+
+Three inconsistencies where the API contradicted itself. Each is a behaviour
+change visible to clients, not an internal refactor; review before upgrading.
+
+- **Declared numeric types are enforced, not coerced.** An `integer` or `float`
+  attribute now rejects a quoted number (`"5"`, `"1.5"`) with `422 VALIDATION`.
+  Previously `encoding/json` unmarshalled these straight into a `json.Number`
+  and they were accepted, so the declared type meant nothing at the boundary.
+  `decimal` is deliberately unchanged: it accepts a string form on purpose, to
+  carry exact precision without float rounding. Clients sending quoted numerics
+  to integer/float attributes must send bare JSON numbers.
+- **`DELETE` of a missing unit family or match rule is `404`, not `204`.** These
+  two were the only by-id routes reporting success for something that was never
+  there; saved views, service-account revoke, unlink, value removal and
+  dependency archival all already returned `404`. The existence check is
+  tenant-scoped, so another tenant's record stays indistinguishable from a
+  missing one.
+- **Provisioning routes authorize before reporting the feature gate.** A caller
+  without the admin scope now gets `403` rather than `501 FEATURE_DISABLED`, so
+  an unauthorized caller cannot learn whether provisioning is configured in this
+  deployment. Matches the order the other protected routes already use.
+
 ## [1.1.0] — 2026-07-18
 
 A post-1.0 independent review (security, architecture, performance and

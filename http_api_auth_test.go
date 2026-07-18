@@ -233,9 +233,11 @@ func TestHTTPAdminScopedRoutes(t *testing.T) {
 		Convey("When a writer calls the provisioning API of a service without one", func() {
 			resp := a.as(writerToken).get("/api/v1/tenants")
 
-			Convey("Then the feature gate answers first with 501, not leaking that a scope was also missing", func() {
-				So(resp.Status, ShouldEqual, http.StatusNotImplemented)
-				So(resp.errorCode(), ShouldEqual, "FEATURE_DISABLED")
+			// Authorization answers first, so a caller without the admin scope
+			// learns nothing about whether provisioning is configured here, and
+			// gets the accurate 403 rather than a misleading "not implemented".
+			Convey("Then it is 403, the deployment's configuration not disclosed", func() {
+				So(resp.Status, ShouldEqual, http.StatusForbidden)
 			})
 		})
 	})

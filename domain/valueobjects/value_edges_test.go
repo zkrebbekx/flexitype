@@ -189,14 +189,24 @@ func TestParseValueEdges(t *testing.T) {
 		})
 
 		Convey("When a numeric type arrives as a quoted number", func() {
-			i, intErr := ParseValue(DataTypeInteger, json.RawMessage(`"5"`))
-			f, floatErr := ParseValue(DataTypeFloat, json.RawMessage(`"1.5"`))
+			_, intErr := ParseValue(DataTypeInteger, json.RawMessage(`"5"`))
+			_, floatErr := ParseValue(DataTypeFloat, json.RawMessage(`"1.5"`))
 
-			Convey("Then it is coerced, since json.Number accepts quoted numeric literals", func() {
-				So(intErr, ShouldBeNil)
-				So(i.Int(), ShouldEqual, 5)
-				So(floatErr, ShouldBeNil)
-				So(f.Float(), ShouldEqual, 1.5)
+			// encoding/json would happily unmarshal "5" into a json.Number, so
+			// without an explicit guard the declared type stops meaning anything
+			// at the API boundary. Decimal stays exempt (see below): it accepts a
+			// string form deliberately, to avoid float rounding.
+			Convey("Then it is rejected — the declared type is enforced, not coerced", func() {
+				So(intErr, ShouldNotBeNil)
+				So(intErr.Error(), ShouldContainSubstring, "quoted string")
+				So(floatErr, ShouldNotBeNil)
+				So(floatErr.Error(), ShouldContainSubstring, "quoted string")
+			})
+
+			Convey("And decimal still accepts its string form, for exact precision", func() {
+				d, err := ParseValue(DataTypeDecimal, json.RawMessage(`"12.50"`))
+				So(err, ShouldBeNil)
+				So(d.String(), ShouldEqual, "12.50")
 			})
 
 			Convey("And a quoted non-number is still rejected", func() {

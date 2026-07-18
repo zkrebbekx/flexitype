@@ -133,5 +133,12 @@ func (i *Interactor) Delete(ctx context.Context, rawID string) error {
 	if err != nil {
 		return domainerrors.NewValidation(err.Error())
 	}
+	// Confirm it exists (within this tenant) first, so deleting something that
+	// is not there reports NotFound like every other by-id operation, rather
+	// than a misleading success. The lookup is tenant-scoped, so another
+	// tenant's family is indistinguishable from a missing one.
+	if _, err := i.store.Get(ctx, uow.TenantFromContext(ctx), id); err != nil {
+		return err
+	}
 	return i.store.Delete(ctx, uow.TenantFromContext(ctx), id)
 }

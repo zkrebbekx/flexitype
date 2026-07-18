@@ -131,3 +131,44 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: flexitype
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25"
+          check-latest: true
+          cache: true
+      - name: Coverage
+        env:
+          # The Postgres-backed suites skip without a DSN, which would drop the
+          # infrastructure/postgres numbers (and the total) sharply.
+          FLEXITYPE_TEST_DSN: postgres://postgres:postgres@localhost:5432/flexitype?sslmode=disable
+          # Ratcheted upward as coverage lands; never lower it to make CI pass.
+          MIN_COVERAGE: "64"
+        run: ./scripts/coverage.sh
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-profile
+          path: coverage.out
+          if-no-files-found: warn

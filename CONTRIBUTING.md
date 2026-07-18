@@ -16,6 +16,22 @@ Some tests exercise PostgreSQL; CI runs them against a Postgres 16 service.
 Locally, point the DB env vars (see [docs/configuration.md](docs/configuration.md))
 at any Postgres 16 instance.
 
+### Coverage
+
+```bash
+FLEXITYPE_TEST_DSN=postgres://... ./scripts/coverage.sh   # report
+MIN_COVERAGE=90 ./scripts/coverage.sh                     # enforce a floor
+COVERAGE_HTML=cov.html ./scripts/coverage.sh              # browsable report
+```
+
+CI runs the same script with a floor. The floor **ratchets upward** as coverage
+lands — raise it when you add tests, never lower it to make a build pass. Run
+with a DSN: the Postgres suites skip without one and the total drops sharply.
+
+Process wiring and sample code (`cmd/`, `examples/`, `internal/demo`) are
+excluded from the measured set; that list is deliberately short, and adding to
+it needs a real justification rather than being a way to dodge a test.
+
 ## Conventions
 
 - **Tests** are goconvey `Given / When / Then`.

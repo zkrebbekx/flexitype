@@ -7,3 +7,7 @@ web/dist/*
 # Playground build artifacts (built by the pages workflow)
 web/public/flexitype.wasm
 web/public/wasm_exec.js
+
+# Coverage profiles
+coverage.out
+coverage.html

@@ -77,6 +77,34 @@ func TestSavedViews(t *testing.T) {
 				_, err = b.Get(ctxB, v.ID.String())
 				So(domainerrors.IsNotFound(err), ShouldBeTrue)
 			})
+
+			Convey("Then the same name cannot be reused within the tenant", func() {
+				_, err := a.Create(ctxA, appsavedview.Input{Name: "A view", RootType: "supplier"})
+				So(domainerrors.IsConflict(err), ShouldBeTrue)
+			})
+
+			Convey("Then the same name IS available to another tenant", func() {
+				b := svc.Interactors(ctxB).SavedViews()
+				_, err := b.Create(ctxB, appsavedview.Input{Name: "A view", RootType: "product"})
+				So(err, ShouldBeNil)
+			})
+		})
+
+		Convey("When several views are saved out of alphabetical order", func() {
+			for _, name := range []string{"Zebra", "Alpha", "Middle"} {
+				_, err := a.Create(ctxA, appsavedview.Input{Name: name, RootType: "product"})
+				So(err, ShouldBeNil)
+			}
+
+			Convey("Then the list comes back name-ordered", func() {
+				list, err := a.List(ctxA)
+				So(err, ShouldBeNil)
+				names := make([]string, 0, len(list))
+				for _, v := range list {
+					names = append(names, v.Name)
+				}
+				So(names, ShouldResemble, []string{"Alpha", "Middle", "Zebra"})
+			})
 		})
 	})
 }

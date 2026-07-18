@@ -426,5 +426,167 @@ func TestMemoryTransactor(t *testing.T) {
 				So(total, ShouldEqual, 0)
 			})
 		})
+
+		Convey("When a nested transaction runs through InTransaction and fails", func() {
+			// The inner frame must reuse the OUTER transaction (depth guard),
+			// not open an independent one: the inner rollback therefore only
+			// unwinds a nesting level and leaves the undo to the outer frame.
+			repos := store.Repositories()
+			td, _, err := domaintypedef.New(domaintypedef.NewInput{
+				TenantID: valueobjects.DefaultTenant, InternalName: "gamma", DisplayName: "gamma",
+			}, time.Now())
+			So(err, ShouldBeNil)
+
+			outer, err := store.Transactor().Begin(ctx)
+			So(err, ShouldBeNil)
+
+			boom := errors.New("inner unit of work failed")
+			innerErr := outer.InTransaction(ctx, func(tx db.Transactor) error {
+				So(repos.TypeDefinitions.WithTx(tx).Save(ctx, td), ShouldBeNil)
+				return boom
+			})
+
+			Convey("Then the caller's error is returned verbatim and the outer rollback undoes the write", func() {
+				So(errors.Is(innerErr, boom), ShouldBeTrue)
+				// Still visible: only the outermost frame performs the undo.
+				_, err := repos.TypeDefinitions.Get(ctx, td.ID())
+				So(err, ShouldBeNil)
+
+				So(outer.Rollback(ctx), ShouldBeNil)
+				_, err = repos.TypeDefinitions.Get(ctx, td.ID())
+				So(domainerrors.IsNotFound(err), ShouldBeTrue)
+			})
+		})
+
+		Convey("When a nested transaction runs through InTransaction and succeeds", func() {
+			repos := store.Repositories()
+			td, _, err := domaintypedef.New(domaintypedef.NewInput{
+				TenantID: valueobjects.DefaultTenant, InternalName: "delta", DisplayName: "delta",
+			}, time.Now())
+			So(err, ShouldBeNil)
+
+			outer, err := store.Transactor().Begin(ctx)
+			So(err, ShouldBeNil)
+
+			var postCommits int
+			outer.OnPostCommit(func(context.Context) error { postCommits++; return nil })
+
+			So(outer.InTransaction(ctx, func(tx db.Transactor) error {
+				return repos.TypeDefinitions.WithTx(tx).Save(ctx, td)
+			}), ShouldBeNil)
+
+			Convey("Then the inner commit only unwinds a level; hooks wait for the outermost commit", func() {
+				So(postCommits, ShouldEqual, 0)
+				So(outer.Commit(ctx), ShouldBeNil)
+				So(postCommits, ShouldEqual, 1)
+
+				got, err := repos.TypeDefinitions.Get(ctx, td.ID())
+				So(err, ShouldBeNil)
+				So(got.InternalName(), ShouldEqual, "delta")
+			})
+		})
+
+		Convey("When a transaction is finished and then reused", func() {
+			tx, err := store.Transactor().Begin(ctx)
+			So(err, ShouldBeNil)
+			So(tx.Commit(ctx), ShouldBeNil)
+
+			Convey("Then Begin and Commit refuse it while Rollback is a no-op", func() {
+				_, beginErr := tx.Begin(ctx)
+				So(beginErr, ShouldNotBeNil)
+				So(tx.Commit(ctx), ShouldNotBeNil)
+				So(tx.Rollback(ctx), ShouldBeNil) // already durable: nothing to undo
+			})
+		})
+
+		Convey("When InTransaction is used on a finished transaction", func() {
+			tx, err := store.Transactor().Begin(ctx)
+			So(err, ShouldBeNil)
+			So(tx.Rollback(ctx), ShouldBeNil)
+
+			called := false
+			err = tx.InTransaction(ctx, func(db.Transactor) error { called = true; return nil })
+
+			Convey("Then the body never runs and the Begin failure surfaces", func() {
+				So(err, ShouldNotBeNil)
+				So(called, ShouldBeFalse)
+			})
+		})
+	})
+}
+
+// TestTransactorOutsideTransaction pins the no-op transactor's contract: the
+// object returned by Store.Transactor() is a factory, not an open transaction,
+// so completing or hooking it is a programming error rather than a silent no-op.
+func TestTransactorOutsideTransaction(t *testing.T) {
+	Convey("Given the transactor factory itself (no transaction open)", t, func() {
+		store := memory.NewStore()
+		ctx := context.Background()
+		tr := store.Transactor()
+
+		Convey("When Commit or Rollback is called on it", func() {
+			commitErr := tr.Commit(ctx)
+			rollbackErr := tr.Rollback(ctx)
+
+			Convey("Then both report that no transaction is in progress", func() {
+				So(errors.Is(commitErr, db.ErrNotInTransaction), ShouldBeTrue)
+				So(errors.Is(rollbackErr, db.ErrNotInTransaction), ShouldBeTrue)
+			})
+		})
+
+		Convey("When a hook is registered outside a transaction", func() {
+			noop := func(context.Context) error { return nil }
+
+			Convey("Then each registration panics rather than dropping the hook", func() {
+				So(func() { tr.OnPreCommit(noop) }, ShouldPanic)
+				So(func() { tr.OnPostCommit(noop) }, ShouldPanic)
+				So(func() { tr.OnRollback(noop) }, ShouldPanic)
+			})
+		})
+
+		Convey("When InTransaction wraps a successful unit of work", func() {
+			repos := store.Repositories()
+			td, _, err := domaintypedef.New(domaintypedef.NewInput{
+				TenantID: valueobjects.DefaultTenant, InternalName: "epsilon", DisplayName: "epsilon",
+			}, time.Now())
+			So(err, ShouldBeNil)
+
+			var posted bool
+			err = tr.InTransaction(ctx, func(tx db.Transactor) error {
+				tx.OnPostCommit(func(context.Context) error { posted = true; return nil })
+				return repos.TypeDefinitions.WithTx(tx).Save(ctx, td)
+			})
+
+			Convey("Then it opens a real transaction, commits it and fires post-commit hooks", func() {
+				So(err, ShouldBeNil)
+				So(posted, ShouldBeTrue)
+				got, getErr := repos.TypeDefinitions.Get(ctx, td.ID())
+				So(getErr, ShouldBeNil)
+				So(got.InternalName(), ShouldEqual, "epsilon")
+			})
+		})
+
+		Convey("When InTransaction wraps a failing unit of work", func() {
+			repos := store.Repositories()
+			td, _, err := domaintypedef.New(domaintypedef.NewInput{
+				TenantID: valueobjects.DefaultTenant, InternalName: "zeta", DisplayName: "zeta",
+			}, time.Now())
+			So(err, ShouldBeNil)
+
+			boom := errors.New("validation failed")
+			var rolledBack bool
+			err = tr.InTransaction(ctx, func(tx db.Transactor) error {
+				tx.OnRollback(func(context.Context) error { rolledBack = true; return nil })
+				So(repos.TypeDefinitions.WithTx(tx).Save(ctx, td), ShouldBeNil)
+				return boom
+			})
+
+			Convey("Then the error is propagated and the intermediate write is undone", func() {
+				So(errors.Is(err, boom), ShouldBeTrue)
+				So(rolledBack, ShouldBeTrue)
+				_, getErr := repos.TypeDefinitions.Get(ctx, td.ID())
+				So(domainerrors.IsNotFound(getErr), ShouldBeTrue)
+			})
+		})
 	})
 }

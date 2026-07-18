@@ -1017,6 +1017,22 @@ func (s *server) reindexSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"reindexed": count})
 }
 
+// recomputeComputed rebuilds every computed attribute for the caller's tenant —
+// the recovery path when a crash between commit and post-commit left computed
+// projections stale (issue #211).
+func (s *server) recomputeComputed(w http.ResponseWriter, r *http.Request) {
+	if s.recompute == nil {
+		s.featureDisabled(w, "computed attributes")
+		return
+	}
+	count, err := s.recompute(r.Context(), uow.TenantFromContext(r.Context()))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"recomputed": count})
+}
+
 // --- activity ----------------------------------------------------------------
 
 func (s *server) listActivity(w http.ResponseWriter, r *http.Request) {

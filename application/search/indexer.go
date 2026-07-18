@@ -1,8 +1,11 @@
 // Package search maintains the entity search projection: one document per
-// entity, rebuilt whenever the entity's values change. The indexer is a
-// dispatcher subscriber, so any delivery path (direct or outbox) keeps the
-// projection fresh; rebuild-on-event makes it idempotent, which is exactly
-// what at-least-once delivery needs.
+// entity, rebuilt whenever the entity's values change. The indexer is an
+// internal-projection subscriber, maintained synchronously in the originating
+// unit of work's post-commit in BOTH delivery modes (never on the outbox
+// relay), so a written entity is immediately findable via matches() in the
+// writing request regardless of WithOutbox (issue #211). Rebuild-on-event
+// makes it idempotent — safe under the computed-attribute recompute loop and
+// any retry.
 package search
 
 import (

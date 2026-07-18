@@ -1,9 +1,12 @@
-// Package outbox implements at-least-once event delivery: the unit of
-// work writes envelopes into an outbox table in the same transaction as
-// the change, and a relay dispatches them to the registered hooks,
+// Package outbox implements at-least-once EXTERNAL event delivery: the unit
+// of work writes envelopes into an outbox table in the same transaction as
+// the change, and a relay dispatches them to the registered external hooks,
 // retrying on failure. Without the outbox, a crash between commit and
-// dispatch loses events; with it, every consumer (webhooks, pub/sub, the
-// search indexer) sees each committed change at least once.
+// dispatch loses events; with it, every external consumer (webhooks, pub/sub)
+// sees each committed change at least once. Internal projections (computed
+// attributes, search index, GraphQL cache) do NOT ride the relay — they are
+// maintained synchronously in the writing request regardless of the outbox
+// (see application/uow and issue #211).
 package outbox
 
 import (

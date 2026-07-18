@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
 
@@ -13,7 +14,10 @@ import (
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/infrastructure/memory"
+	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
 func TestDuplicateDetection(t *testing.T) {
@@ -105,6 +109,116 @@ func TestDuplicateDetection(t *testing.T) {
 					So(pair, ShouldNotContainSubstring, "e4")
 					So(pair, ShouldNotContainSubstring, "e5")
 				}
+			})
+		})
+	})
+}
+
+// TestMatchStoreDirect pins the matching-rule store port: rules are listed
+// oldest-first per type, tenant boundaries hold on every operation, and deleting
+// a rule takes its dismissals with it (there is nothing left to dismiss).
+func TestMatchStoreDirect(t *testing.T) {
+	Convey("Given matching rules on two types across two tenants", t, func() {
+		ctx := context.Background()
+		store := memory.NewMatchStore()
+
+		const productType, supplierType = "type-product", "type-supplier"
+		t0 := time.Date(2026, 3, 1, 8, 0, 0, 0, time.UTC)
+		mk := func(id string, tenant valueobjects.TenantID, typeID string, created time.Time) appdedup.Rule {
+			return appdedup.Rule{
+				ID: ulid.MustParse(id), TenantID: tenant, TypeDefinitionID: typeID,
+				AttributeDefinitionID: "attr-name", Strategy: appdedup.StrategyExact,
+				CreatedAt: created,
+			}
+		}
+
+		second := mk(ulidAt('1'), tenantA, productType, t0.Add(time.Hour)) // created later
+		first := mk(ulidAt('2'), tenantA, productType, t0)                 // created earlier
+		onSupplier := mk(ulidAt('3'), tenantA, supplierType, t0)
+		foreign := mk(ulidAt('4'), tenantB, productType, t0)
+
+		for _, r := range []appdedup.Rule{second, first, onSupplier, foreign} {
+			So(store.CreateRule(ctx, r), ShouldBeNil)
+		}
+		So(store.Dismiss(ctx, appdedup.Dismissal{
+			RuleID: first.ID, TenantID: tenantA, EntityA: "e1", EntityB: "e2",
+		}), ShouldBeNil)
+		So(store.Dismiss(ctx, appdedup.Dismissal{
+			RuleID: second.ID, TenantID: tenantA, EntityA: "e3", EntityB: "e4",
+		}), ShouldBeNil)
+
+		ruleIDs := func(rules []appdedup.Rule) []string {
+			out := make([]string, 0, len(rules))
+			for _, r := range rules {
+				out = append(out, r.ID.String())
+			}
+			return out
+		}
+
+		Convey("When a type's rules are listed", func() {
+			got, err := store.ListRules(ctx, tenantA, productType)
+			So(err, ShouldBeNil)
+
+			Convey("Then they are oldest-first and scoped to both the tenant and the type", func() {
+				So(ruleIDs(got), ShouldResemble, []string{first.ID.String(), second.ID.String()})
+			})
+		})
+
+		Convey("When a type with no rules is listed", func() {
+			got, err := store.ListRules(ctx, tenantA, "type-unknown")
+			So(err, ShouldBeNil)
+
+			Convey("Then an empty slice is returned rather than nil", func() {
+				So(got, ShouldNotBeNil)
+				So(got, ShouldBeEmpty)
+			})
+		})
+
+		Convey("When the other tenant lists the same type's rules", func() {
+			got, err := store.ListRules(ctx, tenantB, productType)
+			So(err, ShouldBeNil)
+
+			Convey("Then it sees only its own rule", func() {
+				So(ruleIDs(got), ShouldResemble, []string{foreign.ID.String()})
+			})
+		})
+
+		Convey("When a rule is deleted by its owner", func() {
+			So(store.DeleteRule(ctx, tenantA, first.ID), ShouldBeNil)
+
+			Convey("Then the rule and its dismissals are gone, and sibling rules keep theirs", func() {
+				_, err := store.GetRule(ctx, tenantA, first.ID)
+				So(domainerrors.IsNotFound(err), ShouldBeTrue)
+
+				remaining, err := store.ListRules(ctx, tenantA, productType)
+				So(err, ShouldBeNil)
+				So(ruleIDs(remaining), ShouldResemble, []string{second.ID.String()})
+
+				orphaned, err := store.ListDismissals(ctx, tenantA, first.ID)
+				So(err, ShouldBeNil)
+				So(orphaned, ShouldBeEmpty)
+
+				kept, err := store.ListDismissals(ctx, tenantA, second.ID)
+				So(err, ShouldBeNil)
+				So(kept, ShouldHaveLength, 1)
+			})
+		})
+
+		Convey("When a tenant tries to delete another tenant's rule", func() {
+			So(store.DeleteRule(ctx, tenantA, foreign.ID), ShouldBeNil)
+
+			Convey("Then the call is a silent no-op and the rule survives", func() {
+				got, err := store.GetRule(ctx, tenantB, foreign.ID)
+				So(err, ShouldBeNil)
+				So(got.ID.String(), ShouldEqual, foreign.ID.String())
+			})
+		})
+
+		Convey("When an unknown rule id is deleted", func() {
+			err := store.DeleteRule(ctx, tenantA, ulid.MustParse(ulidAt('9')))
+
+			Convey("Then deletion is idempotent — no error for an absent rule", func() {
+				So(err, ShouldBeNil)
 			})
 		})
 	})

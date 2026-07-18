@@ -206,6 +206,25 @@ func (v Value) Quantity() Quantity {
 	return q
 }
 
+// jsonIsString reports whether a raw JSON scalar is a quoted string.
+//
+// encoding/json will unmarshal "5" straight into a json.Number, so without
+// this check an integer or float attribute silently accepted a string where
+// its schema declares a number — the declared type stopped meaning anything at
+// the boundary. Decimal is deliberately exempt: it accepts a string form to
+// avoid float rounding (see its arm below).
+func jsonIsString(raw json.RawMessage) bool {
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+			continue
+		default:
+			return b == '"'
+		}
+	}
+	return false
+}
+
 // ParseValue decodes a raw JSON scalar into a typed Value according to the
 // declared data type. This is the single entry point for values arriving
 // over the API.
@@ -239,6 +258,9 @@ func ParseValue(dt DataType, raw json.RawMessage) (Value, error) {
 		return NewEnumValue(s), nil
 
 	case DataTypeInteger:
+		if jsonIsString(raw) {
+			return Value{}, fmt.Errorf("expected integer, got a quoted string")
+		}
 		var n json.Number
 		if err := dec.Decode(&n); err != nil {
 			return Value{}, fmt.Errorf("expected integer: %w", err)
@@ -250,6 +272,9 @@ func ParseValue(dt DataType, raw json.RawMessage) (Value, error) {
 		return NewIntegerValue(i), nil
 
 	case DataTypeFloat:
+		if jsonIsString(raw) {
+			return Value{}, fmt.Errorf("expected number, got a quoted string")
+		}
 		var n json.Number
 		if err := dec.Decode(&n); err != nil {
 			return Value{}, fmt.Errorf("expected number: %w", err)

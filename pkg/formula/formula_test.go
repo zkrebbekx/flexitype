@@ -143,19 +143,19 @@ func TestFormulaParseErrors(t *testing.T) {
 	})
 }
 
-// TestFormulaRejectsUnknownCharacters pins the CORRECT behaviour for a formula
+// TestFormulaRejectsUnknownCharacters is the regression test for a formula
 // containing a character the lexer does not recognise.
 //
-// It currently fails: the lexer's default arm emits token{kind: tokEOF,
+// It used to pass silently: the lexer's default arm emitted token{kind: tokEOF,
 // text: string(c)} intending to "force an 'unexpected' error upstream", but
 // Parse's terminal check is `p.tok.kind != tokEOF`, which that synthetic token
-// satisfies. So parsing STOPS at the unknown character and silently returns the
-// truncated prefix instead of an error — "price # qty" parses as "price".
+// satisfied. Parsing therefore STOPPED at the unknown character and returned
+// the truncated prefix instead of an error — "price # qty" parsed as "price".
 //
-// This is silent data corruption rather than a crash: domain/attribute's
-// Computed.Validate accepts the definition, Refs() under-reports the
+// That was silent data corruption rather than a crash: domain/attribute's
+// Computed.Validate accepted the definition, Refs() under-reported the
 // dependency (weakening cycle detection and recompute tracking), and
-// application/computed materializes a wrong value for every entity.
+// application/computed materialized a wrong value for every entity.
 //
 // The fix gives an unrecognised character its own token kind (tokInvalid), so
 // the terminal check rejects it instead of mistaking it for end of input.

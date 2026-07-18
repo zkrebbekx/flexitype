@@ -528,7 +528,16 @@ go build ./...   # everything compiles without a database
 go test ./...    # goconvey Given/When/Then suites
 go vet ./...
 cd web && npm test && npm run build   # console tests + typecheck + bundle
+
+./scripts/coverage.sh                 # statement coverage + per-package report
 ```
+
+Coverage is measured with `-coverpkg` across the module, because most of it
+comes from cross-package tests (the root integration suites and the in-memory
+feature suites drive `application/`, `domain/` and `infrastructure/`). Set
+`FLEXITYPE_TEST_DSN` first — the Postgres suites skip without it, which sinks
+the total. `MIN_COVERAGE=NN` enforces a floor (CI does); `COVERAGE_HTML=cov.html`
+writes a browsable report.
 
 Storage is a single polymorphic value table with one typed, indexed column
 per storage class — no table-per-type explosion, uniqueness probes stay

@@ -7,10 +7,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-18
+
 ### Changed — REST behaviour
 
-Three inconsistencies where the API contradicted itself. Each is a behaviour
-change visible to clients, not an internal refactor; review before upgrading.
+Three inconsistencies where the API contradicted itself, released as a minor
+because in each case the documented contract was already the new behaviour —
+the old one was the defect. Each is still visible to clients, so review before
+upgrading; the first can reject requests that previously succeeded.
 
 - **Declared numeric types are enforced, not coerced.** An `integer` or `float`
   attribute now rejects a quoted number (`"5"`, `"1.5"`) with `422 VALIDATION`.
@@ -252,6 +256,7 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 - Quantity `one_of` members and defaults are unit-rebased; equal quantities in
   different units compare equal.
 
-[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/zkrebbekx/flexitype/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/zkrebbekx/flexitype/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/zkrebbekx/flexitype/releases/tag/v1.0.0

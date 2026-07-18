@@ -448,40 +448,6 @@ func NewRelationshipRepository(q db.QueryExecer) domainrelationship.Repository {
 }
 
 // WithTx binds the repository to a transaction, bypassing loader caches.
-func (r *relationshipRepository) ListByEntities(ctx context.Context, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) ([]*domainrelationship.Relationship, error) {
-	if len(entityIDs) == 0 {
-		return nil, nil
-	}
-	// A live link touches an entity if it is on either side; match any of the
-	// given ids against parent OR child in one pass.
-	placeholders := make([]string, 0, len(entityIDs))
-	args := make([]any, 0, len(entityIDs)+1)
-	args = append(args, tenant.String())
-	for _, id := range entityIDs {
-		placeholders = append(placeholders, "?")
-		args = append(args, id.String())
-	}
-	list := strings.Join(placeholders, ", ")
-	query := bind(`SELECT ` + relColumns + ` FROM flexitype_relationship
-	 WHERE tenant_id = ? AND archived_at IS NULL
-	   AND (parent_entity_id IN (` + list + `) OR child_entity_id IN (` + list + `))
-	 ORDER BY id`)
-	// The id list is interpolated twice (parent and child), so repeat its args.
-	full := make([]any, 0, len(args)+len(entityIDs))
-	full = append(full, args...)
-	for _, id := range entityIDs {
-		full = append(full, id.String())
-	}
-	var rows []relRow
-	if err := r.q.SelectContext(ctx, &rows, query, full...); err != nil {
-		return nil, fmt.Errorf("list relationships by entities: %w", err)
-	}
-	out := make([]*domainrelationship.Relationship, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, domainrelationship.Rehydrate(row.snapshot()))
-	}
-	return out, nil
-}
 
 func (r *relationshipRepository) WithTx(tx db.Tx) domainrelationship.Repository {
 	return &relationshipRepository{q: txExecer(tx), inTx: true}

@@ -185,7 +185,10 @@ func (a *ActivityInteractor) List(ctx context.Context, in ActivityListInput) (*A
 	}
 	page, err := in.Page.Resolve()
 	if err != nil {
-		return nil, err
+		// Wrap like every other list interactor: an unwrapped error is
+		// unclassifiable by writeError, so a bad ?limit=/?cursor= surfaced as
+		// 500 INTERNAL here while every sibling route returned 422.
+		return nil, domainerrors.NewValidation(err.Error())
 	}
 	items, total, err := a.log.List(ctx, activity.Filter{
 		TenantID: uow.TenantFromContext(ctx),

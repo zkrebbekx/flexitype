@@ -21,7 +21,7 @@ type DefinitionFilter struct {
 // definitions.
 type DefinitionRepository interface {
 	// WithTx returns a repository bound to the given transaction.
-	WithTx(tx db.QueryExecer) DefinitionRepository
+	WithTx(tx db.Tx) DefinitionRepository
 
 	// Get loads one definition by ID (batched).
 	Get(ctx context.Context, id valueobjects.RelationshipDefinitionID) (*Definition, error)
@@ -98,7 +98,7 @@ type LinkPage struct {
 // Repository is the persistence port for relationship instances.
 type Repository interface {
 	// WithTx returns a repository bound to the given transaction.
-	WithTx(tx db.QueryExecer) Repository
+	WithTx(tx db.Tx) Repository
 
 	// Get loads one relationship by ID (batched).
 	Get(ctx context.Context, id valueobjects.RelationshipID) (*Relationship, error)

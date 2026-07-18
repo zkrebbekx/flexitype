@@ -92,10 +92,14 @@ func (r *schemaVersionReader) SchemaVersion(ctx context.Context) (uint64, error)
 // Repositories returns the full repository set over this store, including
 // the in-process FQL executor.
 func (s *Store) Repositories() application.Repositories {
+	// One value repository serves both the aggregate write port (Values) and
+	// the read-model port (ValueReader): the same struct implements both.
+	values := &valueRepo{s: s}
 	return application.Repositories{
 		TypeDefinitions:         &typeDefRepo{s: s},
 		Attributes:              &attrRepo{s: s},
-		Values:                  &valueRepo{s: s},
+		Values:                  values,
+		ValueReader:             values,
 		Dependencies:            &depRepo{s: s},
 		RelationshipDefinitions: &relDefRepo{s: s},
 		Relationships:           &relRepo{s: s},

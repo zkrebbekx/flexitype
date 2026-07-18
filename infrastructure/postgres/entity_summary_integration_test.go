@@ -9,6 +9,7 @@ import (
 	_ "github.com/lib/pq"
 	. "github.com/smartystreets/goconvey/convey"
 
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
@@ -71,7 +72,9 @@ func TestEntitySummaryProjectionIntegration(t *testing.T) {
 	typeID := valueobjects.NewTypeDefinitionID()
 	attrID := ulid.New().String()
 	typeIDs := []valueobjects.TypeDefinitionID{typeID}
-	repo := postgres.NewAttributeValueRepository(pool)
+	// The entity-summary reads moved to the application-owned value read port;
+	// the same backend struct implements it alongside the aggregate repository.
+	repo := postgres.NewAttributeValueRepository(pool).(appctx.ValueReader)
 
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 

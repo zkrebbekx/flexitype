@@ -159,7 +159,7 @@ func (i *Interactor) GridRows(ctx context.Context, rawTypeID string, attrNames, 
 		ids = append(ids, id)
 	}
 
-	vals, err := i.values.ListByEntities(ctx, t.TenantID(), ids)
+	vals, err := i.reads.ListByEntities(ctx, t.TenantID(), ids)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func (i *Interactor) forEachValueBatched(ctx context.Context, tenant valueobject
 		if end > len(ids) {
 			end = len(ids)
 		}
-		vals, err := i.values.ListByEntities(ctx, tenant, ids[start:end])
+		vals, err := i.reads.ListByEntities(ctx, tenant, ids[start:end])
 		if err != nil {
 			return err
 		}

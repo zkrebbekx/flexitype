@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
@@ -53,7 +54,7 @@ type Store interface {
 	// joins the value write's atomic unit of work — a rollback then also
 	// un-does the revision delete, and the audit trail is never orphaned by a
 	// value-tx abort. It mirrors the value repository's WithTx.
-	WithTx(tx db.QueryExecer) Store
+	WithTx(tx db.Tx) Store
 
 	Create(ctx context.Context, r Revision) error
 	Get(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) (Revision, error)
@@ -94,7 +95,7 @@ type Interactor struct {
 	store    Store
 	typeDefs domaintypedef.Repository
 	attrs    domainattribute.Repository
-	values   domainvalue.Repository
+	values   appctx.ValueReader
 	applier  SnapshotApplier
 	now      func() time.Time
 }
@@ -104,7 +105,7 @@ func NewInteractor(
 	store Store,
 	typeDefs domaintypedef.Repository,
 	attrs domainattribute.Repository,
-	values domainvalue.Repository,
+	values appctx.ValueReader,
 	applier SnapshotApplier,
 	now func() time.Time,
 ) *Interactor {

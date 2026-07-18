@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	apprevision "github.com/zkrebbekx/flexitype/application/revision"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
@@ -67,7 +68,8 @@ func (i *Interactor) ApplySnapshot(ctx context.Context, rawTypeDefID, rawEntityI
 
 		// Archive current values whose (attribute, scope) is not in the target.
 		values := i.values.WithTx(tx)
-		current, err := values.ListByEntity(ctx, domainvalue.EntityKey{
+		reads := values.(appctx.ValueReader)
+		current, err := reads.ListByEntity(ctx, domainvalue.EntityKey{
 			TenantID: tenant, TypeDefinitionID: typeDefID, EntityID: entityID,
 		})
 		if err != nil {

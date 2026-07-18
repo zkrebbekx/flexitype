@@ -24,7 +24,7 @@ type Repository interface {
 	// WithTx returns a repository bound to the given transaction. Reads on
 	// the returned repository bypass loader caches so they observe
 	// uncommitted writes.
-	WithTx(tx db.QueryExecer) Repository
+	WithTx(tx db.Tx) Repository
 
 	// Get loads one type definition by ID (batched).
 	Get(ctx context.Context, id valueobjects.TypeDefinitionID) (*TypeDefinition, error)

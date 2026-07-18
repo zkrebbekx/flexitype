@@ -25,10 +25,11 @@ func NewActivityLog(pool db.QueryExecer) activity.Log {
 	return &activityLog{pool: pool}
 }
 
-func (l *activityLog) Write(ctx context.Context, tx db.QueryExecer, entries []activity.Entry) error {
+func (l *activityLog) Write(ctx context.Context, tx db.Tx, entries []activity.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}
+	q := txExecer(tx)
 
 	const cols = 9
 	args := make([]any, 0, len(entries)*cols)
@@ -44,7 +45,7 @@ func (l *activityLog) Write(ctx context.Context, tx db.QueryExecer, entries []ac
 	query := bind(`INSERT INTO flexitype_activity_log
 	   (id, tenant_id, actor, entity, entity_id, action, before_state, after_state, occurred_at)
 	 VALUES ` + strings.Join(rows, ", "))
-	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+	if _, err := q.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("write activity log: %w", err)
 	}
 	return nil

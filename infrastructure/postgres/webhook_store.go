@@ -28,8 +28,8 @@ func NewSubscriptionStore(q db.QueryExecer) webhook.SubscriptionStore {
 	return &subscriptionStore{q: q}
 }
 
-func (s *subscriptionStore) WithTx(q db.QueryExecer) webhook.SubscriptionStore {
-	return &subscriptionStore{q: q}
+func (s *subscriptionStore) WithTx(tx db.Tx) webhook.SubscriptionStore {
+	return &subscriptionStore{q: txExecer(tx)}
 }
 
 type subscriptionRow struct {

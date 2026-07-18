@@ -19,7 +19,7 @@ type valueRepo struct {
 	j *undoJournal
 }
 
-func (r *valueRepo) WithTx(tx db.QueryExecer) domainvalue.Repository {
+func (r *valueRepo) WithTx(tx db.Tx) domainvalue.Repository {
 	return &valueRepo{s: r.s, j: journalOf(tx)}
 }
 
@@ -252,7 +252,7 @@ type depRepo struct {
 	j *undoJournal
 }
 
-func (r *depRepo) WithTx(tx db.QueryExecer) domaindependency.Repository {
+func (r *depRepo) WithTx(tx db.Tx) domaindependency.Repository {
 	return &depRepo{s: r.s, j: journalOf(tx)}
 }
 
@@ -331,7 +331,7 @@ type relDefRepo struct {
 	j *undoJournal
 }
 
-func (r *relDefRepo) WithTx(tx db.QueryExecer) domainrelationship.DefinitionRepository {
+func (r *relDefRepo) WithTx(tx db.Tx) domainrelationship.DefinitionRepository {
 	return &relDefRepo{s: r.s, j: journalOf(tx)}
 }
 
@@ -403,7 +403,7 @@ type relRepo struct {
 	j *undoJournal
 }
 
-func (r *relRepo) WithTx(tx db.QueryExecer) domainrelationship.Repository {
+func (r *relRepo) WithTx(tx db.Tx) domainrelationship.Repository {
 	return &relRepo{s: r.s, j: journalOf(tx)}
 }
 

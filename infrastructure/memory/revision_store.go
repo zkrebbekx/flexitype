@@ -32,7 +32,7 @@ func NewRevisionStore() revision.Store {
 // inside the same SQL transaction and rolls back with it. Reads and Create pass
 // straight through. Outside a transaction (the executer is not a memory
 // transaction) the base store is returned unchanged.
-func (s *revisionStore) WithTx(tx db.QueryExecer) revision.Store {
+func (s *revisionStore) WithTx(tx db.Tx) revision.Store {
 	if t, ok := tx.(db.Transactor); ok {
 		return &txRevisionStore{revisionStore: s, tx: t}
 	}

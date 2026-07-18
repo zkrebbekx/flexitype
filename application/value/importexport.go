@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/zkrebbekx/flexitype/application/appctx"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
@@ -65,12 +66,12 @@ func newImportCache() *importCache {
 // prefetch seeds the existing-value cache with one query for every entity the
 // chunk touches, so the write path reads them from memory instead of a query
 // per cell.
-func (c *importCache) prefetch(ctx context.Context, values domainvalue.Repository, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) error {
+func (c *importCache) prefetch(ctx context.Context, reads appctx.ValueReader, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) error {
 	c.existing = map[string][]*domainvalue.AttributeValue{}
 	if len(entityIDs) == 0 {
 		return nil
 	}
-	vals, err := values.ListByEntities(ctx, tenant, entityIDs)
+	vals, err := reads.ListByEntities(ctx, tenant, entityIDs)
 	if err != nil {
 		return fmt.Errorf("prefetch existing values: %w", err)
 	}
@@ -255,7 +256,7 @@ func (i *Interactor) importTransactional(ctx context.Context, tenant valueobject
 	err := i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
 		cache := newImportCache()
 		cctx := withImportCache(ctx, cache)
-		if err := cache.prefetch(cctx, i.values.WithTx(tx), tenant, preparedEntityIDs(valid)); err != nil {
+		if err := cache.prefetch(cctx, i.values.WithTx(tx).(appctx.ValueReader), tenant, preparedEntityIDs(valid)); err != nil {
 			return err
 		}
 		for _, p := range valid {
@@ -311,7 +312,7 @@ func (i *Interactor) writeChunk(ctx context.Context, tenant valueobjects.TenantI
 	return i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
 		cache := newImportCache()
 		cctx := withImportCache(ctx, cache)
-		if err := cache.prefetch(cctx, i.values.WithTx(tx), tenant, preparedEntityIDs(chunk)); err != nil {
+		if err := cache.prefetch(cctx, i.values.WithTx(tx).(appctx.ValueReader), tenant, preparedEntityIDs(chunk)); err != nil {
 			return err
 		}
 		for _, p := range chunk {
@@ -673,7 +674,7 @@ func (i *Interactor) exportEntityIDs(
 	var ids []string
 	page := db.Page{Limit: 500}
 	for {
-		summaries, _, err := i.values.ListEntities(ctx, tenant, []valueobjects.TypeDefinitionID{typeID}, page)
+		summaries, _, err := i.reads.ListEntities(ctx, tenant, []valueobjects.TypeDefinitionID{typeID}, page)
 		if err != nil {
 			return nil, err
 		}

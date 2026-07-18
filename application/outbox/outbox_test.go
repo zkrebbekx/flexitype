@@ -24,7 +24,7 @@ type fakeStore struct {
 	fails   map[string]int
 }
 
-func (s *fakeStore) Write(_ context.Context, _ db.QueryExecer, envs []events.Envelope) error {
+func (s *fakeStore) Write(_ context.Context, _ db.Tx, envs []events.Envelope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pending = append(s.pending, envs...)

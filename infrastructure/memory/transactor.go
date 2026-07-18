@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 
@@ -15,19 +14,10 @@ import (
 // exactly the keys a rolled-back unit of work wrote, so a failed unit of work
 // leaves no partial data (matching PostgreSQL atomicity) without disturbing the
 // committed writes of any interleaved transaction.
-type transactor struct{ store *Store }
-
-var errNoSQL = errors.New("memory: repositories do not execute SQL")
-
-func (t *transactor) GetContext(context.Context, any, string, ...any) error    { return errNoSQL }
-func (t *transactor) SelectContext(context.Context, any, string, ...any) error { return errNoSQL }
-func (t *transactor) ExecContext(context.Context, string, ...any) (sql.Result, error) {
-	return nil, errNoSQL
+type transactor struct {
+	db.TxMarker
+	store *Store
 }
-func (t *transactor) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
-	return nil, errNoSQL
-}
-func (t *transactor) QueryRowContext(context.Context, string, ...any) *sql.Row { return nil }
 
 func (t *transactor) Begin(context.Context) (db.Transactor, error) {
 	// A fresh undo journal per transaction: repositories bound to this tx (via
@@ -36,12 +26,12 @@ func (t *transactor) Begin(context.Context) (db.Transactor, error) {
 	return &memTx{store: t.store, journal: newUndoJournal()}, nil
 }
 
-// journalOf returns the undo journal of a memory transaction, or nil when q is
+// journalOf returns the undo journal of a memory transaction, or nil when tx is
 // not a memory transaction — a write made outside any transaction is not
 // journalled, since there is nothing to roll back to.
-func journalOf(q db.QueryExecer) *undoJournal {
-	if tx, ok := q.(*memTx); ok {
-		return tx.journal
+func journalOf(tx db.Tx) *undoJournal {
+	if t, ok := tx.(*memTx); ok {
+		return t.journal
 	}
 	return nil
 }
@@ -65,6 +55,7 @@ func (t *transactor) OnRollback(db.Hook)   { panic("memory: OnRollback outside t
 // memTx is one logical transaction: hook bookkeeping plus the undo journal
 // that reverses the data mutations its bound repositories make on rollback.
 type memTx struct {
+	db.TxMarker
 	store    *Store
 	journal  *undoJournal
 	depth    int
@@ -73,16 +64,6 @@ type memTx struct {
 	post     []db.Hook
 	rollback []db.Hook
 }
-
-func (t *memTx) GetContext(context.Context, any, string, ...any) error    { return errNoSQL }
-func (t *memTx) SelectContext(context.Context, any, string, ...any) error { return errNoSQL }
-func (t *memTx) ExecContext(context.Context, string, ...any) (sql.Result, error) {
-	return nil, errNoSQL
-}
-func (t *memTx) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
-	return nil, errNoSQL
-}
-func (t *memTx) QueryRowContext(context.Context, string, ...any) *sql.Row { return nil }
 
 func (t *memTx) Begin(context.Context) (db.Transactor, error) {
 	if t.done {

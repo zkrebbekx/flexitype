@@ -12,7 +12,7 @@ import (
 // EnvelopeSink persists envelopes inside the business transaction — the
 // outbox's write side.
 type EnvelopeSink interface {
-	Write(ctx context.Context, tx db.QueryExecer, envs []events.Envelope) error
+	Write(ctx context.Context, tx db.Tx, envs []events.Envelope) error
 }
 
 // Collector accumulates the domain events and audit changes a usecase

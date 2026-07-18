@@ -16,6 +16,7 @@ var ErrNotInTransaction = errors.New("db: not in a transaction")
 // sqlxTransactor is the pool-level Transactor. It executes directly against
 // the pool; Begin returns a transaction-bound child.
 type sqlxTransactor struct {
+	TxMarker
 	db *sqlx.DB
 }
 
@@ -71,6 +72,7 @@ func (t *sqlxTransactor) OnRollback(Hook)   { panic("db: OnRollback outside tran
 
 // txTransactor is a transaction-bound Transactor carrying lifecycle hooks.
 type txTransactor struct {
+	TxMarker
 	tx         *sqlx.Tx
 	depth      int
 	done       bool

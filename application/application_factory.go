@@ -215,7 +215,7 @@ func (f *factory) New(context.Context) *Interactors {
 	i := &Interactors{
 		typeDefs: apptypedef.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
 		attrs:    appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, f.cfg.UnitFamilies),
-		values: appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies, repos.Relationships, appvalue.Config{
+		values: appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.ValueReader, repos.Dependencies, repos.Relationships, appvalue.Config{
 			Blobs:          f.cfg.BlobStore,
 			UnitFamilies:   f.cfg.UnitFamilies,
 			OnCleanupError: f.cfg.OnCleanupError,
@@ -234,7 +234,7 @@ func (f *factory) New(context.Context) *Interactors {
 			Blobs:          f.cfg.BlobStore,
 			OnCleanupError: f.cfg.OnCleanupError,
 		}),
-		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.Dependencies),
+		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.ValueReader, repos.Dependencies),
 		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),
 		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query, f.cfg.Features.SearchIndex, f.cfg.UnitFamilies),
 		activity:      &ActivityInteractor{log: activityLog},
@@ -245,10 +245,10 @@ func (f *factory) New(context.Context) *Interactors {
 		i.savedViews = appsavedview.NewInteractor(f.cfg.SavedViews)
 	}
 	if f.cfg.MatchRules != nil {
-		i.dedup = appdedup.NewInteractor(f.cfg.MatchRules, repos.TypeDefinitions, repos.Attributes, repos.Values, f.cfg.Now)
+		i.dedup = appdedup.NewInteractor(f.cfg.MatchRules, repos.TypeDefinitions, repos.Attributes, repos.ValueReader, f.cfg.Now)
 	}
 	if f.cfg.Revisions != nil {
-		i.revisions = apprevision.NewInteractor(f.cfg.Revisions, repos.TypeDefinitions, repos.Attributes, repos.Values, i.values, f.cfg.Now)
+		i.revisions = apprevision.NewInteractor(f.cfg.Revisions, repos.TypeDefinitions, repos.Attributes, repos.ValueReader, i.values, f.cfg.Now)
 	}
 	if f.cfg.ChangeSets != nil {
 		i.changesets = appchangeset.NewInteractor(f.cfg.ChangeSets, i.values, f.cfg.Now)

@@ -25,8 +25,8 @@ func NewRevisionStore(q db.QueryExecer) revision.Store {
 // WithTx binds the store to a transaction so a revision purge runs inside the
 // value write's transaction and rolls back with it — mirroring the value
 // repository's WithTx.
-func (s *revisionStore) WithTx(tx db.QueryExecer) revision.Store {
-	return &revisionStore{q: tx}
+func (s *revisionStore) WithTx(tx db.Tx) revision.Store {
+	return &revisionStore{q: txExecer(tx)}
 }
 
 type revisionRow struct {

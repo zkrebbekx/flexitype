@@ -20,10 +20,14 @@ import (
 // NewRepositories builds one request-scoped repository set over the pool.
 // Call once per request so dataloader caches die with the request.
 func NewRepositories(pool db.QueryExecer) application.Repositories {
+	// One value repository serves both the aggregate write port (Values) and
+	// the read-model port (ValueReader): the same struct implements both.
+	values := NewAttributeValueRepository(pool)
 	return application.Repositories{
 		TypeDefinitions:         NewTypeDefinitionRepository(pool),
 		Attributes:              NewAttributeDefinitionRepository(pool),
-		Values:                  NewAttributeValueRepository(pool),
+		Values:                  values,
+		ValueReader:             values.(application.ValueReader),
 		Dependencies:            NewDependencyRepository(pool),
 		RelationshipDefinitions: NewRelationshipDefinitionRepository(pool),
 		Relationships:           NewRelationshipRepository(pool),
@@ -31,6 +35,13 @@ func NewRepositories(pool db.QueryExecer) application.Repositories {
 		SchemaVersions:          NewSchemaVersionReader(pool),
 	}
 }
+
+// txExecer down-casts the opaque transaction handle a repository or sink is
+// handed back to the SQL executor the PostgreSQL backend runs queries through.
+// The handle is always the sqlx-backed transactor in this backend; db.Tx keeps
+// the domain from executing SQL through it, but the backend that opened the
+// transaction knows its concrete type.
+func txExecer(tx db.Tx) db.QueryExecer { return tx.(db.QueryExecer) }
 
 // idKeyset is the single-column ascending keyset used by every id-ordered list.
 var idKeyset = []db.KeysetColumn{{Expr: "id"}}

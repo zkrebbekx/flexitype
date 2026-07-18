@@ -111,6 +111,11 @@ const (
 	tokOp
 	tokLParen
 	tokRParen
+	// tokInvalid marks a character the lexer does not recognise. It must be a
+	// DISTINCT kind, not tokEOF: Parse terminates on tokEOF, so reusing tokEOF
+	// here made an unknown character look like a clean end of input and
+	// silently truncated the formula ("price # qty" parsed as "price").
+	tokInvalid
 )
 
 type token struct {
@@ -159,7 +164,7 @@ func (p *parser) next() {
 		p.tok = token{kind: tokIdent, text: p.src[start:p.pos]}
 	default:
 		p.pos++
-		p.tok = token{kind: tokEOF, text: string(c)} // forces an "unexpected" error upstream
+		p.tok = token{kind: tokInvalid, text: string(c)} // rejected by Parse/parseFactor
 	}
 }
 

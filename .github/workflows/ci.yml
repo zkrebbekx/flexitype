@@ -163,7 +163,7 @@ jobs:
           # infrastructure/postgres numbers (and the total) sharply.
           FLEXITYPE_TEST_DSN: postgres://postgres:postgres@localhost:5432/flexitype?sslmode=disable
           # Ratcheted upward as coverage lands; never lower it to make CI pass.
-          MIN_COVERAGE: "64"
+          MIN_COVERAGE: "90"
         run: ./scripts/coverage.sh
       - name: Upload coverage profile
         if: always()

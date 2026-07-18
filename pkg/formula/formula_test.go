@@ -157,10 +157,9 @@ func TestFormulaParseErrors(t *testing.T) {
 // dependency (weakening cycle detection and recompute tracking), and
 // application/computed materializes a wrong value for every entity.
 //
-// Skipped pending the fix; see the coverage report that surfaced it.
+// The fix gives an unrecognised character its own token kind (tokInvalid), so
+// the terminal check rejects it instead of mistaking it for end of input.
 func TestFormulaRejectsUnknownCharacters(t *testing.T) {
-	t.Skip("known bug: an unrecognised character silently truncates the formula instead of erroring")
-
 	Convey("Given a formula containing an unrecognised character", t, func() {
 		Convey("When it is parsed", func() {
 			expr, err := formula.Parse("price # qty")

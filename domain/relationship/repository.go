@@ -115,11 +115,6 @@ type Repository interface {
 	// either side (batched across entities — the inspector hot path).
 	ListByEntity(ctx context.Context, key EntityLinksKey) ([]*Relationship, error)
 
-	// ListByEntities loads every live link touching any of the given
-	// entities, in one query — the no-N+1 path for fanning out a set of
-	// entities to their relationships (e.g. the entity inspector).
-	ListByEntities(ctx context.Context, tenant valueobjects.TenantID, entityIDs []valueobjects.EntityID) ([]*Relationship, error)
-
 	// WindowedLinks returns, for each self entity, a keyset page of the
 	// opposite endpoints of ONE relationship definition in one direction. The
 	// page is applied PER self via a row-number window, so each self reads at

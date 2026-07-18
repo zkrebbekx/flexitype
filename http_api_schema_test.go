@@ -1132,36 +1132,31 @@ func TestHTTPActivityAndFeatureRoutes(t *testing.T) {
 				})
 			})
 
-			// KNOWN DEFECT — /api/v1/activity is the only paginated list route
-			// that answers a bad ?limit=/?cursor= with 500 INTERNAL instead of
-			// 422 VALIDATION. application.ActivityInteractor.List returns
-			// db.PageArgs.Resolve's plain fmt.Errorf straight through, where
-			// every sibling interactor wraps it in domainerrors.NewValidation;
-			// writeError therefore cannot recognise it and falls back to the
-			// generic 500 (and logs it at error level). These assertions pin the
-			// CURRENT behavior so the suite is honest — when the one-line wrap
-			// lands in application/interfaces.go they will fail loudly and
-			// should be changed to expect 422 / "VALIDATION".
-			Convey("When the activity limit is not numeric (known 500-vs-422 defect)", func() {
+			// Regression: /api/v1/activity used to answer a bad ?limit=/?cursor=
+			// with 500 INTERNAL, because ActivityInteractor.List returned
+			// db.PageArgs.Resolve's plain fmt.Errorf straight through where every
+			// sibling wraps it in domainerrors.NewValidation — writeError could
+			// not classify it and fell back to the generic 500 (logged at error
+			// level). It now matches its siblings.
+			Convey("When the activity limit is not numeric", func() {
 				resp := a.get("/api/v1/activity?limit=all")
 
-				Convey("Then it is currently 500 INTERNAL, where every other list route is 422", func() {
-					So(resp.Status, ShouldEqual, http.StatusInternalServerError)
-					So(resp.errorCode(), ShouldEqual, "INTERNAL")
+				Convey("Then it is 422 VALIDATION, matching every other list route", func() {
+					So(resp.Status, ShouldEqual, http.StatusUnprocessableEntity)
+					So(resp.errorCode(), ShouldEqual, "VALIDATION")
 
-					// The contrast that makes it a defect rather than a policy.
 					sibling := a.get("/api/v1/type-definitions?limit=all")
 					So(sibling.Status, ShouldEqual, http.StatusUnprocessableEntity)
 					So(sibling.errorCode(), ShouldEqual, "VALIDATION")
 				})
 			})
 
-			Convey("When the activity cursor is malformed (same defect)", func() {
+			Convey("When the activity cursor is malformed", func() {
 				resp := a.get("/api/v1/activity?cursor=not-a-cursor")
 
-				Convey("Then it is likewise 500 rather than 422", func() {
-					So(resp.Status, ShouldEqual, http.StatusInternalServerError)
-					So(resp.errorCode(), ShouldEqual, "INTERNAL")
+				Convey("Then it is likewise 422 VALIDATION", func() {
+					So(resp.Status, ShouldEqual, http.StatusUnprocessableEntity)
+					So(resp.errorCode(), ShouldEqual, "VALIDATION")
 				})
 			})
 		})

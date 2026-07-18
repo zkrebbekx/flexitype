@@ -65,39 +65,26 @@ func TestInitWithoutEndpoint(t *testing.T) {
 	})
 }
 
-// TestInitWithEndpoint documents a REAL, CURRENTLY-FAILING production bug.
+// TestInitWithEndpoint is the regression test for a bug that made tracing
+// impossible to enable at all.
 //
-// The assertions below describe the behaviour Init is supposed to have and
-// are deliberately NOT weakened to match the broken behaviour. The test is
-// skipped only so a known production defect does not masquerade as a broken
-// test suite; remove the t.Skip as the regression test for the fix.
-//
-// BUG: telemetry.Init always fails once OTEL_EXPORTER_OTLP_ENDPOINT is set,
-// which is the only supported way to turn tracing on. It returns:
+// Init used to fail whenever OTEL_EXPORTER_OTLP_ENDPOINT was set — the only
+// supported way to turn tracing on — with:
 //
 //	build otel resource: conflicting Schema URL:
 //	  https://opentelemetry.io/schemas/1.41.0 and
 //	  https://opentelemetry.io/schemas/1.26.0
 //
-// Cause: telemetry.go merges resource.Default() (schema URL 1.41.0, from
-// go.opentelemetry.io/otel/sdk v1.44.0) with a resource built from
-// semconv/v1.26.0. resource.Merge rejects conflicting schema URLs, so the
-// merge never succeeds and the SDK tracer provider is never installed.
+// telemetry.go merged resource.Default() (whose schema URL tracks the SDK)
+// with a resource pinned to semconv/v1.26.0, and resource.Merge rejects
+// conflicting schema URLs — so the tracer provider was never installed and
+// cmd/flexitype turned the error into a hard boot failure. The service
+// refused to start the moment an operator enabled OTLP tracing.
 //
-// Impact: cmd/flexitype/main.go:60-63 turns this into a hard boot failure —
-// "init telemetry: build otel resource: conflicting Schema URL" — so the
-// service refuses to start whenever an operator enables OTLP tracing.
-// Distributed tracing cannot currently be enabled at all.
-//
-// Fix (production change, intentionally NOT made here): align the semconv
-// import in internal/telemetry/telemetry.go with the SDK's schema version, or
-// build the resource with resource.New(...)/schemaless merge instead of
-// merging against resource.Default().
+// The fix builds the service attributes with resource.NewSchemaless, so the
+// merged resource inherits the SDK's schema instead of fighting it — which
+// also survives future SDK schema bumps.
 func TestInitWithEndpoint(t *testing.T) {
-	t.Skip("KNOWN BUG: telemetry.Init fails with a conflicting OTel schema URL " +
-		"whenever OTEL_EXPORTER_OTLP_ENDPOINT is set; see the comment above. " +
-		"Un-skip once internal/telemetry/telemetry.go is fixed.")
-
 	Convey("Given an OTLP endpoint is configured", t, func() {
 		restoreGlobals(t)
 		// Port 1 on loopback is never listening. The HTTP exporter connects

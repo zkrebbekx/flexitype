@@ -20,11 +20,19 @@ func (s *server) adminDisabled(w http.ResponseWriter) {
 
 // adminReady gates provisioning on both configuration and the admin scope.
 func (s *server) adminReady(w http.ResponseWriter, r *http.Request) bool {
+	// Authorize BEFORE disclosing whether provisioning is configured: an
+	// unauthorized caller learns nothing about the deployment, and a caller
+	// missing the scope gets the accurate 403 rather than a misleading "not
+	// implemented". This is also the order every other protected route uses
+	// (see purgeEntity/purgeTenant, which authorize first).
+	if !s.requireAdmin(w, r) {
+		return false
+	}
 	if s.admin == nil {
 		s.adminDisabled(w)
 		return false
 	}
-	return s.requireAdmin(w, r)
+	return true
 }
 
 type createTenantRequest struct {

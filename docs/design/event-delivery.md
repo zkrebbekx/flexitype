@@ -263,3 +263,38 @@ at-least-once by design and honest about it.
 
 Phase 1 alone meets the stated requirements; phase 2 adds replay and the
 pull option; phase 3 is demand-driven.
+
+## Internal projections vs. external delivery
+
+Two kinds of subscriber ride the event stream, and they have deliberately
+different consistency models:
+
+- **Internal projections** — the computed-attribute materializer, the entity
+  search index, and the GraphQL schema cache — are maintained on a **separate,
+  internal dispatcher** that runs synchronously in the originating request's
+  post-commit, in **both** delivery modes. So a write's own computed attributes
+  and `matches()` results are visible to that same request (read-your-writes),
+  and this holds **independent of `WithOutbox`** (issue #211). A projection
+  failure is surfaced to `WithDispatchObserver` rather than silently swallowed,
+  but it does not fail the already-committed write (a retry would double-apply).
+- **External consumers** — webhooks, pub/sub, and the events feed — ride the
+  regular `events.Dispatcher`, which the outbox relay drains. Their semantics
+  are the ones described above (at-least-once with `WithOutbox`, best-effort
+  synchronous without it). Internal-projection consistency is **not** affected
+  by that choice.
+
+### Durability & recovery
+
+Because internal projections are maintained in-process at post-commit rather
+than through a durable queue, a process crash in the window between the commit
+and its post-commit can leave a projection stale (the write is durable; its
+derived computed value or search document may not be). Both are self-healing
+and idempotently rebuildable, so recovery is an operator action, not data loss:
+
+- Search index: `POST /api/v1/search/reindex` (embedded: `Service.ReindexSearch`).
+- Computed attributes: `POST /api/v1/computed/recompute` (embedded:
+  `Service.RecomputeComputed`).
+- GraphQL schema cache: self-heals from the persisted `schema_version` (#192);
+  no action needed.
+
+Both endpoints rebuild the whole tenant and are safe to re-run.

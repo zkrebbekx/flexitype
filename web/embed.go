@@ -9,3 +9,12 @@ import "embed"
 //
 //go:embed all:dist
 var Dist embed.FS
+
+// IndexHTML is the source console template. Vite copies its inline
+// pre-paint theme <script> into the built dist/index.html verbatim, so its
+// SHA-256 is the one pinned in the API server's Content-Security-Policy
+// (a test cross-checks the two, so editing the inline script fails CI until
+// the CSP hash is updated).
+//
+//go:embed index.html
+var IndexHTML string

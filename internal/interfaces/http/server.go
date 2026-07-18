@@ -29,6 +29,9 @@ type ServerConfig struct {
 	Admin *admin.Interactor
 	// Reindex rebuilds the search projection; nil when the index is off.
 	Reindex func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
+	// RecomputeComputed rebuilds every computed attribute for a tenant — the
+	// recovery path for internal-projection staleness after a crash.
+	RecomputeComputed func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
 	// Metrics, when set, records HTTP SLIs and serves /metrics.
 	Metrics *metrics.Metrics
 	// RateLimiter, when set, throttles API requests per service account.
@@ -48,7 +51,7 @@ func NewHandler(cfg ServerConfig) http.Handler {
 // buildRouter constructs the raw chi router (before OpenTelemetry wrapping) so
 // tests can walk the registered routes.
 func buildRouter(cfg ServerConfig) *chi.Mux {
-	s := &server{factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex, admin: cfg.Admin, blobs: cfg.BlobStore, graphql: cfg.GraphQL}
+	s := &server{factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex, recompute: cfg.RecomputeComputed, admin: cfg.Admin, blobs: cfg.BlobStore, graphql: cfg.GraphQL}
 
 	r := chi.NewRouter()
 	r.Use(recoverer(cfg.Logger))
@@ -217,6 +220,7 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 		api.Get("/graphql", s.graphqlQuery)
 		api.Post("/graphql", s.graphqlQuery)
 		api.Post("/search/reindex", s.reindexSearch)
+		api.Post("/computed/recompute", s.recomputeComputed)
 
 		api.Get("/activity", s.listActivity)
 
@@ -264,10 +268,11 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 
 // server holds per-handler dependencies.
 type server struct {
-	factory application.Factory
-	log     *logger.Logger
-	reindex func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
-	admin   *admin.Interactor
-	blobs   blob.Store
-	graphql *gql.Engine
+	factory   application.Factory
+	log       *logger.Logger
+	reindex   func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
+	recompute func(ctx context.Context, tenant valueobjects.TenantID) (int, error)
+	admin     *admin.Interactor
+	blobs     blob.Store
+	graphql   *gql.Engine
 }

@@ -1,12 +1,34 @@
 package http
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
+
+	"github.com/zkrebbekx/flexitype/web"
 )
+
+func TestConsoleThemeScriptHashMatchesCSP(t *testing.T) {
+	Convey("Given the inline pre-paint theme script in the console template", t, func() {
+		// The bare <script> (no attributes) is the theme IIFE; the module entry
+		// uses <script type="module" src=...>.
+		m := regexp.MustCompile(`(?s)<script>(.*?)</script>`).FindStringSubmatch(web.IndexHTML)
+		So(m, ShouldNotBeNil)
+
+		sum := sha256.Sum256([]byte(m[1]))
+		want := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+
+		Convey("Its hash is the one pinned in the CSP — else the theme script is blocked, or the CSP is stale", func() {
+			So(consoleThemeScriptHash, ShouldEqual, want)
+			So(securityCSP, ShouldContainSubstring, want)
+		})
+	})
+}
 
 func TestSanitizeCSVCell(t *testing.T) {
 	Convey("Given a cell that begins with a formula trigger character", t, func() {

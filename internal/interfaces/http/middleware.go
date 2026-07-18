@@ -28,16 +28,24 @@ func withInteractors(factory application.Factory) func(http.Handler) http.Handle
 	}
 }
 
+// consoleThemeScriptHash is the SHA-256 of the inline pre-paint theme <script>
+// in web/index.html (which Vite copies verbatim into the served index.html).
+// Pinning its hash in script-src lets the console keep that one inline script
+// WITHOUT 'unsafe-inline', so an injected inline script is blocked. A test
+// recomputes this from web.IndexHTML and fails if it drifts.
+const consoleThemeScriptHash = "'sha256-s3Q8xUUXR+swI8/f9WrZoqSTuYLHw84CXgtIw0hXP2Q='"
+
 // securityCSP is the Content-Security-Policy applied to every response. It
 // keeps the console's script, data-fetching and framing pinned to its own
-// origin. 'unsafe-inline' is required because index.html ships an inline
-// pre-paint theme script and inline boot styles and Vue binds inline style
-// attributes; 'wasm-unsafe-eval' lets the in-browser playground build
-// instantiate its WebAssembly service. Tightening script-src to hashes or a
-// nonce is a follow-up that needs build-tool support. Handlers that serve raw
-// uploads (media) override this with a stricter, content-free policy.
+// origin. script-src allows only 'self', the pinned hash of the inline theme
+// script, and 'wasm-unsafe-eval' (for the in-browser playground build) — no
+// 'unsafe-inline', so injected inline scripts are refused. style-src keeps
+// 'unsafe-inline' because Vue binds inline style attributes and index.html
+// ships an inline boot <style> (styles are a far weaker injection vector).
+// Handlers that serve raw uploads (media) override this with a stricter,
+// content-free policy.
 const securityCSP = "default-src 'self'; " +
-	"script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; " +
+	"script-src 'self' " + consoleThemeScriptHash + " 'wasm-unsafe-eval'; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data: blob:; " +
 	"font-src 'self' data:; " +

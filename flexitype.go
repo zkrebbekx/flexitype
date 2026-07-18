@@ -173,9 +173,10 @@ func WithWebhookAllowPrivate() Option {
 	return func(o *options) { o.webhookAllowPrivate = true }
 }
 
-// WithSearchIndex enables the entity search projection: a dispatcher
-// subscriber keeps one searchable document per entity, unlocking FQL
-// matches(). Pair with WithOutbox for at-least-once index maintenance.
+// WithSearchIndex enables the entity search projection: an internal-projection
+// subscriber keeps one searchable document per entity, unlocking FQL matches().
+// The index is maintained synchronously in the writing request (read-your-writes)
+// in both delivery modes, so it stays fresh independent of WithOutbox (#211).
 func WithSearchIndex() Option {
 	return func(o *options) {
 		o.searchIndex = true
@@ -194,12 +195,20 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	transactor := db.NewTransactor(pool)
 	newRepos := func() application.Repositories { return postgres.NewRepositories(pool) }
 
+	// Internal projections ride their OWN dispatcher, maintained synchronously in
+	// the originating unit of work (see application/uow) in BOTH delivery modes —
+	// never the external o.dispatcher the relay drains. This keeps computed-
+	// attribute, search-index and GraphQL-cache consistency (and read-your-writes)
+	// identical whether or not WithOutbox is enabled (issue #211); o.dispatcher is
+	// reserved for external consumer hooks (webhooks, pub/sub, funcs).
+	projections := events.NewDispatcher()
+
 	var indexer *search.Indexer
 	var searchStore search.DocumentStore
 	if o.searchIndex {
 		searchStore = postgres.NewSearchStore(pool)
 		indexer = search.NewIndexer(newRepos, searchStore)
-		o.dispatcher.Register(indexer, events.WithEventTypes(search.EventTypes()...))
+		projections.Register(indexer, events.WithEventTypes(search.EventTypes()...))
 	}
 
 	var relay *outbox.Relay
@@ -209,6 +218,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		Transactor:      transactor,
 		NewRepositories: newRepos,
 		Dispatcher:      o.dispatcher,
+		Projections:     projections,
 		ActivityLog:     postgres.NewActivityLog(pool),
 		OnRollback:      o.onRollback,
 		OnDispatchError: o.onDispatch,
@@ -253,14 +263,18 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	cfg.BlobStore = o.blobs
 
 	factory := application.NewFactory(cfg)
-	// Computed attributes materialize via an event subscriber, so their
-	// derived values are ordinary (FQL-queryable) values.
-	o.dispatcher.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
+	// Computed attributes materialize via an internal-projection subscriber, so
+	// their derived values are ordinary (FQL-queryable) values — maintained in
+	// the writing request regardless of the outbox.
+	projections.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
 
-	// The GraphQL schema mirrors the live type definitions; a subscriber
-	// invalidates a tenant's cached schema when its definitions change.
+	// The GraphQL schema mirrors the live type definitions; an internal-projection
+	// subscriber invalidates a tenant's cached schema when its definitions change.
+	// This is a fast-path hint only: correctness is backed by the persisted
+	// schema_version (issue #192), so routing it off the external dispatcher keeps
+	// cross-replica invalidation intact.
 	graphqlEngine := gql.NewEngine()
-	o.dispatcher.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
+	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
 
 	return &Service{
 		pool:       pool,
@@ -300,12 +314,18 @@ func NewInMemory(opts ...Option) *Service {
 		o.blobs = blob.NewMemoryStore()
 	}
 
+	// Internal projections ride their own dispatcher (see New), maintained
+	// synchronously in the originating unit of work. The in-memory service is
+	// always direct-dispatch (WithOutbox is ignored), but keeping the split
+	// matches the database path and reserves o.dispatcher for external hooks.
+	projections := events.NewDispatcher()
+
 	var indexer *search.Indexer
 	var searchStore search.DocumentStore
 	if o.searchIndex {
 		searchStore = store.SearchStore()
 		indexer = search.NewIndexer(newRepos, searchStore)
-		o.dispatcher.Register(indexer, events.WithEventTypes(search.EventTypes()...))
+		projections.Register(indexer, events.WithEventTypes(search.EventTypes()...))
 	}
 
 	transactor := store.Transactor()
@@ -313,6 +333,7 @@ func NewInMemory(opts ...Option) *Service {
 		Transactor:      transactor,
 		NewRepositories: newRepos,
 		Dispatcher:      o.dispatcher,
+		Projections:     projections,
 		ActivityLog:     store.ActivityLog(),
 		OnRollback:      o.onRollback,
 		OnDispatchError: o.onDispatch,
@@ -326,9 +347,9 @@ func NewInMemory(opts ...Option) *Service {
 		BlobStore:       o.blobs,
 		SearchStore:     searchStore, // may be nil; enables entity-data erasure of the projection
 	})
-	o.dispatcher.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
+	projections.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
 	graphqlEngine := gql.NewEngine()
-	o.dispatcher.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
+	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
 	return &Service{
 		transactor: transactor,
 		dispatcher: o.dispatcher,

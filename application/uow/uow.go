@@ -44,14 +44,15 @@ type UnitOfWork interface {
 // pre-commit (activity log), post-commit (event dispatch) and rollback
 // handlers registered.
 type unitOfWork struct {
-	tx         db.Transactor
-	dispatcher *events.Dispatcher
-	log        activity.Log
-	sink       EnvelopeSink // non-nil switches post-commit dispatch to outbox writes
-	afterWrite func()       // relay nudge, called post-commit in outbox mode
-	onRollback func(ctx context.Context, err error)
-	onDispatch func(ctx context.Context, err error) // observes soft-failed sync dispatch
-	now        func() time.Time
+	tx          db.Transactor
+	dispatcher  *events.Dispatcher
+	projections *events.Dispatcher // internal projections, maintained sync post-commit in BOTH modes
+	log         activity.Log
+	sink        EnvelopeSink // non-nil switches EXTERNAL post-commit dispatch to outbox writes
+	afterWrite  func()       // relay nudge, called post-commit in outbox mode
+	onRollback  func(ctx context.Context, err error)
+	onDispatch  func(ctx context.Context, err error) // observes soft-failed sync dispatch + projection maintenance
+	now         func() time.Time
 }
 
 // Option customises a unit of work.
@@ -63,12 +64,27 @@ func WithRollbackObserver(fn func(ctx context.Context, err error)) Option {
 	return func(u *unitOfWork) { u.onRollback = fn }
 }
 
-// WithDispatchObserver installs a hook invoked when synchronous post-commit
-// event dispatch fails. In the default (non-outbox) mode the change is already
-// durable when subscribers run, so a subscriber error must not turn a
-// committed write into a request failure — it is observed here and swallowed.
+// WithDispatchObserver installs a hook invoked when a post-commit maintenance
+// step fails. It covers two soft-failure paths, both after the change is
+// already durable: a synchronous external subscriber error (default,
+// non-outbox mode) and an internal-projection maintenance error (computed
+// attributes / search index / GraphQL cache, in either mode). Neither must
+// turn a committed write into a request failure — a retry would double-apply
+// side effects — so the error is surfaced here rather than swallowed silently
+// or promoted to a request error.
 func WithDispatchObserver(fn func(ctx context.Context, err error)) Option {
 	return func(u *unitOfWork) { u.onDispatch = fn }
+}
+
+// WithProjections installs the internal-projection dispatcher. Unlike the
+// external dispatcher (which delivers to consumer hooks and, under WithOutbox,
+// is fed by the relay), this one is ALWAYS dispatched synchronously in the
+// originating unit of work's post-commit — in both delivery modes — so the
+// writing request observes its own computed attributes and search updates
+// (read-your-writes) regardless of the outbox setting. See Execute's
+// post-commit hook and issue #211.
+func WithProjections(d *events.Dispatcher) Option {
+	return func(u *unitOfWork) { u.projections = d }
 }
 
 // UTCNow is the canonical clock for every usecase constructor: wall-clock in
@@ -158,23 +174,43 @@ func (u *unitOfWork) Execute(ctx context.Context, fn func(tx db.Transactor, c *C
 		return u.log.Write(ctx, tx, entries)
 	})
 
-	// Post-commit: fan events out to subscribers only once the change is
-	// durable. In outbox mode the envelopes are already queued — just wake
-	// the relay.
+	// Post-commit: maintain internal projections, then fan events out to
+	// external subscribers — both only once the change is durable.
 	tx.OnPostCommit(func(ctx context.Context) error {
 		if len(collector.events) == 0 {
 			return nil
 		}
+		meta := events.Metadata{TenantID: tenant.String(), Actor: actor.String()}
+
+		// Internal projections (computed-attribute materialization, the search
+		// index, the GraphQL schema-cache hint) are maintained here — in the
+		// originating request, synchronously, in BOTH delivery modes. This is the
+		// crux of #211: they ride their OWN dispatcher, never the external one the
+		// relay drains, so their consistency does not depend on WithOutbox. Because
+		// the work happens in the writing request's post-commit (never later on the
+		// relay), the request always observes its own computed values and search
+		// updates — read-your-writes, outbox on or off. A maintenance failure is
+		// surfaced to the observer rather than silently swallowed into permanent
+		// staleness; since the change is already durable it is reported, not turned
+		// into a request error (a retry would double-apply the committed write).
+		if u.projections != nil {
+			if perr := u.projections.Dispatch(ctx, meta, collector.events...); perr != nil {
+				if u.onDispatch != nil {
+					u.onDispatch(ctx, perr)
+				}
+			}
+		}
+
+		// External delivery keeps its existing semantics. In outbox mode the
+		// envelopes were queued pre-commit — just wake the relay for
+		// at-least-once delivery.
 		if u.sink != nil {
 			if u.afterWrite != nil {
 				u.afterWrite()
 			}
 			return nil
 		}
-		if derr := u.dispatcher.Dispatch(ctx, events.Metadata{
-			TenantID: tenant.String(),
-			Actor:    actor.String(),
-		}, collector.events...); derr != nil {
+		if derr := u.dispatcher.Dispatch(ctx, meta, collector.events...); derr != nil {
 			// The change has committed; a failing subscriber must not surface
 			// as a request error (that would prompt a retry and double-apply
 			// side effects). Observe it and move on — at-least-once delivery is

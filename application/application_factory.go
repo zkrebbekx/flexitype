@@ -55,9 +55,18 @@ type FactoryConfig struct {
 	// dataloader caches per request).
 	NewRepositories func() Repositories
 
-	// Dispatcher fans domain events out to registered client hooks
-	// (pub/sub, webhooks, funcs) after commit.
+	// Dispatcher fans domain events out to registered EXTERNAL client hooks
+	// (pub/sub, webhooks, funcs) after commit. Under the outbox it is fed by the
+	// relay; without it, it dispatches synchronously best-effort.
 	Dispatcher *events.Dispatcher
+
+	// Projections dispatches INTERNAL projection maintenance (computed
+	// attributes, search index, GraphQL schema-cache invalidation) synchronously
+	// in the originating unit of work's post-commit — in BOTH delivery modes, so
+	// read-your-writes on computed values and matches() never depends on
+	// WithOutbox (issue #211). Reserved for internal projections; external hooks
+	// use Dispatcher. Nil leaves internal maintenance unwired (no projections).
+	Projections *events.Dispatcher
 
 	// ActivityLog persists audit entries inside the business transaction
 	// (pre-commit) and serves the audit read API.
@@ -202,6 +211,9 @@ func (f *factory) New(context.Context) *Interactors {
 	}
 	if f.cfg.OnDispatchError != nil {
 		opts = append(opts, uow.WithDispatchObserver(f.cfg.OnDispatchError))
+	}
+	if f.cfg.Projections != nil {
+		opts = append(opts, uow.WithProjections(f.cfg.Projections))
 	}
 	if f.cfg.Outbox != nil {
 		opts = append(opts, uow.WithOutbox(f.cfg.Outbox, f.cfg.OutboxNudge))

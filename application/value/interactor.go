@@ -839,7 +839,7 @@ func (i *Interactor) ListEntities(ctx context.Context, rawTypeDefID string, incl
 	}
 
 	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(e domainvalue.EntitySummary) string {
-		return db.EncodeKeyset(e.LastUpdatedAt.UTC().Format(time.RFC3339Nano), e.EntityID.String())
+		return db.EncodeKeyset(db.KeysetTime(e.LastUpdatedAt), e.EntityID.String())
 	})
 	out := &EntityListOutput{
 		Items:    make([]EntitySummaryOutput, 0, len(items)),

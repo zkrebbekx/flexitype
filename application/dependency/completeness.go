@@ -3,7 +3,6 @@ package dependency
 import (
 	"context"
 	"sort"
-	"time"
 
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -257,7 +256,7 @@ func (i *Interactor) TypeCompleteness(ctx context.Context, rawTypeID string) (*T
 			break
 		}
 		last := summaries[len(summaries)-1]
-		page.Cursor = db.EncodeKeyset(last.LastUpdatedAt.UTC().Format(time.RFC3339Nano), last.EntityID.String())
+		page.Cursor = db.EncodeKeyset(db.KeysetTime(last.LastUpdatedAt), last.EntityID.String())
 	}
 	out.Scored = len(out.Entities)
 	if out.Scored > 0 {

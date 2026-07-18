@@ -555,7 +555,7 @@ func TestEntitySummaryKeysetOrdering(t *testing.T) {
 
 		Convey("When resuming from the composite (updated-at desc, entity-id asc) cursor", func() {
 			cursor := db.EncodeKeyset(
-				fixedTime.Add(2*time.Hour).UTC().Format(time.RFC3339Nano), "newest")
+				db.KeysetTime(fixedTime.Add(2*time.Hour)), "newest")
 			got, total, err := repos.ValueReader.ListEntities(ctx, tenantA, typeIDs,
 				db.Page{Limit: 10, Cursor: cursor})
 			So(err, ShouldBeNil)
@@ -572,7 +572,7 @@ func TestEntitySummaryKeysetOrdering(t *testing.T) {
 			// A truncated cursor supplies only the timestamp; the tiebreaker
 			// column has no counterpart to compare against, so a row whose
 			// timestamp matches must not be treated as strictly after it.
-			cursor := db.EncodeKeyset(fixedTime.Add(2 * time.Hour).UTC().Format(time.RFC3339Nano))
+			cursor := db.EncodeKeyset(db.KeysetTime(fixedTime.Add(2 * time.Hour)))
 			got, _, err := repos.ValueReader.ListEntities(ctx, tenantA, typeIDs,
 				db.Page{Limit: 10, Cursor: cursor})
 			So(err, ShouldBeNil)
@@ -863,7 +863,7 @@ func TestActivityLogListFiltersAndCursor(t *testing.T) {
 
 		Convey("When resuming from the (occurred-at, id) descending cursor", func() {
 			cursor := db.EncodeKeyset(
-				fixedTime.Add(2*time.Hour).UTC().Format(time.RFC3339Nano), ulidAt('3'))
+				db.KeysetTime(fixedTime.Add(2*time.Hour)), ulidAt('3'))
 			got, total, err := log.List(ctx, activity.Filter{TenantID: tenantA},
 				db.Page{Limit: 10, Cursor: cursor})
 			So(err, ShouldBeNil)

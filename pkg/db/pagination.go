@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const (
@@ -98,8 +99,27 @@ func KeysetPage[T any](page Page, items []T, total *int, cursorOf func(T) string
 	return items, info
 }
 
+// keysetTimeLayout renders a timestamp with a FIXED-WIDTH nanosecond fraction.
+//
+// It exists because time.RFC3339Nano strips trailing zeros, so ".365800000"
+// renders as ".3658" while ".365821000" renders as ".365821". Backends that
+// compare cursor columns as strings (the in-memory one) then order them by the
+// character after the shorter fraction — a digit versus the trailing 'Z' — and
+// since 'Z' (0x5A) sorts above every digit (0x30-0x39), an OLDER timestamp can
+// compare as newer. That made the comparison non-chronological and, worse,
+// non-monotonic, so the binary search over a sorted page landed in the wrong
+// region and silently skipped rows. A fixed-width fraction makes lexical order
+// match chronological order. Postgres is unaffected either way: it casts the
+// cursor value to timestamptz and compares it numerically.
+const keysetTimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// KeysetTime renders a timestamp for use as a keyset cursor column. Always use
+// this rather than formatting inline, so every producer and comparator agrees
+// on one lexically-ordered representation.
+func KeysetTime(t time.Time) string { return t.UTC().Format(keysetTimeLayout) }
+
 // EncodeKeyset builds an opaque cursor from a row's ORDER BY column values, in
-// ORDER BY order (stringified: ids as-is, timestamps as RFC3339Nano).
+// ORDER BY order (stringified: ids as-is, timestamps via KeysetTime).
 func EncodeKeyset(values ...string) string {
 	b, _ := json.Marshal(values)
 	return base64.StdEncoding.EncodeToString(b)

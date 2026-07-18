@@ -231,7 +231,7 @@ func (i *Indexer) Reindex(ctx context.Context, tenant valueobjects.TenantID) (in
 				break
 			}
 			last := entities[len(entities)-1]
-			page.Cursor = db.EncodeKeyset(last.LastUpdatedAt.UTC().Format(time.RFC3339Nano), last.EntityID.String())
+			page.Cursor = db.EncodeKeyset(db.KeysetTime(last.LastUpdatedAt), last.EntityID.String())
 		}
 	}
 	return count, nil

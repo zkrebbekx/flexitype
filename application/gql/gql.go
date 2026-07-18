@@ -645,7 +645,7 @@ func topLevelPage(ctx context.Context, inter *application.Interactors, typeInter
 		ids = make([]string, 0, len(out.Items))
 		for _, e := range out.Items {
 			ids = append(ids, e.EntityID)
-			cursorByID[e.EntityID] = db.EncodeKeyset(e.LastUpdatedAt.UTC().Format(time.RFC3339Nano), e.EntityID)
+			cursorByID[e.EntityID] = db.EncodeKeyset(db.KeysetTime(e.LastUpdatedAt), e.EntityID)
 		}
 		return ids, cursorByID, out.PageInfo, nil
 	}
@@ -656,7 +656,7 @@ func topLevelPage(ctx context.Context, inter *application.Interactors, typeInter
 	ids = make([]string, 0, len(out.Items))
 	for _, r := range out.Items {
 		ids = append(ids, r.EntityID)
-		cursorByID[r.EntityID] = db.EncodeKeyset(r.LastUpdatedAt.UTC().Format(time.RFC3339Nano), r.EntityID)
+		cursorByID[r.EntityID] = db.EncodeKeyset(db.KeysetTime(r.LastUpdatedAt), r.EntityID)
 	}
 	return ids, cursorByID, out.PageInfo, nil
 }

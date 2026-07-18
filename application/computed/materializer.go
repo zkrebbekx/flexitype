@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application"
+	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
@@ -28,6 +29,7 @@ import (
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/formula"
 )
@@ -183,6 +185,87 @@ func (m *Materializer) invalidate() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	clear(m.hasComputed)
+}
+
+// RecomputeTenant re-materializes every entity's computed attributes for a
+// tenant — the recovery counterpart to the search index's Reindex. Internal
+// projections are maintained in the originating request's post-commit
+// (issue #211), so read-your-writes holds regardless of the outbox setting;
+// the trade-off is that a process crash between commit and that post-commit can
+// leave a computed value stale. Running this rebuilds them all. It pages types
+// and their entities, skipping types with no computed attributes, and reuses
+// the per-entity Recompute (each in its own unit of work). Pagination stays
+// correct even though Recompute bumps an entity's last_updated_at: each page's
+// cursor is taken from the values read before that page was recomputed, so a
+// recomputed entity moves ahead of the cursor and is never revisited.
+func (m *Materializer) RecomputeTenant(ctx context.Context, tenant valueobjects.TenantID) (int, error) {
+	ctx = uow.WithTenant(ctx, tenant)
+	it := m.factory.New(ctx)
+	limit := 200
+	count := 0
+
+	var typeCursor *string
+	for {
+		types, err := it.TypeDefinitions().List(ctx, apptypedef.ListInput{Page: db.PageArgs{Limit: &limit, Cursor: typeCursor}})
+		if err != nil {
+			return count, fmt.Errorf("list types: %w", err)
+		}
+		for _, t := range types.Items {
+			typeID := t.ID.String()
+			has, err := m.typeHasComputed(ctx, it, typeID)
+			if err != nil {
+				return count, err
+			}
+			if !has {
+				continue // no computed attributes → nothing to rebuild
+			}
+			var entCursor *string
+			for {
+				entities, err := it.Values().ListEntities(ctx, typeID, false, db.PageArgs{Limit: &limit, Cursor: entCursor})
+				if err != nil {
+					return count, fmt.Errorf("list entities of %s: %w", typeID, err)
+				}
+				for _, e := range entities.Items {
+					if err := m.Recompute(ctx, typeID, e.EntityID); err != nil {
+						return count, fmt.Errorf("recompute %s: %w", e.EntityID, err)
+					}
+					count++
+				}
+				if entities.PageInfo.NextCursor == nil {
+					break
+				}
+				entCursor = entities.PageInfo.NextCursor
+			}
+		}
+		if types.PageInfo.NextCursor == nil {
+			break
+		}
+		typeCursor = types.PageInfo.NextCursor
+	}
+	return count, nil
+}
+
+// typeHasComputed reports whether a type's effective schema holds any computed
+// formula attribute, consulting and populating the per-type cache so a bulk
+// recompute skips computed-free types without re-walking their inheritance
+// chain on every entity.
+func (m *Materializer) typeHasComputed(ctx context.Context, it *application.Interactors, typeID string) (bool, error) {
+	if known, has := m.cachedHasComputed(typeID); known {
+		return has, nil
+	}
+	attrs, err := it.TypeDefinitions().EffectiveAttributes(ctx, typeID)
+	if err != nil {
+		return false, fmt.Errorf("load effective attributes: %w", err)
+	}
+	has := false
+	for _, a := range attrs {
+		if a.Attribute.Computed != nil && a.Attribute.Computed.Kind == domainattribute.ComputedFormula {
+			has = true
+			break
+		}
+	}
+	m.setCachedHasComputed(typeID, has)
+	return has, nil
 }
 
 // Recompute evaluates every computed formula attribute of the entity's type

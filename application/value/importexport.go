@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/zkrebbekx/flexitype/application/appctx"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
@@ -685,7 +684,7 @@ func (i *Interactor) exportEntityIDs(
 			break
 		}
 		last := summaries[len(summaries)-1]
-		page.Cursor = db.EncodeKeyset(last.LastUpdatedAt.UTC().Format(time.RFC3339Nano), last.EntityID.String())
+		page.Cursor = db.EncodeKeyset(db.KeysetTime(last.LastUpdatedAt), last.EntityID.String())
 	}
 	if len(ids) > maxExportRows {
 		ids = ids[:maxExportRows]

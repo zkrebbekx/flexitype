@@ -6,7 +6,6 @@ package application
 
 import (
 	"context"
-	"time"
 
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 
@@ -200,7 +199,7 @@ func (a *ActivityInteractor) List(ctx context.Context, in ActivityListInput) (*A
 		return nil, err
 	}
 	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(e activity.Entry) string {
-		return db.EncodeKeyset(e.OccurredAt.UTC().Format(time.RFC3339Nano), e.ID.String())
+		return db.EncodeKeyset(db.KeysetTime(e.OccurredAt), e.ID.String())
 	})
 	return &ActivityListOutput{
 		Items:    items,

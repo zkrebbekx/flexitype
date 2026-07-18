@@ -260,13 +260,13 @@ func idKey(id string) []string { return []string{id} }
 // entityKey is the composite keyset key for entity lists ordered by
 // last-updated (descending) with the entity id as the ascending tiebreaker.
 func entityKey(lastUpdated time.Time, entityID string) []string {
-	return []string{lastUpdated.UTC().Format(time.RFC3339Nano), entityID}
+	return []string{db.KeysetTime(lastUpdated), entityID}
 }
 
 // entryKey is the composite keyset key for the activity log, ordered by
 // occurred-at then id (both descending — newest first).
 func entryKey(e activity.Entry) []string {
-	return []string{e.OccurredAt.UTC().Format(time.RFC3339Nano), e.ID.String()}
+	return []string{db.KeysetTime(e.OccurredAt), e.ID.String()}
 }
 
 // sortByID orders snapshots by an id-extracting function for stable pages.

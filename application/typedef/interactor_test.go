@@ -2,8 +2,6 @@ package typedef
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"testing"
 	"time"
 
@@ -22,26 +20,13 @@ import (
 // contract: pre-commit before commit (errors roll back), post-commit after,
 // rollback hooks on rollback.
 type fakeTransactor struct {
+	db.TxMarker
 	committed  bool
 	rolledBack bool
 	pre        []db.Hook
 	post       []db.Hook
 	rollback   []db.Hook
 }
-
-func (f *fakeTransactor) GetContext(context.Context, any, string, ...any) error {
-	return fmt.Errorf("fake transactor: no SQL")
-}
-func (f *fakeTransactor) SelectContext(context.Context, any, string, ...any) error {
-	return fmt.Errorf("fake transactor: no SQL")
-}
-func (f *fakeTransactor) ExecContext(context.Context, string, ...any) (sql.Result, error) {
-	return nil, fmt.Errorf("fake transactor: no SQL")
-}
-func (f *fakeTransactor) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
-	return nil, fmt.Errorf("fake transactor: no SQL")
-}
-func (f *fakeTransactor) QueryRowContext(context.Context, string, ...any) *sql.Row { return nil }
 
 // Begin starts a fresh logical transaction: hooks from a previous unit of
 // work must not leak into the next one.
@@ -95,7 +80,7 @@ func newFakeRepo() *fakeRepo {
 	return &fakeRepo{items: make(map[string]domaintypedef.Snapshot)}
 }
 
-func (r *fakeRepo) WithTx(db.QueryExecer) domaintypedef.Repository { return r }
+func (r *fakeRepo) WithTx(db.Tx) domaintypedef.Repository { return r }
 
 func (r *fakeRepo) Get(_ context.Context, id valueobjects.TypeDefinitionID) (*domaintypedef.TypeDefinition, error) {
 	snap, ok := r.items[id.String()]
@@ -146,7 +131,7 @@ type fakeActivityLog struct {
 	entries []activity.Entry
 }
 
-func (l *fakeActivityLog) Write(_ context.Context, _ db.QueryExecer, entries []activity.Entry) error {
+func (l *fakeActivityLog) Write(_ context.Context, _ db.Tx, entries []activity.Entry) error {
 	l.entries = append(l.entries, entries...)
 	return nil
 }

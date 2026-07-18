@@ -148,8 +148,8 @@ func NewRelationshipDefinitionRepository(q db.QueryExecer) domainrelationship.De
 }
 
 // WithTx binds the repository to a transaction, bypassing loader caches.
-func (r *relationshipDefinitionRepository) WithTx(tx db.QueryExecer) domainrelationship.DefinitionRepository {
-	return &relationshipDefinitionRepository{q: tx, inTx: true}
+func (r *relationshipDefinitionRepository) WithTx(tx db.Tx) domainrelationship.DefinitionRepository {
+	return &relationshipDefinitionRepository{q: txExecer(tx), inTx: true}
 }
 
 func (r *relationshipDefinitionRepository) batchByID(ctx context.Context, ids []string) (map[string]domainrelationship.DefinitionSnapshot, error) {
@@ -483,8 +483,8 @@ func (r *relationshipRepository) ListByEntities(ctx context.Context, tenant valu
 	return out, nil
 }
 
-func (r *relationshipRepository) WithTx(tx db.QueryExecer) domainrelationship.Repository {
-	return &relationshipRepository{q: tx, inTx: true}
+func (r *relationshipRepository) WithTx(tx db.Tx) domainrelationship.Repository {
+	return &relationshipRepository{q: txExecer(tx), inTx: true}
 }
 
 func (r *relationshipRepository) batchByID(ctx context.Context, ids []string) (map[string]domainrelationship.Snapshot, error) {

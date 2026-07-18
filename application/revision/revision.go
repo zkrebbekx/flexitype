@@ -53,7 +53,7 @@ type Store interface {
 	// joins the value write's atomic unit of work — a rollback then also
 	// un-does the revision delete, and the audit trail is never orphaned by a
 	// value-tx abort. It mirrors the value repository's WithTx.
-	WithTx(tx db.QueryExecer) Store
+	WithTx(tx db.Tx) Store
 
 	Create(ctx context.Context, r Revision) error
 	Get(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) (Revision, error)

@@ -25,10 +25,11 @@ func NewOutboxStore(tx db.Transactor) outbox.Store {
 	return &outboxStore{tx: tx}
 }
 
-func (s *outboxStore) Write(ctx context.Context, tx db.QueryExecer, envs []events.Envelope) error {
+func (s *outboxStore) Write(ctx context.Context, tx db.Tx, envs []events.Envelope) error {
 	if len(envs) == 0 {
 		return nil
 	}
+	q := txExecer(tx)
 
 	const cols = 9
 	rows := make([]string, 0, len(envs))
@@ -44,7 +45,7 @@ func (s *outboxStore) Write(ctx context.Context, tx db.QueryExecer, envs []event
 	query := bind(`INSERT INTO flexitype_event_outbox
 	   (id, tenant_id, actor, event_type, aggregate_type, aggregate_id, payload, occurred_at, recorded_at)
 	 VALUES ` + strings.Join(rows, ", "))
-	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+	if _, err := q.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("write outbox: %w", err)
 	}
 	return nil
@@ -83,7 +84,7 @@ func (s *outboxStore) Claim(ctx context.Context, relayID string, limit int, leas
 		 )
 		 RETURNING id, tenant_id, actor, event_type, aggregate_type, aggregate_id,
 		           payload::text AS payload, occurred_at, recorded_at`)
-	if err := s.tx.SelectContext(ctx, &rows, query, relayID, leaseTTL.Seconds(), limit); err != nil {
+	if err := txExecer(s.tx).SelectContext(ctx, &rows, query, relayID, leaseTTL.Seconds(), limit); err != nil {
 		return nil, fmt.Errorf("claim outbox rows: %w", err)
 	}
 
@@ -128,22 +129,23 @@ func (s *outboxStore) Finalize(ctx context.Context, results []outbox.Result) err
 	}
 
 	return s.tx.InTransaction(ctx, func(tx db.Transactor) error {
+		q := txExecer(tx)
 		// Serialize feed_seq assignment across relays. Blocking (not
 		// try): we already dispatched and must finalize.
-		if _, err := tx.ExecContext(ctx,
+		if _, err := q.ExecContext(ctx,
 			`SELECT pg_advisory_xact_lock(hashtext('flexitype_outbox_expansion'))`); err != nil {
 			return fmt.Errorf("acquire expansion lock: %w", err)
 		}
 
 		if len(done) > 0 {
-			if err := s.expand(ctx, tx, done); err != nil {
+			if err := s.expand(ctx, q, done); err != nil {
 				return err
 			}
 		}
 		for i, id := range failed {
 			// Clear the lease so a later pass retries promptly; only touch
 			// rows still pending (a crash-race copy may have dispatched).
-			if _, err := tx.ExecContext(ctx, bind(
+			if _, err := q.ExecContext(ctx, bind(
 				`UPDATE flexitype_event_outbox
 				 SET attempts = attempts + 1, last_error = ?, claimed_at = NULL, claimed_by = NULL
 				 WHERE id = ? AND dispatched_at IS NULL`), lastErrs[i], id); err != nil {
@@ -156,7 +158,7 @@ func (s *outboxStore) Finalize(ctx context.Context, results []outbox.Result) err
 
 // expand stamps feed_seq on successful envelopes (claim order) and fans
 // out one webhook-delivery row per matching active subscription.
-func (s *outboxStore) expand(ctx context.Context, tx db.Transactor, done []string) error {
+func (s *outboxStore) expand(ctx context.Context, q db.QueryExecer, done []string) error {
 	// Re-read the still-pending rows in id order. Filtering on
 	// dispatched_at IS NULL makes expansion idempotent: if a lease expired
 	// and another relay already dispatched one of these, it is skipped
@@ -167,7 +169,7 @@ func (s *outboxStore) expand(ctx context.Context, tx db.Transactor, done []strin
 		EventType string  `db:"event_type"`
 	}
 	var rows []expandRow
-	if err := tx.SelectContext(ctx, &rows, bind(
+	if err := q.SelectContext(ctx, &rows, bind(
 		`SELECT id, tenant_id, event_type
 		 FROM flexitype_event_outbox
 		 WHERE id = ANY(?) AND dispatched_at IS NULL
@@ -185,12 +187,12 @@ func (s *outboxStore) expand(ctx context.Context, tx db.Transactor, done []strin
 	}
 
 	seqs := make([]int64, 0, len(rows))
-	if err := tx.SelectContext(ctx, &seqs, bind(
+	if err := q.SelectContext(ctx, &seqs, bind(
 		`SELECT nextval('flexitype_event_feed_seq') FROM generate_series(1, ?)`), len(rows)); err != nil {
 		return fmt.Errorf("allocate feed sequence: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, bind(
+	if _, err := q.ExecContext(ctx, bind(
 		`UPDATE flexitype_event_outbox o
 		 SET feed_seq = v.seq, dispatched_at = now(), attempts = o.attempts + 1
 		 FROM (SELECT unnest(?::text[]) AS id, unnest(?::bigint[]) AS seq) v
@@ -199,7 +201,7 @@ func (s *outboxStore) expand(ctx context.Context, tx db.Transactor, done []strin
 	}
 
 	var subs []subscriptionRow
-	if err := tx.SelectContext(ctx, &subs, bind(
+	if err := q.SelectContext(ctx, &subs, bind(
 		`SELECT id, tenant_id, name, url, secret, previous_secret, event_types, active, created_at, updated_at
 		 FROM flexitype_webhook_subscription WHERE active`)); err != nil {
 		return fmt.Errorf("load active subscriptions: %w", err)
@@ -226,7 +228,7 @@ func (s *outboxStore) expand(ctx context.Context, tx db.Transactor, done []strin
 		return nil
 	}
 
-	if _, err := tx.ExecContext(ctx, bind(`INSERT INTO flexitype_webhook_delivery
+	if _, err := q.ExecContext(ctx, bind(`INSERT INTO flexitype_webhook_delivery
 	   (id, subscription_id, envelope_id, tenant_id, event_type, feed_seq, status, next_attempt_at, created_at, updated_at)
 	 VALUES `+strings.Join(valueRows, ", ")), args...); err != nil {
 		return fmt.Errorf("fan out deliveries: %w", err)

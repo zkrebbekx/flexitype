@@ -136,8 +136,8 @@ func NewDependencyRepository(q db.QueryExecer) domaindependency.Repository {
 }
 
 // WithTx binds the repository to a transaction, bypassing loader caches.
-func (r *dependencyRepository) WithTx(tx db.QueryExecer) domaindependency.Repository {
-	return &dependencyRepository{q: tx, inTx: true}
+func (r *dependencyRepository) WithTx(tx db.Tx) domaindependency.Repository {
+	return &dependencyRepository{q: txExecer(tx), inTx: true}
 }
 
 func (r *dependencyRepository) batchByID(ctx context.Context, ids []string) (map[string]domaindependency.Snapshot, error) {

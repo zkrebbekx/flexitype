@@ -19,7 +19,7 @@ type typeDefRepo struct {
 	j *undoJournal
 }
 
-func (r *typeDefRepo) WithTx(tx db.QueryExecer) domaintypedef.Repository {
+func (r *typeDefRepo) WithTx(tx db.Tx) domaintypedef.Repository {
 	return &typeDefRepo{s: r.s, j: journalOf(tx)}
 }
 
@@ -108,7 +108,7 @@ type attrRepo struct {
 	j *undoJournal
 }
 
-func (r *attrRepo) WithTx(tx db.QueryExecer) domainattribute.Repository {
+func (r *attrRepo) WithTx(tx db.Tx) domainattribute.Repository {
 	return &attrRepo{s: r.s, j: journalOf(tx)}
 }
 
@@ -225,7 +225,7 @@ func (r *attrRepo) Save(_ context.Context, a *domainattribute.Definition) error 
 
 type activityLog struct{ s *Store }
 
-func (l *activityLog) Write(_ context.Context, tx db.QueryExecer, entries []activity.Entry) error {
+func (l *activityLog) Write(_ context.Context, tx db.Tx, entries []activity.Entry) error {
 	l.s.mu.Lock()
 	defer l.s.mu.Unlock()
 	// The audit log is written from a pre-commit hook; journal its length so a

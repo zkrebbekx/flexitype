@@ -19,7 +19,7 @@ import (
 type Store interface {
 	// Write persists envelopes inside the caller's transaction — the unit
 	// of work's pre-commit handler.
-	Write(ctx context.Context, tx db.QueryExecer, envs []events.Envelope) error
+	Write(ctx context.Context, tx db.Tx, envs []events.Envelope) error
 
 	// Claim leases up to limit undispatched envelopes for the given relay
 	// and returns them for dispatch. Claiming takes a short row lease

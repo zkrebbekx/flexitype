@@ -32,6 +32,13 @@ func NewRepositories(pool db.QueryExecer) application.Repositories {
 	}
 }
 
+// txExecer down-casts the opaque transaction handle a repository or sink is
+// handed back to the SQL executor the PostgreSQL backend runs queries through.
+// The handle is always the sqlx-backed transactor in this backend; db.Tx keeps
+// the domain from executing SQL through it, but the backend that opened the
+// transaction knows its concrete type.
+func txExecer(tx db.Tx) db.QueryExecer { return tx.(db.QueryExecer) }
+
 // idKeyset is the single-column ascending keyset used by every id-ordered list.
 var idKeyset = []db.KeysetColumn{{Expr: "id"}}
 

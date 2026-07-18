@@ -182,8 +182,8 @@ func NewAttributeDefinitionRepository(q db.QueryExecer) domainattribute.Reposito
 }
 
 // WithTx binds the repository to a transaction, bypassing loader caches.
-func (r *attributeDefinitionRepository) WithTx(tx db.QueryExecer) domainattribute.Repository {
-	return &attributeDefinitionRepository{q: tx, inTx: true}
+func (r *attributeDefinitionRepository) WithTx(tx db.Tx) domainattribute.Repository {
+	return &attributeDefinitionRepository{q: txExecer(tx), inTx: true}
 }
 
 func (r *attributeDefinitionRepository) batchByID(ctx context.Context, ids []string) (map[string]domainattribute.Snapshot, error) {

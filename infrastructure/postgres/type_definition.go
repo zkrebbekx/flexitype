@@ -144,8 +144,8 @@ func NewTypeDefinitionRepository(q db.QueryExecer) domaintypedef.Repository {
 
 // WithTx binds the repository to a transaction. Loader caches are bypassed
 // so reads observe uncommitted writes.
-func (r *typeDefinitionRepository) WithTx(tx db.QueryExecer) domaintypedef.Repository {
-	return &typeDefinitionRepository{q: tx, inTx: true}
+func (r *typeDefinitionRepository) WithTx(tx db.Tx) domaintypedef.Repository {
+	return &typeDefinitionRepository{q: txExecer(tx), inTx: true}
 }
 
 func (r *typeDefinitionRepository) batchByID(ctx context.Context, ids []string) (map[string]domaintypedef.Snapshot, error) {

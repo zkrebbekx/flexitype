@@ -25,10 +25,11 @@ func Migrate(ctx context.Context, tx db.Transactor) error {
 	const advisoryLockKey = 0x666c6578 // "flex"
 
 	return tx.InTransaction(ctx, func(tx db.Transactor) error {
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, advisoryLockKey); err != nil {
+		q := txExecer(tx)
+		if _, err := q.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, advisoryLockKey); err != nil {
 			return fmt.Errorf("acquire migration lock: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx,
+		if _, err := q.ExecContext(ctx,
 			`CREATE TABLE IF NOT EXISTS flexitype_schema_migrations (
 			   version    INTEGER PRIMARY KEY,
 			   applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -38,7 +39,7 @@ func Migrate(ctx context.Context, tx db.Transactor) error {
 
 		applied := make(map[int]bool)
 		var versions []int
-		if err := tx.SelectContext(ctx, &versions, `SELECT version FROM flexitype_schema_migrations`); err != nil {
+		if err := q.SelectContext(ctx, &versions, `SELECT version FROM flexitype_schema_migrations`); err != nil {
 			return fmt.Errorf("read applied migrations: %w", err)
 		}
 		for _, v := range versions {
@@ -62,10 +63,10 @@ func Migrate(ctx context.Context, tx db.Transactor) error {
 			if err != nil {
 				return fmt.Errorf("read migration %s: %w", name, err)
 			}
-			if _, err := tx.ExecContext(ctx, string(sqlBytes)); err != nil {
+			if _, err := q.ExecContext(ctx, string(sqlBytes)); err != nil {
 				return fmt.Errorf("apply migration %s: %w", name, err)
 			}
-			if _, err := tx.ExecContext(ctx,
+			if _, err := q.ExecContext(ctx,
 				`INSERT INTO flexitype_schema_migrations (version) VALUES ($1)`, version); err != nil {
 				return fmt.Errorf("record migration %s: %w", name, err)
 			}
@@ -83,12 +84,13 @@ func MigrateDown(ctx context.Context, tx db.Transactor, target int) error {
 	const advisoryLockKey = 0x666c6578 // "flex"
 
 	return tx.InTransaction(ctx, func(tx db.Transactor) error {
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, advisoryLockKey); err != nil {
+		q := txExecer(tx)
+		if _, err := q.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, advisoryLockKey); err != nil {
 			return fmt.Errorf("acquire migration lock: %w", err)
 		}
 
 		var versions []int
-		if err := tx.SelectContext(ctx, &versions,
+		if err := q.SelectContext(ctx, &versions,
 			`SELECT version FROM flexitype_schema_migrations WHERE version > $1 ORDER BY version DESC`,
 			target); err != nil {
 			return fmt.Errorf("read applied migrations: %w", err)
@@ -104,10 +106,10 @@ func MigrateDown(ctx context.Context, tx db.Transactor, target int) error {
 			if err != nil {
 				return fmt.Errorf("read down migration %s: %w", down, err)
 			}
-			if _, err := tx.ExecContext(ctx, string(sqlBytes)); err != nil {
+			if _, err := q.ExecContext(ctx, string(sqlBytes)); err != nil {
 				return fmt.Errorf("revert migration %s: %w", down, err)
 			}
-			if _, err := tx.ExecContext(ctx,
+			if _, err := q.ExecContext(ctx,
 				`DELETE FROM flexitype_schema_migrations WHERE version = $1`, version); err != nil {
 				return fmt.Errorf("record reverting %s: %w", name, err)
 			}

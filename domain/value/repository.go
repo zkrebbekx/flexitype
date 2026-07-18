@@ -40,7 +40,7 @@ type EntitySummary struct {
 // dataloader-batched; writes run on a transaction-bound repository.
 type Repository interface {
 	// WithTx returns a repository bound to the given transaction.
-	WithTx(tx db.QueryExecer) Repository
+	WithTx(tx db.Tx) Repository
 
 	// Get loads one value by ID (batched).
 	Get(ctx context.Context, id valueobjects.AttributeValueID) (*AttributeValue, error)

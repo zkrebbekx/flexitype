@@ -2,9 +2,7 @@ package value
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
@@ -26,22 +24,9 @@ import (
 // --- in-memory fakes ---------------------------------------------------------
 
 type fakeTransactor struct {
+	db.TxMarker
 	pre, post, rollback []db.Hook
 }
-
-func (f *fakeTransactor) GetContext(context.Context, any, string, ...any) error {
-	return fmt.Errorf("fake: no SQL")
-}
-func (f *fakeTransactor) SelectContext(context.Context, any, string, ...any) error {
-	return fmt.Errorf("fake: no SQL")
-}
-func (f *fakeTransactor) ExecContext(context.Context, string, ...any) (sql.Result, error) {
-	return nil, fmt.Errorf("fake: no SQL")
-}
-func (f *fakeTransactor) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
-	return nil, fmt.Errorf("fake: no SQL")
-}
-func (f *fakeTransactor) QueryRowContext(context.Context, string, ...any) *sql.Row { return nil }
 
 func (f *fakeTransactor) Begin(context.Context) (db.Transactor, error) {
 	f.pre, f.post, f.rollback = nil, nil, nil
@@ -87,7 +72,7 @@ type fakeTypeDefRepo struct {
 	types map[string]domaintypedef.Snapshot
 }
 
-func (r *fakeTypeDefRepo) WithTx(db.QueryExecer) domaintypedef.Repository { return r }
+func (r *fakeTypeDefRepo) WithTx(db.Tx) domaintypedef.Repository { return r }
 
 func (r *fakeTypeDefRepo) Get(_ context.Context, id valueobjects.TypeDefinitionID) (*domaintypedef.TypeDefinition, error) {
 	snap, ok := r.types[id.String()]
@@ -128,7 +113,7 @@ type fakeAttrRepo struct {
 	defs map[string]*domainattribute.Definition
 }
 
-func (r *fakeAttrRepo) WithTx(db.QueryExecer) domainattribute.Repository { return r }
+func (r *fakeAttrRepo) WithTx(db.Tx) domainattribute.Repository { return r }
 
 func (r *fakeAttrRepo) Get(_ context.Context, id valueobjects.AttributeDefinitionID) (*domainattribute.Definition, error) {
 	def, ok := r.defs[id.String()]
@@ -175,7 +160,7 @@ type fakeValueRepo struct {
 	values map[string]domainvalue.Snapshot
 }
 
-func (r *fakeValueRepo) WithTx(db.QueryExecer) domainvalue.Repository { return r }
+func (r *fakeValueRepo) WithTx(db.Tx) domainvalue.Repository { return r }
 
 func (r *fakeValueRepo) Get(_ context.Context, id valueobjects.AttributeValueID) (*domainvalue.AttributeValue, error) {
 	snap, ok := r.values[id.String()]
@@ -263,7 +248,7 @@ type fakeDepRepo struct {
 	deps []*domaindependency.Dependency
 }
 
-func (r *fakeDepRepo) WithTx(db.QueryExecer) domaindependency.Repository { return r }
+func (r *fakeDepRepo) WithTx(db.Tx) domaindependency.Repository { return r }
 
 func (r *fakeDepRepo) Get(context.Context, valueobjects.DependencyID) (*domaindependency.Dependency, error) {
 	return nil, domainerrors.NewNotFound(domaindependency.AggregateType, "unused")
@@ -301,7 +286,7 @@ func (r *fakeDepRepo) Save(_ context.Context, d *domaindependency.Dependency) er
 // memory-backed bulk_ops test.
 type fakeLinksRepo struct{}
 
-func (r *fakeLinksRepo) WithTx(db.QueryExecer) domainrelationship.Repository { return r }
+func (r *fakeLinksRepo) WithTx(db.Tx) domainrelationship.Repository { return r }
 func (r *fakeLinksRepo) Get(context.Context, valueobjects.RelationshipID) (*domainrelationship.Relationship, error) {
 	return nil, nil
 }
@@ -338,7 +323,7 @@ type fakeActivityLog struct {
 	entries []activity.Entry
 }
 
-func (l *fakeActivityLog) Write(_ context.Context, _ db.QueryExecer, entries []activity.Entry) error {
+func (l *fakeActivityLog) Write(_ context.Context, _ db.Tx, entries []activity.Entry) error {
 	l.entries = append(l.entries, entries...)
 	return nil
 }

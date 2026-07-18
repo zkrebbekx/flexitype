@@ -2,8 +2,6 @@ package webhook
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,22 +24,9 @@ import (
 // --- fakes -------------------------------------------------------------------
 
 type fakeTransactor struct {
+	db.TxMarker
 	pre, post, rollback []db.Hook
 }
-
-func (f *fakeTransactor) GetContext(context.Context, any, string, ...any) error {
-	return fmt.Errorf("fake transactor: no SQL")
-}
-func (f *fakeTransactor) SelectContext(context.Context, any, string, ...any) error {
-	return fmt.Errorf("fake transactor: no SQL")
-}
-func (f *fakeTransactor) ExecContext(context.Context, string, ...any) (sql.Result, error) {
-	return nil, fmt.Errorf("fake transactor: no SQL")
-}
-func (f *fakeTransactor) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
-	return nil, fmt.Errorf("fake transactor: no SQL")
-}
-func (f *fakeTransactor) QueryRowContext(context.Context, string, ...any) *sql.Row { return nil }
 
 func (f *fakeTransactor) Begin(context.Context) (db.Transactor, error) {
 	f.pre, f.post, f.rollback = nil, nil, nil
@@ -90,7 +75,7 @@ func newFakeSubscriptionStore() *fakeSubscriptionStore {
 	return &fakeSubscriptionStore{items: map[string]Subscription{}}
 }
 
-func (s *fakeSubscriptionStore) WithTx(db.QueryExecer) SubscriptionStore { return s }
+func (s *fakeSubscriptionStore) WithTx(db.Tx) SubscriptionStore { return s }
 
 func (s *fakeSubscriptionStore) Get(_ context.Context, tenant valueobjects.TenantID, id ulid.ID) (Subscription, error) {
 	sub, ok := s.items[id.String()]
@@ -193,7 +178,7 @@ type recordedActivity struct {
 	entries []activity.Entry
 }
 
-func (l *recordedActivity) Write(_ context.Context, _ db.QueryExecer, entries []activity.Entry) error {
+func (l *recordedActivity) Write(_ context.Context, _ db.Tx, entries []activity.Entry) error {
 	l.entries = append(l.entries, entries...)
 	return nil
 }

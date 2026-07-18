@@ -129,7 +129,7 @@ func isLiteralPrivateHost(host string) bool {
 // SubscriptionStore persists subscriptions. WithTx binds the store to a
 // transaction for writes inside a unit of work.
 type SubscriptionStore interface {
-	WithTx(q db.QueryExecer) SubscriptionStore
+	WithTx(tx db.Tx) SubscriptionStore
 	Get(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) (Subscription, error)
 	GetByName(ctx context.Context, tenant valueobjects.TenantID, name string) (Subscription, error)
 	List(ctx context.Context, tenant valueobjects.TenantID) ([]Subscription, error)

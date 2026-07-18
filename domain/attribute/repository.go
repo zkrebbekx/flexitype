@@ -21,7 +21,7 @@ type Filter struct {
 // on a transaction-bound repository from WithTx.
 type Repository interface {
 	// WithTx returns a repository bound to the given transaction.
-	WithTx(tx db.QueryExecer) Repository
+	WithTx(tx db.Tx) Repository
 
 	// Get loads one definition by ID (batched).
 	Get(ctx context.Context, id valueobjects.AttributeDefinitionID) (*Definition, error)

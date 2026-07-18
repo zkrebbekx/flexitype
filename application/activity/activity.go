@@ -91,6 +91,6 @@ type Filter struct {
 // Log is the persistence port for the activity log. Write runs inside the
 // business transaction (pre-commit); List serves the audit API.
 type Log interface {
-	Write(ctx context.Context, tx db.QueryExecer, entries []Entry) error
+	Write(ctx context.Context, tx db.Tx, entries []Entry) error
 	List(ctx context.Context, filter Filter, page db.Page) ([]Entry, int, error)
 }

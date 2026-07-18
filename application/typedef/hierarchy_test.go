@@ -22,7 +22,7 @@ type fakeAttrs struct {
 	byType map[string][]*domainattribute.Definition
 }
 
-func (r *fakeAttrs) WithTx(db.QueryExecer) domainattribute.Repository { return r }
+func (r *fakeAttrs) WithTx(db.Tx) domainattribute.Repository { return r }
 func (r *fakeAttrs) Get(context.Context, valueobjects.AttributeDefinitionID) (*domainattribute.Definition, error) {
 	return nil, domainerrors.NewNotFound(domainattribute.AggregateType, "unused")
 }

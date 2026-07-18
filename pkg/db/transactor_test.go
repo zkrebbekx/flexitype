@@ -37,8 +37,9 @@ func TestTransactorHooks(t *testing.T) {
 			tx.OnPreCommit(func(ctx context.Context) error {
 				order = append(order, "pre")
 				// Pre-commit hooks run inside the transaction: this write
-				// must be part of it.
-				_, execErr := tx.ExecContext(ctx, "INSERT INTO audit VALUES (1)")
+				// must be part of it. The transactor is query-free at the
+				// interface; the concrete sqlx transactor is the executor.
+				_, execErr := tx.(QueryExecer).ExecContext(ctx, "INSERT INTO audit VALUES (1)")
 				return execErr
 			})
 			tx.OnPostCommit(func(context.Context) error {

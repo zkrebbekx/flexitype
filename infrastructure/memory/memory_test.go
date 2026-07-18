@@ -416,15 +416,6 @@ func TestMemoryTransactor(t *testing.T) {
 			})
 		})
 
-		Convey("When SQL is attempted against the memory store", func() {
-			var dest []int
-			err := store.Transactor().SelectContext(ctx, &dest, "SELECT 1")
-
-			Convey("Then it is rejected explicitly", func() {
-				So(err, ShouldNotBeNil)
-			})
-		})
-
 		Convey("When an empty store is listed", func() {
 			repos := store.Repositories()
 			_, total, err := repos.TypeDefinitions.List(ctx,

@@ -40,17 +40,18 @@ import (
 
 // Service is an embedded flexitype instance.
 type Service struct {
-	pool       *sqlx.DB
-	transactor db.Transactor
-	dispatcher *events.Dispatcher
-	factory    application.Factory
-	relay      *outbox.Relay
-	indexer    *search.Indexer
-	worker     *webhook.Worker
-	pruner     *feed.Pruner
-	blobs      blob.Store
-	graphql    *gql.Engine
-	onBgError  func(err error)
+	pool         *sqlx.DB
+	transactor   db.Transactor
+	dispatcher   *events.Dispatcher
+	factory      application.Factory
+	relay        *outbox.Relay
+	indexer      *search.Indexer
+	materializer *computed.Materializer
+	worker       *webhook.Worker
+	pruner       *feed.Pruner
+	blobs        blob.Store
+	graphql      *gql.Engine
+	onBgError    func(err error)
 }
 
 type options struct {
@@ -266,7 +267,8 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	// Computed attributes materialize via an internal-projection subscriber, so
 	// their derived values are ordinary (FQL-queryable) values — maintained in
 	// the writing request regardless of the outbox.
-	projections.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
+	materializer := computed.NewMaterializer(factory)
+	projections.Register(materializer, events.WithEventTypes(computed.EventTypes()...))
 
 	// The GraphQL schema mirrors the live type definitions; an internal-projection
 	// subscriber invalidates a tenant's cached schema when its definitions change.
@@ -277,17 +279,18 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
 
 	return &Service{
-		pool:       pool,
-		transactor: transactor,
-		dispatcher: o.dispatcher,
-		factory:    factory,
-		relay:      relay,
-		indexer:    indexer,
-		worker:     worker,
-		pruner:     pruner,
-		blobs:      o.blobs,
-		graphql:    graphqlEngine,
-		onBgError:  o.onBgError,
+		pool:         pool,
+		transactor:   transactor,
+		dispatcher:   o.dispatcher,
+		factory:      factory,
+		relay:        relay,
+		indexer:      indexer,
+		materializer: materializer,
+		worker:       worker,
+		pruner:       pruner,
+		blobs:        o.blobs,
+		graphql:      graphqlEngine,
+		onBgError:    o.onBgError,
 	}
 }
 
@@ -347,17 +350,19 @@ func NewInMemory(opts ...Option) *Service {
 		BlobStore:       o.blobs,
 		SearchStore:     searchStore, // may be nil; enables entity-data erasure of the projection
 	})
-	projections.Register(computed.NewMaterializer(factory), events.WithEventTypes(computed.EventTypes()...))
+	materializer := computed.NewMaterializer(factory)
+	projections.Register(materializer, events.WithEventTypes(computed.EventTypes()...))
 	graphqlEngine := gql.NewEngine()
 	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
 	return &Service{
-		transactor: transactor,
-		dispatcher: o.dispatcher,
-		factory:    factory,
-		indexer:    indexer,
-		blobs:      o.blobs,
-		graphql:    graphqlEngine,
-		onBgError:  o.onBgError,
+		transactor:   transactor,
+		dispatcher:   o.dispatcher,
+		factory:      factory,
+		indexer:      indexer,
+		materializer: materializer,
+		blobs:        o.blobs,
+		graphql:      graphqlEngine,
+		onBgError:    o.onBgError,
 	}
 }
 
@@ -430,6 +435,15 @@ func (s *Service) ReindexSearch(ctx context.Context, tenant valueobjects.TenantI
 		return 0, domainerrors.NewValidation("the search index is disabled; enable it with WithSearchIndex")
 	}
 	return s.indexer.Reindex(ctx, tenant)
+}
+
+// RecomputeComputed re-materializes every entity's computed attributes for a
+// tenant — the recovery counterpart to ReindexSearch. Internal projections are
+// maintained in the originating request's post-commit (issue #211), so a
+// process crash between commit and that post-commit can leave a computed value
+// stale; this rebuilds them all. Returns the number of entities recomputed.
+func (s *Service) RecomputeComputed(ctx context.Context, tenant valueobjects.TenantID) (int, error) {
+	return s.materializer.RecomputeTenant(ctx, tenant)
 }
 
 // Migrate applies flexitype's embedded schema migrations. Safe to call on
@@ -560,6 +574,7 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 	}
 	if s.indexer != nil {
 		server.Reindex = s.ReindexSearch
+		server.RecomputeComputed = s.RecomputeComputed
 	}
 	return httpapi.NewHandler(server)
 }

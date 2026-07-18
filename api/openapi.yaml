@@ -597,6 +597,14 @@ paths:
         "200": { description: Reindexed count, content: { application/json: { schema: { type: object, properties: { reindexed: { type: integer } } } } } }
         "501": { $ref: "#/components/responses/Error" }
 
+  /computed/recompute:
+    post:
+      tags: [ops]
+      summary: Rebuild every computed attribute for the tenant (recovery after crash-induced staleness)
+      responses:
+        "200": { description: Recomputed entity count, content: { application/json: { schema: { type: object, properties: { recomputed: { type: integer } } } } } }
+        "501": { $ref: "#/components/responses/Error" }
+
   /activity:
     get:
       tags: [activity]

@@ -68,6 +68,24 @@ type Repository interface {
 	// row count. Only valid on a transaction-bound repository.
 	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (purgedMediaKeys []string, count int, err error)
 
+	// MediaValueForKey returns the media value the tenant already stores for an
+	// object key, and whether one exists. Archived rows count.
+	//
+	// It is how a media write that did not come from the upload path is
+	// validated: the caller supplies an object key, and the metadata that
+	// travels with it — MIME type, size, checksum — is taken from the stored
+	// value rather than from the caller. Trusting caller-supplied metadata
+	// meant the media constraint's type allowlist and the upload path's
+	// content sniffing could both be stated away.
+	MediaValueForKey(ctx context.Context, tenant valueobjects.TenantID, objectKey string) (valueobjects.Value, bool, error)
+
+	// MediaKeyRefCount counts the value rows, in any tenant and including
+	// archived ones, that reference an object key other than excludeValueID.
+	//
+	// Blob GC consults it before deleting: a key referenced by another row must
+	// not have its bytes removed out from under that row.
+	MediaKeyRefCount(ctx context.Context, objectKey string, excludeValueID valueobjects.AttributeValueID) (int, error)
+
 	// MediaKeyAttributes returns the distinct attribute definitions of every
 	// value row in the tenant, live or archived, that references the object
 	// key. An empty result means the tenant holds no such value.

@@ -175,7 +175,7 @@ func (i *Interactor) removeScopedWithin(ctx context.Context, tx db.Transactor, c
 		if err := values.Save(ctx, av); err != nil {
 			return fmt.Errorf("archive value: %w", err)
 		}
-		i.gcMediaAfterCommit(tx, before.Value)
+		i.gcMediaAfterCommit(tx, before.ID, before.Value)
 		c.CollectEvents(evts...)
 		c.RecordChange(activity.Change{
 			Entity:   domainvalue.AggregateType,

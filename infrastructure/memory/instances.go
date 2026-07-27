@@ -188,6 +188,39 @@ func (r *valueRepo) Save(_ context.Context, av *domainvalue.AttributeValue) erro
 	return nil
 }
 
+func (r *valueRepo) MediaValueForKey(_ context.Context, tenant valueobjects.TenantID, objectKey string) (valueobjects.Value, bool, error) {
+	r.s.mu.RLock()
+	defer r.s.mu.RUnlock()
+	var best *domainvalue.Snapshot
+	for _, snap := range r.s.values {
+		if snap.TenantID != tenant || snap.Value.DataType() != valueobjects.DataTypeMedia ||
+			snap.Value.Media().ObjectKey != objectKey {
+			continue
+		}
+		if best == nil || snap.CreatedAt.Before(best.CreatedAt) {
+			s := snap
+			best = &s
+		}
+	}
+	if best == nil {
+		return valueobjects.Value{}, false, nil
+	}
+	return best.Value, true, nil
+}
+
+func (r *valueRepo) MediaKeyRefCount(_ context.Context, objectKey string, exclude valueobjects.AttributeValueID) (int, error) {
+	r.s.mu.RLock()
+	defer r.s.mu.RUnlock()
+	n := 0
+	for _, snap := range r.s.values {
+		if snap.Value.DataType() == valueobjects.DataTypeMedia &&
+			snap.Value.Media().ObjectKey == objectKey && !snap.ID.Equals(exclude) {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (r *valueRepo) MediaKeyAttributes(_ context.Context, tenant valueobjects.TenantID, objectKey string) ([]valueobjects.AttributeDefinitionID, error) {
 	r.s.mu.RLock()
 	defer r.s.mu.RUnlock()

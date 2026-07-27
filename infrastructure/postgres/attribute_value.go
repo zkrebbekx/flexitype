@@ -577,6 +577,43 @@ func typeDefPredicate(ids []string) (string, any) {
 	return "type_definition_id = ANY(?)", pq.Array(ids)
 }
 
+// MediaValueForKey returns the media value the tenant stores for an object key.
+// It is served by the same (tenant_id, object_key) expression index the
+// download-authorization probe uses.
+func (r *attributeValueRepository) MediaValueForKey(ctx context.Context, tenant valueobjects.TenantID, objectKey string) (valueobjects.Value, bool, error) {
+	var rows []valueRow
+	if err := r.q.SelectContext(ctx, &rows, bind(
+		`SELECT `+valueColumnList+`
+		   FROM flexitype_attribute_value
+		  WHERE tenant_id = ? AND data_type = ? AND value_json->>'object_key' = ?
+		  ORDER BY created_at
+		  LIMIT 1`),
+		tenant.String(), valueobjects.DataTypeMedia.String(), objectKey); err != nil {
+		return valueobjects.Value{}, false, fmt.Errorf("media value for key: %w", err)
+	}
+	if len(rows) == 0 {
+		return valueobjects.Value{}, false, nil
+	}
+	snap, err := rows[0].snapshot()
+	if err != nil {
+		return valueobjects.Value{}, false, err
+	}
+	return snap.Value, true, nil
+}
+
+// MediaKeyRefCount counts other rows referencing an object key, across tenants
+// and including archived ones.
+func (r *attributeValueRepository) MediaKeyRefCount(ctx context.Context, objectKey string, exclude valueobjects.AttributeValueID) (int, error) {
+	var n int
+	if err := r.q.GetContext(ctx, &n, bind(
+		`SELECT count(*) FROM flexitype_attribute_value
+		  WHERE data_type = ? AND value_json->>'object_key' = ? AND id <> ?`),
+		valueobjects.DataTypeMedia.String(), objectKey, exclude.String()); err != nil {
+		return 0, fmt.Errorf("media key reference count: %w", err)
+	}
+	return n, nil
+}
+
 // MediaKeyAttributes returns the distinct attributes of the tenant's value rows
 // that reference objectKey. The object key lives inside the media metadata
 // JSON; the tenant + data_type filter narrows the scan to the tenant's media

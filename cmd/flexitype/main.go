@@ -227,10 +227,21 @@ func run(log *logger.Logger) error {
 		log.Info().Msg("prometheus metrics enabled at /metrics")
 	}
 
-	var limiter *ratelimit.Limiter
+	// Both limiters default to a non-zero rate, so the throttled configuration
+	// is what a deployment gets without knowing the variables exist. Set either
+	// rate to 0 to turn that ceiling off.
+	var limiter, tenantLimiter *ratelimit.Limiter
 	if cfg.RateLimitRPS > 0 {
 		limiter = ratelimit.New(cfg.RateLimitRPS, cfg.RateLimitBurst)
-		log.Info().Float64("rps", cfg.RateLimitRPS).Int("burst", cfg.RateLimitBurst).Msg("per-account rate limiting enabled")
+		log.Info().Float64("rps", cfg.RateLimitRPS).Int("burst", cfg.RateLimitBurst).
+			Msg("per-account rate limiting enabled")
+	} else {
+		log.Warn().Msg("per-account rate limiting is DISABLED (FLEXITYPE_RATE_LIMIT_RPS=0)")
+	}
+	if cfg.TenantRateLimitRPS > 0 {
+		tenantLimiter = ratelimit.New(cfg.TenantRateLimitRPS, cfg.TenantRateLimitBurst)
+		log.Info().Float64("rps", cfg.TenantRateLimitRPS).Int("burst", cfg.TenantRateLimitBurst).
+			Msg("per-tenant rate limiting enabled")
 	}
 
 	handler := svc.APIHandler(flexitype.APIConfig{
@@ -240,6 +251,7 @@ func run(log *logger.Logger) error {
 		Metrics:            appMetrics,
 		EnableProvisioning: cfg.EnableProvisioning,
 		RateLimiter:        limiter,
+		TenantRateLimiter:  tenantLimiter,
 		DisableConsole:     !cfg.EnableConsole,
 	})
 

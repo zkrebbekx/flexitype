@@ -60,12 +60,37 @@ type Store interface {
 // Interactor implements the provisioning usecases.
 type Interactor struct {
 	store Store
-	now   func() time.Time
+	// authCache, when set, is evicted after a rotation or a revocation so the
+	// old credential stops working at once rather than at the end of the cache
+	// TTL. Nil when no caching authenticator is configured.
+	authCache serviceaccount.Invalidator
+	now       func() time.Time
 }
 
 // NewInteractor wires the admin usecases.
-func NewInteractor(store Store) *Interactor {
-	return &Interactor{store: store, now: uow.UTCNow}
+func NewInteractor(store Store, opts ...Option) *Interactor {
+	i := &Interactor{store: store, now: uow.UTCNow}
+	for _, opt := range opts {
+		opt(i)
+	}
+	return i
+}
+
+// Option customises the admin interactor.
+type Option func(*Interactor)
+
+// WithAuthCache lets a rotation or a revocation evict the account's cached
+// authentications immediately. Without it, both take effect only when the
+// cache entry expires.
+func WithAuthCache(inv serviceaccount.Invalidator) Option {
+	return func(i *Interactor) { i.authCache = inv }
+}
+
+// invalidate drops an account's cached authentications, if a cache is wired.
+func (i *Interactor) invalidate(id ulid.ID) {
+	if i.authCache != nil {
+		i.authCache.Invalidate(id.String())
+	}
 }
 
 // CreateTenant provisions a new tenant.
@@ -158,7 +183,14 @@ func (i *Interactor) ListAccounts(ctx context.Context, tenant string) ([]Service
 }
 
 // RotateSecret issues a new secret for an account and returns the new token
-// once; the old secret stops working immediately.
+// once.
+//
+// The old secret stops working immediately when a cache is wired (see
+// WithAuthCache); otherwise it stops working when its cached authentication
+// expires, within FLEXITYPE_AUTH_CACHE_TTL. The distinction matters during
+// incident response: an operator who rotates a leaked token and records the
+// time needs to know whether requests after that timestamp could still have
+// used it.
 func (i *Interactor) RotateSecret(ctx context.Context, rawID string) (*AccountWithToken, error) {
 	id, err := ulid.Parse(rawID)
 	if err != nil {
@@ -175,11 +207,13 @@ func (i *Interactor) RotateSecret(ctx context.Context, rawID string) (*AccountWi
 	if err := i.store.UpdateSecret(ctx, id, serviceaccount.HashSecret(secret), i.now()); err != nil {
 		return nil, err
 	}
+	i.invalidate(id)
 	return &AccountWithToken{Account: acct, Token: serviceaccount.MintToken(id.String(), secret)}, nil
 }
 
-// Revoke deactivates a service account; its token stops working within the
-// auth cache TTL.
+// Revoke deactivates a service account. Its token stops working immediately
+// when a cache is wired (see WithAuthCache), otherwise within the auth cache
+// TTL.
 func (i *Interactor) Revoke(ctx context.Context, rawID string) error {
 	id, err := ulid.Parse(rawID)
 	if err != nil {
@@ -188,7 +222,11 @@ func (i *Interactor) Revoke(ctx context.Context, rawID string) error {
 	if _, err := i.store.GetAccount(ctx, id); err != nil {
 		return err
 	}
-	return i.store.SetAccountActive(ctx, id, false, i.now())
+	if err := i.store.SetAccountActive(ctx, id, false, i.now()); err != nil {
+		return err
+	}
+	i.invalidate(id)
+	return nil
 }
 
 func parseScopes(raw []string) ([]serviceaccount.Scope, error) {

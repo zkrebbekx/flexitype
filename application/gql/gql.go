@@ -14,6 +14,7 @@ package gql
 import (
 	"container/list"
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -23,9 +24,11 @@ import (
 
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"
+
 	"github.com/graphql-go/graphql/language/ast"
 	"github.com/graphql-go/graphql/language/parser"
 	"github.com/graphql-go/graphql/language/source"
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 
 	"github.com/zkrebbekx/flexitype/application"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
@@ -125,6 +128,9 @@ type Engine struct {
 	ll       *list.List               // LRU recency order; front = most recent
 	cache    map[string]*list.Element // tenant|access -> *cacheEntry element
 	now      func() time.Time         // clock; swappable in tests
+	// onError receives the original text of an error that was masked before
+	// it reached the client, so the detail is logged rather than lost.
+	onError func(error)
 }
 
 // versionMemo caches a tenant's persisted schema version to spare a database
@@ -167,6 +173,12 @@ func WithCacheCap(n int) EngineOption {
 			e.cacheCap = n
 		}
 	}
+}
+
+// WithErrorObserver reports the original text of every error masked on its way
+// out, so the detail stays available server-side.
+func WithErrorObserver(fn func(error)) EngineOption {
+	return func(e *Engine) { e.onError = fn }
 }
 
 // NewEngine builds a GraphQL engine. The zero-argument form uses the defaults
@@ -240,12 +252,53 @@ func (e *Engine) Execute(ctx context.Context, query string, variables map[string
 	// goroutine and database connections.
 	ctx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
-	return graphql.Do(graphql.Params{
+	return sanitize(graphql.Do(graphql.Params{
 		Schema:         schema,
 		RequestString:  query,
 		VariableValues: variables,
 		Context:        ctx,
-	})
+	}), e.onError)
+}
+
+// sanitize replaces every non-domain error message with a generic one, and
+// reports the original to the observer instead.
+//
+// The REST surface already collapses an unclassified error into "internal
+// error" with a 500; GraphQL returned graphql.Do's result verbatim, so a
+// resolver that wrapped an infrastructure error surfaced its message intact —
+// SQL fragments, table and column names, constraint names. The same underlying
+// failure was therefore reconnaissance through one surface and nothing through
+// the other, and hardening either one gave false confidence about the pair.
+//
+// A domain error keeps its message: those are the client-facing validation and
+// not-found messages the API contract is written in, and they are the same
+// strings REST returns.
+func sanitize(res *graphql.Result, onError func(error)) *graphql.Result {
+	if res == nil {
+		return res
+	}
+	for i, ge := range res.Errors {
+		var domainErr *domainerrors.Error
+		if errors.As(ge.OriginalError(), &domainErr) {
+			continue
+		}
+		if isGraphQLClientError(ge) {
+			continue
+		}
+		if onError != nil {
+			onError(fmt.Errorf("graphql: %s", ge.Message))
+		}
+		res.Errors[i].Message = "internal error"
+	}
+	return res
+}
+
+// isGraphQLClientError reports whether an error came from parsing or
+// validating the query rather than from executing it. Those messages describe
+// the caller's own query — an unknown field, a syntax error — so masking them
+// would make the API unusable while protecting nothing.
+func isGraphQLClientError(ge gqlerrors.FormattedError) bool {
+	return ge.OriginalError() == nil || len(ge.Locations) > 0 && len(ge.Path) == 0
 }
 
 // schemaFor returns the tenant+access schema, rebuilding when the tenant's
@@ -356,7 +409,14 @@ func accessSignature(a uow.Access) string {
 	return strings.Join(parts, ",")
 }
 
+// resultErr builds a single-error result. It is used for pre-execution
+// failures — a missing context, a query over the cost budget, a schema build
+// error — so it sanitizes on the same rule Execute applies to resolver errors.
 func resultErr(err error) *graphql.Result {
+	var domainErr *domainerrors.Error
+	if !errors.As(err, &domainErr) {
+		err = fmt.Errorf("internal error")
+	}
 	return &graphql.Result{Errors: []gqlerrors.FormattedError{{Message: err.Error()}}}
 }
 

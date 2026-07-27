@@ -38,6 +38,8 @@ var allKeys = []string{
 	"FLEXITYPE_DB_HOST",
 	"FLEXITYPE_DB_PORT",
 	"FLEXITYPE_DEV_INSECURE",
+	"FLEXITYPE_TENANT_RATE_LIMIT_RPS",
+	"FLEXITYPE_TENANT_RATE_LIMIT_BURST",
 	"FLEXITYPE_ENABLE_CONSOLE",
 	"FLEXITYPE_RUN_RELAY",
 	"FLEXITYPE_RUN_DELIVERY_WORKER",
@@ -126,8 +128,10 @@ func TestLoadDefaults(t *testing.T) {
 				So(cfg.EnableProvisioning, ShouldBeFalse)
 				So(cfg.AuthCacheTTL, ShouldEqual, 30*time.Second)
 				So(cfg.BootstrapAdmin, ShouldBeFalse)
-				So(cfg.RateLimitRPS, ShouldEqual, 0)
+				So(cfg.RateLimitRPS, ShouldEqual, 50)
 				So(cfg.RateLimitBurst, ShouldEqual, 200)
+				So(cfg.TenantRateLimitRPS, ShouldEqual, 500)
+				So(cfg.TenantRateLimitBurst, ShouldEqual, 2000)
 				So(cfg.PubSubProject, ShouldEqual, "")
 				So(cfg.PubSubTopic, ShouldEqual, "flexitype-events")
 				So(cfg.PubSubOrdering, ShouldBeFalse)

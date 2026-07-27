@@ -201,15 +201,25 @@ func (l *AccountLookup) AuthenticateCtx(ctx context.Context, token string) (serv
 	}
 
 	var row struct {
-		TenantID   string         `db:"tenant_id"`
-		Name       string         `db:"name"`
-		SecretHash string         `db:"secret_hash"`
-		Scopes     pq.StringArray `db:"scopes"`
-		Active     bool           `db:"active"`
+		TenantID     string         `db:"tenant_id"`
+		Name         string         `db:"name"`
+		SecretHash   string         `db:"secret_hash"`
+		Scopes       pq.StringArray `db:"scopes"`
+		Active       bool           `db:"active"`
+		TenantActive bool           `db:"tenant_active"`
 	}
+	// The tenant's own active flag is joined in, so deactivating a tenant
+	// actually suspends it. Consulting only the account flag meant
+	// PATCH /api/v1/tenants/{name} {"active": false} — the action an operator
+	// takes during an incident, an offboarding or a non-payment suspension —
+	// left every service account under that tenant reading and writing, while
+	// the control plane reported the tenant as inactive.
 	err = l.q.GetContext(ctx, &row, bind(
-		`SELECT tenant_id, name, secret_hash, scopes, active
-		 FROM flexitype_service_account WHERE id = ?`), id)
+		`SELECT a.tenant_id, a.name, a.secret_hash, a.scopes, a.active,
+		        COALESCE(t.active, true) AS tenant_active
+		   FROM flexitype_service_account a
+		   LEFT JOIN flexitype_tenant t ON t.name = a.tenant_id
+		  WHERE a.id = ?`), id)
 	if isNoRows(err) {
 		return serviceaccount.Account{}, serviceaccount.VerifyOnlyTiming(secret)
 	}
@@ -231,6 +241,9 @@ func (l *AccountLookup) AuthenticateCtx(ctx context.Context, token string) (serv
 	}
 	if !row.Active {
 		return serviceaccount.Account{}, fmt.Errorf("service account is revoked")
+	}
+	if !row.TenantActive {
+		return serviceaccount.Account{}, fmt.Errorf("tenant is deactivated")
 	}
 	return acct, nil
 }

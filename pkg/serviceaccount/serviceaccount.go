@@ -81,6 +81,17 @@ type AuthenticatorCtx interface {
 	AuthenticateCtx(ctx context.Context, token string) (Account, error)
 }
 
+// Invalidator drops cached authentication state for one account. A caching
+// authenticator implements it; a plain store has nothing to drop and does not.
+//
+// The admin interactor calls it after rotating or revoking a secret, so the
+// old credential stops working at once rather than at the end of the cache
+// TTL. Callers type-assert, so an authenticator without a cache needs no
+// change.
+type Invalidator interface {
+	Invalidate(accountID string)
+}
+
 // Store holds the configured accounts.
 type Store struct {
 	accounts map[string]Account

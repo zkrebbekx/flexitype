@@ -19,6 +19,13 @@ const (
 // decodes it against its own ordering and selects the rows strictly after it.
 // Keyset (rather than LIMIT/OFFSET) keeps pages stable under concurrent inserts
 // and deletes — no skipped or duplicated rows.
+//
+// That guarantee holds against inserts and deletes, and it does NOT hold when
+// a concurrent write changes a row's sort key. The entity listing orders
+// newest-first on last_updated_at, which a trigger rewrites on every value
+// write: an entity the sweep has not reached yet, written mid-sweep, jumps
+// ahead of the cursor and can never satisfy the "strictly older" predicate
+// again. It is skipped, silently. Set Stable for a full sweep.
 type Page struct {
 	Limit  int
 	Cursor string // "" = first page
@@ -26,6 +33,16 @@ type Page struct {
 	// separate query only when requested, so unbounded lists don't pay for a
 	// count on every page.
 	WantTotal bool
+	// Stable asks for an ordering on an IMMUTABLE key, for a consumer that
+	// must see every row exactly once — a reindex, a CSV export, a
+	// completeness sweep, a recompute.
+	//
+	// It trades presentation order for coverage: rows come back in id order
+	// rather than newest-first. A row inserted ahead of the cursor mid-sweep
+	// is still missed (it did not exist when the sweep started, so no
+	// snapshot could include it), but no EXISTING row is ever skipped because
+	// something wrote to it.
+	Stable bool
 }
 
 // PageArgs are raw client pagination arguments.

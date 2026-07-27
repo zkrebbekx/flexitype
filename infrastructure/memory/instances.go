@@ -168,6 +168,18 @@ func (r *valueRepo) ListEntities(_ context.Context, tenant valueobjects.TenantID
 	for _, e := range agg {
 		out = append(out, *e)
 	}
+	// A full sweep orders on the IMMUTABLE key, matching the SQL
+	// implementation: last_updated_at changes on every write, so an entity
+	// written mid-sweep jumps ahead of a newest-first cursor and is skipped.
+	if page.Stable {
+		sort.Slice(out, func(i, j int) bool {
+			return out[i].EntityID.String() < out[j].EntityID.String()
+		})
+		pageItems, total := paginate(out, page,
+			func(e domainvalue.EntitySummary) []string { return []string{e.EntityID.String()} }, false, false)
+		return pageItems, total, nil
+	}
+
 	// Most recently changed first, matching the SQL implementation.
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].LastUpdatedAt.Equal(out[j].LastUpdatedAt) {

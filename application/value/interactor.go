@@ -1005,11 +1005,27 @@ type EntityListOutput struct {
 	PageInfo db.PageInfo
 }
 
+// ListEntitiesStable is ListEntities with the sweep ordering: every existing
+// row exactly once, in id order, rather than newest-first. Use it for a full
+// pass — a reindex, an export, a completeness score, a recompute — where a
+// missed row is a defect and presentation order does not matter.
+func (i *Interactor) ListEntitiesStable(ctx context.Context, rawTypeDefID string, includeDescendants bool, args db.PageArgs) (*EntityListOutput, error) {
+	return i.listEntities(ctx, rawTypeDefID, includeDescendants, args, true)
+}
+
 // ListEntities pages the distinct entities holding live values of a type
-// definition — the observability entry point for the admin console. With
-// includeDescendants, entities of every subtype are included and each row
-// carries its declared type.
+// definition — the observability entry point for the admin console, ordered
+// newest-first. With includeDescendants, entities of every subtype are
+// included and each row carries its declared type.
+//
+// The ordering key is mutable, so a page is stable against inserts and
+// deletes but not against a write to a row the caller has not reached yet.
+// Use ListEntitiesStable for a full sweep.
 func (i *Interactor) ListEntities(ctx context.Context, rawTypeDefID string, includeDescendants bool, args db.PageArgs) (*EntityListOutput, error) {
+	return i.listEntities(ctx, rawTypeDefID, includeDescendants, args, false)
+}
+
+func (i *Interactor) listEntities(ctx context.Context, rawTypeDefID string, includeDescendants bool, args db.PageArgs, stable bool) (*EntityListOutput, error) {
 	typeDefID, err := valueobjects.ParseTypeDefinitionID(rawTypeDefID)
 	if err != nil {
 		return nil, domainerrors.NewValidation(err.Error())
@@ -1018,6 +1034,7 @@ func (i *Interactor) ListEntities(ctx context.Context, rawTypeDefID string, incl
 	if err != nil {
 		return nil, domainerrors.NewValidation(err.Error())
 	}
+	page.Stable = stable
 
 	typeIDs := []valueobjects.TypeDefinitionID{typeDefID}
 	if includeDescendants {
@@ -1040,6 +1057,11 @@ func (i *Interactor) ListEntities(ctx context.Context, rawTypeDefID string, incl
 	}
 
 	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(e domainvalue.EntitySummary) string {
+		if page.Stable {
+			// A sweep pages on the immutable key, so its cursor carries only
+			// that. Mixing the two shapes would decode as the wrong ordering.
+			return db.EncodeKeyset(e.EntityID.String())
+		}
 		return db.EncodeKeyset(db.KeysetTime(e.LastUpdatedAt), e.EntityID.String())
 	})
 	out := &EntityListOutput{

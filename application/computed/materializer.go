@@ -204,7 +204,7 @@ func (m *Materializer) RecomputeType(ctx context.Context, tenant valueobjects.Te
 		}
 		var cursor *string
 		for {
-			entities, err := it.Values().ListEntities(ctx, id, false, db.PageArgs{Limit: &limit, Cursor: cursor})
+			entities, err := it.Values().ListEntitiesStable(ctx, id, false, db.PageArgs{Limit: &limit, Cursor: cursor})
 			if err != nil {
 				return count, fmt.Errorf("list entities of %s: %w", id, err)
 			}
@@ -368,7 +368,7 @@ func (m *Materializer) RecomputeTenant(ctx context.Context, tenant valueobjects.
 			}
 			var entCursor *string
 			for {
-				entities, err := it.Values().ListEntities(ctx, typeID, false, db.PageArgs{Limit: &limit, Cursor: entCursor})
+				entities, err := it.Values().ListEntitiesStable(ctx, typeID, false, db.PageArgs{Limit: &limit, Cursor: entCursor})
 				if err != nil {
 					return count, fmt.Errorf("list entities of %s: %w", typeID, err)
 				}

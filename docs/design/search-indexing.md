@@ -30,11 +30,17 @@ queries. It degrades when:
 ## Options considered
 
 **A. Stay pure-transactional, add targeted Postgres indexes.**
-`pg_trgm` GIN on `value_text` makes `contains`/`icontains` indexable;
-expression indexes cover hot attributes. Zero new moving parts, zero
+Expression indexes cover hot attributes. Zero new moving parts, zero
 staleness. Ceiling: still row-per-value model, still OLTP contention, no
-relevance ranking. *Do this first regardless — it's an index migration,
-not an architecture.*
+relevance ranking.
+
+*Not* `pg_trgm`. This section used to recommend trigram GIN indexes on
+`value_text` first, "regardless". Migration 000018 deletes them, and the
+reason stands: `contains`/`icontains` compile to `strpos()`, which no
+trigram GIN index can serve. They were pure write-path cost — GIN
+maintenance on the hottest table in the database — for zero read benefit.
+Making those predicates indexable needs the predicate to change first
+(see #333), not another index.
 
 **B. Postgres-native read model (denormalised entity documents).** A
 `flexitype_entity_search` table — one row per entity with a `jsonb`
@@ -85,10 +91,11 @@ make the delivery reliable with an **outbox**:
 4. **Rebuild path.** A `reindex` command that streams entities through the
    indexer, for bootstrap and disaster recovery.
 
-Sequencing: `pg_trgm` migration (A) now; outbox + `SearchIndexer` port
-next (unlocks B/C without churn); option B reference implementation when a
-deployment actually hits the wall; C stays an adapter example, never a
-core dependency.
+Sequencing: the outbox and the `SearchIndexer` port first (they unlock B
+and C without churn); option B's reference implementation when a deployment
+actually hits the wall; C stays an adapter example, never a core dependency.
+No trigram migration — see option A for why the one that shipped was
+reverted.
 
 ## Backend parity of `matches()`
 
@@ -112,9 +119,12 @@ deliberately excluded from that equality assertion: treat it as best-effort
 relevance search, not an exact predicate, and prefer `contains`/`iequals` when
 you need deterministic, backend-identical matching.
 
-> Note on eventual consistency: with the transactional outbox enabled, the
-> search projection (and computed-attribute materialization) update
-> **asynchronously** after a write commits. A read issued immediately after a
-> write may briefly not reflect it in Postgres, whereas the in-memory backend
-> dispatches synchronously. This is expected at-least-once behaviour, not a
-> parity bug.
+> Note on read-your-writes: the search projection and computed-attribute
+> materialization are maintained **synchronously**, in the writing request's
+> post-commit, in both delivery modes. A read issued straight after a write
+> reflects it. Projections ride their own dispatcher, separate from the
+> delivery bus, so `WithOutbox` does not change this (#211).
+>
+> This paragraph used to describe an asynchronous window. It no longer
+> exists, and a deployment that still polls or retries-on-empty around it is
+> carrying a workaround for a race it can never reproduce.

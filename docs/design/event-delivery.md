@@ -111,10 +111,10 @@ commit* into two lanes:
               ┌─────────────────┼──────────────────────────────┐
               ▼                 ▼                              ▼
    in-process hooks    flexitype_webhook_delivery     events feed / SSE
-   (search indexer,    one row per (envelope ×        (reads by feed_seq;
-   embedded handlers)  subscription); claimed         named CAS cursors)
-                       SKIP LOCKED by delivery
-                       workers, backoff + DLQ
+   (embedded            one row per (envelope ×        (reads by feed_seq;
+   WithHandler /        subscription); claimed         named CAS cursors)
+   WithPublisher)       SKIP LOCKED by delivery
+                        workers, backoff + DLQ
 ```
 
 ### 1. Expansion: one sequencer, horizontally scaled delivery
@@ -126,9 +126,12 @@ last, DB-only one:
    rows to this relay (`claimed_by`/`claimed_at`), skipping rows another
    relay holds (`FOR UPDATE SKIP LOCKED`) and reclaiming leases older than
    the TTL (a crashed relay). No lock, no dispatch.
-2. **Dispatch** — the in-process handlers (search indexer, embedded
+2. **Dispatch** — the in-process handlers (embedded
    `WithPublisher`/`WithHandler` hooks) run for the batch **outside any
-   transaction or lock**. A slow or failing handler therefore never pins a
+   transaction or lock**. The search indexer and the other projections are
+   NOT on this lane: since #211 they ride a separate dispatcher invoked
+   synchronously in the writing request's post-commit, so they stay fresh
+   whether or not the outbox is enabled. A slow or failing handler therefore never pins a
    database connection or blocks other relays.
 3. **Finalize** — under `pg_advisory_xact_lock` (blocking, since the batch
    is already dispatched and its outcome must be recorded), stamp a

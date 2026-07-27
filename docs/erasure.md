@@ -36,7 +36,9 @@ Returns a receipt of what was erased:
   "revisions_purged": 3,
   "relationships_gone": 2,
   "search_docs_purged": 0,
-  "media_blobs_purged": 1
+  "media_blobs_purged": 1,
+  "media_blobs_failed": 0,
+  "unpurged_blob_keys": []
 }
 ```
 
@@ -62,7 +64,9 @@ curl -sS -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
   "revisions_purged": 310,
   "relationships_gone": 205,
   "search_docs_purged": 640,
-  "media_blobs_purged": 88
+  "media_blobs_purged": 88,
+  "media_blobs_failed": 2,
+  "unpurged_blob_keys": ["t1/9f/a0c2…", "t1/1b/77de…"]
 }
 ```
 
@@ -94,6 +98,14 @@ report, err = it.Values().PurgeTenant(ctx) // tenant from ctx
   the blobs are removed after commit (best effort, mirroring the archival GC
   path); a storage hiccup never fails the erasure and a later sweep can
   reconcile.
+
+  **Check `media_blobs_failed` before you record the request as satisfied.**
+  A non-zero value means the erasure did not fully succeed: those blobs are
+  still in object storage, and `unpurged_blob_keys` names every one of them
+  so an operator can remove them by hand. The receipt reports the residue
+  honestly rather than a false success, which is the whole reason those two
+  fields exist — and they were missing from both samples above and from the
+  OpenAPI schema.
 - **Search & revisions** — the search projection is event-driven and revisions
   are stored outside the value write transaction, so their purge runs on their
   own stores within the same call; the deletes are idempotent under retry.

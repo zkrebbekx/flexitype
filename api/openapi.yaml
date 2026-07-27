@@ -71,7 +71,12 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Total"
         - $ref: "#/components/parameters/IncludeArchived"
+        - name: internal_name
+          in: query
+          description: Comma-separated internal names to filter by.
+          schema: { type: string }
       responses:
         "200":
           $ref: "#/components/responses/TypeDefinitionPage"
@@ -138,8 +143,12 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: "#/components/schemas/EffectiveAttribute" }
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/EffectiveAttribute" }
   /type-definitions/{id}/children:
     parameters: [{ $ref: "#/components/parameters/ID" }]
     get:
@@ -151,8 +160,12 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: "#/components/schemas/TypeDefinition" }
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/TypeDefinition" }
 
   /attributes:
     get:
@@ -161,8 +174,18 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Total"
         - name: type_definition_id
           in: query
+          description: Only attributes declared on this type.
+          schema: { type: string }
+        - name: internal_name
+          in: query
+          description: Comma-separated internal names to filter by.
+          schema: { type: string }
+        - name: data_type
+          in: query
+          description: Comma-separated data types to filter by.
           schema: { type: string }
         - $ref: "#/components/parameters/IncludeArchived"
       responses:
@@ -222,7 +245,12 @@ paths:
           application/json:
             schema: { type: object, properties: { value: {} } }
       responses:
-        "200": { description: Value is valid }
+        "200":
+          description: Value is valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidateValueResult"
         "422": { $ref: "#/components/responses/Error" }
 
   /values:
@@ -232,18 +260,39 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Total"
+        - $ref: "#/components/parameters/IncludeArchived"
+        - name: type_definition_id
+          in: query
+          description: Narrow to one type's entities.
+          schema: { type: string }
+        - name: attribute_definition_id
+          in: query
+          description: >-
+            Narrow to one attribute across entities — the "who has a value for
+            this field" query.
+          schema: { type: string }
+        - name: entity_id
+          in: query
+          description: Narrow to one entity.
+          schema: { type: string }
+        - $ref: "#/components/parameters/ChangeSetOverlay"
       responses:
         "200": { $ref: "#/components/responses/ValuePage" }
     post:
       tags: [values]
       summary: Set an entity's attribute value
+      description: >-
+        Sets one attribute value. This is an upsert, not a create — writing an
+        attribute that already holds a value replaces it — so the answer is
+        200, not 201.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/SetValue" }
       responses:
-        "201": { $ref: "#/components/responses/Value" }
+        "200": { $ref: "#/components/responses/Value" }
         "422": { $ref: "#/components/responses/Error" }
   /values/batch:
     post:
@@ -385,6 +434,7 @@ paths:
           schema: { type: boolean }
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Total"
       responses:
         "200":
           description: Entity summaries
@@ -449,14 +499,19 @@ paths:
       parameters:
         - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
         - { name: entityID, in: path, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/ChangeSetOverlay"
       responses:
         "200":
           description: Live values
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: "#/components/schemas/Value" }
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Value" }
   /entities/{typeDefinitionID}/{entityID}/relationships:
     get:
       tags: [entities]
@@ -465,7 +520,17 @@ paths:
         - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
         - { name: entityID, in: path, required: true, schema: { type: string } }
       responses:
-        "200": { description: Entity links }
+        "200":
+          description: Entity links
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/EntityLink" }
   /entities/{typeDefinitionID}/{entityID}/attributes/{attributeID}/effective-schema:
     get:
       tags: [entities]
@@ -475,7 +540,12 @@ paths:
         - { name: entityID, in: path, required: true, schema: { type: string } }
         - { name: attributeID, in: path, required: true, schema: { type: string } }
       responses:
-        "200": { description: "Effective schema (allowed values, required, restricted)" }
+        "200":
+          description: "Effective schema (allowed values, required, restricted)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EffectiveSchema"
 
   /dependencies:
     get:
@@ -484,30 +554,74 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Total"
+        - name: source_attribute_id
+          in: query
+          description: Only rules whose source is this attribute.
+          schema: { type: string }
+        - name: target_attribute_id
+          in: query
+          description: Only rules whose target is this attribute.
+          schema: { type: string }
       responses:
-        "200": { description: Dependency page }
+        "200":
+          description: Dependency page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Dependency" }
+                  page_info: { $ref: "#/components/schemas/PageInfo" }
     post:
       tags: [dependencies]
       summary: Create a dependency
       requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
       responses:
-        "201": { description: Created dependency }
+        "201":
+          description: Created dependency
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dependency"
         "422": { $ref: "#/components/responses/Error" }
   /dependencies/{id}:
     parameters: [{ $ref: "#/components/parameters/ID" }]
     get:
       tags: [dependencies]
       summary: Get a dependency
-      responses: { "200": { description: Dependency }, "404": { $ref: "#/components/responses/Error" } }
+      responses:
+        "200":
+          description: Dependency
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dependency"
+        "404": { $ref: "#/components/responses/Error" }
     patch:
       tags: [dependencies]
       summary: Update a dependency
       requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
-      responses: { "200": { description: Updated dependency } }
+      responses:
+        "200":
+          description: The updated dependency
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dependency"
     delete:
       tags: [dependencies]
       summary: Archive a dependency
-      responses: { "200": { description: Archived dependency } }
+      responses:
+        "200":
+          description: The archived dependency
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dependency"
 
   /relationship-definitions:
     get:
@@ -516,9 +630,22 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Total"
         - { name: type_definition_id, in: query, schema: { type: string } }
         - $ref: "#/components/parameters/IncludeArchived"
-      responses: { "200": { description: Relationship-definition page } }
+      responses:
+        "200":
+          description: Relationship-definition page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/RelationshipDefinition" }
+                  page_info: { $ref: "#/components/schemas/PageInfo" }
     post:
       tags: [relationships]
       summary: Create a relationship definition
@@ -528,25 +655,73 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/CreateRelationshipDefinition" }
       responses:
-        "201": { description: Created relationship definition }
+        "201":
+          description: Created relationship definition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipDefinition"
         "422": { $ref: "#/components/responses/Error" }
   /relationship-definitions/{id}:
     parameters: [{ $ref: "#/components/parameters/ID" }]
-    get: { tags: [relationships], summary: Get a relationship definition, responses: { "200": { description: Relationship definition }, "404": { $ref: "#/components/responses/Error" } } }
+    get:
+      tags: [relationships]
+      summary: Get a relationship definition
+      responses:
+        "200":
+          description: Relationship definition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipDefinition"
+        "404": { $ref: "#/components/responses/Error" }
     patch:
       tags: [relationships]
       summary: Update a relationship definition
       requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
-      responses: { "200": { description: Updated } }
+      responses:
+        "200":
+          description: The updated definition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipDefinition"
   /relationship-definitions/{id}/archive:
     parameters: [{ $ref: "#/components/parameters/ID" }]
-    post: { tags: [relationships], summary: Archive, responses: { "200": { description: Archived } } }
+    post:
+      tags: [relationships]
+      summary: Archive
+      responses:
+        "200":
+          description: The archived definition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipDefinition"
   /relationship-definitions/{id}/restore:
     parameters: [{ $ref: "#/components/parameters/ID" }]
-    post: { tags: [relationships], summary: Restore, responses: { "200": { description: Restored } } }
+    post:
+      tags: [relationships]
+      summary: Restore
+      responses:
+        "200":
+          description: The restored definition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipDefinition"
   /relationship-definitions/{id}/attribute-sets:
     parameters: [{ $ref: "#/components/parameters/ID" }]
-    get: { tags: [relationships], summary: List the inherited attribute-set chain, responses: { "200": { description: Attribute set ids } } }
+    get:
+      tags: [relationships]
+      summary: List the inherited attribute-set chain
+      responses:
+        "200":
+          description: Attribute set ids
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttributeSetIDs"
 
   /relationships:
     get:
@@ -555,7 +730,32 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
-      responses: { "200": { description: Relationship page } }
+        - $ref: "#/components/parameters/Total"
+        - name: relationship_definition_id
+          in: query
+          description: Only links under this relationship definition.
+          schema: { type: string }
+        - name: parent_entity_id
+          in: query
+          description: Only links whose parent is this entity.
+          schema: { type: string }
+        - name: child_entity_id
+          in: query
+          description: Only links whose child is this entity.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Relationship page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Relationship" }
+                  page_info: { $ref: "#/components/schemas/PageInfo" }
     post:
       tags: [relationships]
       summary: Link two entities
@@ -565,13 +765,37 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/Link" }
       responses:
-        "201": { description: Created link }
+        "201":
+          description: Created link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Relationship"
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
   /relationships/{id}:
     parameters: [{ $ref: "#/components/parameters/ID" }]
-    get: { tags: [relationships], summary: Get a relationship, responses: { "200": { description: Relationship }, "404": { $ref: "#/components/responses/Error" } } }
-    delete: { tags: [relationships], summary: Unlink, responses: { "200": { description: Unlinked } } }
+    get:
+      tags: [relationships]
+      summary: Get a relationship
+      responses:
+        "200":
+          description: Relationship
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Relationship"
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [relationships]
+      summary: Unlink
+      responses:
+        "200":
+          description: The unlinked relationship, now archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Relationship"
 
   /query:
     get:
@@ -582,6 +806,9 @@ paths:
         - { name: q, in: query, required: true, schema: { type: string }, description: FQL expression }
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Total"
+        - $ref: "#/components/parameters/Locale"
+        - $ref: "#/components/parameters/Channel"
       responses:
         "200":
           description: Matching entities
@@ -633,8 +860,20 @@ paths:
         - { name: actor, in: query, schema: { type: string } }
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Total"
       responses:
-        "200": { description: Activity page }
+        "200":
+          description: Activity page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ActivityEntry" }
+                  page_info: { $ref: "#/components/schemas/PageInfo" }
         "501": { $ref: "#/components/responses/Error" }
 
   /webhook-subscriptions:
@@ -642,7 +881,17 @@ paths:
       tags: [event-delivery]
       summary: List webhook subscriptions
       responses:
-        "200": { description: Subscriptions }
+        "200":
+          description: Subscriptions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Subscription" }
         "501": { $ref: "#/components/responses/Error" }
     post:
       tags: [event-delivery]
@@ -678,14 +927,32 @@ paths:
         - { name: status, in: query, schema: { type: string, enum: [pending, inflight, delivered, dead] } }
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
-      responses: { "200": { description: Delivery page } }
+        - $ref: "#/components/parameters/Total"
+      responses:
+        "200":
+          description: Delivery page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Delivery" }
+                  page_info: { $ref: "#/components/schemas/PageInfo" }
   /webhook-deliveries/{id}/redeliver:
     parameters: [{ $ref: "#/components/parameters/ID" }]
     post:
       tags: [event-delivery]
       summary: Requeue a dead or delivered delivery
       responses:
-        "200": { description: Requeued }
+        "200":
+          description: Requeued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
         "409": { $ref: "#/components/responses/Error" }
 
   /events:
@@ -697,7 +964,18 @@ paths:
         - { name: types, in: query, schema: { type: string }, description: Comma-separated event types }
         - $ref: "#/components/parameters/Limit"
       responses:
-        "200": { description: Feed page }
+        "200":
+          description: Feed page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/FeedEvent" }
+                  page_info: { $ref: "#/components/schemas/PageInfo" }
         "410": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
   /events/stream:
@@ -714,7 +992,13 @@ paths:
     get:
       tags: [event-delivery]
       summary: Read a named consumer cursor
-      responses: { "200": { description: Cursor position } }
+      responses:
+        "200":
+          description: Cursor position
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventCursor"
     put:
       tags: [event-delivery]
       summary: Commit a named cursor (compare-and-swap)
@@ -724,7 +1008,12 @@ paths:
           application/json:
             schema: { type: object, properties: { position: { type: integer, format: int64 }, expected: { type: integer, format: int64 } } }
       responses:
-        "200": { description: Committed }
+        "200":
+          description: Committed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventCursor"
         "409": { $ref: "#/components/responses/Error" }
 
   /admin/purge:
@@ -790,7 +1079,12 @@ paths:
           application/json:
             schema: { type: object, required: [active], properties: { active: { type: boolean } } }
       responses:
-        "200": { description: Updated }
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
 
@@ -997,6 +1291,7 @@ paths:
         - { name: include_descendants, in: query, schema: { type: boolean } }
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Total"
       responses:
         "200":
           description: Grid page
@@ -1356,6 +1651,32 @@ components:
       name: include_archived
       in: query
       schema: { type: boolean }
+    Total:
+      name: total
+      in: query
+      description: >-
+        Compute page_info.total_count. It is off by default because counting
+        costs a second scan; this is the only way to obtain a total.
+      schema: { type: boolean }
+    Locale:
+      name: locale
+      in: query
+      description: >-
+        Narrow to one locale of a localizable attribute. Without it a
+        localizable attribute answers with its unscoped values only.
+      schema: { type: string }
+    Channel:
+      name: channel
+      in: query
+      description: Narrow to one channel of a scopable attribute.
+      schema: { type: string }
+    ChangeSetOverlay:
+      name: changeset
+      in: query
+      description: >-
+        Overlay a draft change-set's staged mutations on the stored values, to
+        preview the change-set before publishing it.
+      schema: { type: string }
 
   responses:
     Error:
@@ -1414,6 +1735,12 @@ components:
   schemas:
     Error:
       type: object
+      example:
+        error:
+          code: VALIDATION
+          message: "expected integer, got a quoted string"
+          details:
+            attribute: pages
       required: [error]
       properties:
         error:
@@ -1434,9 +1761,21 @@ components:
         next_cursor: { type: string }
     DataType:
       type: string
-      enum: [bool, string, integer, float, decimal, date, time, datetime, enum, url, email, json]
+      enum: [bool, string, integer, float, decimal, date, time, datetime, enum, url, email, json, media, quantity]
+      description: >-
+        The attribute's value type. media and quantity were missing here, so a
+        generated client rejected them before sending a request and the
+        features looked absent rather than undocumented.
     TypeDefinition:
       type: object
+      example:
+        id: 01JBQ8Z0000000000000000000
+        tenant_id: default
+        internal_name: product
+        display_name: Product
+        version: 1
+        created_at: "2026-07-27T09:22:45Z"
+        updated_at: "2026-07-27T09:22:45Z"
       properties:
         id: { type: string }
         tenant_id: { type: string }
@@ -1465,6 +1804,16 @@ components:
         description: { type: string }
     Attribute:
       type: object
+      example:
+        id: 01JBQ8Z0000000000000000001
+        tenant_id: default
+        type_definition_id: 01JBQ8Z0000000000000000000
+        internal_name: sku
+        display_name: SKU
+        data_type: string
+        required: false
+        unique: true
+        version: 1
       properties:
         id: { type: string }
         tenant_id: { type: string }
@@ -1518,6 +1867,14 @@ components:
         default_value: {}
     Value:
       type: object
+      example:
+        id: 01JBQ8Z0000000000000000002
+        tenant_id: default
+        attribute_definition_id: 01JBQ8Z0000000000000000001
+        entity_id: p-1001
+        internal_name: sku
+        data_type: string
+        value: ABC-123
       properties:
         id: { type: string }
         tenant_id: { type: string }
@@ -1547,6 +1904,15 @@ components:
         last_updated_at: { type: string, format: date-time }
     PurgeReport:
       type: object
+      example:
+        entity_id: p-1001
+        values_purged: 7
+        revisions_purged: 3
+        relationships_gone: 2
+        search_docs_purged: 0
+        media_blobs_purged: 1
+        media_blobs_failed: 0
+        unpurged_blob_keys: []
       description: The audited receipt of a hard delete (right-to-erasure).
       properties:
         entity_id: { type: string, description: "set for a per-entity purge; omitted for a tenant purge" }
@@ -1555,6 +1921,166 @@ components:
         relationships_gone: { type: integer }
         search_docs_purged: { type: integer }
         media_blobs_purged: { type: integer }
+        media_blobs_failed:
+          type: integer
+          description: >-
+            Blobs whose deletion failed. A non-zero value means the erasure
+            did NOT fully succeed and residual data remains in object storage.
+            Check this before recording the request as satisfied.
+        unpurged_blob_keys:
+          type: array
+          items: { type: string }
+          description: >-
+            The object keys still present, so an operator can reconcile them
+            by hand. Present only when media_blobs_failed is non-zero.
+    Dependency:
+      type: object
+      description: A conditional-validation / cascading-picklist rule.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        source_attribute_id: { type: string }
+        target_attribute_id: { type: string }
+        conditions:
+          type: array
+          items: { $ref: "#/components/schemas/DependencyCondition" }
+        effect: { $ref: "#/components/schemas/DependencyEffect" }
+        description: { type: string }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        archived_at: { type: string, format: date-time, nullable: true }
+    DependencyCondition:
+      type: object
+      description: One condition on a rule's source attribute.
+      properties:
+        kind: { type: string, enum: [equals, in, range, pattern, exists, dynamic] }
+        value: {}
+        values: { type: array, items: {} }
+        min: {}
+        max: {}
+        pattern: { type: string }
+        dynamic: {}
+        op: { type: string }
+    DependencyEffect:
+      type: object
+      description: What a matched rule does to the target attribute.
+      properties:
+        allowed_values: { type: array, items: {} }
+        constraints: { type: array, items: {} }
+        required: { type: boolean, nullable: true }
+    EffectiveSchema:
+      type: object
+      description: An attribute's dependency-resolved state for one entity.
+      properties:
+        attribute_definition_id: { type: string }
+        entity_id: { type: string }
+        required: { type: boolean }
+        restricted: { type: boolean }
+        allowed_values: { type: array, items: {} }
+    RelationshipDefinition:
+      type: object
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        internal_name: { type: string }
+        display_name: { type: string }
+        description: { type: string }
+        kind: { type: string, enum: [directed, symmetric] }
+        parent_type_id: { type: string }
+        child_type_id: { type: string }
+        parent_label: { type: string }
+        child_label: { type: string }
+        attribute_set_id: { type: string }
+        extends_id: { type: string }
+        parent_version_policy: { type: string }
+        child_version_policy: { type: string }
+        min_children: { type: integer, nullable: true }
+        max_children: { type: integer, nullable: true }
+        min_parents: { type: integer, nullable: true }
+        max_parents: { type: integer, nullable: true }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        archived_at: { type: string, format: date-time, nullable: true }
+    Relationship:
+      type: object
+      description: One live link between two entities.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        relationship_definition_id: { type: string }
+        parent_entity_id: { type: string }
+        child_entity_id: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        archived_at: { type: string, format: date-time, nullable: true }
+    EntityLink:
+      type: object
+      description: >-
+        A relationship with its definition and the queried entity's role
+        resolved, so a caller does not have to look either up.
+      properties:
+        relationship: { $ref: "#/components/schemas/Relationship" }
+        definition: { $ref: "#/components/schemas/RelationshipDefinition" }
+        role: { type: string, enum: [parent, child] }
+    ActivityEntry:
+      type: object
+      description: One audit-log entry.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        actor: { type: string }
+        entity: { type: string }
+        entity_id: { type: string }
+        action: { type: string }
+        before: {}
+        after: {}
+        occurred_at: { type: string, format: date-time }
+    FeedEvent:
+      type: object
+      description: One event on the ordered feed.
+      properties:
+        feed_seq: { type: integer, format: int64 }
+        id: { type: string }
+        type: { type: string }
+        tenant_id: { type: string }
+        actor: { type: string }
+        occurred_at: { type: string, format: date-time }
+        payload: {}
+    EventCursor:
+      type: object
+      description: A named consumer's committed feed position.
+      properties:
+        consumer: { type: string }
+        position: { type: integer, format: int64 }
+        updated_at: { type: string, format: date-time }
+    Delivery:
+      type: object
+      description: One webhook delivery attempt record.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        subscription_id: { type: string }
+        event_id: { type: string }
+        status: { type: string, enum: [pending, inflight, delivered, dead] }
+        attempts: { type: integer }
+        last_error: { type: string }
+        next_attempt_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ValidateValueResult:
+      type: object
+      description: Whether a candidate value satisfies an attribute's constraints.
+      properties:
+        valid: { type: boolean }
+        error: { type: string }
+    AttributeSetIDs:
+      type: object
+      properties:
+        attribute_set_ids:
+          type: array
+          items: { type: string }
     EffectiveAttribute:
       type: object
       properties:
@@ -1869,7 +2395,6 @@ components:
     Facets:
       type: object
       properties:
-        type_definition_id: { type: string }
         facets:
           type: object
           additionalProperties:

@@ -398,12 +398,16 @@ with health checks still green, because reads were unaffected.
 
 ## [1.2.0] — 2026-07-18
 
-### Changed — REST behaviour
+### BREAKING — REST behaviour
 
-Three inconsistencies where the API contradicted itself, released as a minor
-because in each case the documented contract was already the new behaviour —
-the old one was the defect. Each is still visible to clients, so review before
+**Four** inconsistencies where the API contradicted itself, released as a minor
+under the carve-out in [api-stability.md](docs/api-stability.md#release-versioning):
+in each case the documented contract was already the new behaviour and the old
+one was the defect. Each is still visible to clients, so review before
 upgrading; the first can reject requests that previously succeeded.
+
+(This section said "three" and sat under a `Changed` heading. It is four, and
+a change that rejects previously-accepted requests belongs under BREAKING.)
 
 - **Declared numeric types are enforced, not coerced.** An `integer` or `float`
   attribute now rejects a quoted number (`"5"`, `"1.5"`) with `422 VALIDATION`.
@@ -422,6 +426,34 @@ upgrading; the first can reject requests that previously succeeded.
   without the admin scope now gets `403` rather than `501 FEATURE_DISABLED`, so
   an unauthorized caller cannot learn whether provisioning is configured in this
   deployment. Matches the order the other protected routes already use.
+- **A bad `?limit=` or `?cursor=` on `GET /activity` answers `422`, not `500`.**
+  A caller's malformed pagination argument was reported as an internal server
+  error, so it appeared on an error-rate dashboard as a service fault and gave
+  the caller nothing to correct (#258).
+
+### Fixed
+
+This section was missing entirely from the 1.2.0 release. Four fixes shipped in
+it and were documented nowhere:
+
+- **Enabling tracing was a hard boot failure.** Setting
+  `OTEL_EXPORTER_OTLP_ENDPOINT` — the only way to turn tracing on — made `Init`
+  return an error, and `cmd/flexitype` turned that into a refusal to start. So
+  the observability feature could not be enabled at all, and the failure looked
+  like a bad endpoint rather than a bug (#257).
+- **The in-memory backend silently dropped rows from paginated listings.** A
+  keyset page could omit records with no error and no gap in the cursor, so a
+  full walk returned an incomplete set that looked complete (#263).
+- **`formula.Parse` silently truncated at an unrecognised character.** The
+  parser stopped early and returned what it had, so `application/computed`
+  materialized a wrong value for every entity of the type, permanently and
+  without an error. **Behaviour change against stored data:** a formula that
+  appeared to work because it was being truncated now fails to parse, and the
+  attribute reports the error instead of a wrong number (#266).
+- **A change-set could write across tenants.** A change-set carrying another
+  tenant's attribute or entity ids archived that tenant's value on publish. See
+  the 1.1.0 security note below — the fix landed there and was omitted from its
+  security list (#222).
 
 ## [1.1.0] — 2026-07-18
 
@@ -456,6 +488,10 @@ so the type is internal wiring and continues to change without notice.
 
 ### Security
 
+- **A change-set could write across tenants** — a change-set carrying another
+  tenant's attribute or entity ids archived that tenant's value on publish. The
+  publish path now re-resolves every staged id in the publishing tenant's
+  scope. This fix shipped in 1.1.0 and was omitted from this list (#222).
 - **Media download is tenant-scoped** — an object key is served only to the
   tenant that owns it; a mismatch is a `404`, so ownership is not probeable
   (was a cross-tenant IDOR).

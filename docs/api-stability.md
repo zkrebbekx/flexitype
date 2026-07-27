@@ -9,7 +9,18 @@ each offers and how changes are communicated.
 
 Releases follow [Semantic Versioning](https://semver.org/). From **1.0**, the
 usual guarantees take effect: breaking changes only in majors, additive changes
-in minors, fixes in patches. Every release is a git tag (`vX.Y.Z`), a GitHub
+in minors, fixes in patches.
+
+**One carve-out, stated because it has already been used.** A fix that makes
+the API behave as documented can ship in a minor even when it rejects a
+request that previously succeeded — a validation gap closed, or a wrong status
+code corrected. v1.2.0 used it four times: quoted values for integer
+attributes are refused, `DELETE` of a missing unit family or match rule
+answers 404 rather than 204, provisioning routes authorize before the feature
+gate, and a bad `?limit=`/`?cursor=` on `/activity` answers 422 rather than
+500. Each such change is listed in the changelog under a **BREAKING** heading
+with the old and new behaviour. What does *not* ship in a minor is a change to
+a shape or a name that behaved correctly. Every release is a git tag (`vX.Y.Z`), a GitHub
 release, and an entry in [CHANGELOG.md](../CHANGELOG.md). Pin a tag; do not
 depend on `main`.
 
@@ -39,6 +50,19 @@ surface** — the only symbols that carry the SemVer compatibility promise from
 
 - **The facade**: the root `github.com/zkrebbekx/flexitype` package —
   `New`/`NewInMemory`, its `Option`s, `Service` and the types they exchange.
+- **The data surface**: the interactors reached through
+  `Service.Interactors(ctx)` and `Service.Factory()` — their method
+  signatures, their `…Input` structs, and the types they return.
+
+  This was previously excluded, which made the promise hollow: no facade
+  method performs a CRUD operation, so every line of an embedder's business
+  logic went through a layer the document disclaimed. A team could evaluate
+  library mode on the strength of this page and find there was no version to
+  pin that gave them the guarantee they had read.
+
+  What stays internal inside those packages: the repository and store ports
+  they depend on, their constructors, and everything unexported. Take the
+  interactors from the facade; do not build one yourself.
 - **The Go client module**: `github.com/zkrebbekx/flexitype/client` (see
   below; separately versioned).
 - **Extension ports** you implement and hand to the facade:
@@ -49,8 +73,11 @@ surface** — the only symbols that carry the SemVer compatibility promise from
     (the auth boundary for the standalone server).
 
 `pkg/db` is **not** an extension port. It was listed as one through 1.0, in
-error: no facade option accepts a `Transactor`, and `New` takes an
-`*sqlx.DB` and builds the transactor itself. `db.Transactor`, `db.Tx` and
+error: no facade option accepts a `Transactor`. `New(pool *sqlx.DB, opts
+...Option)` takes a concrete `*sqlx.DB` and builds the transactor itself, so
+**`github.com/jmoiron/sqlx` is part of the supported signature** — that is a
+dependency an embedder inherits, and it is named here rather than discovered
+late by someone designing around "we supply our own transaction handle". `db.Transactor`, `db.Tx` and
 `db.TxMarker` are internal wiring and change without notice — `Tx` was
 resealed as an opaque marker in 1.1.0. Supply your own pool to `New` to
 control connection settings; there is no supported way to substitute a
@@ -58,12 +85,13 @@ transaction manager.
 
 Everything else is **internal, with no compatibility promise**, even though Go
 requires it to be exported for the facade to wire it together — treat it as you
-would `internal/`. This includes: the `application/*` interactors, their input
-structs and stores; the `domain/*` aggregates and repository ports; both
-storage backends (`infrastructure/*`); the FQL and formula ASTs (`pkg/fql`,
-`pkg/formula`); and deployment plumbing. Do **not** import these directly from
-outside the module; configure behaviour through the facade's `Option`s instead.
-They may change in any release.
+would `internal/`. This includes: the stores and repository ports the
+`application/*` interactors depend on, and the interactors' own constructors;
+the `domain/*` aggregates and repository ports; both storage backends
+(`infrastructure/*`); the FQL and formula ASTs (`pkg/fql`, `pkg/formula`); and
+deployment plumbing. Do **not** construct these directly; reach the interactors
+through `Service.Interactors(ctx)` and configure behaviour through the facade's
+`Option`s. They may change in any release.
 
 - `internal/` is never part of the public API. Deployment plumbing that only
   `cmd/flexitype` and the facade use (`config`, `shutdown`, `telemetry`,

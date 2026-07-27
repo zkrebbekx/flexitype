@@ -63,7 +63,10 @@ func (s *EntitiesService) Relationships(ctx context.Context, typeID, entityID st
 // entity (required, restricted, allowed values).
 func (s *EntitiesService) EffectiveSchema(ctx context.Context, typeID, entityID, attributeID string) (*EffectiveSchema, error) {
 	var out EffectiveSchema
-	return &out, s.c.do(ctx, http.MethodGet, "/entities/"+typeID+"/"+url.PathEscape(entityID)+"/attributes/"+attributeID+"/effective-schema", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/entities/"+typeID+"/"+url.PathEscape(entityID)+"/attributes/"+attributeID+"/effective-schema", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // RelationshipRequirements reports an entity's unmet cardinality minimums.
@@ -74,7 +77,10 @@ func (s *EntitiesService) RelationshipRequirements(ctx context.Context, typeID, 
 // Completeness scores one entity against its effective required schema.
 func (s *EntitiesService) Completeness(ctx context.Context, typeID, entityID string) (*Completeness, error) {
 	var out Completeness
-	return &out, s.c.do(ctx, http.MethodGet, "/entities/"+typeID+"/"+url.PathEscape(entityID)+"/completeness", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/entities/"+typeID+"/"+url.PathEscape(entityID)+"/completeness", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Remove archives an entity's values and unlinks its relationships.
@@ -90,7 +96,10 @@ func (s *EntitiesService) Grid(ctx context.Context, typeID string, attributes []
 	}
 	firstOpts(opts).apply(q)
 	var out GridResult
-	return &out, s.c.do(ctx, http.MethodGet, "/entities/"+typeID+"/grid", q, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/entities/"+typeID+"/grid", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Facets returns value counts for the chosen attributes over the current
@@ -104,7 +113,10 @@ func (s *EntitiesService) Facets(ctx context.Context, typeID string, attributes 
 		q.Set("query", query)
 	}
 	var out Facets
-	return &out, s.c.do(ctx, http.MethodGet, "/entities/"+typeID+"/facets", q, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/entities/"+typeID+"/facets", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // ImportInput describes a CSV import against one type.
@@ -234,7 +246,10 @@ func (s *EntitiesService) Revisions(ctx context.Context, typeID, entityID string
 // CreateRevision captures an entity's current values as a new revision.
 func (s *EntitiesService) CreateRevision(ctx context.Context, typeID, entityID, label string) (*EntityRevision, error) {
 	var out EntityRevision
-	return &out, s.c.do(ctx, http.MethodPost, "/entities/"+typeID+"/"+url.PathEscape(entityID)+"/revisions", nil, map[string]string{"label": label}, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/entities/"+typeID+"/"+url.PathEscape(entityID)+"/revisions", nil, map[string]string{"label": label}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // DownloadMedia streams a stored media object by its key, returning the bytes

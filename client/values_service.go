@@ -25,7 +25,10 @@ type SetValueInput struct {
 // Set writes one value (create or update; single-valued attributes upsert).
 func (s *ValuesService) Set(ctx context.Context, in SetValueInput) (*AttributeValue, error) {
 	var out AttributeValue
-	return &out, s.c.do(ctx, http.MethodPost, "/values", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/values", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // SetBatch writes many values atomically in one unit of work.
@@ -42,7 +45,10 @@ func (s *ValuesService) SetBatch(ctx context.Context, in []SetValueInput) ([]Att
 // Get loads one value by id.
 func (s *ValuesService) Get(ctx context.Context, id string) (*AttributeValue, error) {
 	var out AttributeValue
-	return &out, s.c.do(ctx, http.MethodGet, "/values/"+id, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/values/"+id, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Remove archives one value by id.

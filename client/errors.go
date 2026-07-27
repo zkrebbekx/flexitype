@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // ErrorCode is a stable, machine-readable failure code the API returns.
@@ -69,6 +72,13 @@ type APIError struct {
 	Message string
 	// Details is the optional machine-readable context.
 	Details map[string]any
+
+	// RetryAfter is how long the server asked the caller to wait before
+	// retrying, parsed from the Retry-After header. It is zero when the
+	// server sent no hint. The server sets it on every throttle, and it was
+	// dropped: callers saw RATE_LIMITED with no wait hint and either failed
+	// outright or invented their own backoff.
+	RetryAfter time.Duration
 }
 
 // Error implements error.
@@ -99,19 +109,46 @@ func decodeError(resp *http.Response) error {
 			Details map[string]any `json:"details,omitempty"`
 		} `json:"error"`
 	}
+	retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	if err := json.Unmarshal(body, &wire); err != nil || wire.Error.Code == "" {
 		return &APIError{
-			Status:  resp.StatusCode,
-			Code:    CodeInternal,
-			Message: fmt.Sprintf("unexpected %d response: %s", resp.StatusCode, truncate(string(body), 200)),
+			Status:     resp.StatusCode,
+			Code:       CodeInternal,
+			Message:    fmt.Sprintf("unexpected %d response: %s", resp.StatusCode, truncate(string(body), 200)),
+			RetryAfter: retryAfter,
 		}
 	}
 	return &APIError{
-		Status:  resp.StatusCode,
-		Code:    ErrorCode(wire.Error.Code),
-		Message: wire.Error.Message,
-		Details: wire.Error.Details,
+		Status:     resp.StatusCode,
+		Code:       ErrorCode(wire.Error.Code),
+		Message:    wire.Error.Message,
+		Details:    wire.Error.Details,
+		RetryAfter: retryAfter,
 	}
+}
+
+// parseRetryAfter reads both forms RFC 9110 allows for Retry-After: a delay
+// in whole seconds, and an HTTP date. A date in the past gives zero, not a
+// negative wait.
+func parseRetryAfter(header string, now time.Time) time.Duration {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(header); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	when, err := http.ParseTime(header)
+	if err != nil {
+		return 0
+	}
+	if d := when.Sub(now); d > 0 {
+		return d
+	}
+	return 0
 }
 
 func truncate(s string, n int) string {

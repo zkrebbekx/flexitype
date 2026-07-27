@@ -43,19 +43,28 @@ func (s *DependenciesService) All(ctx context.Context, opts ...ListOptions) iter
 // Get loads one dependency.
 func (s *DependenciesService) Get(ctx context.Context, id string) (*Dependency, error) {
 	var out Dependency
-	return &out, s.c.do(ctx, http.MethodGet, "/dependencies/"+id, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/dependencies/"+id, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Create creates a dependency.
 func (s *DependenciesService) Create(ctx context.Context, in CreateDependencyInput) (*Dependency, error) {
 	var out Dependency
-	return &out, s.c.do(ctx, http.MethodPost, "/dependencies", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/dependencies", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Update mutates a dependency.
 func (s *DependenciesService) Update(ctx context.Context, id string, in CreateDependencyInput) (*Dependency, error) {
 	var out Dependency
-	return &out, s.c.do(ctx, http.MethodPatch, "/dependencies/"+id, nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPatch, "/dependencies/"+id, nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Archive soft-deletes a dependency.
@@ -84,13 +93,19 @@ func (s *UnitFamiliesService) List(ctx context.Context) ([]UnitFamily, error) {
 // Get loads one unit family.
 func (s *UnitFamiliesService) Get(ctx context.Context, id string) (*UnitFamily, error) {
 	var out UnitFamily
-	return &out, s.c.do(ctx, http.MethodGet, "/unit-families/"+id, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/unit-families/"+id, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Create creates a unit family.
 func (s *UnitFamiliesService) Create(ctx context.Context, in CreateUnitFamilyInput) (*UnitFamily, error) {
 	var out UnitFamily
-	return &out, s.c.do(ctx, http.MethodPost, "/unit-families", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/unit-families", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Delete removes a unit family.
@@ -135,26 +150,38 @@ func (s *SavedViewsService) List(ctx context.Context) ([]SavedView, error) {
 // Get loads one saved view.
 func (s *SavedViewsService) Get(ctx context.Context, id string) (*SavedView, error) {
 	var out SavedView
-	return &out, s.c.do(ctx, http.MethodGet, "/saved-views/"+id, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/saved-views/"+id, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Create creates a saved view.
 func (s *SavedViewsService) Create(ctx context.Context, in SavedViewInput) (*SavedView, error) {
 	var out SavedView
-	return &out, s.c.do(ctx, http.MethodPost, "/saved-views", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/saved-views", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Update replaces every field of a saved view. A zero value in the input
 // clears the stored value; use Patch to change a subset.
 func (s *SavedViewsService) Update(ctx context.Context, id string, in SavedViewInput) (*SavedView, error) {
 	var out SavedView
-	return &out, s.c.do(ctx, http.MethodPatch, "/saved-views/"+id, nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPatch, "/saved-views/"+id, nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Patch changes only the fields set on in, leaving the rest as stored.
 func (s *SavedViewsService) Patch(ctx context.Context, id string, in SavedViewPatch) (*SavedView, error) {
 	var out SavedView
-	return &out, s.c.do(ctx, http.MethodPatch, "/saved-views/"+id, nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPatch, "/saved-views/"+id, nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Delete removes a saved view.
@@ -170,7 +197,10 @@ type RevisionsService struct{ c *Client }
 // Get loads one revision.
 func (s *RevisionsService) Get(ctx context.Context, id string) (*EntityRevision, error) {
 	var out EntityRevision
-	return &out, s.c.do(ctx, http.MethodGet, "/revisions/"+id, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/revisions/"+id, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Diff returns the difference between two revisions of one entity as raw
@@ -203,7 +233,10 @@ type MatchRulesService struct{ c *Client }
 // Scan runs a rule and returns scored candidate duplicate pairs.
 func (s *MatchRulesService) Scan(ctx context.Context, ruleID string) (*MatchScan, error) {
 	var out MatchScan
-	return &out, s.c.do(ctx, http.MethodGet, "/match-rules/"+ruleID+"/scan", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/match-rules/"+ruleID+"/scan", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Dismiss records a candidate pair as not-a-duplicate so it never resurfaces.
@@ -232,7 +265,10 @@ func (s *SchemaService) Export(ctx context.Context) (json.RawMessage, error) {
 // Import applies a bundle idempotently and reports what was created vs skipped.
 func (s *SchemaService) Import(ctx context.Context, bundle json.RawMessage) (*SchemaImportResult, error) {
 	var out SchemaImportResult
-	return &out, s.c.do(ctx, http.MethodPost, "/schema/import", nil, bundle, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/schema/import", nil, bundle, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Templates lists the curated starter schemas.
@@ -243,7 +279,10 @@ func (s *SchemaService) Templates(ctx context.Context) ([]SchemaTemplate, error)
 // ApplyTemplate imports a curated template into the caller's tenant.
 func (s *SchemaService) ApplyTemplate(ctx context.Context, name string) (*SchemaImportResult, error) {
 	var out SchemaImportResult
-	return &out, s.c.do(ctx, http.MethodPost, "/schema/templates/"+url.PathEscape(name)+"/apply", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/schema/templates/"+url.PathEscape(name)+"/apply", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // --- change-sets -------------------------------------------------------------
@@ -266,19 +305,28 @@ func (s *ChangeSetsService) List(ctx context.Context) ([]ChangeSet, error) {
 // Get loads one change-set.
 func (s *ChangeSetsService) Get(ctx context.Context, id string) (*ChangeSet, error) {
 	var out ChangeSet
-	return &out, s.c.do(ctx, http.MethodGet, "/changesets/"+id, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/changesets/"+id, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Create opens a change-set.
 func (s *ChangeSetsService) Create(ctx context.Context, in CreateChangeSetInput) (*ChangeSet, error) {
 	var out ChangeSet
-	return &out, s.c.do(ctx, http.MethodPost, "/changesets", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/changesets", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // AddMutation stages one value change on a draft change-set.
 func (s *ChangeSetsService) AddMutation(ctx context.Context, id string, m Mutation) (*ChangeSet, error) {
 	var out ChangeSet
-	return &out, s.c.do(ctx, http.MethodPost, "/changesets/"+id+"/mutations", nil, m, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/changesets/"+id+"/mutations", nil, m, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Submit moves a draft into review.
@@ -303,7 +351,10 @@ func (s *ChangeSetsService) Publish(ctx context.Context, id string) (*ChangeSet,
 
 func (s *ChangeSetsService) transition(ctx context.Context, id, action string) (*ChangeSet, error) {
 	var out ChangeSet
-	return &out, s.c.do(ctx, http.MethodPost, "/changesets/"+id+"/"+action, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/changesets/"+id+"/"+action, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // --- relationship definitions -----------------------------------------------
@@ -356,25 +407,37 @@ func (s *RelationshipDefinitionsService) List(ctx context.Context, opts ...ListR
 // Get loads one relationship definition.
 func (s *RelationshipDefinitionsService) Get(ctx context.Context, id string) (*RelationshipDefinition, error) {
 	var out RelationshipDefinition
-	return &out, s.c.do(ctx, http.MethodGet, "/relationship-definitions/"+id, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/relationship-definitions/"+id, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Create creates a relationship definition.
 func (s *RelationshipDefinitionsService) Create(ctx context.Context, in CreateRelationshipDefinitionInput) (*RelationshipDefinition, error) {
 	var out RelationshipDefinition
-	return &out, s.c.do(ctx, http.MethodPost, "/relationship-definitions", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/relationship-definitions", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Archive soft-deletes a relationship definition.
 func (s *RelationshipDefinitionsService) Archive(ctx context.Context, id string) (*RelationshipDefinition, error) {
 	var out RelationshipDefinition
-	return &out, s.c.do(ctx, http.MethodPost, "/relationship-definitions/"+id+"/archive", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/relationship-definitions/"+id+"/archive", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Restore reverses an archive.
 func (s *RelationshipDefinitionsService) Restore(ctx context.Context, id string) (*RelationshipDefinition, error) {
 	var out RelationshipDefinition
-	return &out, s.c.do(ctx, http.MethodPost, "/relationship-definitions/"+id+"/restore", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/relationship-definitions/"+id+"/restore", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // --- relationships (links) --------------------------------------------------
@@ -397,13 +460,19 @@ func (s *RelationshipsService) List(ctx context.Context, opts ...ListOptions) (*
 // Get loads one relationship.
 func (s *RelationshipsService) Get(ctx context.Context, id string) (*Relationship, error) {
 	var out Relationship
-	return &out, s.c.do(ctx, http.MethodGet, "/relationships/"+id, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/relationships/"+id, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Link creates a relationship between two entities.
 func (s *RelationshipsService) Link(ctx context.Context, in LinkInput) (*Relationship, error) {
 	var out Relationship
-	return &out, s.c.do(ctx, http.MethodPost, "/relationships", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/relationships", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Unlink archives a relationship.
@@ -478,19 +547,28 @@ func (s *WebhooksService) List(ctx context.Context) ([]WebhookSubscription, erro
 // Get loads one subscription.
 func (s *WebhooksService) Get(ctx context.Context, id string) (*WebhookSubscription, error) {
 	var out WebhookSubscription
-	return &out, s.c.do(ctx, http.MethodGet, "/webhook-subscriptions/"+id, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/webhook-subscriptions/"+id, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Create creates a subscription.
 func (s *WebhooksService) Create(ctx context.Context, in SubscriptionInput) (*WebhookSubscription, error) {
 	var out WebhookSubscription
-	return &out, s.c.do(ctx, http.MethodPost, "/webhook-subscriptions", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/webhook-subscriptions", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Update mutates a subscription.
 func (s *WebhooksService) Update(ctx context.Context, id string, in SubscriptionInput) (*WebhookSubscription, error) {
 	var out WebhookSubscription
-	return &out, s.c.do(ctx, http.MethodPatch, "/webhook-subscriptions/"+id, nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPatch, "/webhook-subscriptions/"+id, nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Delete removes a subscription.
@@ -594,13 +672,19 @@ func (s *AdminService) ListTenants(ctx context.Context) ([]Tenant, error) {
 // CreateTenant provisions a tenant.
 func (s *AdminService) CreateTenant(ctx context.Context, name string) (*Tenant, error) {
 	var out Tenant
-	return &out, s.c.do(ctx, http.MethodPost, "/tenants", nil, map[string]string{"name": name}, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/tenants", nil, map[string]string{"name": name}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // SetTenantActive enables or disables a tenant.
 func (s *AdminService) SetTenantActive(ctx context.Context, name string, active bool) (*Tenant, error) {
 	var out Tenant
-	return &out, s.c.do(ctx, http.MethodPatch, "/tenants/"+url.PathEscape(name), nil, map[string]bool{"active": active}, &out)
+	if err := s.c.do(ctx, http.MethodPatch, "/tenants/"+url.PathEscape(name), nil, map[string]bool{"active": active}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // ListServiceAccounts returns one tenant's service accounts. tenant is
@@ -627,13 +711,19 @@ type CreateServiceAccountInput struct {
 // CreateServiceAccount provisions a service account and returns its one-time token.
 func (s *AdminService) CreateServiceAccount(ctx context.Context, in CreateServiceAccountInput) (*ServiceAccount, error) {
 	var out ServiceAccount
-	return &out, s.c.do(ctx, http.MethodPost, "/service-accounts", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/service-accounts", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // RotateServiceAccount issues a new token for a service account.
 func (s *AdminService) RotateServiceAccount(ctx context.Context, id string) (*ServiceAccount, error) {
 	var out ServiceAccount
-	return &out, s.c.do(ctx, http.MethodPost, "/service-accounts/"+id+"/rotate", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/service-accounts/"+id+"/rotate", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // RevokeServiceAccount deletes a service account.

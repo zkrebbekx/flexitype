@@ -552,8 +552,11 @@ func (s *Service) Factory() application.Factory { return s.factory }
 // their own API handler (e.g. the WASM playground).
 func (s *Service) GraphQLEngine() *gql.Engine { return s.graphql }
 
-// Dispatcher exposes the event dispatcher, e.g. to register hooks after
-// construction.
+// Dispatcher exposes the event dispatcher, for inspection and for
+// registering hooks before the service starts serving.
+//
+// Register during composition, not while traffic flows: Register mutates
+// the handler slice that Dispatch reads, and neither is synchronised.
 func (s *Service) Dispatcher() *events.Dispatcher { return s.dispatcher }
 
 // APIConfig configures the mountable REST API for embedded deployments.
@@ -672,9 +675,12 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 		}
 		server.Admin = s.AdminInteractor(adminOpts...)
 	}
+	// Reindex needs the search index; recompute does not. Gating both on
+	// the indexer made the maintenance recompute endpoint 404 for every
+	// deployment that runs computed attributes without search.
 	if s.indexer != nil {
 		server.Reindex = s.ReindexSearch
-		server.RecomputeComputed = s.RecomputeComputed
 	}
+	server.RecomputeComputed = s.RecomputeComputed
 	return httpapi.NewHandler(server)
 }

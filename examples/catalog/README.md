@@ -82,9 +82,15 @@ Either every value lands (and its events fire) or the batch rolls back.
 
 ### 4. Cascading dependency
 
-`status = "active"` makes `sku` required. Inspect an entity's effective
-schema to see the rule take effect, or try setting `status` to `active`
-with no `sku` and watch it fail validation.
+`status = "active"` makes `sku` required. Set `status` to `active`, then
+read the effective schema for `sku` and see `required` become true, or
+read the entity's completeness and see `sku` listed as missing.
+
+Requiredness is a completeness signal, not a write-time constraint. Each
+write validates the one attribute it carries, so setting `status` to
+`active` while `sku` is absent succeeds. Gate on completeness at the point
+where the entity must be whole — publishing it, for example — rather than
+on each individual write.
 
 ### 5. FQL
 

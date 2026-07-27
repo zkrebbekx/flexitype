@@ -33,34 +33,36 @@ func (s *subscriptionStore) WithTx(tx db.Tx) webhook.SubscriptionStore {
 }
 
 type subscriptionRow struct {
-	ID             ulid.ID        `db:"id"`
-	TenantID       string         `db:"tenant_id"`
-	Name           string         `db:"name"`
-	URL            string         `db:"url"`
-	Secret         string         `db:"secret"`
-	PreviousSecret string         `db:"previous_secret"`
-	EventTypes     pq.StringArray `db:"event_types"`
-	Active         bool           `db:"active"`
-	CreatedAt      time.Time      `db:"created_at"`
-	UpdatedAt      time.Time      `db:"updated_at"`
+	ID         ulid.ID        `db:"id"`
+	TenantID   string         `db:"tenant_id"`
+	Name       string         `db:"name"`
+	URL        string         `db:"url"`
+	Secret     string         `db:"secret"`
+	EventTypes pq.StringArray `db:"event_types"`
+	Active     bool           `db:"active"`
+	CreatedAt  time.Time      `db:"created_at"`
+	UpdatedAt  time.Time      `db:"updated_at"`
 }
 
 func (r subscriptionRow) toSubscription() webhook.Subscription {
 	return webhook.Subscription{
-		ID:             r.ID,
-		TenantID:       valueobjects.TenantID(r.TenantID),
-		Name:           r.Name,
-		URL:            r.URL,
-		Secret:         r.Secret,
-		PreviousSecret: r.PreviousSecret,
-		EventTypes:     []string(r.EventTypes),
-		Active:         r.Active,
-		CreatedAt:      r.CreatedAt,
-		UpdatedAt:      r.UpdatedAt,
+		ID:         r.ID,
+		TenantID:   valueobjects.TenantID(r.TenantID),
+		Name:       r.Name,
+		URL:        r.URL,
+		Secret:     r.Secret,
+		EventTypes: []string(r.EventTypes),
+		Active:     r.Active,
+		CreatedAt:  r.CreatedAt,
+		UpdatedAt:  r.UpdatedAt,
 	}
 }
 
-const subscriptionCols = `id, tenant_id, name, url, secret, previous_secret, event_types, active, created_at, updated_at`
+// subscriptionCols omits previous_secret. Nothing signs with it — a
+// delivery carries one signature, computed with secret — so it is no longer
+// read or written. The column stays until the next major version so that a
+// rollback to an older binary still finds it.
+const subscriptionCols = `id, tenant_id, name, url, secret, event_types, active, created_at, updated_at`
 
 // textArray keeps nil slices as empty SQL arrays (the column is NOT NULL).
 func textArray(v []string) pq.StringArray {
@@ -125,8 +127,8 @@ func (s *subscriptionStore) ListActive(ctx context.Context) ([]webhook.Subscript
 func (s *subscriptionStore) Create(ctx context.Context, sub webhook.Subscription) error {
 	_, err := s.q.ExecContext(ctx, bind(`INSERT INTO flexitype_webhook_subscription
 	   (`+subscriptionCols+`)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-		sub.ID, sub.TenantID.String(), sub.Name, sub.URL, sub.Secret, sub.PreviousSecret,
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		sub.ID, sub.TenantID.String(), sub.Name, sub.URL, sub.Secret,
 		textArray(sub.EventTypes), sub.Active, sub.CreatedAt, sub.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("insert subscription: %w", err)
@@ -136,9 +138,9 @@ func (s *subscriptionStore) Create(ctx context.Context, sub webhook.Subscription
 
 func (s *subscriptionStore) Update(ctx context.Context, sub webhook.Subscription) error {
 	_, err := s.q.ExecContext(ctx, bind(`UPDATE flexitype_webhook_subscription
-	 SET url = ?, secret = ?, previous_secret = ?, event_types = ?, active = ?, updated_at = ?
+	 SET url = ?, secret = ?, event_types = ?, active = ?, updated_at = ?
 	 WHERE tenant_id = ? AND id = ?`),
-		sub.URL, sub.Secret, sub.PreviousSecret, textArray(sub.EventTypes), sub.Active,
+		sub.URL, sub.Secret, textArray(sub.EventTypes), sub.Active,
 		sub.UpdatedAt, sub.TenantID.String(), sub.ID)
 	if err != nil {
 		return fmt.Errorf("update subscription: %w", err)

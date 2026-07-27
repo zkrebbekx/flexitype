@@ -464,18 +464,25 @@ func TestHTTPDisabledFeatures(t *testing.T) {
 	Convey("Given a service without the search index", t, func() {
 		a := newAPI(t, flexitype.APIConfig{})
 
-		Convey("When a reindex or recompute is requested", func() {
+		Convey("When a reindex is requested", func() {
 			reindex := a.post("/api/v1/search/reindex", nil)
-			recompute := a.post("/api/v1/computed/recompute", nil)
 
-			Convey("Then both are 501 — the maintenance hooks are not wired", func() {
+			Convey("Then it is 501 — the search index is not wired", func() {
 				So(reindex.Status, ShouldEqual, http.StatusNotImplemented)
 				So(reindex.errorCode(), ShouldEqual, "FEATURE_DISABLED")
 				So(reindex.errorMessage(), ShouldContainSubstring, "search index")
+			})
+		})
 
-				So(recompute.Status, ShouldEqual, http.StatusNotImplemented)
-				So(recompute.errorCode(), ShouldEqual, "FEATURE_DISABLED")
-				So(recompute.errorMessage(), ShouldContainSubstring, "computed attributes")
+		Convey("When a recompute is requested", func() {
+			// Recompute walks entities and re-evaluates formulas. It never
+			// touches the index, so it was wired behind the wrong guard: a
+			// deployment using computed attributes without search got a
+			// "feature disabled" answer that named nothing it had turned off.
+			recompute := a.post("/api/v1/computed/recompute", nil)
+
+			Convey("Then it is served, because it does not need the index", func() {
+				So(recompute.Status, ShouldEqual, http.StatusOK)
 			})
 		})
 	})

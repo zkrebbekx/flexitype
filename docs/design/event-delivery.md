@@ -190,9 +190,26 @@ POST   /api/v1/webhook-deliveries/{id}/redeliver
 
 Tenant-scoped like every other resource; service-account auth applies.
 Subscriptions live in the DB (`flexitype_webhook_subscription`), so all
-replicas see the same set — no config drift between replicas. Secret
-rotation keeps `secret` + `previous_secret` both signing-valid for a
-grace window.
+replicas see the same set — no config drift between replicas.
+
+#### Secret rotation
+
+A delivery carries one signature, computed with the subscription's
+current secret. The grace window is on the receiving side: `VerifyRequest`
+takes a list of secrets and accepts a delivery that matches any of them.
+Rotate in this order, so that no delivery is ever signed with a secret the
+receiver does not hold:
+
+1. Add the new secret to the receiver's accepted list, keeping the old one.
+   The receiver now accepts both. The server still signs with the old one.
+2. Rotate the subscription (`PATCH` with `rotate_secret`). The server now
+   signs with the new secret, which the receiver already accepts.
+3. Remove the old secret from the receiver's accepted list.
+
+Step 1 must complete on every receiver replica before step 2. Rotating
+first is a hard cutover: every delivery signed between the rotation and
+the receiver update fails signature verification, and is retried until
+the receiver catches up or the delivery goes dead.
 
 ### 4. Events feed + cursors
 

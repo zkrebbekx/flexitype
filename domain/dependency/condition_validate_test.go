@@ -193,13 +193,29 @@ func TestConditionMatchingEdges(t *testing.T) {
 
 		Convey("When a pattern condition is evaluated", func() {
 			Convey("Then the source text is matched and a bad pattern errors", func() {
-				got, err := Condition{Kind: CondPattern, Pattern: "^SKU-"}.
+				// Anchored: the expression must match the WHOLE value, so a
+				// prefix rule spells out the rest.
+				got, err := Condition{Kind: CondPattern, Pattern: "SKU-.*"}.
 					Matches(valueobjects.NewStringValue("SKU-9"), now)
 				So(err, ShouldBeNil)
 				So(got, ShouldBeTrue)
 
-				got, err = Condition{Kind: CondPattern, Pattern: "^SKU-"}.
+				got, err = Condition{Kind: CondPattern, Pattern: "SKU-.*"}.
 					Matches(valueobjects.NewStringValue("PART-9"), now)
+				So(err, ShouldBeNil)
+				So(got, ShouldBeFalse)
+
+				// A rule written under the old substring behaviour keeps it by
+				// asking for it.
+				got, err = Condition{Kind: CondPattern, Pattern: "^SKU-", PatternSubstring: true}.
+					Matches(valueobjects.NewStringValue("SKU-9"), now)
+				So(err, ShouldBeNil)
+				So(got, ShouldBeTrue)
+
+				// And an unanchored expression no longer matches a value that
+				// merely contains it.
+				got, err = Condition{Kind: CondPattern, Pattern: "[0-9]{4}"}.
+					Matches(valueobjects.NewStringValue("abc1234def"), now)
 				So(err, ShouldBeNil)
 				So(got, ShouldBeFalse)
 

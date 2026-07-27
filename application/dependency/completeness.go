@@ -75,7 +75,7 @@ func (i *Interactor) entityFilled(
 	tenant valueobjects.TenantID,
 	typeID valueobjects.TypeDefinitionID,
 	entityID valueobjects.EntityID,
-) (map[valueobjects.AttributeDefinitionID]valueobjects.Value, error) {
+) (map[valueobjects.AttributeDefinitionID][]valueobjects.Value, error) {
 	values, err := i.values.ListByEntity(ctx, domainvalue.EntityKey{
 		TenantID:         tenant,
 		TypeDefinitionID: typeID,
@@ -84,9 +84,13 @@ func (i *Interactor) entityFilled(
 	if err != nil {
 		return nil, err
 	}
-	set := make(map[valueobjects.AttributeDefinitionID]valueobjects.Value, len(values))
+	// Every value of each attribute, not one arbitrary member: a multi-valued
+	// attribute collapsed to whichever row came last, so a dependency whose
+	// source is multi-valued scored against a single member.
+	set := make(map[valueobjects.AttributeDefinitionID][]valueobjects.Value, len(values))
 	for _, av := range values {
-		set[av.AttributeDefinitionID()] = av.Value()
+		id := av.AttributeDefinitionID()
+		set[id] = append(set[id], av.Value())
 	}
 	return set, nil
 }
@@ -100,7 +104,7 @@ func (i *Interactor) scoreEntity(
 	ctx context.Context,
 	t *domaintypedef.TypeDefinition,
 	entityID valueobjects.EntityID,
-	filled map[valueobjects.AttributeDefinitionID]valueobjects.Value,
+	filled map[valueobjects.AttributeDefinitionID][]valueobjects.Value,
 ) (*CompletenessOutput, error) {
 	chain, err := apptypedef.Chain(ctx, i.typeDefs, t)
 	if err != nil {
@@ -271,7 +275,7 @@ func (i *Interactor) TypeCompleteness(ctx context.Context, rawTypeID string) (*T
 func (i *Interactor) attributeRequired(
 	ctx context.Context,
 	a *domainattribute.Definition,
-	filled map[valueobjects.AttributeDefinitionID]valueobjects.Value,
+	filled map[valueobjects.AttributeDefinitionID][]valueobjects.Value,
 ) (bool, error) {
 	deps, err := i.deps.ListByTarget(ctx, a.ID())
 	if err != nil {

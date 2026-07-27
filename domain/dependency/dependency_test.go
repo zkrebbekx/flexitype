@@ -133,8 +133,8 @@ func TestDependencyAggregate(t *testing.T) {
 		})
 
 		Convey("When the entity's category is bike", func() {
-			sourceValues := map[valueobjects.AttributeDefinitionID]valueobjects.Value{
-				category.ID(): valueobjects.NewEnumValue("bike"),
+			sourceValues := map[valueobjects.AttributeDefinitionID][]valueobjects.Value{
+				category.ID(): {valueobjects.NewEnumValue("bike")},
 			}
 			schema, err := ResolveEffective(subcategory, []*Dependency{dep}, sourceValues, now)
 			So(err, ShouldBeNil)
@@ -149,8 +149,8 @@ func TestDependencyAggregate(t *testing.T) {
 		})
 
 		Convey("When the entity's category is car", func() {
-			sourceValues := map[valueobjects.AttributeDefinitionID]valueobjects.Value{
-				category.ID(): valueobjects.NewEnumValue("car"),
+			sourceValues := map[valueobjects.AttributeDefinitionID][]valueobjects.Value{
+				category.ID(): {valueobjects.NewEnumValue("car")},
 			}
 			schema, err := ResolveEffective(subcategory, []*Dependency{dep}, sourceValues, now)
 			So(err, ShouldBeNil)
@@ -172,8 +172,8 @@ func TestDependencyAggregate(t *testing.T) {
 			}, now)
 			So(err, ShouldBeNil)
 
-			sourceValues := map[valueobjects.AttributeDefinitionID]valueobjects.Value{
-				category.ID(): valueobjects.NewEnumValue("bike"),
+			sourceValues := map[valueobjects.AttributeDefinitionID][]valueobjects.Value{
+				category.ID(): {valueobjects.NewEnumValue("bike")},
 			}
 			schema, err := ResolveEffective(subcategory, []*Dependency{dep, dep2}, sourceValues, now)
 			So(err, ShouldBeNil)
@@ -207,8 +207,8 @@ func TestDependencyAggregate(t *testing.T) {
 			}, now)
 			So(err, ShouldBeNil)
 
-			sourceValues := map[valueobjects.AttributeDefinitionID]valueobjects.Value{
-				category.ID(): valueobjects.NewEnumValue("bike"),
+			sourceValues := map[valueobjects.AttributeDefinitionID][]valueobjects.Value{
+				category.ID(): {valueobjects.NewEnumValue("bike")},
 			}
 			schema, err := ResolveEffective(subcategory, []*Dependency{dep3}, sourceValues, now)
 			So(err, ShouldBeNil)

@@ -247,7 +247,7 @@ func (f *factory) New(context.Context) *Interactors {
 			Blobs:          f.cfg.BlobStore,
 			OnCleanupError: f.cfg.OnCleanupError,
 		}),
-		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.ValueReader, repos.Dependencies),
+		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.ValueReader, repos.Dependencies, f.cfg.UnitFamilies),
 		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),
 		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query, f.cfg.Features.SearchIndex, f.cfg.UnitFamilies),
 		activity:      &ActivityInteractor{log: activityLog, acl: fieldacl.New(repos.Attributes)},

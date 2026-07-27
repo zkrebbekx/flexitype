@@ -616,9 +616,9 @@ func (i *Interactor) checkDependencies(
 	if err != nil {
 		return fmt.Errorf("load entity values: %w", err)
 	}
-	sourceValues := make(map[valueobjects.AttributeDefinitionID]valueobjects.Value, len(entityValues))
+	sourceValues := make(map[valueobjects.AttributeDefinitionID][]valueobjects.Value, len(entityValues))
 	for _, av := range entityValues {
-		sourceValues[av.AttributeDefinitionID()] = av.Value()
+		sourceValues[av.AttributeDefinitionID()] = append(sourceValues[av.AttributeDefinitionID()], av.Value())
 	}
 
 	schema, err := domaindependency.ResolveEffective(def, targeting, sourceValues, i.now())

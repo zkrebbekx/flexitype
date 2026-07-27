@@ -22,25 +22,30 @@ type EffectiveSchema struct {
 }
 
 // ResolveEffective computes the effective schema for a target attribute.
-// deps are the dependencies targeting it; sourceValues maps source
-// attribute IDs to the entity's current values (absent = zero Value).
+// deps are the dependencies targeting it; sourceValues maps each source
+// attribute ID to ALL of the entity's current values for it (absent = the zero
+// value). A condition matches when any of them satisfies it — see
+// Dependency.MatchesAny.
 // Matched allowed-value sets intersect; constraints accumulate.
 func ResolveEffective(
 	target *attribute.Definition,
 	deps []*Dependency,
-	sourceValues map[valueobjects.AttributeDefinitionID]valueobjects.Value,
+	sourceValues map[valueobjects.AttributeDefinitionID][]valueobjects.Value,
 	now time.Time,
 ) (EffectiveSchema, error) {
 	schema := EffectiveSchema{
 		Required:    target.Required(),
 		Constraints: target.Constraints(),
 	}
+	// Tracked across the loop so conflicting overrides resolve by rule rather
+	// than by whichever dependency the store happened to return last.
+	overridden, requiredByAny := false, false
 
 	for _, d := range deps {
 		if d.IsArchived() || !d.TargetAttributeID().Equals(target.ID()) {
 			continue
 		}
-		matched, err := d.Matches(sourceValues[d.SourceAttributeID()], now)
+		matched, err := d.MatchesAny(sourceValues[d.SourceAttributeID()], now)
 		if err != nil {
 			return EffectiveSchema{}, err
 		}
@@ -59,8 +64,25 @@ func ResolveEffective(
 		}
 		schema.Constraints = append(schema.Constraints, effect.Constraints...)
 		if effect.Required != nil {
-			schema.Required = *effect.Required
+			overridden = true
+			requiredByAny = requiredByAny || *effect.Required
 		}
+	}
+	// A matched override replaces the attribute's own required flag, so a
+	// dependency can still relax a required attribute. Two matched overrides
+	// that DISAGREE resolve to required.
+	//
+	// Last-writer-wins resolved by repository return order, so the outcome
+	// depended on dependency creation order: the in-memory and SQL backends
+	// could disagree for identical schemas, and editing one rule silently
+	// changed the behaviour of a rule its author never touched. The direction
+	// follows from the asymmetry — resolving to "optional" when a matched rule
+	// demanded the field lets incomplete records through a gate that was
+	// configured to stop them, and that is the failure that costs something.
+	// It also matches how AllowedValues already resolves conflicts, by
+	// intersection rather than by order.
+	if overridden {
+		schema.Required = requiredByAny
 	}
 	return schema, nil
 }

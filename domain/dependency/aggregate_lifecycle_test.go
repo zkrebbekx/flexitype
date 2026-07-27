@@ -238,7 +238,7 @@ func TestDependencyLifecycle(t *testing.T) {
 
 			Convey("And an archived dependency no longer contributes to the effective schema", func() {
 				schema, err := ResolveEffective(subcategory, []*Dependency{dep},
-					map[valueobjects.AttributeDefinitionID]valueobjects.Value{category.ID(): bike}, later)
+					map[valueobjects.AttributeDefinitionID][]valueobjects.Value{category.ID(): {bike}}, later)
 				So(err, ShouldBeNil)
 				So(schema.Restricted, ShouldBeFalse)
 			})
@@ -246,7 +246,7 @@ func TestDependencyLifecycle(t *testing.T) {
 
 		Convey("When a dependency aimed at another attribute is resolved", func() {
 			schema, err := ResolveEffective(other, []*Dependency{dep},
-				map[valueobjects.AttributeDefinitionID]valueobjects.Value{category.ID(): bike}, now)
+				map[valueobjects.AttributeDefinitionID][]valueobjects.Value{category.ID(): {bike}}, now)
 
 			Convey("Then it is skipped rather than misapplied", func() {
 				So(err, ShouldBeNil)
@@ -265,7 +265,7 @@ func TestDependencyLifecycle(t *testing.T) {
 			broken.conditions[0].Pattern = "("
 
 			_, err = ResolveEffective(subcategory, []*Dependency{broken},
-				map[valueobjects.AttributeDefinitionID]valueobjects.Value{category.ID(): bike}, now)
+				map[valueobjects.AttributeDefinitionID][]valueobjects.Value{category.ID(): {bike}}, now)
 
 			Convey("Then resolution fails rather than silently ignoring the rule", func() {
 				So(err, ShouldNotBeNil)
@@ -376,7 +376,7 @@ func TestEffectiveSchemaChecks(t *testing.T) {
 			So(err, ShouldBeNil)
 
 			schema, err := ResolveEffective(note, []*Dependency{first, second},
-				map[valueobjects.AttributeDefinitionID]valueobjects.Value{flag.ID(): on}, now)
+				map[valueobjects.AttributeDefinitionID][]valueobjects.Value{flag.ID(): {on}}, now)
 			So(err, ShouldBeNil)
 
 			Convey("Then both bounds apply at once", func() {

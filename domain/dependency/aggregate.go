@@ -185,7 +185,39 @@ func (d *Dependency) Archive(now time.Time) ([]events.Event, error) {
 	}}, nil
 }
 
-// Matches reports whether all conditions hold for the given source value.
+// MatchesAny reports whether ANY of an entity's values for the source
+// attribute satisfies every condition.
+//
+// A multi-valued source used to collapse to one arbitrary member, and a
+// localizable or scopable one to whichever variant was written last, because
+// the caller built a map of one value per attribute. So a rule such as "if
+// certifications contains asbestos then require disposal_plan" evaluated only
+// the newest certification: adding a second certification stopped the rule
+// matching the first, with no schema or data change to explain it.
+//
+// Any-match is the conventional reading of a condition over a set, and it is
+// the safe direction here: a rule that fired on a member keeps firing when
+// another member is added.
+//
+// An attribute with no values is evaluated once against the zero value, so
+// conditions that test absence behave as before.
+func (d *Dependency) MatchesAny(sources []valueobjects.Value, now time.Time) (bool, error) {
+	if len(sources) == 0 {
+		return d.Matches(valueobjects.Value{}, now)
+	}
+	for _, v := range sources {
+		ok, err := d.Matches(v, now)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Matches reports whether one source value satisfies every condition.
 func (d *Dependency) Matches(source valueobjects.Value, now time.Time) (bool, error) {
 	for _, c := range d.conditions {
 		ok, err := c.Matches(source, now)

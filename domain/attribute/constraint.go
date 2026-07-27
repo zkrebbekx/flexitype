@@ -168,11 +168,42 @@ func (c MaxValue) Check(v valueobjects.Value) error {
 	return nil
 }
 
-// Pattern requires textual values to match an anchored RE2 expression.
+// Pattern requires textual values to match an anchored RE2 expression: the
+// expression must match the WHOLE value, not a substring of it.
+//
+// Anchoring is applied at compile time by wrapping the author's expression in
+// \A(?:...)\z, so an expression that already anchors itself is unaffected and
+// an alternation cannot bind to only part of the value.
+//
+// The doc promised anchoring and the check used unanchored MatchString, which
+// reports whether the string CONTAINS a match. An administrator declaring
+// [A-Z]{2}[0-9]{6} on an identifier therefore accepted "junk XX123456 junk"
+// and any pasted text containing such a substring, so malformed identifiers
+// entered data that routing, integrations and compliance reports depend on.
 type Pattern struct {
 	Expr string `json:"expr"`
+	// Substring opts out of anchoring, so the expression matches anywhere in
+	// the value. It exists for expressions written under the old behaviour —
+	// a prefix rule such as `^SKU-` means "starts with" only if the match may
+	// end early — so those authors are not stranded by the anchored default.
+	//
+	// It is `substring` rather than `anchored` deliberately: the zero value of
+	// a bool is false, so a constraint that says nothing gets the safe,
+	// documented semantics.
+	Substring bool `json:"substring,omitempty"`
 
 	compiled *regexp.Regexp
+}
+
+// pattern returns the expression to compile: anchored unless the author asked
+// for substring matching. The non-capturing group keeps a top-level
+// alternation from binding to only one end — `a|b` becomes \A(?:a|b)\z, not
+// \Aa|b\z.
+func (c Pattern) pattern() string {
+	if c.Substring {
+		return c.Expr
+	}
+	return `\A(?:` + c.Expr + `)\z`
 }
 
 // Kind implements Constraint.
@@ -183,7 +214,7 @@ func (c Pattern) Validate(dt valueobjects.DataType) error {
 	if !dt.IsTextual() {
 		return domainerrors.NewValidation("pattern requires a textual data type", "data_type", dt.String())
 	}
-	if _, err := regexp.Compile(c.Expr); err != nil {
+	if _, err := regexp.Compile(c.pattern()); err != nil {
 		return domainerrors.NewValidation("invalid pattern", "expr", c.Expr, "error", err.Error())
 	}
 	return nil
@@ -194,7 +225,7 @@ func (c Pattern) Check(v valueobjects.Value) error {
 	re := c.compiled
 	if re == nil {
 		var err error
-		re, err = regexp.Compile(c.Expr)
+		re, err = regexp.Compile(c.pattern())
 		if err != nil {
 			return domainerrors.NewValidation("invalid pattern", "expr", c.Expr)
 		}
@@ -291,13 +322,14 @@ func (c MediaConstraint) Check(v valueobjects.Value) error {
 type Constraints []Constraint
 
 type constraintJSON struct {
-	Kind    ConstraintKind    `json:"kind"`
-	N       *int              `json:"n,omitempty"`
-	Value   json.RawMessage   `json:"value,omitempty"`
-	Expr    string            `json:"expr,omitempty"`
-	Values  []json.RawMessage `json:"values,omitempty"`
-	MIME    []string          `json:"mime,omitempty"`
-	MaxSize *int64            `json:"max_size,omitempty"`
+	Kind      ConstraintKind    `json:"kind"`
+	N         *int              `json:"n,omitempty"`
+	Value     json.RawMessage   `json:"value,omitempty"`
+	Expr      string            `json:"expr,omitempty"`
+	Substring bool              `json:"substring,omitempty"`
+	Values    []json.RawMessage `json:"values,omitempty"`
+	MIME      []string          `json:"mime,omitempty"`
+	MaxSize   *int64            `json:"max_size,omitempty"`
 }
 
 // MarshalJSON encodes each constraint with a kind discriminator and typed
@@ -327,7 +359,7 @@ func (cs Constraints) MarshalJSON() ([]byte, error) {
 			}
 			cj.Value = typed
 		case Pattern:
-			cj.Expr = t.Expr
+			cj.Expr, cj.Substring = t.Expr, t.Substring
 		case OneOf:
 			for _, v := range t.Values {
 				typed, err := v.MarshalTyped()
@@ -382,11 +414,13 @@ func (cs *Constraints) UnmarshalJSON(b []byte) error {
 			}
 			out = append(out, MaxValue{Max: v})
 		case KindPattern:
-			compiled, err := regexp.Compile(cj.Expr)
+			p := Pattern{Expr: cj.Expr, Substring: cj.Substring}
+			compiled, err := regexp.Compile(p.pattern())
 			if err != nil {
 				return fmt.Errorf("pattern %q: %w", cj.Expr, err)
 			}
-			out = append(out, Pattern{Expr: cj.Expr, compiled: compiled})
+			p.compiled = compiled
+			out = append(out, p)
 		case KindOneOf:
 			values := make([]valueobjects.Value, 0, len(cj.Values))
 			for _, rv := range cj.Values {

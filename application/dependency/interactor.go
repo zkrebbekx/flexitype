@@ -11,6 +11,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/activity"
 	"github.com/zkrebbekx/flexitype/application/appctx"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
+	appunit "github.com/zkrebbekx/flexitype/application/unit"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
@@ -18,6 +19,7 @@ import (
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
+	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
 // Interactor implements the dependency usecases.
@@ -27,12 +29,124 @@ type Interactor struct {
 	attrs    domainattribute.Repository
 	values   appctx.ValueReader
 	deps     domaindependency.Repository
-	now      func() time.Time
+	// units resolves the unit family a quantity attribute pins, so quantity
+	// operands inside a rule are rebased the way attribute constraints
+	// already are. Nil disables quantity support, and a rule carrying a
+	// quantity operand is then rejected rather than stored un-rebased.
+	units unitStore
+	now   func() time.Time
+}
+
+// unitStore is the subset of the unit-family port this interactor needs.
+type unitStore interface {
+	Get(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) (appunit.Family, error)
 }
 
 // NewInteractor wires the dependency usecases.
-func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values appctx.ValueReader, deps domaindependency.Repository) *Interactor {
-	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, deps: deps, now: uow.UTCNow}
+func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values appctx.ValueReader, deps domaindependency.Repository, units unitStore) *Interactor {
+	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, deps: deps, units: units, now: uow.UTCNow}
+}
+
+// normalizeQuantityOperands rebases every quantity operand a rule carries: the
+// conditions against the SOURCE attribute's unit family, and the effect's
+// allowed values and nested min/max constraints against the TARGET's.
+//
+// Attribute constraints and static defaults were rebased; the identical
+// operands inside a dependency were not, and ParseValue stores whatever base
+// the caller supplied. So "if weight > 5 kg then require hazard_class",
+// written through the API without computing a base, stored a bound whose base
+// was 0 — and stored values ARE rebased at write time, so the rule fired for
+// every weight. With a wrong base it never fired. Conditional validation on
+// quantities was silently wrong in both directions, with no error at
+// definition time or at evaluation time.
+func (i *Interactor) normalizeQuantityOperands(
+	ctx context.Context,
+	source, target *domainattribute.Definition,
+	conditions []domaindependency.Condition,
+	effect *domaindependency.Effect,
+) error {
+	rebaseWith := func(def *domainattribute.Definition) (func(valueobjects.Value) (valueobjects.Value, error), error) {
+		if def.DataType() != valueobjects.DataTypeQuantity {
+			// Nothing to rebase against; a quantity operand on a
+			// non-quantity attribute is already a type error downstream.
+			return func(v valueobjects.Value) (valueobjects.Value, error) { return v, nil }, nil
+		}
+		if i.units == nil {
+			return nil, domainerrors.NewValidation("unit families are not configured in this deployment")
+		}
+		if def.UnitFamilyID() == "" {
+			return nil, domainerrors.NewValidation(
+				"quantity attribute in a dependency requires a unit family", "attribute", def.InternalName())
+		}
+		famID, err := ulid.Parse(def.UnitFamilyID())
+		if err != nil {
+			return nil, domainerrors.NewValidation(err.Error())
+		}
+		family, err := i.units.Get(ctx, uow.TenantFromContext(ctx), famID)
+		if err != nil {
+			return nil, err
+		}
+		return func(v valueobjects.Value) (valueobjects.Value, error) {
+			return appunit.Rebase(family, v)
+		}, nil
+	}
+
+	rebaseSource, err := rebaseWith(source)
+	if err != nil {
+		return err
+	}
+	for idx := range conditions {
+		c := &conditions[idx]
+		for _, ref := range []**valueobjects.Value{&c.Value, &c.Min, &c.Max} {
+			if *ref == nil {
+				continue
+			}
+			nv, err := rebaseSource(**ref)
+			if err != nil {
+				return err
+			}
+			*ref = &nv
+		}
+		for j, v := range c.Values {
+			nv, err := rebaseSource(v)
+			if err != nil {
+				return err
+			}
+			c.Values[j] = nv
+		}
+	}
+
+	if effect == nil {
+		return nil
+	}
+	rebaseTarget, err := rebaseWith(target)
+	if err != nil {
+		return err
+	}
+	for j, v := range effect.AllowedValues {
+		nv, err := rebaseTarget(v)
+		if err != nil {
+			return err
+		}
+		effect.AllowedValues[j] = nv
+	}
+	for idx, c := range effect.Constraints {
+		switch cc := c.(type) {
+		case domainattribute.MinValue:
+			nv, err := rebaseTarget(cc.Min)
+			if err != nil {
+				return err
+			}
+			effect.Constraints[idx] = domainattribute.MinValue{Min: nv}
+		case domainattribute.MaxValue:
+			nv, err := rebaseTarget(cc.Max)
+			if err != nil {
+				return err
+			}
+			effect.Constraints[idx] = domainattribute.MaxValue{Max: nv}
+		}
+	}
+	return nil
 }
 
 // CreateInput holds data for creating a dependency. Conditions and Effect
@@ -84,6 +198,9 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domaindepende
 		// Both attributes must live on one hierarchy chain so every entity
 		// holding the target also holds (or inherits) the source.
 		if err := i.checkSameChain(ctx, tx, source, target); err != nil {
+			return err
+		}
+		if err := i.normalizeQuantityOperands(ctx, source, target, conditions, &effect); err != nil {
 			return err
 		}
 
@@ -157,6 +274,10 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domaindepende
 		}
 		target, err := attrs.Get(ctx, d.TargetAttributeID())
 		if err != nil {
+			return err
+		}
+
+		if err := i.normalizeQuantityOperands(ctx, source, target, conditions, &effect); err != nil {
 			return err
 		}
 
@@ -340,7 +461,7 @@ func (i *Interactor) EffectiveSchema(ctx context.Context, rawAttrID, rawEntityID
 		return nil, err
 	}
 
-	sourceValues := make(map[valueobjects.AttributeDefinitionID]valueobjects.Value)
+	sourceValues := make(map[valueobjects.AttributeDefinitionID][]valueobjects.Value)
 	if len(targeting) > 0 {
 		// Read the entity's whole value set, not the slice anchored to this
 		// attribute's DECLARING type. For an entity of a subtype the declaring
@@ -353,7 +474,7 @@ func (i *Interactor) EffectiveSchema(ctx context.Context, rawAttrID, rawEntityID
 			return nil, err
 		}
 		for _, av := range entityValues {
-			sourceValues[av.AttributeDefinitionID()] = av.Value()
+			sourceValues[av.AttributeDefinitionID()] = append(sourceValues[av.AttributeDefinitionID()], av.Value())
 		}
 	}
 

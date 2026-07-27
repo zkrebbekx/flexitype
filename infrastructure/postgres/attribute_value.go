@@ -682,6 +682,47 @@ func (r *attributeValueRepository) MediaKeyAttributes(ctx context.Context, tenan
 	return out, nil
 }
 
+// AttributeDataShape answers, in one pass, every question a structural
+// schema change has to ask of the data already stored.
+//
+// It is an aggregate over one attribute's live rows, so it rides the
+// (tenant_id, attribute_definition_id) index and never scans the table.
+func (r *attributeValueRepository) AttributeDataShape(ctx context.Context, tenant valueobjects.TenantID, attrID valueobjects.AttributeDefinitionID) (domainvalue.DataShape, error) {
+	var row struct {
+		LiveValues       int `db:"live_values"`
+		EntitiesWithMany int `db:"entities_with_many"`
+		ScopedValues     int `db:"scoped_values"`
+		DuplicateValues  int `db:"duplicate_values"`
+	}
+	// The value comparison mirrors what a unique constraint compares: the
+	// rendered text of the value, whichever typed column holds it.
+	const q = `
+WITH live AS (
+    SELECT entity_id, locale, channel,
+           COALESCE(value_text, value_json::text, value_int::text,
+                    value_float::text, value_bool::text, value_time::text) AS v
+      FROM flexitype_attribute_value
+     WHERE tenant_id = ? AND attribute_definition_id = ? AND archived_at IS NULL
+),
+per_entity AS (SELECT entity_id, COUNT(*) AS n FROM live GROUP BY entity_id),
+per_value  AS (SELECT v, COUNT(DISTINCT entity_id) AS n FROM live WHERE v IS NOT NULL GROUP BY v)
+SELECT
+  (SELECT COUNT(*) FROM live)                                        AS live_values,
+  (SELECT COUNT(*) FROM per_entity WHERE n > 1)                      AS entities_with_many,
+  (SELECT COUNT(*) FROM live WHERE COALESCE(locale, '') <> ''
+                                OR COALESCE(channel, '') <> '')      AS scoped_values,
+  (SELECT COALESCE(SUM(n), 0) FROM per_value WHERE n > 1)            AS duplicate_values`
+	if err := r.q.GetContext(ctx, &row, bind(q), tenant.String(), attrID.String()); err != nil {
+		return domainvalue.DataShape{}, fmt.Errorf("attribute data shape: %w", err)
+	}
+	return domainvalue.DataShape{
+		LiveValues:       row.LiveValues,
+		EntitiesWithMany: row.EntitiesWithMany,
+		ScopedValues:     row.ScopedValues,
+		DuplicateValues:  row.DuplicateValues,
+	}, nil
+}
+
 func (r *attributeValueRepository) Save(ctx context.Context, av *domainvalue.AttributeValue) error {
 	s := av.Snapshot()
 	cols := columnsFromValue(s.Value)

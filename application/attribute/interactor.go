@@ -14,6 +14,7 @@ import (
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
+	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
@@ -25,6 +26,7 @@ type Interactor struct {
 	uow      uow.UnitOfWork
 	typeDefs domaintypedef.Repository
 	attrs    domainattribute.Repository
+	values   domainvalue.Repository
 	// units resolves unit families so quantity min/max constraint operands
 	// normalize to the base unit; nil when unit families are disabled.
 	units appunit.Store
@@ -33,8 +35,67 @@ type Interactor struct {
 
 // NewInteractor wires the attribute-definition usecases. units (nil-able)
 // normalizes quantity constraint operands.
-func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, units appunit.Store) *Interactor {
-	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, units: units, now: uow.UTCNow}
+func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, units appunit.Store) *Interactor {
+	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, units: units, now: uow.UTCNow}
+}
+
+// assertStructuralChangeIsSafe refuses a flag flip that would orphan or
+// invalidate data already stored.
+//
+// The structural flags used to be replaced with no check at all. Each flip
+// left rows the new schema cannot express or reach, and none of them reported
+// anything: the rows kept hydrating and kept matching FQL, so the schema and
+// the data disagreed silently. Version pinning does not cover this — it
+// records the constraint version a value was validated against, and these
+// flags are structural rather than per-value.
+func (i *Interactor) assertStructuralChangeIsSafe(
+	ctx context.Context, values domainvalue.Repository, before domainattribute.Snapshot, in UpdateInput,
+	computed *domainattribute.Computed,
+) error {
+	losingMulti := before.MultiValued && !in.MultiValued
+	gainingUnique := !before.Unique && in.Unique
+	losingLocale := before.Localizable && !in.Localizable
+	losingChannel := before.Scopable && !in.Scopable
+	gainingComputed := before.Computed == nil && computed != nil
+	if !losingMulti && !gainingUnique && !losingLocale && !losingChannel && !gainingComputed {
+		return nil
+	}
+
+	shape, err := values.AttributeDataShape(ctx, before.TenantID, before.ID)
+	if err != nil {
+		return fmt.Errorf("inspect stored values: %w", err)
+	}
+	switch {
+	case losingMulti && shape.EntitiesWithMany > 0:
+		// A single-valued write updates the first row and never reaches the
+		// rest, so those rows would still read and still match FQL with no
+		// write able to touch them again.
+		return domainerrors.NewConflict(
+			"cannot make the attribute single-valued: entities already hold more than one value; "+
+				"remove the extra values first",
+			"attribute", before.InternalName, "entities", shape.EntitiesWithMany)
+	case gainingUnique && shape.DuplicateValues > 0:
+		// No backfill runs, so the existing duplicates would persist while
+		// new writers of those same values were refused.
+		return domainerrors.NewConflict(
+			"cannot make the attribute unique: stored values already contain duplicates",
+			"attribute", before.InternalName, "duplicate_values", shape.DuplicateValues)
+	case (losingLocale || losingChannel) && shape.ScopedValues > 0:
+		// Scope is rejected on write once the flag is off, so scoped rows
+		// could never be updated or removed through the API again.
+		return domainerrors.NewConflict(
+			"cannot turn off localizable/scopable: stored values carry a locale or channel; "+
+				"remove the scoped values first",
+			"attribute", before.InternalName, "scoped_values", shape.ScopedValues)
+	case gainingComputed && shape.LiveValues > 0:
+		// The next recompute would overwrite or clear whatever a person
+		// wrote there.
+		return domainerrors.NewConflict(
+			"cannot make the attribute computed: it already holds written values, "+
+				"which the first recompute would overwrite or clear",
+			"attribute", before.InternalName, "values", shape.LiveValues)
+	}
+	return nil
 }
 
 // CreateInput holds data for creating an attribute definition. Constraints
@@ -114,15 +175,23 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 			}
 		}
 
+		// The uniqueness namespace is the WHOLE hierarchy, not just this
+		// type's chain and its own descendants. The FQL binder flattens the
+		// queried root's chain and every descendant into one name→attribute
+		// map, so two sibling subtypes declaring the same internal name gave
+		// the binder a collision it resolved by list order — the last one
+		// listed won, silently, and which one that was could change with an
+		// unrelated edit. Walking down from the root covers siblings, cousins
+		// and everything else the binder will flatten together.
 		hierarchy, err := apptypedef.Chain(ctx, typeDefs, td)
 		if err != nil {
 			return err
 		}
-		descendants, err := apptypedef.Descendants(ctx, typeDefs, td)
+		descendants, err := apptypedef.Descendants(ctx, typeDefs, root)
 		if err != nil {
 			return err
 		}
-		hierarchy = append(hierarchy, descendants...)
+		hierarchy = appendUnseenTypes(hierarchy, descendants)
 
 		// A computed formula must not create a dependency cycle with the
 		// type's other computed attributes.
@@ -150,9 +219,25 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 					return domainerrors.NewConflict("internal name already in use", "internal_name", in.InternalName)
 				}
 				return domainerrors.NewConflict(
-					"internal name would shadow an attribute declared elsewhere in the type hierarchy",
+					"internal name is already declared elsewhere in the type hierarchy; "+
+						"one name means one attribute across the whole tree, because a query "+
+						"over the root flattens it into a single namespace",
 					"internal_name", in.InternalName, "declared_in", link.InternalName())
 			}
+		}
+
+		// Cap attributes per type. Every effective-schema walk resolves a
+		// type's attributes in one read; without a cap, a type could hold
+		// more than the walk returns and the tail became invisible to
+		// validation, FQL, import/export, cycle detection and completeness
+		// while remaining writable through its own endpoint.
+		if _, total, terr := attrs.ListByTypeDefinition(ctx, typeDefID, db.Page{Limit: 1, WantTotal: true}); terr != nil {
+			return fmt.Errorf("count type attributes: %w", terr)
+		} else if total >= domainattribute.MaxPerType {
+			return domainerrors.NewValidation(
+				"type already declares the maximum number of attributes",
+				"type_definition_id", typeDefID.String(),
+				"attributes", total, "limit", domainattribute.MaxPerType)
 		}
 
 		attr, evts, err := domainattribute.New(domainattribute.NewInput{
@@ -247,6 +332,10 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			return err
 		}
 		before := attr.Snapshot()
+
+		if serr := i.assertStructuralChangeIsSafe(ctx, i.values.WithTx(tx), before, in, computed); serr != nil {
+			return serr
+		}
 
 		// A computed formula must not introduce a dependency cycle with the
 		// type's other computed attributes — enforced on update as well as
@@ -633,7 +722,7 @@ func (i *Interactor) normalizeQuantityConstraints(ctx context.Context, dt valueo
 func (i *Interactor) computedDeps(ctx context.Context, attrs domainattribute.Repository, hierarchy []*domaintypedef.TypeDefinition) (map[string][]string, error) {
 	deps := map[string][]string{}
 	for _, link := range hierarchy {
-		list, _, err := attrs.ListByTypeDefinition(ctx, link.ID(), db.Page{Limit: 500})
+		list, err := domainattribute.ListAllForType(ctx, attrs, link.ID())
 		if err != nil {
 			return nil, err
 		}
@@ -696,4 +785,22 @@ func checkFormulaCycle(name string, refs []string, deps map[string][]string) err
 		return domainerrors.NewValidation("computed formula introduces a dependency cycle", "attribute", name)
 	}
 	return nil
+}
+
+// appendUnseenTypes appends the types not already in the list, keyed by id.
+// The chain and the root's descendant set overlap on the declaring type and
+// its ancestors' other branches.
+func appendUnseenTypes(into []*domaintypedef.TypeDefinition, more []*domaintypedef.TypeDefinition) []*domaintypedef.TypeDefinition {
+	seen := make(map[string]bool, len(into))
+	for _, t := range into {
+		seen[t.ID().String()] = true
+	}
+	for _, t := range more {
+		if seen[t.ID().String()] {
+			continue
+		}
+		seen[t.ID().String()] = true
+		into = append(into, t)
+	}
+	return into
 }

@@ -278,7 +278,7 @@ func (i *Interactor) EffectiveAttributes(ctx context.Context, rawID string) ([]E
 
 	var out []EffectiveAttribute
 	for _, link := range chain {
-		attrs, _, err := i.attrs.ListByTypeDefinition(ctx, link.ID(), db.Page{Limit: 500})
+		attrs, err := domainattribute.ListAllForType(ctx, i.attrs, link.ID())
 		if err != nil {
 			return nil, err
 		}

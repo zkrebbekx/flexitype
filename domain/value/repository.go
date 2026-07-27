@@ -124,4 +124,35 @@ type Repository interface {
 	// Archived rows count for both: their blobs may still exist and remain the
 	// owning tenant's.
 	MediaKeyAttributes(ctx context.Context, tenant valueobjects.TenantID, objectKey string) ([]valueobjects.AttributeDefinitionID, error)
+
+	// AttributeDataShape reports what stored data would be orphaned or
+	// invalidated by a structural change to an attribute definition.
+	//
+	// The structural flags — multi-valued, unique, localizable, scopable,
+	// computed — used to be replaced with no check against data already
+	// written, and each flip left rows the new schema cannot express or
+	// reach. It counts live rows only: archived rows are already unreachable
+	// and are not the caller's problem.
+	AttributeDataShape(ctx context.Context, tenant valueobjects.TenantID, attrID valueobjects.AttributeDefinitionID) (DataShape, error)
+}
+
+// DataShape summarises the stored values of one attribute, for the checks a
+// structural schema change has to pass.
+type DataShape struct {
+	// LiveValues counts unarchived rows.
+	LiveValues int
+	// EntitiesWithMany counts entities holding more than one live row —
+	// exactly the rows that a multi-valued→single flip would strand, because
+	// a single-valued write updates the first row and never reaches the rest.
+	EntitiesWithMany int
+	// ScopedValues counts live rows carrying a locale or a channel. Turning
+	// localizable or scopable off leaves those rows readable but unwritable:
+	// scope is rejected on write, so they can never be updated or removed
+	// through the API again.
+	ScopedValues int
+	// DuplicateValues counts live rows sharing a value with another entity's
+	// row — what a false→true unique flip would leave behind, since no
+	// backfill check runs and new writers of those same values are refused
+	// while the existing duplicates persist.
+	DuplicateValues int
 }

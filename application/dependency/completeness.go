@@ -118,7 +118,7 @@ func (i *Interactor) scoreEntity(
 	}
 	seen := make(map[valueobjects.AttributeDefinitionID]bool)
 	for _, link := range chain {
-		attrs, _, err := i.attrs.ListByTypeDefinition(ctx, link.ID(), db.Page{Limit: 500})
+		attrs, err := domainattribute.ListAllForType(ctx, i.attrs, link.ID())
 		if err != nil {
 			return nil, err
 		}

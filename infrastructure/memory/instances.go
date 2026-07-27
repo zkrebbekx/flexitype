@@ -276,6 +276,40 @@ func (r *valueRepo) MediaKeyAttributes(_ context.Context, tenant valueobjects.Te
 	return out, nil
 }
 
+// AttributeDataShape scans the tenant's live rows for the one attribute.
+func (r *valueRepo) AttributeDataShape(_ context.Context, tenant valueobjects.TenantID, attrID valueobjects.AttributeDefinitionID) (domainvalue.DataShape, error) {
+	r.s.mu.RLock()
+	defer r.s.mu.RUnlock()
+
+	var out domainvalue.DataShape
+	perEntity := map[string]int{}
+	perValue := map[string]int{}
+	for _, snap := range r.s.values {
+		if snap.TenantID != tenant || !snap.AttributeDefinitionID.Equals(attrID) || snap.ArchivedAt != nil {
+			continue
+		}
+		out.LiveValues++
+		perEntity[snap.EntityID.String()]++
+		if snap.Locale != "" || snap.Channel != "" {
+			out.ScopedValues++
+		}
+		// Key duplicates on the rendered value; that is what a unique
+		// constraint compares.
+		perValue[snap.Value.Text()]++
+	}
+	for _, n := range perEntity {
+		if n > 1 {
+			out.EntitiesWithMany++
+		}
+	}
+	for _, n := range perValue {
+		if n > 1 {
+			out.DuplicateValues += n
+		}
+	}
+	return out, nil
+}
+
 func (r *valueRepo) PurgeEntity(_ context.Context, key domainvalue.EntityKey) ([]string, int, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()

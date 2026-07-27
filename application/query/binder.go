@@ -76,7 +76,7 @@ func (b *binder) scopeFor(ctx context.Context, root *domaintypedef.TypeDefinitio
 			continue
 		}
 		typeIDs = append(typeIDs, t.ID())
-		attrs, _, err := b.attrs.ListByTypeDefinition(ctx, t.ID(), db.Page{Limit: 500})
+		attrs, err := domainattribute.ListAllForType(ctx, b.attrs, t.ID())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -118,7 +118,7 @@ func (b *binder) linkAttrsFor(ctx context.Context, def domainrelationship.Defini
 	out := make(map[string]domainattribute.Snapshot)
 	current := def
 	for depth := 0; depth < maxTraversalDepth*2; depth++ {
-		attrs, _, err := b.attrs.ListByTypeDefinition(ctx, current.AttributeSetID, db.Page{Limit: 500})
+		attrs, err := domainattribute.ListAllForType(ctx, b.attrs, current.AttributeSetID)
 		if err != nil {
 			return nil, err
 		}

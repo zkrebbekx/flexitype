@@ -226,6 +226,35 @@ func (r *fakeValueRepo) Save(_ context.Context, av *domainvalue.AttributeValue) 
 	return nil
 }
 
+// AttributeDataShape scans the fake's rows, mirroring the real backends.
+func (r *fakeValueRepo) AttributeDataShape(_ context.Context, tenant valueobjects.TenantID, attrID valueobjects.AttributeDefinitionID) (domainvalue.DataShape, error) {
+	var out domainvalue.DataShape
+	perEntity := map[string]int{}
+	perValue := map[string]int{}
+	for _, snap := range r.values {
+		if snap.TenantID != tenant || !snap.AttributeDefinitionID.Equals(attrID) || snap.ArchivedAt != nil {
+			continue
+		}
+		out.LiveValues++
+		perEntity[snap.EntityID.String()]++
+		if snap.Locale != "" || snap.Channel != "" {
+			out.ScopedValues++
+		}
+		perValue[snap.Value.Text()]++
+	}
+	for _, n := range perEntity {
+		if n > 1 {
+			out.EntitiesWithMany++
+		}
+	}
+	for _, n := range perValue {
+		if n > 1 {
+			out.DuplicateValues += n
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeValueRepo) PurgeEntity(context.Context, domainvalue.EntityKey) ([]string, int, error) {
 	return nil, 0, nil
 }
@@ -397,7 +426,14 @@ func enumOf(members ...string) domainattribute.Constraints {
 func TestSetValueUsecase(t *testing.T) {
 	Convey("Given the value usecases over in-memory repositories", t, func() {
 		typeDef := valueobjects.NewTypeDefinitionID()
-		typeDefs := &fakeTypeDefRepo{types: map[string]domaintypedef.Snapshot{}}
+		// The type has to exist: a write under an archived type is refused,
+		// so the write path resolves the entity's type on every set.
+		typeDefs := &fakeTypeDefRepo{types: map[string]domaintypedef.Snapshot{
+			typeDef.String(): {
+				ID: typeDef, TenantID: valueobjects.DefaultTenant,
+				InternalName: "order", DisplayName: "Order", Version: 1,
+			},
+		}}
 		attrs := &fakeAttrRepo{defs: map[string]*domainattribute.Definition{}}
 		values := &fakeValueRepo{values: map[string]domainvalue.Snapshot{}}
 		deps := &fakeDepRepo{}

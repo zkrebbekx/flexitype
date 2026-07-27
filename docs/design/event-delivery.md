@@ -199,7 +199,7 @@ grace window.
 ```
 GET  /api/v1/events?after=<feed_seq>&types=a,b&limit=100     → ordered page + next cursor
 GET  /api/v1/events/stream?after=<feed_seq>                  → SSE; id: <feed_seq> per event
-PUT  /api/v1/event-cursors/{consumer}                        {position, expected_position}  → 409 on CAS miss
+PUT  /api/v1/event-cursors/{consumer}                        {position, expected}  → 409 on CAS miss
 GET  /api/v1/event-cursors/{consumer}
 ```
 

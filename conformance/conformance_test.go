@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"os"
 	"testing"
 
+	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
 	. "github.com/smartystreets/goconvey/convey"
 
 	"github.com/zkrebbekx/flexitype"
@@ -172,6 +175,90 @@ func TestClientConformance(t *testing.T) {
 			f, err := c.Features(ctx)
 			So(err, ShouldBeNil)
 			So(f.SearchIndex, ShouldBeTrue)
+		})
+	})
+}
+
+// TestEventCursorConformance drives the feed-cursor round trip the SDK is
+// documented to support.
+//
+// Both directions used field names the server does not: GetCursor read
+// `after_seq` where the server writes `position`, so it returned 0 with a NIL
+// error on every call — indistinguishable from a fresh consumer's legitimate
+// start. CommitCursor sent `after_seq`/`expected_seq` into a strict decoder,
+// so every commit was a hard 422 and the cursor never advanced.
+//
+// The two halves masked each other: a consumer replayed the whole retained
+// feed on every restart, and the replay looked like the cursor simply never
+// being committed — which it was not. Nothing in either half reported a
+// failure, and no conformance case exercised the pair.
+func TestEventCursorConformance(t *testing.T) {
+	// Cursors need the transactional outbox, which the in-memory service does
+	// not implement (it always direct-dispatches), so this case runs against
+	// Postgres and skips without a DSN. CI provides one.
+	dsn := os.Getenv("FLEXITYPE_TEST_DSN")
+	if dsn == "" {
+		t.Skip("FLEXITYPE_TEST_DSN not set; skipping the event-cursor conformance case")
+	}
+
+	Convey("Given a service with the outbox enabled and its Go client", t, func() {
+		pool, err := sqlx.Connect("postgres", dsn)
+		So(err, ShouldBeNil)
+		Reset(func() { _ = pool.Close() })
+
+		svc := flexitype.New(pool, flexitype.WithOutbox())
+		So(svc.Migrate(context.Background()), ShouldBeNil)
+		pool.MustExec(`TRUNCATE flexitype_event_cursor`)
+
+		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{}))
+		Reset(ts.Close)
+
+		c, err := client.New(ts.URL)
+		So(err, ShouldBeNil)
+		ctx := context.Background()
+
+		Convey("When a consumer reads its cursor before committing anything", func() {
+			position, err := c.Events().GetCursor(ctx, "search-indexer")
+
+			Convey("Then it starts at zero, without an error", func() {
+				So(err, ShouldBeNil)
+				So(position, ShouldEqual, 0)
+			})
+		})
+
+		Convey("When the consumer commits a position", func() {
+			err := c.Events().CommitCursor(ctx, "search-indexer", 7, 0)
+
+			Convey("Then the commit is accepted", func() {
+				So(err, ShouldBeNil)
+			})
+
+			Convey("Then reading it back returns what was committed", func() {
+				So(err, ShouldBeNil)
+				position, gerr := c.Events().GetCursor(ctx, "search-indexer")
+				So(gerr, ShouldBeNil)
+				So(position, ShouldEqual, int64(7))
+			})
+
+			Convey("Then advancing it again from the committed position works", func() {
+				So(err, ShouldBeNil)
+				So(c.Events().CommitCursor(ctx, "search-indexer", 12, 7), ShouldBeNil)
+				position, gerr := c.Events().GetCursor(ctx, "search-indexer")
+				So(gerr, ShouldBeNil)
+				So(position, ShouldEqual, int64(12))
+			})
+
+			Convey("Then a stale expected position is refused, not silently applied", func() {
+				So(err, ShouldBeNil)
+				// The compare-and-swap this endpoint exists for: a second
+				// replica that read an older position must lose.
+				cerr := c.Events().CommitCursor(ctx, "search-indexer", 9, 0)
+				So(cerr, ShouldNotBeNil)
+
+				position, gerr := c.Events().GetCursor(ctx, "search-indexer")
+				So(gerr, ShouldBeNil)
+				So(position, ShouldEqual, int64(7))
+			})
 		})
 	})
 }

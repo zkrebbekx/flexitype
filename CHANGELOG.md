@@ -7,6 +7,103 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### BREAKING — Go client: `Revisions().Diff` takes two revision ids
+
+`Diff(ctx, id)` becomes `Diff(ctx, fromID, toID)`. The endpoint diffs one
+revision against another and requires `?to=`; the old signature sent no
+query, so **every call returned `VALIDATION: to (revision id) is required`**.
+No call could succeed, so no working code depends on the old shape — but the
+change is a compile error, and it is called out here rather than buried.
+
+Pass the newer revision as `toID`:
+
+```go
+diff, err := c.Revisions().Diff(ctx, oldRev.ID, newRev.ID)
+```
+
+Two more methods changed behaviour without changing their signature. Both
+could only fail before, so neither can break working code:
+
+- `Entities().AsOf` decoded a bare revision object through the
+  `{"items":[...]}` list helper, so it returned an **empty slice and a nil
+  error** on every call. Point-in-time reads rendered an empty entity and
+  looked like data that was never set. It now decodes the object, and an
+  empty timestamp is rejected locally rather than as a server 422. Use the
+  new `AsOfRevision` when the revision's id, seq or label is needed too.
+- `Admin().ListServiceAccounts` sent `tenant` where the server reads
+  `tenant_name`, so the filter was dropped and the call always 422'd. The
+  tenant argument is now required and rejected locally when empty.
+
+### Added — Go client: capabilities that had no method
+
+Eight REST capabilities were reachable only over raw `net/http`, including
+both right-to-erasure endpoints that `docs/erasure.md` documents. A team that
+standardised on the SDK had to hand-roll erasure — the one operation with a
+statutory deadline — with its own auth, error decoding and retries.
+
+- `Entities().Purge` and `Client.PurgeTenant` (right to erasure).
+- `Values().List` / `.All`, with the `type_definition_id`,
+  `attribute_definition_id`, `entity_id` and `include_archived` filters, plus
+  the `changeset` draft-preview overlay.
+- `RelationshipDefinitions().Update` and `.AttributeSets`.
+- `Schema().Template(name)`.
+- `Client.RecomputeComputed`.
+- `Events().ListPage`, which returns the feed's `next_cursor` — the list
+  helper used to discard it, so there was no supported way to ask for the
+  second page.
+
+Streaming (`GET /events/stream`) stays out of scope, and the `EventsService`
+godoc now says so: server-sent events need a long-lived connection with its
+own reconnect policy, and the cursor gives at-least-once delivery across
+restarts that a stream alone does not.
+
+`TestClientRouteCoverage` now walks the live router and fails when a route has
+no client method, so this cannot recur silently.
+
+### Fixed — Go client: dropped response fields
+
+- `ChangeSet.Name` is populated. The field was declared as `title`, which the
+  server never sends, so every change-set read back with a blank label — a
+  valid empty string, so it looked like an unnamed change-set rather than a
+  bug. `Title` remains as a deprecated mirror of `Name` so existing code
+  keeps compiling, and it is removed in the next major version. `Approver`
+  and `PublishedAt` are added.
+- `SavedView` gains `Sort`, `CreatedAt` and `UpdatedAt`. See the saved-view
+  entry below for the data loss the missing `Sort` caused.
+- `Facets.Truncated` is populated (and added to `api/openapi.yaml`, so
+  generated clients get it too). Without it a partial bucket list is
+  indistinguishable from a complete one, so a filter sidebar shows
+  "3 materials" where there are 300.
+
+### Fixed — a saved-view PATCH no longer clears the fields it omits
+
+`PATCH /api/v1/saved-views/{id}` decoded into a value struct, so any field the
+caller omitted was written back as its zero value. Renaming a view through any
+client — the SDK, curl, a generated client — silently cleared the sort order
+configured through another, and sort order is part of what makes a saved view
+reproducible.
+
+The handler is now sparse: an absent field keeps its stored value, and an
+explicit empty value still clears it. In the SDK, `SavedViews().Update` keeps
+full-replace semantics (and now carries `Sort`), and the new
+`SavedViews().Patch` takes a sparse `SavedViewPatch`.
+
+### Fixed — two capability gaps reported as caller errors
+
+`GET /media/{key}` with no blob store, and the GraphQL endpoint in a
+deployment that does not run GraphQL, both answered `422 VALIDATION` — the
+same status and code as a malformed request. Retry logic could not tell a
+permanent capability gap from a caller error, so a client kept retrying an
+upload against a deployment that structurally cannot accept it. Both now
+answer `501 FEATURE_DISABLED`.
+
+The Go client gains the three error codes it was missing —
+`FEATURE_DISABLED`, `CURSOR_CONFLICT` and `CURSOR_EXPIRED`, the last two
+being the two recovery branches every feed consumer must implement — with
+matching `errors.Is` sentinels. `docs/api-stability.md` now lists all twelve.
+`TestErrorCodeContract` holds the OpenAPI enum, the client constants and the
+stability document equal.
+
 ### Security — field ACL is enforced on every value surface
 
 The per-attribute permission set was applied by the value API, the grid,

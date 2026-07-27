@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"iter"
 	"net/http"
 	"net/url"
@@ -102,12 +103,28 @@ func (s *UnitFamiliesService) Delete(ctx context.Context, id string) error {
 // SavedViewsService operates on saved views.
 type SavedViewsService struct{ c *Client }
 
-// SavedViewInput creates or updates a saved view.
+// SavedViewInput creates or fully replaces a saved view. Every field is sent,
+// so a zero value clears the stored one — use SavedViewPatch to change some
+// fields and leave the rest alone.
 type SavedViewInput struct {
 	Name     string   `json:"name"`
 	RootType string   `json:"root_type"`
-	Query    string   `json:"query,omitempty"`
-	Columns  []string `json:"columns,omitempty"`
+	Query    string   `json:"query"`
+	Columns  []string `json:"columns"`
+	Sort     string   `json:"sort"`
+}
+
+// SavedViewPatch is a sparse update: a nil field is left as it is stored.
+//
+// This exists because the full-replace form loses data on an unrelated edit.
+// Renaming a view built in the console used to omit its sort order and clear
+// it, and the SDK could not even read that field back.
+type SavedViewPatch struct {
+	Name     *string   `json:"name,omitempty"`
+	RootType *string   `json:"root_type,omitempty"`
+	Query    *string   `json:"query,omitempty"`
+	Columns  *[]string `json:"columns,omitempty"`
+	Sort     *string   `json:"sort,omitempty"`
 }
 
 // List returns the tenant's saved views.
@@ -127,8 +144,15 @@ func (s *SavedViewsService) Create(ctx context.Context, in SavedViewInput) (*Sav
 	return &out, s.c.do(ctx, http.MethodPost, "/saved-views", nil, in, &out)
 }
 
-// Update mutates a saved view.
+// Update replaces every field of a saved view. A zero value in the input
+// clears the stored value; use Patch to change a subset.
 func (s *SavedViewsService) Update(ctx context.Context, id string, in SavedViewInput) (*SavedView, error) {
+	var out SavedView
+	return &out, s.c.do(ctx, http.MethodPatch, "/saved-views/"+id, nil, in, &out)
+}
+
+// Patch changes only the fields set on in, leaving the rest as stored.
+func (s *SavedViewsService) Patch(ctx context.Context, id string, in SavedViewPatch) (*SavedView, error) {
 	var out SavedView
 	return &out, s.c.do(ctx, http.MethodPatch, "/saved-views/"+id, nil, in, &out)
 }
@@ -149,11 +173,19 @@ func (s *RevisionsService) Get(ctx context.Context, id string) (*EntityRevision,
 	return &out, s.c.do(ctx, http.MethodGet, "/revisions/"+id, nil, nil, &out)
 }
 
-// Diff returns the difference between a revision and the entity's current
-// values as raw JSON (add/change/remove per attribute).
-func (s *RevisionsService) Diff(ctx context.Context, id string) (json.RawMessage, error) {
+// Diff returns the difference between two revisions of one entity as raw
+// JSON (add/change/remove per attribute). Both ids are required.
+//
+// The endpoint diffs revision against revision. An earlier signature took
+// one id and sent no query, so the server answered
+// "to (revision id) is required" on every call.
+func (s *RevisionsService) Diff(ctx context.Context, fromID, toID string) (json.RawMessage, error) {
+	if fromID == "" || toID == "" {
+		return nil, fmt.Errorf("flexitype: Diff requires both revision ids")
+	}
 	var out json.RawMessage
-	return out, s.c.do(ctx, http.MethodGet, "/revisions/"+id+"/diff", nil, nil, &out)
+	q := url.Values{"to": {toID}}
+	return out, s.c.do(ctx, http.MethodGet, "/revisions/"+fromID+"/diff", q, nil, &out)
 }
 
 // Restore rolls the entity back to a revision (replayed as normal writes, so
@@ -484,6 +516,13 @@ func (s *WebhooksService) Redeliver(ctx context.Context, deliveryID string) erro
 // --- events ------------------------------------------------------------------
 
 // EventsService reads the events feed and cursors (requires event delivery).
+//
+// Streaming is out of scope for this SDK. GET /api/v1/events/stream serves
+// server-sent events, which needs a long-lived connection with its own
+// reconnect and backoff policy; that belongs to the consumer, not to a
+// request/response client. Poll with ListPage and commit a cursor instead —
+// the cursor gives at-least-once delivery across restarts, which a stream
+// alone does not.
 type EventsService struct{ c *Client }
 
 // ListEventsOptions pages the feed.
@@ -564,13 +603,17 @@ func (s *AdminService) SetTenantActive(ctx context.Context, name string, active 
 	return &out, s.c.do(ctx, http.MethodPatch, "/tenants/"+url.PathEscape(name), nil, map[string]bool{"active": active}, &out)
 }
 
-// ListServiceAccounts returns the service accounts (optionally for one tenant).
+// ListServiceAccounts returns one tenant's service accounts. tenant is
+// required: the endpoint has no cross-tenant listing.
+//
+// The query parameter is `tenant_name`. An earlier version sent `tenant`,
+// which the server ignored, so the call answered
+// "tenant_name is required" whether or not a tenant was passed.
 func (s *AdminService) ListServiceAccounts(ctx context.Context, tenant string) ([]ServiceAccount, error) {
-	q := url.Values{}
-	if tenant != "" {
-		q.Set("tenant", tenant)
+	if tenant == "" {
+		return nil, fmt.Errorf("flexitype: ListServiceAccounts requires a tenant name")
 	}
-	return items[ServiceAccount](ctx, s.c, "/service-accounts", q)
+	return items[ServiceAccount](ctx, s.c, "/service-accounts", url.Values{"tenant_name": {tenant}})
 }
 
 // CreateServiceAccountInput provisions a credential. The returned Token is

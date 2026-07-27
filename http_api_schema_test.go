@@ -386,6 +386,29 @@ func TestHTTPSavedViewRoutes(t *testing.T) {
 				So(a.get("/api/v1/saved-views/"+id).Status, ShouldEqual, http.StatusNotFound)
 			})
 
+			Convey("And a PATCH leaves the fields it omits alone", func() {
+				// The handler used to decode into a value struct, so omitting
+				// sort wrote it back as "". Renaming a view through any client
+				// silently cleared the sort order set through another.
+				id := resp.str(t, "id")
+				patched := a.patch("/api/v1/saved-views/"+id, map[string]any{"name": "renamed"})
+
+				So(patched.Status, ShouldEqual, http.StatusOK)
+				So(patched.str(t, "name"), ShouldEqual, "renamed")
+				So(patched.str(t, "sort"), ShouldEqual, "name")
+				So(patched.str(t, "query"), ShouldEqual, "price < 10")
+				So(patched.object(t)["columns"], ShouldResemble, []any{"name", "price"})
+			})
+
+			Convey("And a PATCH can still clear a field explicitly", func() {
+				id := resp.str(t, "id")
+				patched := a.patch("/api/v1/saved-views/"+id, map[string]any{"sort": ""})
+
+				So(patched.Status, ShouldEqual, http.StatusOK)
+				So(patched.str(t, "sort"), ShouldBeEmpty)
+				So(patched.str(t, "name"), ShouldEqual, "cheap")
+			})
+
 			Convey("And it appears in the list", func() {
 				So(len(a.get("/api/v1/saved-views").items(t)), ShouldEqual, 1)
 			})

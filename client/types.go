@@ -290,6 +290,11 @@ type SavedView struct {
 	RootType string   `json:"root_type"`
 	Query    string   `json:"query"`
 	Columns  []string `json:"columns,omitempty"`
+	// Sort is the view's ordering clause. It is part of what makes a saved
+	// view reproducible, and had no field to land in.
+	Sort      string    `json:"sort,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // MatchRule is a per-type duplicate-detection rule.
@@ -322,16 +327,42 @@ type MatchScan struct {
 
 // ChangeSet is a staged batch of value edits moving through review.
 type ChangeSet struct {
-	ID              string          `json:"id"`
-	TenantID        string          `json:"tenant_id"`
-	Title           string          `json:"title"`
+	ID       string `json:"id"`
+	TenantID string `json:"tenant_id"`
+	// Name is the change-set's label. The server emits "name"; this field
+	// was declared as "title", so it never populated and every change-set
+	// read back with a blank label.
+	Name            string          `json:"name"`
 	State           string          `json:"state"`
 	RequireApproval bool            `json:"require_approval"`
 	Author          string          `json:"author,omitempty"`
+	Approver        string          `json:"approver,omitempty"`
 	Mutations       json.RawMessage `json:"mutations,omitempty"`
 	PublishAt       *time.Time      `json:"publish_at,omitempty"`
+	PublishedAt     *time.Time      `json:"published_at,omitempty"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
+
+	// Title mirrors Name.
+	//
+	// Deprecated: the server has no "title" field and never sent one, so
+	// this was always empty. It is populated from "name" so that code
+	// written against it keeps compiling and now reads a real value. Use
+	// Name; Title is removed in the next major version of this module.
+	Title string `json:"-"`
+}
+
+// UnmarshalJSON decodes a change-set and mirrors Name onto the deprecated
+// Title field.
+func (c *ChangeSet) UnmarshalJSON(b []byte) error {
+	type alias ChangeSet // no methods, so this does not recurse
+	var out alias
+	if err := json.Unmarshal(b, &out); err != nil {
+		return err
+	}
+	out.Title = out.Name
+	*c = ChangeSet(out)
+	return nil
 }
 
 // GridResult is a faceted grid page: chosen attribute values per entity.
@@ -375,6 +406,11 @@ type FacetBucket struct {
 // result set.
 type Facets struct {
 	Facets map[string][]FacetBucket `json:"facets"`
+	// Truncated reports that at least one attribute has more distinct values
+	// than the buckets returned. Without it a partial bucket list is
+	// indistinguishable from a complete one, so a filter sidebar shows
+	// "3 materials" where there are 300.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // ExportResult is a parsed CSV export: a header and data rows.

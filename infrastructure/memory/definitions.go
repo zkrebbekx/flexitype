@@ -2,9 +2,11 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
+	"github.com/zkrebbekx/flexitype/application/erasure"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
@@ -269,4 +271,77 @@ func (l *activityLog) List(_ context.Context, filter activity.Filter, page db.Pa
 	})
 	pageItems, total := paginate(out, page, entryKey, true, true)
 	return pageItems, total, nil
+}
+
+// activityEraser redacts an erased entity's value snapshots from the audit
+// log, mirroring the Postgres eraser.
+//
+// Every write persisted the full value in an entry's before/after state, and
+// the log deliberately survives an erasure so the erasure stays provable —
+// which is exactly why the entries are redacted rather than deleted: the
+// proof survives, the personal data does not.
+type activityEraser struct{ s *Store }
+
+// NewActivityEraser builds the in-memory audit-log residual eraser.
+func (s *Store) NewActivityEraser() erasure.ResidualEraser { return &activityEraser{s: s} }
+
+func (e *activityEraser) Name() string { return "activity log" }
+
+// RedactEntity matches on the entity named INSIDE the state snapshot, not on
+// the entry's EntityID: an entry for a value write keys on the value's own id,
+// so the entity appears only in the recorded before/after JSON.
+func (e *activityEraser) RedactEntity(_ context.Context, _ db.Tx, tenant valueobjects.TenantID, entityID string) (int, error) {
+	return e.redact(func(entry activity.Entry) bool {
+		return entry.TenantID == tenant && statesName(entry, entityID)
+	})
+}
+
+// RedactTenant redacts every entry that names any entity. Entries that name
+// none are schema history, which a tenant erasure keeps: it erases entity
+// DATA, not definitions.
+func (e *activityEraser) RedactTenant(_ context.Context, _ db.Tx, tenant valueobjects.TenantID) (int, error) {
+	return e.redact(func(entry activity.Entry) bool {
+		return entry.TenantID == tenant && statesName(entry, "")
+	})
+}
+
+// statesName reports whether an entry's before/after snapshots name the given
+// entity, or any entity when want is empty.
+func statesName(entry activity.Entry, want string) bool {
+	for _, raw := range []json.RawMessage{entry.Before, entry.After} {
+		if len(raw) == 0 {
+			continue
+		}
+		var probe struct {
+			EntityID string `json:"entity_id"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil || probe.EntityID == "" {
+			continue
+		}
+		if want == "" || probe.EntityID == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *activityEraser) redact(match func(activity.Entry) bool) (int, error) {
+	e.s.mu.Lock()
+	defer e.s.mu.Unlock()
+	marker := json.RawMessage(`{"` + erasure.RedactedMarker + `":true}`)
+	n := 0
+	for i := range e.s.activities {
+		entry := e.s.activities[i]
+		if !match(entry) || (entry.Before == nil && entry.After == nil) {
+			continue
+		}
+		if entry.Before != nil {
+			e.s.activities[i].Before = marker
+		}
+		if entry.After != nil {
+			e.s.activities[i].After = marker
+		}
+		n++
+	}
+	return n, nil
 }

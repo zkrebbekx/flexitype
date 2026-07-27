@@ -58,6 +58,10 @@ type Config struct {
 	// OnCleanupError surfaces a swallowed post-erasure cleanup failure (a blob GC
 	// or search-projection removal that could not be completed). Nil-safe.
 	OnCleanupError func(error)
+	// Residuals redact the erased values from the records that copied them —
+	// the event log and the activity log. Empty leaves those copies readable,
+	// which is what an erasure used to do while reporting success.
+	Residuals []ResidualEraser
 }
 
 // Interactor owns the entity- and tenant-level erasure usecases.
@@ -71,6 +75,7 @@ type Interactor struct {
 	// onCleanupError surfaces a swallowed post-erasure cleanup failure (a blob
 	// GC or search-projection removal that could not be completed). Nil-safe.
 	onCleanupError func(error)
+	residuals      []ResidualEraser
 }
 
 // NewInteractor wires the erasure usecases from a total config, so a
@@ -84,6 +89,7 @@ func NewInteractor(cfg Config) *Interactor {
 		search:         cfg.Search,
 		blobs:          cfg.Blobs,
 		onCleanupError: cfg.OnCleanupError,
+		residuals:      cfg.Residuals,
 	}
 }
 
@@ -114,6 +120,11 @@ type PurgeReport struct {
 	MediaBlobsPurged int `json:"media_blobs_purged"`
 	// MediaBlobsFailed counts blobs whose deletion failed; UnpurgedBlobKeys
 	// lists their still-orphaned object keys for operator reconciliation.
+	// RecordsRedacted counts the event-log and activity-log records whose
+	// copies of the erased values were replaced with a marker. The rows
+	// survive on purpose: the activity log is what makes the erasure
+	// provable, and the event feed's sequence is gapless by design.
+	RecordsRedacted  int      `json:"records_redacted"`
 	MediaBlobsFailed int      `json:"media_blobs_failed"`
 	UnpurgedBlobKeys []string `json:"unpurged_blob_keys,omitempty"`
 }
@@ -200,6 +211,12 @@ func (i *Interactor) PurgeEntity(ctx context.Context, rawTypeDefID, rawEntityID 
 			},
 		})
 
+		n, rerr := i.redactEntityResiduals(ctx, tx, tenant, rawEntityID)
+		if rerr != nil {
+			return rerr
+		}
+		report.RecordsRedacted = n
+
 		i.gcErasedBlobs(tx, mediaKeys, report)
 		return nil
 	})
@@ -207,6 +224,35 @@ func (i *Interactor) PurgeEntity(ctx context.Context, rawTypeDefID, rawEntityID 
 		return nil, err
 	}
 	return report, nil
+}
+
+// redactEntityResiduals redacts the erased entity's values wherever they were
+// copied. It runs INSIDE the erasure transaction: a rollback must not leave
+// the values deleted in one place and readable in another, and a redaction
+// failure must fail the erasure rather than be reported as success.
+func (i *Interactor) redactEntityResiduals(ctx context.Context, tx db.Transactor, tenant valueobjects.TenantID, entityID string) (int, error) {
+	total := 0
+	for _, r := range i.residuals {
+		n, err := r.RedactEntity(ctx, tx, tenant, entityID)
+		if err != nil {
+			return 0, fmt.Errorf("redact erased values in %s: %w", r.Name(), err)
+		}
+		total += n
+	}
+	return total, nil
+}
+
+// redactTenantResiduals is the tenant-wide counterpart.
+func (i *Interactor) redactTenantResiduals(ctx context.Context, tx db.Transactor, tenant valueobjects.TenantID) (int, error) {
+	total := 0
+	for _, r := range i.residuals {
+		n, err := r.RedactTenant(ctx, tx, tenant)
+		if err != nil {
+			return 0, fmt.Errorf("redact erased values in %s: %w", r.Name(), err)
+		}
+		total += n
+	}
+	return total, nil
 }
 
 // PurgeTenant permanently ERASES a tenant's entity DATA: it hard-deletes every
@@ -257,6 +303,12 @@ func (i *Interactor) PurgeTenant(ctx context.Context) (*PurgeReport, error) {
 		// report before Execute returns, since post-commit hooks run inside Commit.
 		i.purgeTenantSearchAfterCommit(tx, tenant, report)
 
+		n, rerr := i.redactTenantResiduals(ctx, tx, tenant)
+		if rerr != nil {
+			return rerr
+		}
+		report.RecordsRedacted = n
+
 		c.RecordChange(activity.Change{
 			Entity:   "tenant",
 			EntityID: tenant.String(),
@@ -266,6 +318,7 @@ func (i *Interactor) PurgeTenant(ctx context.Context) (*PurgeReport, error) {
 				"values_purged":      report.ValuesPurged,
 				"revisions_purged":   report.RevisionsPurged,
 				"relationships_gone": report.RelationshipsGone,
+				"records_redacted":   report.RecordsRedacted,
 			},
 		})
 

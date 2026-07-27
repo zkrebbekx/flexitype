@@ -18,6 +18,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/admin"
 	"github.com/zkrebbekx/flexitype/application/changeset"
 	"github.com/zkrebbekx/flexitype/application/computed"
+	"github.com/zkrebbekx/flexitype/application/erasure"
 	"github.com/zkrebbekx/flexitype/application/feed"
 	"github.com/zkrebbekx/flexitype/application/gql"
 	"github.com/zkrebbekx/flexitype/application/outbox"
@@ -239,6 +240,10 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	var relay *outbox.Relay
 	var worker *webhook.Worker
 	var pruner *feed.Pruner
+	residualErasers := []erasure.ResidualEraser{
+		postgres.NewOutboxEraser(),
+		postgres.NewActivityEraser(),
+	}
 	cfg := application.FactoryConfig{
 		Transactor:      transactor,
 		NewRepositories: newRepos,
@@ -248,13 +253,18 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		OnRollback:      o.onRollback,
 		OnDispatchError: o.onDispatch,
 		OnCleanupError:  o.onCleanup,
-		Features:        o.features,
-		SavedViews:      postgres.NewSavedViewStore(pool),
-		MatchRules:      postgres.NewMatchStore(pool),
-		Revisions:       postgres.NewRevisionStore(pool),
-		ChangeSets:      postgres.NewChangeSetStore(pool),
-		UnitFamilies:    postgres.NewUnitFamilyStore(pool),
-		SearchStore:     searchStore, // may be nil; enables entity-data erasure of the projection
+		// Erasure has to reach the records that copied the values it deletes:
+		// the event log (which the feed serves until retention prunes it, and
+		// forever for rows never expanded) and the activity log (kept on
+		// purpose, so the erasure stays provable).
+		ErasureResiduals: residualErasers,
+		Features:         o.features,
+		SavedViews:       postgres.NewSavedViewStore(pool),
+		MatchRules:       postgres.NewMatchStore(pool),
+		Revisions:        postgres.NewRevisionStore(pool),
+		ChangeSets:       postgres.NewChangeSetStore(pool),
+		UnitFamilies:     postgres.NewUnitFamilyStore(pool),
+		SearchStore:      searchStore, // may be nil; enables entity-data erasure of the projection
 	}
 	if o.outbox {
 		store := postgres.NewOutboxStore(transactor)
@@ -369,14 +379,19 @@ func NewInMemory(opts ...Option) *Service {
 		OnRollback:      o.onRollback,
 		OnDispatchError: o.onDispatch,
 		OnCleanupError:  o.onCleanup,
-		Features:        o.features,
-		SavedViews:      savedViews,
-		MatchRules:      matchRules,
-		Revisions:       revisions,
-		ChangeSets:      changesets,
-		UnitFamilies:    unitFamilies,
-		BlobStore:       o.blobs,
-		SearchStore:     searchStore, // may be nil; enables entity-data erasure of the projection
+		// The activity log copies the values an erasure deletes, and it
+		// survives the erasure on purpose so the erasure stays provable, so
+		// its entries are redacted. There is no in-memory event log to
+		// redact: this backend direct-dispatches and keeps no outbox.
+		ErasureResiduals: []erasure.ResidualEraser{store.NewActivityEraser()},
+		Features:         o.features,
+		SavedViews:       savedViews,
+		MatchRules:       matchRules,
+		Revisions:        revisions,
+		ChangeSets:       changesets,
+		UnitFamilies:     unitFamilies,
+		BlobStore:        o.blobs,
+		SearchStore:      searchStore, // may be nil; enables entity-data erasure of the projection
 	})
 	materializer := computed.NewMaterializer(factory)
 	materializer.OnSchemaChange(schemaChangeRecomputer(materializer, o.onBgError))

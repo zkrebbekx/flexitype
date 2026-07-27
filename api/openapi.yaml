@@ -1911,6 +1911,7 @@ components:
         relationships_gone: 2
         search_docs_purged: 0
         media_blobs_purged: 1
+        records_redacted: 12
         media_blobs_failed: 0
         unpurged_blob_keys: []
       description: The audited receipt of a hard delete (right-to-erasure).
@@ -1921,6 +1922,13 @@ components:
         relationships_gone: { type: integer }
         search_docs_purged: { type: integer }
         media_blobs_purged: { type: integer }
+        records_redacted:
+          type: integer
+          description: >-
+            Event-log and activity-log records whose copies of the erased
+            values were replaced with a marker. The rows survive on purpose:
+            the activity log is what makes the erasure provable, and the event
+            feed's sequence is gapless by design.
         media_blobs_failed:
           type: integer
           description: >-

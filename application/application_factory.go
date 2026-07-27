@@ -88,6 +88,10 @@ type FactoryConfig struct {
 	// undo a durable erasure), so the failure is surfaced here for
 	// logging/metering rather than lost. Optional.
 	OnCleanupError func(error)
+	// ErasureResiduals redact the erased values from the records that copied
+	// them — the event log and the activity log. Empty leaves those copies
+	// readable, which is what an erasure used to do while reporting success.
+	ErasureResiduals []apperasure.ResidualEraser
 
 	// Now overrides the clock. Optional; defaults to uow.UTCNow. A custom clock
 	// MUST return UTC wall-clock time (not a local or monotonic reading): the
@@ -246,6 +250,7 @@ func (f *factory) New(context.Context) *Interactors {
 			Search:         f.cfg.SearchStore,
 			Blobs:          f.cfg.BlobStore,
 			OnCleanupError: f.cfg.OnCleanupError,
+			Residuals:      f.cfg.ErasureResiduals,
 		}),
 		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.ValueReader, repos.Dependencies, f.cfg.UnitFamilies),
 		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),

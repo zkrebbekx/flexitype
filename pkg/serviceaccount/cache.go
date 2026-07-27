@@ -18,6 +18,13 @@ type cachingAuthenticator struct {
 
 	mu    sync.RWMutex
 	cache map[string]cacheEntry
+	// byAccount indexes cached tokens by the account they resolve to, so a
+	// rotation or revocation can evict exactly that account's entries. The
+	// cache is keyed by token, which is the only thing a request presents, so
+	// without this index a rotated secret kept authenticating for the whole
+	// TTL — while RotateSecret's documentation promised it stopped
+	// immediately.
+	byAccount map[string]map[string]struct{}
 }
 
 type cacheEntry struct {
@@ -32,10 +39,11 @@ func NewCachingAuthenticator(auth Authenticator, ttl time.Duration) Authenticato
 		return auth
 	}
 	return &cachingAuthenticator{
-		inner: auth,
-		ttl:   ttl,
-		now:   time.Now,
-		cache: map[string]cacheEntry{},
+		inner:     auth,
+		ttl:       ttl,
+		now:       time.Now,
+		cache:     map[string]cacheEntry{},
+		byAccount: map[string]map[string]struct{}{},
 	}
 }
 
@@ -75,11 +83,48 @@ func (c *cachingAuthenticator) AuthenticateCtx(ctx context.Context, token string
 	if len(c.cache) > 1024 {
 		for k, e := range c.cache {
 			if !now.Before(e.expires) {
-				delete(c.cache, k)
+				c.forget(k)
 			}
 		}
 	}
 	c.cache[token] = cacheEntry{account: account, expires: now.Add(c.ttl)}
+	if c.byAccount == nil {
+		c.byAccount = map[string]map[string]struct{}{}
+	}
+	if c.byAccount[account.ID] == nil {
+		c.byAccount[account.ID] = map[string]struct{}{}
+	}
+	c.byAccount[account.ID][token] = struct{}{}
 	c.mu.Unlock()
 	return account, nil
+}
+
+// Invalidate drops every cached token for one account, so a rotated or revoked
+// credential stops working at once rather than at the end of the TTL.
+//
+// It satisfies the Invalidator interface, which the admin interactor calls
+// after RotateSecret and Revoke. Invalidating an account that has nothing
+// cached is a no-op.
+func (c *cachingAuthenticator) Invalidate(accountID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for token := range c.byAccount[accountID] {
+		delete(c.cache, token)
+	}
+	delete(c.byAccount, accountID)
+}
+
+// forget removes one token from both maps. The caller holds the lock.
+func (c *cachingAuthenticator) forget(token string) {
+	entry, ok := c.cache[token]
+	if !ok {
+		return
+	}
+	delete(c.cache, token)
+	if tokens := c.byAccount[entry.account.ID]; tokens != nil {
+		delete(tokens, token)
+		if len(tokens) == 0 {
+			delete(c.byAccount, entry.account.ID)
+		}
+	}
 }

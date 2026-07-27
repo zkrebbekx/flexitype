@@ -9,6 +9,8 @@ import (
 
 	. "github.com/smartystreets/goconvey/convey"
 
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+
 	"github.com/zkrebbekx/flexitype/application/uow"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 )
@@ -69,13 +71,23 @@ func TestEngineSubscriberContract(t *testing.T) {
 
 func TestResultErr(t *testing.T) {
 	Convey("Given an engine-level failure that must not reach resolution", t, func() {
-		Convey("When it is turned into a GraphQL result", func() {
-			res := resultErr(errors.New("boom"))
+		Convey("When an infrastructure error is turned into a GraphQL result", func() {
+			res := resultErr(errors.New("pq: relation \"flexitype_attribute_value\" does not exist"))
 
-			Convey("Then it carries the message as a formatted GraphQL error and no data", func() {
+			Convey("Then the detail is masked, as it is on the REST surface", func() {
 				So(res.Errors, ShouldHaveLength, 1)
-				So(res.Errors[0].Message, ShouldEqual, "boom")
+				So(res.Errors[0].Message, ShouldEqual, "internal error")
+				So(res.Errors[0].Message, ShouldNotContainSubstring, "flexitype_attribute_value")
 				So(res.Data, ShouldBeNil)
+			})
+		})
+
+		Convey("When a domain error is turned into a GraphQL result", func() {
+			res := resultErr(domainerrors.NewValidation("query exceeds the cost budget"))
+
+			Convey("Then its client-facing message survives", func() {
+				So(res.Errors, ShouldHaveLength, 1)
+				So(res.Errors[0].Message, ShouldEqual, "query exceeds the cost budget")
 			})
 		})
 	})

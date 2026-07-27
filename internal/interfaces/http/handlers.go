@@ -1005,6 +1005,13 @@ func (s *server) validateQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) reindexSearch(w http.ResponseWriter, r *http.Request) {
+	// Tenant-wide and expensive to serve: one write-scoped token could
+	// repeatedly rebuild every search document, which is a within-tenant
+	// denial of service that a per-account request limiter does not contain
+	// because each call is cheap to issue.
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	if s.reindex == nil {
 		s.featureDisabled(w, "search index")
 		return
@@ -1021,6 +1028,11 @@ func (s *server) reindexSearch(w http.ResponseWriter, r *http.Request) {
 // the recovery path when a crash between commit and post-commit left computed
 // projections stale (issue #211).
 func (s *server) recomputeComputed(w http.ResponseWriter, r *http.Request) {
+	// Admin-scoped for the same reason as reindexSearch: tenant-wide, cheap to
+	// call, expensive to serve.
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	if s.recompute == nil {
 		s.featureDisabled(w, "computed attributes")
 		return

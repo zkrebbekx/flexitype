@@ -298,7 +298,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	// This is a fast-path hint only: correctness is backed by the persisted
 	// schema_version (issue #192), so routing it off the external dispatcher keeps
 	// cross-replica invalidation intact.
-	graphqlEngine := gql.NewEngine()
+	graphqlEngine := gql.NewEngine(gql.WithErrorObserver(o.onBgError))
 	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
 
 	return &Service{
@@ -378,7 +378,7 @@ func NewInMemory(opts ...Option) *Service {
 	})
 	materializer := computed.NewMaterializer(factory)
 	projections.Register(materializer, events.WithEventTypes(computed.EventTypes()...))
-	graphqlEngine := gql.NewEngine()
+	graphqlEngine := gql.NewEngine(gql.WithErrorObserver(o.onBgError))
 	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
 	return &Service{
 		transactor:   transactor,
@@ -571,6 +571,9 @@ type APIConfig struct {
 	// RateLimiter, when set, throttles API requests per service account
 	// (429 + Retry-After). Build one with ratelimit.New.
 	RateLimiter *ratelimit.Limiter
+	// TenantRateLimiter, when set, caps a tenant's aggregate request rate
+	// across all of its service accounts.
+	TenantRateLimiter *ratelimit.Limiter
 	// DisableConsole omits the admin-console SPA, for an API-only deployment.
 	// An unmatched path then returns a JSON 404 like any other API error.
 	DisableConsole bool
@@ -588,11 +591,15 @@ func (s *Service) NewAccountLookup(ttl time.Duration) serviceaccount.Authenticat
 
 // AdminInteractor returns the provisioning usecases over this service's
 // pool, or nil for in-memory services.
-func (s *Service) AdminInteractor() *admin.Interactor {
+//
+// opts are passed through; APIHandler wires admin.WithAuthCache when the
+// deployment authenticates through a caching authenticator, so a rotation or a
+// revocation takes effect at once rather than at the end of the cache TTL.
+func (s *Service) AdminInteractor(opts ...admin.Option) *admin.Interactor {
 	if s.pool == nil {
 		return nil
 	}
-	return admin.NewInteractor(postgres.NewAdminStore(s.pool))
+	return admin.NewInteractor(postgres.NewAdminStore(s.pool), opts...)
 }
 
 // BootstrapAdmin seeds the provisioning tables with a tenant and an
@@ -655,10 +662,15 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 		BlobStore:   s.blobs,
 		GraphQL:     s.graphql,
 
-		DisableConsole: cfg.DisableConsole,
+		TenantRateLimiter: cfg.TenantRateLimiter,
+		DisableConsole:    cfg.DisableConsole,
 	}
 	if cfg.EnableProvisioning {
-		server.Admin = s.AdminInteractor()
+		var adminOpts []admin.Option
+		if inv, ok := cfg.Accounts.(serviceaccount.Invalidator); ok {
+			adminOpts = append(adminOpts, admin.WithAuthCache(inv))
+		}
+		server.Admin = s.AdminInteractor(adminOpts...)
 	}
 	if s.indexer != nil {
 		server.Reindex = s.ReindexSearch

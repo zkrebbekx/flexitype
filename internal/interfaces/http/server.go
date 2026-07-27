@@ -38,6 +38,10 @@ type ServerConfig struct {
 	Metrics *metrics.Metrics
 	// RateLimiter, when set, throttles API requests per service account.
 	RateLimiter *ratelimit.Limiter
+	// TenantRateLimiter, when set, caps a tenant's aggregate request rate
+	// across all of its service accounts. Without it, a tenant multiplies its
+	// effective rate by the number of accounts it creates.
+	TenantRateLimiter *ratelimit.Limiter
 	// BlobStore serves media downloads; nil when media is disabled.
 	BlobStore blob.Store
 	// GraphQL serves the read-only GraphQL API; nil disables the endpoint.
@@ -85,7 +89,7 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 		api.Use(authenticate(cfg.Accounts, cfg.Logger))
 		// Throttle after auth so the limiter keys on the resolved account
 		// and counts usage per tenant.
-		api.Use(rateLimit(cfg.RateLimiter, cfg.Metrics))
+		api.Use(rateLimit(cfg.RateLimiter, cfg.TenantRateLimiter, cfg.Metrics))
 		// Interactors after auth: the set is built with the request's actor
 		// and tenant already on the context.
 		api.Use(withInteractors(cfg.Factory))

@@ -95,6 +95,15 @@ type Config struct {
 	RateLimitRPS float64
 	// RateLimitBurst is the token-bucket ceiling for short bursts.
 	RateLimitBurst int
+	// TenantRateLimitRPS caps a tenant's aggregate request rate across all of
+	// its service accounts; 0 disables the aggregate ceiling.
+	//
+	// The per-account limiter alone cannot bound a tenant: a tenant that
+	// creates more accounts multiplies its effective rate by the account
+	// count, and the per-account buckets have no view of the total.
+	TenantRateLimitRPS float64
+	// TenantRateLimitBurst is the aggregate token-bucket ceiling.
+	TenantRateLimitBurst int
 	// PubSubProject, when set, publishes every event to Google Cloud
 	// Pub/Sub in addition to any webhook subscriptions.
 	PubSubProject string
@@ -129,35 +138,37 @@ func (d Database) DSN() string {
 func Load() (Config, error) {
 	e := &envReader{}
 	cfg := Config{
-		Port:                e.int("FLEXITYPE_PORT", 8080),
-		ServiceAccountsPath: os.Getenv("FLEXITYPE_SERVICE_ACCOUNTS"),
-		DevInsecure:         e.bool("FLEXITYPE_DEV_INSECURE", false),
-		RequireAuth:         e.bool("FLEXITYPE_REQUIRE_AUTH", true),
-		EnableConsole:       e.bool("FLEXITYPE_ENABLE_CONSOLE", true),
-		RunRelay:            e.bool("FLEXITYPE_RUN_RELAY", true),
-		RunDeliveryWorker:   e.bool("FLEXITYPE_RUN_DELIVERY_WORKER", true),
-		RunPruner:           e.bool("FLEXITYPE_RUN_PRUNER", true),
-		RunScheduler:        e.bool("FLEXITYPE_RUN_SCHEDULER", true),
-		LogLevel:            envStr("FLEXITYPE_LOG_LEVEL", "info"),
-		LogFormat:           envStr("FLEXITYPE_LOG_FORMAT", "json"),
-		ShutdownTimeout:     e.duration("FLEXITYPE_SHUTDOWN_TIMEOUT", 30*time.Second),
-		MigrateOnStart:      e.bool("FLEXITYPE_MIGRATE_ON_START", true),
-		EnableSearch:        e.bool("FLEXITYPE_FEATURE_SEARCH", true),
-		EnableActivity:      e.bool("FLEXITYPE_FEATURE_ACTIVITY", true),
-		EnableOutbox:        e.bool("FLEXITYPE_OUTBOX", false),
-		EnableSearchIndex:   e.bool("FLEXITYPE_FEATURE_SEARCH_INDEX", false),
-		BlobDir:             os.Getenv("FLEXITYPE_BLOB_DIR"),
-		EventRetention:      e.duration("FLEXITYPE_EVENT_RETENTION", 7*24*time.Hour),
-		WebhookAllowPrivate: e.bool("FLEXITYPE_WEBHOOK_ALLOW_PRIVATE", false),
-		EnableMetrics:       e.bool("FLEXITYPE_METRICS", true),
-		EnableProvisioning:  e.bool("FLEXITYPE_PROVISIONING", false),
-		AuthCacheTTL:        e.duration("FLEXITYPE_AUTH_CACHE_TTL", 30*time.Second),
-		BootstrapAdmin:      e.bool("FLEXITYPE_BOOTSTRAP_ADMIN", false),
-		RateLimitRPS:        e.float("FLEXITYPE_RATE_LIMIT_RPS", 0),
-		RateLimitBurst:      e.int("FLEXITYPE_RATE_LIMIT_BURST", 200),
-		PubSubProject:       os.Getenv("FLEXITYPE_PUBSUB_PROJECT"),
-		PubSubTopic:         envStr("FLEXITYPE_PUBSUB_TOPIC", "flexitype-events"),
-		PubSubOrdering:      e.bool("FLEXITYPE_PUBSUB_ORDERING", false),
+		Port:                 e.int("FLEXITYPE_PORT", 8080),
+		ServiceAccountsPath:  os.Getenv("FLEXITYPE_SERVICE_ACCOUNTS"),
+		DevInsecure:          e.bool("FLEXITYPE_DEV_INSECURE", false),
+		RequireAuth:          e.bool("FLEXITYPE_REQUIRE_AUTH", true),
+		EnableConsole:        e.bool("FLEXITYPE_ENABLE_CONSOLE", true),
+		RunRelay:             e.bool("FLEXITYPE_RUN_RELAY", true),
+		RunDeliveryWorker:    e.bool("FLEXITYPE_RUN_DELIVERY_WORKER", true),
+		RunPruner:            e.bool("FLEXITYPE_RUN_PRUNER", true),
+		RunScheduler:         e.bool("FLEXITYPE_RUN_SCHEDULER", true),
+		LogLevel:             envStr("FLEXITYPE_LOG_LEVEL", "info"),
+		LogFormat:            envStr("FLEXITYPE_LOG_FORMAT", "json"),
+		ShutdownTimeout:      e.duration("FLEXITYPE_SHUTDOWN_TIMEOUT", 30*time.Second),
+		MigrateOnStart:       e.bool("FLEXITYPE_MIGRATE_ON_START", true),
+		EnableSearch:         e.bool("FLEXITYPE_FEATURE_SEARCH", true),
+		EnableActivity:       e.bool("FLEXITYPE_FEATURE_ACTIVITY", true),
+		EnableOutbox:         e.bool("FLEXITYPE_OUTBOX", false),
+		EnableSearchIndex:    e.bool("FLEXITYPE_FEATURE_SEARCH_INDEX", false),
+		BlobDir:              os.Getenv("FLEXITYPE_BLOB_DIR"),
+		EventRetention:       e.duration("FLEXITYPE_EVENT_RETENTION", 7*24*time.Hour),
+		WebhookAllowPrivate:  e.bool("FLEXITYPE_WEBHOOK_ALLOW_PRIVATE", false),
+		EnableMetrics:        e.bool("FLEXITYPE_METRICS", true),
+		EnableProvisioning:   e.bool("FLEXITYPE_PROVISIONING", false),
+		AuthCacheTTL:         e.duration("FLEXITYPE_AUTH_CACHE_TTL", 30*time.Second),
+		BootstrapAdmin:       e.bool("FLEXITYPE_BOOTSTRAP_ADMIN", false),
+		RateLimitRPS:         e.float("FLEXITYPE_RATE_LIMIT_RPS", 50),
+		RateLimitBurst:       e.int("FLEXITYPE_RATE_LIMIT_BURST", 200),
+		TenantRateLimitRPS:   e.float("FLEXITYPE_TENANT_RATE_LIMIT_RPS", 500),
+		TenantRateLimitBurst: e.int("FLEXITYPE_TENANT_RATE_LIMIT_BURST", 2000),
+		PubSubProject:        os.Getenv("FLEXITYPE_PUBSUB_PROJECT"),
+		PubSubTopic:          envStr("FLEXITYPE_PUBSUB_TOPIC", "flexitype-events"),
+		PubSubOrdering:       e.bool("FLEXITYPE_PUBSUB_ORDERING", false),
 		Database: Database{
 			Host:            envStr("FLEXITYPE_DB_HOST", "localhost"),
 			Port:            e.int("FLEXITYPE_DB_PORT", 5432),

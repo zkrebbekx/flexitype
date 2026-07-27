@@ -63,7 +63,12 @@ hostname. Never set it in a deployment reachable by anything but you.
 | `FLEXITYPE_DEV_INSECURE` | `false` | Run with authentication disabled, and permit an unencrypted database connection to a non-loopback host. Local development only. |
 | `FLEXITYPE_REQUIRE_AUTH` | `true` | Refuse to boot unless an account source (file or provisioning) is configured. `FLEXITYPE_DEV_INSECURE` overrides it. |
 | `FLEXITYPE_BOOTSTRAP_ADMIN` | `false` | On startup, if no accounts exist, seed a `default` tenant and `bootstrap-admin` admin account. Its token is printed to **stdout once** (never to the structured log) — capture it. |
-| `FLEXITYPE_AUTH_CACHE_TTL` | `30s` | How long a database-backed auth result is cached. Bounds how quickly a revoked or rotated credential stops working. |
+| `FLEXITYPE_AUTH_CACHE_TTL` | `30s` | How long a database-backed auth result is cached. Rotation and revocation evict the account's entries immediately, so this bounds only a change made directly in the database. |
+
+Deactivating a tenant (`PATCH /api/v1/tenants/{name}` with `{"active": false}`)
+suspends **every service account under it**, in one action. Authentication joins
+the tenant's own flag, so this is a real suspension rather than control-plane
+metadata.
 
 ### Provisioning API
 
@@ -155,17 +160,29 @@ is mounted. Only non-API paths reach the app shell.
 
 ## Rate limiting
 
-Per-service-account throttling with a token bucket. Off by default; set a
-rate to enable. A throttled request gets `429` with a `Retry-After` header.
+Two ceilings, both on by default. A deployment gets the throttled configuration
+without needing to know these variables exist; set either rate to `0` to turn
+that ceiling off.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `FLEXITYPE_RATE_LIMIT_RPS` | `0` | Sustained requests per second per account (0 disables rate limiting). |
-| `FLEXITYPE_RATE_LIMIT_BURST` | `200` | Token-bucket ceiling — how many requests a single account may burst before throttling. |
+| `FLEXITYPE_RATE_LIMIT_RPS` | `50` | Sustained requests per second per **service account**. |
+| `FLEXITYPE_RATE_LIMIT_BURST` | `200` | Token-bucket ceiling for short bursts, per account. |
+| `FLEXITYPE_TENANT_RATE_LIMIT_RPS` | `500` | Sustained requests per second per **tenant**, across all of its accounts. |
+| `FLEXITYPE_TENANT_RATE_LIMIT_BURST` | `2000` | Token-bucket ceiling for short bursts, per tenant. |
 
-When metrics are on, `flexitype_tenant_requests_total{tenant}` counts
-authenticated requests and `flexitype_ratelimit_rejected_total{tenant}`
-counts throttled ones.
+The per-account limiter alone cannot bound a tenant: a tenant that creates more
+service accounts multiplies its effective rate by the account count, because the
+per-account buckets have no view of the total. The tenant ceiling is checked
+first.
+
+A rejected request gets `429` with `Retry-After` and is counted in
+`flexitype_ratelimit_rejected_total`.
+
+`POST /api/v1/search/reindex` and `POST /api/v1/computed/recompute` require the
+**admin** scope. Both are tenant-wide, cheap to call and expensive to serve, so
+a write-scoped token could repeatedly trigger them — a within-tenant denial of
+service that a per-request limiter does not contain.
 
 ## Observability
 

@@ -873,13 +873,24 @@ func (r *relationshipRepository) CountLiveLinks(ctx context.Context, defID value
 		AsParent int `db:"as_parent"`
 		AsChild  int `db:"as_child"`
 	}
+	// Two scalar subqueries, each with the entity in its own WHERE clause, so
+	// the partial indexes on (relationship_definition_id, parent_entity_id) and
+	// (…, child_entity_id) serve them as index-only scans.
+	//
+	// Putting the entity only in an aggregate FILTER counted across every live
+	// link of the definition instead of the endpoint's own, because the WHERE
+	// clause matched them all — measured at 400k links, 15.6 ms of sequential
+	// scan versus 0.29 ms indexed. Cardinality enforcement runs this twice per
+	// link create and RelationshipRequirements runs it once per definition, so
+	// the cost tracked the tenant's total link volume rather than the entity's
+	// own fan-out.
 	err := r.q.GetContext(ctx, &row, bind(
 		`SELECT
-		   count(*) FILTER (WHERE parent_entity_id = ?) AS as_parent,
-		   count(*) FILTER (WHERE child_entity_id = ?)  AS as_child
-		 FROM flexitype_relationship
-		 WHERE relationship_definition_id = ? AND archived_at IS NULL`),
-		entity.String(), entity.String(), defID.String())
+		   (SELECT count(*) FROM flexitype_relationship
+		     WHERE relationship_definition_id = ? AND parent_entity_id = ? AND archived_at IS NULL) AS as_parent,
+		   (SELECT count(*) FROM flexitype_relationship
+		     WHERE relationship_definition_id = ? AND child_entity_id = ? AND archived_at IS NULL) AS as_child`),
+		defID.String(), entity.String(), defID.String(), entity.String())
 	if err != nil {
 		return 0, 0, fmt.Errorf("count live links: %w", err)
 	}

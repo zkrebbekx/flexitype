@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
@@ -242,6 +243,17 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			return err
 		}
 		if def.Unique() {
+			// This is a read followed by a write, which would admit two
+			// concurrent writers of the same value under READ COMMITTED. It is
+			// safe only because lockDefinition above took a row lock on the
+			// attribute definition, in this same transaction, before we got
+			// here: every writer of this attribute serializes on that row, so
+			// the second writer's count observes the first writer's committed
+			// value. Removing or weakening that lock reintroduces the race, and
+			// the duplicate it admits is permanent — the check only ever asks
+			// whether a NEW value collides, so no later write surfaces it.
+			// TestConcurrencyInvariantsPostgres pins the resulting invariant.
+			//
 			// Uniqueness applies per scope: the same value may exist in a
 			// different locale/channel.
 			count, err := reads.CountByDefinitionAndValue(ctx, defID, scope, v, entityID)
@@ -363,15 +375,38 @@ func (i *Interactor) SetBatch(ctx context.Context, in BatchSetInput) (*BatchSetO
 		return nil, domainerrors.NewValidation("batch exceeds the maximum item count", "max", maxBatchItems)
 	}
 
-	out := &BatchSetOutput{Items: make([]domainvalue.Snapshot, 0, len(in.Items))}
+	// Apply in a canonical entity order, so two batches touching the same
+	// entities take the entity-summary rows in the same sequence.
+	//
+	// Every value write refreshes a shared summary row per
+	// (type, entity). Two batches writing DISJOINT value rows of the same two
+	// entities, in opposite order, therefore deadlocked on those summary rows
+	// even though their own rows never conflicted — and nothing sorts entity
+	// ids, so opposite order is the normal case rather than the exception. A
+	// retry would re-run the same unordered writes into the same lock ordering.
+	//
+	// The caller's order is preserved in the output and in the item index an
+	// error reports, so the ordering is invisible from outside.
+	order := make([]int, len(in.Items))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		x, y := in.Items[order[a]], in.Items[order[b]]
+		if x.TypeDefinitionID != y.TypeDefinitionID {
+			return x.TypeDefinitionID < y.TypeDefinitionID
+		}
+		return x.EntityID < y.EntityID
+	})
+
+	out := &BatchSetOutput{Items: make([]domainvalue.Snapshot, len(in.Items))}
 	err := i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
-		out.Items = out.Items[:0]
-		for idx, item := range in.Items {
-			s, err := i.setWithin(ctx, tx, c, item)
+		for _, idx := range order {
+			s, err := i.setWithin(ctx, tx, c, in.Items[idx])
 			if err != nil {
 				return &batchItemError{index: idx, err: err}
 			}
-			out.Items = append(out.Items, s)
+			out.Items[idx] = s
 		}
 		return nil
 	})

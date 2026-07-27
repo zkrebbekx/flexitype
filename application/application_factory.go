@@ -261,7 +261,7 @@ func (f *factory) New(context.Context) *Interactors {
 		i.dedup = appdedup.NewInteractor(f.cfg.MatchRules, repos.TypeDefinitions, repos.Attributes, repos.ValueReader, f.cfg.Now)
 	}
 	if f.cfg.Revisions != nil {
-		i.revisions = apprevision.NewInteractor(f.cfg.Revisions, repos.TypeDefinitions, repos.Attributes, repos.ValueReader, i.values, f.cfg.Now)
+		i.revisions = apprevision.NewInteractor(unit, f.cfg.Revisions, repos.TypeDefinitions, repos.Attributes, repos.ValueReader, i.values, f.cfg.Now)
 	}
 	if f.cfg.ChangeSets != nil {
 		i.changesets = appchangeset.NewInteractor(f.cfg.ChangeSets, i.values, f.cfg.Now)

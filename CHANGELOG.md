@@ -78,6 +78,39 @@ the difference is recorded rather than asserted as an unexplained constant.
   selects only the three columns matching needs (signing secrets no longer
   cross the wire on this path), and 000021 adds the supporting index (#340).
 
+### Fixed — concurrency invariants
+
+Four check-then-write invariants were reported as racy. Two were, two were
+already serialized by a row lock the reports missed. All four now have a
+concurrent regression test, so which is which stops being a matter of reading.
+
+- Revision `seq` was allocated as `MAX(seq)+1` outside any transaction, so two
+  concurrent snapshots of one entity took the same number. Both readers order
+  by `seq` alone, so a point-in-time read or a restore then picked whichever
+  row Postgres returned first — non-deterministically, and differently between
+  replicas. Allocation and insert now share a transaction with an advisory lock
+  on the entity, and both readers break ties on `id` so any pre-existing
+  duplicates at least read the same way twice (#337).
+- The entity-summary trigger from 000019 upserted a shared summary row per
+  affected value row, in statement order. Two writes to DISJOINT value rows of
+  the same two entities, in opposite order, deadlocked on the summary rows —
+  a conflict impossible before the projection existed. It is now three
+  statement-level triggers that sort the affected keys, and `SetBatch` applies
+  its items in a canonical entity order, so every writer takes the summary rows
+  in the same sequence. Sorting also collapses the per-row work a bulk delete
+  repeated (#330).
+- Unique attributes (#329) and relationship max-cardinality (#338) were
+  reported as count-then-insert races. They are not reachable: every value
+  write takes `SELECT ... FOR UPDATE` on the attribute definition, and every
+  link create takes it on the relationship definition, in the same transaction
+  and before the count. Writers of one attribute — or one relationship
+  definition — therefore serialize, and the second writer's count observes the
+  first writer's committed row. Verified by removing the locks under a
+  concurrent test, which stays green, while the same test reproduces the
+  revision-seq race 3 runs out of 3. Both sites now say what makes them safe,
+  so a change that weakens the definition lock is understood to reintroduce the
+  race.
+
 ### Changed — migrations no longer block a live fleet
 
 An upgrade used to apply every pending migration in one transaction. That form

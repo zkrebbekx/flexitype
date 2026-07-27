@@ -31,20 +31,27 @@ func TestComputedValidate(t *testing.T) {
 		})
 
 		Convey("When it derives from a relationship rollup", func() {
-			Convey("Then count needs no target attribute", func() {
+			// No evaluator materializes a rollup, so a well-formed spec is
+			// still refused rather than accepted into an attribute that can
+			// never hold a value. The spec checks below run first, so a
+			// malformed rollup still reports what is malformed.
+			Convey("Then a well-formed count rollup is refused, not silently inert", func() {
 				refs, err := (&Computed{Kind: ComputedRollup, Rollup: &Rollup{
 					Relationship: "uses", Direction: "child", Aggregate: RollupCount,
 				}}).Validate()
-				So(err, ShouldBeNil)
+				So(err, ShouldNotBeNil)
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
+				So(err.Error(), ShouldContainSubstring, "not implemented")
 				So(refs, ShouldBeEmpty) // rollups declare no formula references
 			})
 
-			Convey("Then sum, min and max validate with a target attribute", func() {
+			Convey("Then a well-formed sum, min or max rollup is refused too", func() {
 				for _, agg := range []RollupAggregate{RollupSum, RollupMin, RollupMax} {
 					_, err := (&Computed{Kind: ComputedRollup, Rollup: &Rollup{
 						Relationship: "uses", Direction: "parent", Aggregate: agg, Target: "weight",
 					}}).Validate()
-					So(err, ShouldBeNil)
+					So(err, ShouldNotBeNil)
+					So(err.Error(), ShouldContainSubstring, "not implemented")
 				}
 			})
 
@@ -71,12 +78,13 @@ func TestComputedValidate(t *testing.T) {
 				So(err.Error(), ShouldContainSubstring, "relationship")
 			})
 
-			Convey("Then every documented traversal direction is accepted", func() {
+			Convey("Then a known direction passes the spec check before the refusal", func() {
 				for _, dir := range []string{"child", "parent", "linked"} {
 					_, err := (&Computed{Kind: ComputedRollup, Rollup: &Rollup{
 						Relationship: "uses", Direction: dir, Aggregate: RollupCount,
 					}}).Validate()
-					So(err, ShouldBeNil)
+					So(err, ShouldNotBeNil)
+					So(err.Error(), ShouldContainSubstring, "not implemented")
 				}
 			})
 

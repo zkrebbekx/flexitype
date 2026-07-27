@@ -11,6 +11,7 @@ package formula
 
 import (
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 	"unicode"
@@ -32,19 +33,54 @@ func (e *Expr) Eval(vars map[string]float64) (result float64, ok bool) {
 	return e.root.eval(vars)
 }
 
-type node interface {
-	eval(vars map[string]float64) (float64, bool)
+// EvalRat computes the formula in exact rational arithmetic.
+//
+// It exists for decimal attributes. Evaluating those in binary float64
+// materialized artifacts — `0.1 + 0.2` stored as `0.30000000000000004` — which
+// then failed exact equality in FQL and appeared verbatim in exports. Choosing
+// `decimal` is how a schema author asks for exactness, and computed values
+// were the one place the system produced decimals rather than accepting them.
+//
+// Rationals stay exact through +, -, * and /. A value that has no finite
+// decimal expansion (1/3) is exact here and is rounded only when the caller
+// renders it.
+func (e *Expr) EvalRat(vars map[string]*big.Rat) (result *big.Rat, ok bool) {
+	return e.root.evalRat(vars)
 }
 
-type numNode float64
+type node interface {
+	eval(vars map[string]float64) (float64, bool)
+	evalRat(vars map[string]*big.Rat) (*big.Rat, bool)
+}
 
-func (n numNode) eval(map[string]float64) (float64, bool) { return float64(n), true }
+// numNode keeps the literal's source text alongside its float form, so exact
+// evaluation reads the digits the author wrote rather than a float
+// round-trip of them.
+type numNode struct {
+	f    float64
+	text string
+}
+
+func (n numNode) eval(map[string]float64) (float64, bool) { return n.f, true }
+
+func (n numNode) evalRat(map[string]*big.Rat) (*big.Rat, bool) {
+	r, ok := new(big.Rat).SetString(n.text)
+	return r, ok
+}
 
 type refNode string
 
 func (r refNode) eval(vars map[string]float64) (float64, bool) {
 	v, ok := vars[string(r)]
 	return v, ok
+}
+
+func (r refNode) evalRat(vars map[string]*big.Rat) (*big.Rat, bool) {
+	v, ok := vars[string(r)]
+	if !ok || v == nil {
+		return nil, false
+	}
+	return new(big.Rat).Set(v), true
 }
 
 type binNode struct {
@@ -77,11 +113,45 @@ func (b binNode) eval(vars map[string]float64) (float64, bool) {
 	return 0, false
 }
 
+func (b binNode) evalRat(vars map[string]*big.Rat) (*big.Rat, bool) {
+	l, ok := b.left.evalRat(vars)
+	if !ok {
+		return nil, false
+	}
+	r, ok := b.right.evalRat(vars)
+	if !ok {
+		return nil, false
+	}
+	out := new(big.Rat)
+	switch b.op {
+	case '+':
+		return out.Add(l, r), true
+	case '-':
+		return out.Sub(l, r), true
+	case '*':
+		return out.Mul(l, r), true
+	case '/':
+		if r.Sign() == 0 {
+			return nil, false
+		}
+		return out.Quo(l, r), true
+	}
+	return nil, false
+}
+
 type negNode struct{ inner node }
 
 func (n negNode) eval(vars map[string]float64) (float64, bool) {
 	v, ok := n.inner.eval(vars)
 	return -v, ok
+}
+
+func (n negNode) evalRat(vars map[string]*big.Rat) (*big.Rat, bool) {
+	v, ok := n.inner.evalRat(vars)
+	if !ok {
+		return nil, false
+	}
+	return v.Neg(v), true
 }
 
 // Parse compiles a formula, returning it and a validation error for malformed
@@ -219,8 +289,9 @@ func (p *parser) parseFactor() (node, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid number %q", p.tok.text)
 		}
+		text := p.tok.text
 		p.next()
-		return numNode(f), nil
+		return numNode{f: f, text: text}, nil
 	case tokIdent:
 		name := p.tok.text
 		if p.seen == nil {

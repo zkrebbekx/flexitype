@@ -41,30 +41,34 @@ const (
 // Condition is one predicate over a source attribute's value. All of a
 // dependency's conditions must match for its effect to apply.
 type Condition struct {
-	Kind    ConditionKind              `json:"kind"`
-	Value   *valueobjects.Value        `json:"-"`
-	Values  []valueobjects.Value       `json:"-"`
-	Min     *valueobjects.Value        `json:"-"`
-	Max     *valueobjects.Value        `json:"-"`
-	Pattern string                     `json:"pattern,omitempty"`
-	Dynamic *valueobjects.DynamicValue `json:"dynamic,omitempty"`
-	Op      DynamicOp                  `json:"op,omitempty"`
+	Kind    ConditionKind        `json:"kind"`
+	Value   *valueobjects.Value  `json:"-"`
+	Values  []valueobjects.Value `json:"-"`
+	Min     *valueobjects.Value  `json:"-"`
+	Max     *valueobjects.Value  `json:"-"`
+	Pattern string               `json:"pattern,omitempty"`
+	// PatternSubstring opts a pattern condition out of anchoring, matching
+	// attribute.Pattern.Substring. The zero value keeps the safe semantics.
+	PatternSubstring bool                       `json:"pattern_substring,omitempty"`
+	Dynamic          *valueobjects.DynamicValue `json:"dynamic,omitempty"`
+	Op               DynamicOp                  `json:"op,omitempty"`
 }
 
 type conditionJSON struct {
-	Kind    ConditionKind              `json:"kind"`
-	Value   json.RawMessage            `json:"value,omitempty"`
-	Values  []json.RawMessage          `json:"values,omitempty"`
-	Min     json.RawMessage            `json:"min,omitempty"`
-	Max     json.RawMessage            `json:"max,omitempty"`
-	Pattern string                     `json:"pattern,omitempty"`
-	Dynamic *valueobjects.DynamicValue `json:"dynamic,omitempty"`
-	Op      DynamicOp                  `json:"op,omitempty"`
+	Kind             ConditionKind              `json:"kind"`
+	Value            json.RawMessage            `json:"value,omitempty"`
+	Values           []json.RawMessage          `json:"values,omitempty"`
+	Min              json.RawMessage            `json:"min,omitempty"`
+	Max              json.RawMessage            `json:"max,omitempty"`
+	Pattern          string                     `json:"pattern,omitempty"`
+	PatternSubstring bool                       `json:"pattern_substring,omitempty"`
+	Dynamic          *valueobjects.DynamicValue `json:"dynamic,omitempty"`
+	Op               DynamicOp                  `json:"op,omitempty"`
 }
 
 // MarshalJSON encodes value operands in their self-describing typed form.
 func (c Condition) MarshalJSON() ([]byte, error) {
-	out := conditionJSON{Kind: c.Kind, Pattern: c.Pattern, Dynamic: c.Dynamic, Op: c.Op}
+	out := conditionJSON{Kind: c.Kind, Pattern: c.Pattern, PatternSubstring: c.PatternSubstring, Dynamic: c.Dynamic, Op: c.Op}
 
 	marshal := func(v *valueobjects.Value) (json.RawMessage, error) {
 		if v == nil {
@@ -101,6 +105,7 @@ func (c *Condition) UnmarshalJSON(b []byte) error {
 	}
 	c.Kind = in.Kind
 	c.Pattern = in.Pattern
+	c.PatternSubstring = in.PatternSubstring
 	c.Dynamic = in.Dynamic
 	c.Op = in.Op
 	c.Value, c.Min, c.Max, c.Values = nil, nil, nil, nil
@@ -243,7 +248,11 @@ func (c Condition) Matches(source valueobjects.Value, now time.Time) (bool, erro
 		return true, nil
 
 	case CondPattern:
-		re, err := regexp.Compile(c.Pattern)
+		// Anchored, matching the attribute constraint of the same name. An
+		// unanchored condition matched any value CONTAINING the pattern, so a
+		// rule written to fire on an identifier format fired on anything that
+		// merely embedded one.
+		re, err := regexp.Compile(conditionPattern(c))
 		if err != nil {
 			return false, err
 		}
@@ -277,4 +286,14 @@ func (c Condition) Matches(source valueobjects.Value, now time.Time) (bool, erro
 	default:
 		return false, fmt.Errorf("unknown condition kind %q", c.Kind)
 	}
+}
+
+// conditionPattern returns the expression to compile for a pattern condition:
+// anchored unless the author asked for substring matching, exactly as
+// attribute.Pattern behaves.
+func conditionPattern(c Condition) string {
+	if c.PatternSubstring {
+		return c.Pattern
+	}
+	return `\A(?:` + c.Pattern + `)\z`
 }

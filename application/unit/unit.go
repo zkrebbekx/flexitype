@@ -142,3 +142,25 @@ func (i *Interactor) Delete(ctx context.Context, rawID string) error {
 	}
 	return i.store.Delete(ctx, uow.TenantFromContext(ctx), id)
 }
+
+// Rebase recomputes a quantity value's base magnitude from this family,
+// discarding whatever base the value carried. Non-quantity values pass
+// through unchanged.
+//
+// It exists because a quantity's base is what every comparison uses, and it
+// arrives from caller JSON: a rule operand written through the API carried
+// whatever base the caller supplied — 0 by default, or an arbitrary number if
+// they chose one — so a bound expressed as "5 kg" compared as 0 and matched
+// everything. Rebasing at every boundary that accepts an operand makes the
+// stored base a function of the magnitude, the unit and the family.
+func Rebase(f Family, v valueobjects.Value) (valueobjects.Value, error) {
+	if v.DataType() != valueobjects.DataTypeQuantity {
+		return v, nil
+	}
+	q := v.Quantity()
+	base, err := f.ToBase(q.Magnitude, q.Unit)
+	if err != nil {
+		return valueobjects.Value{}, err
+	}
+	return valueobjects.NewQuantityValue(q.Magnitude, q.Unit, base)
+}

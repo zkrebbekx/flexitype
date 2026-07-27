@@ -138,7 +138,7 @@ type fakeDeliveryStore struct {
 	perCall  int // when >0, cap how many rows one ClaimDue returns (models the per-subscription claim)
 }
 
-func (s *fakeDeliveryStore) ClaimDue(_ context.Context, limit int, _ time.Duration, _ time.Time) ([]ClaimedDelivery, error) {
+func (s *fakeDeliveryStore) ClaimDue(_ context.Context, limit int, leaseFor time.Duration, now time.Time) ([]ClaimedDelivery, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.perCall > 0 && s.perCall < limit {
@@ -149,14 +149,24 @@ func (s *fakeDeliveryStore) ClaimDue(_ context.Context, limit int, _ time.Durati
 		batch = batch[:limit]
 	}
 	s.due = s.due[len(batch):]
-	return batch, nil
+	// Stamp the lease the real store stamps. The worker checks it before
+	// spending an HTTP timeout on a delivery another worker may already own,
+	// so a fake that left it zero would model every claim as already expired.
+	out := make([]ClaimedDelivery, len(batch))
+	for i, d := range batch {
+		if d.LeaseExpiresAt.IsZero() {
+			d.LeaseExpiresAt = now.Add(leaseFor)
+		}
+		out[i] = d
+	}
+	return out, nil
 }
 
-func (s *fakeDeliveryStore) Record(_ context.Context, _ time.Time, outcomes ...Outcome) error {
+func (s *fakeDeliveryStore) Record(_ context.Context, _ time.Time, outcomes ...Outcome) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.outcomes = append(s.outcomes, outcomes...)
-	return nil
+	return 0, nil
 }
 
 func (s *fakeDeliveryStore) ReleaseExpired(context.Context, time.Time) (int, error) {

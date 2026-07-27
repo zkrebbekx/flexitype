@@ -18,11 +18,55 @@ import (
 // outboxStore persists and claims outbox envelopes.
 type outboxStore struct {
 	tx db.Transactor // pool-level transactor for relay claims
+	// maxAttempts parks a row that has failed this many times, so an
+	// undeliverable envelope stops being retried and becomes visible as a
+	// terminal state rather than as permanent load.
+	maxAttempts int
+	// retryCeiling caps the exponential backoff between attempts.
+	retryCeiling time.Duration
 }
 
+// Default retry scheduling for the outbox lane, matching the delivery lane's
+// shape: 1s, 4s, 16s, 64s, 256s, then the ceiling.
+const (
+	defaultOutboxMaxAttempts  = 25
+	defaultOutboxRetryCeiling = 15 * time.Minute
+)
+
 // NewOutboxStore builds the outbox adapter over the pool transactor.
-func NewOutboxStore(tx db.Transactor) outbox.Store {
-	return &outboxStore{tx: tx}
+func NewOutboxStore(tx db.Transactor, opts ...OutboxStoreOption) outbox.Store {
+	s := &outboxStore{
+		tx:           tx,
+		maxAttempts:  defaultOutboxMaxAttempts,
+		retryCeiling: defaultOutboxRetryCeiling,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// OutboxStoreOption customises the outbox adapter's retry scheduling.
+type OutboxStoreOption func(*outboxStore)
+
+// WithOutboxMaxAttempts sets how many failures park a row. Non-positive
+// values are ignored.
+func WithOutboxMaxAttempts(n int) OutboxStoreOption {
+	return func(s *outboxStore) {
+		if n > 0 {
+			s.maxAttempts = n
+		}
+	}
+}
+
+// WithOutboxRetryCeiling caps the backoff between attempts. Non-positive
+// values are ignored.
+func WithOutboxRetryCeiling(d time.Duration) OutboxStoreOption {
+	return func(s *outboxStore) {
+		if d > 0 {
+			s.retryCeiling = d
+		}
+	}
 }
 
 func (s *outboxStore) Write(ctx context.Context, tx db.Tx, envs []events.Envelope) error {
@@ -72,11 +116,20 @@ func (s *outboxStore) Claim(ctx context.Context, relayID string, limit int, leas
 	var rows []outboxRow
 	// A single UPDATE ... RETURNING atomically leases the batch; the inner
 	// SELECT ... FOR UPDATE SKIP LOCKED keeps two relays off the same rows.
+	// next_attempt_at keeps a failing row out of the way until its backoff
+	// elapses, and parked_at takes it out entirely once it passes the attempt
+	// cap. Without both, a permanently failing row kept its low id, was
+	// re-claimed first on every 2-second pass because claims are id-ordered,
+	// and starved every newer envelope — stopping pub/sub, webhooks and the
+	// feed together, since all three are stamped only for a fully dispatched
+	// envelope.
 	query := bind(`UPDATE flexitype_event_outbox
 		 SET claimed_by = ?, claimed_at = now()
 		 WHERE id IN (
 		     SELECT id FROM flexitype_event_outbox
 		     WHERE dispatched_at IS NULL
+		       AND parked_at IS NULL
+		       AND next_attempt_at <= now()
 		       AND (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => ?))
 		     ORDER BY id
 		     LIMIT ?
@@ -143,12 +196,26 @@ func (s *outboxStore) Finalize(ctx context.Context, results []outbox.Result) err
 			}
 		}
 		for i, id := range failed {
-			// Clear the lease so a later pass retries promptly; only touch
-			// rows still pending (a crash-race copy may have dispatched).
+			// Count the attempt, schedule the retry, and park the row once it
+			// passes the cap. attempts was previously written and never read,
+			// so nothing bounded the retries and nothing distinguished an
+			// undeliverable envelope from a slow one. Only rows still pending
+			// are touched (a crash-race copy may have dispatched).
+			//
+			// The backoff is the delivery lane's shape: 1s, 4s, 16s, 64s,
+			// 256s, then a ceiling. Computed in SQL from the incremented
+			// attempt count, so two relays racing on the same row converge.
 			if _, err := q.ExecContext(ctx, bind(
 				`UPDATE flexitype_event_outbox
-				 SET attempts = attempts + 1, last_error = ?, claimed_at = NULL, claimed_by = NULL
-				 WHERE id = ? AND dispatched_at IS NULL`), lastErrs[i], id); err != nil {
+				 SET attempts = attempts + 1,
+				     last_error = ?,
+				     claimed_at = NULL,
+				     claimed_by = NULL,
+				     next_attempt_at = now() + make_interval(secs =>
+				         least(power(4, least(attempts, 10))::float8, ?)),
+				     parked_at = CASE WHEN attempts + 1 >= ? THEN now() ELSE NULL END
+				 WHERE id = ? AND dispatched_at IS NULL`),
+				lastErrs[i], s.retryCeiling.Seconds(), s.maxAttempts, id); err != nil {
 				return fmt.Errorf("mark outbox failure: %w", err)
 			}
 		}

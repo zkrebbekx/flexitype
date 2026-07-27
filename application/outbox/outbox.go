@@ -165,18 +165,36 @@ func (r *Relay) drain(ctx context.Context) {
 			break
 		}
 
+		// Dispatch and finalize a claimed batch on a DETACHED context, so
+		// shutdown stops the relay claiming new work rather than aborting work
+		// it has already done.
+		//
+		// Cancelling the run context mid-batch used to fail Finalize for
+		// envelopes whose publishes had already succeeded. The batch stayed
+		// leased for the whole lease TTL, then another replica reclaimed and
+		// re-dispatched it — a duplicate publish plus a lease-length latency
+		// spike on every rolling deploy, attributable to the deploy rather
+		// than to any consumer fault, which makes it easy to misdiagnose.
+		//
+		// The deadline keeps a hung handler from holding shutdown open
+		// indefinitely; it is bounded by the lease, so a batch that does
+		// exceed it is reclaimed normally.
+		batchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.leaseTTL)
+
 		results := make([]Result, 0, len(envs))
 		for _, env := range envs {
 			results = append(results, Result{
 				EnvelopeID: env.ID,
-				Err:        r.dispatcher.DispatchEnvelopes(ctx, env),
+				Err:        r.dispatcher.DispatchEnvelopes(batchCtx, env),
 			})
 		}
 
-		if err := r.store.Finalize(ctx, results); err != nil {
+		if err := r.store.Finalize(batchCtx, results); err != nil {
 			r.report(err)
+			cancel()
 			break
 		}
+		cancel()
 		expanded = true
 		if len(envs) < r.batch {
 			break

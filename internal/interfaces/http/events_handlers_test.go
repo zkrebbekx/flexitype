@@ -137,8 +137,10 @@ type deliveryStore struct {
 func (d *deliveryStore) ClaimDue(context.Context, int, time.Duration, time.Time) ([]appwebhook.ClaimedDelivery, error) {
 	return nil, nil
 }
-func (d *deliveryStore) Record(context.Context, time.Time, ...appwebhook.Outcome) error { return nil }
-func (d *deliveryStore) ReleaseExpired(context.Context, time.Time) (int, error)         { return 0, nil }
+func (d *deliveryStore) Record(context.Context, time.Time, ...appwebhook.Outcome) (int, error) {
+	return 0, nil
+}
+func (d *deliveryStore) ReleaseExpired(context.Context, time.Time) (int, error) { return 0, nil }
 
 func (d *deliveryStore) List(_ context.Context, filter appwebhook.DeliveryFilter, page db.Page) ([]appwebhook.Delivery, int, error) {
 	d.mu.Lock()

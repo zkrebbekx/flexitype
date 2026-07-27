@@ -231,20 +231,21 @@ func (s *deliveryStore) ClaimDue(ctx context.Context, limit int, leaseFor time.D
 
 	var rows []struct {
 		deliveryRow
-		Payload       string    `db:"payload"`
-		Actor         string    `db:"actor"`
-		AggregateType string    `db:"aggregate_type"`
-		AggregateID   string    `db:"aggregate_id"`
-		OccurredAt    time.Time `db:"occurred_at"`
-		RecordedAt    time.Time `db:"recorded_at"`
-		URL           string    `db:"url"`
-		Secret        string    `db:"secret"`
+		Payload        string    `db:"payload"`
+		Actor          string    `db:"actor"`
+		AggregateType  string    `db:"aggregate_type"`
+		AggregateID    string    `db:"aggregate_id"`
+		OccurredAt     time.Time `db:"occurred_at"`
+		RecordedAt     time.Time `db:"recorded_at"`
+		URL            string    `db:"url"`
+		Secret         string    `db:"secret"`
+		LeaseExpiresAt time.Time `db:"lease_expires_at"`
 	}
 	if err := s.q.SelectContext(ctx, &rows, bind(`SELECT
 	    d.id, d.subscription_id, d.envelope_id, d.tenant_id, d.event_type, d.feed_seq, d.status,
 	    d.attempts, d.next_attempt_at, d.last_error, d.response_code, d.created_at, d.updated_at,
 	    o.payload::text AS payload, o.actor, o.aggregate_type, o.aggregate_id, o.occurred_at, o.recorded_at,
-	    s.url, s.secret
+	    s.url, s.secret, d.lease_expires_at
 	 FROM flexitype_webhook_delivery d
 	 JOIN flexitype_event_outbox o ON o.id = d.envelope_id
 	 JOIN flexitype_webhook_subscription s ON s.id = d.subscription_id
@@ -269,14 +270,22 @@ func (s *deliveryStore) ClaimDue(ctx context.Context, limit int, leaseFor time.D
 				SchemaVersion: events.SchemaVersion,
 				Payload:       json.RawMessage(r.Payload),
 			},
-			URL:    r.URL,
-			Secret: r.Secret,
+			URL:            r.URL,
+			Secret:         r.Secret,
+			LeaseExpiresAt: r.LeaseExpiresAt,
 		})
 	}
 	return out, nil
 }
 
-func (s *deliveryStore) Record(ctx context.Context, now time.Time, outcomes ...webhook.Outcome) error {
+func (s *deliveryStore) Record(ctx context.Context, now time.Time, outcomes ...webhook.Outcome) (int, error) {
+	// Every arm carries the ownership predicate: the row must still be
+	// inflight under the exact lease this worker took. Updating by id alone
+	// let a worker whose lease had lapsed clobber the state of the worker that
+	// took over — including rewinding a delivered row back to pending with a
+	// next_attempt_at, which produced a third send of the same envelope.
+	const owned = ` AND status = 'inflight' AND lease_expires_at = ?`
+	lost := 0
 	for _, o := range outcomes {
 		var query string
 		var args []any
@@ -285,26 +294,30 @@ func (s *deliveryStore) Record(ctx context.Context, now time.Time, outcomes ...w
 			query = `UPDATE flexitype_webhook_delivery
 			 SET status = 'delivered', attempts = attempts + 1, response_code = ?,
 			     last_error = '', lease_expires_at = NULL, updated_at = ?
-			 WHERE id = ?`
-			args = []any{o.ResponseCode, now, o.DeliveryID}
+			 WHERE id = ?` + owned
+			args = []any{o.ResponseCode, now, o.DeliveryID, o.LeaseExpiresAt}
 		case o.Dead:
 			query = `UPDATE flexitype_webhook_delivery
 			 SET status = 'dead', attempts = attempts + 1, response_code = ?,
 			     last_error = ?, lease_expires_at = NULL, updated_at = ?
-			 WHERE id = ?`
-			args = []any{o.ResponseCode, o.Err, now, o.DeliveryID}
+			 WHERE id = ?` + owned
+			args = []any{o.ResponseCode, o.Err, now, o.DeliveryID, o.LeaseExpiresAt}
 		default:
 			query = `UPDATE flexitype_webhook_delivery
 			 SET status = 'pending', attempts = attempts + 1, response_code = ?,
 			     last_error = ?, next_attempt_at = ?, lease_expires_at = NULL, updated_at = ?
-			 WHERE id = ?`
-			args = []any{o.ResponseCode, o.Err, o.NextAttemptAt, now, o.DeliveryID}
+			 WHERE id = ?` + owned
+			args = []any{o.ResponseCode, o.Err, o.NextAttemptAt, now, o.DeliveryID, o.LeaseExpiresAt}
 		}
-		if _, err := s.q.ExecContext(ctx, bind(query), args...); err != nil {
-			return fmt.Errorf("record delivery outcome: %w", err)
+		res, err := s.q.ExecContext(ctx, bind(query), args...)
+		if err != nil {
+			return lost, fmt.Errorf("record delivery outcome: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			lost++
 		}
 	}
-	return nil
+	return lost, nil
 }
 
 func (s *deliveryStore) ReleaseExpired(ctx context.Context, now time.Time) (int, error) {

@@ -21,9 +21,15 @@ import (
 // OrderingKeyFunc derives a Pub/Sub ordering key from an envelope.
 type OrderingKeyFunc func(env events.Envelope) string
 
-// PerAggregate orders messages per aggregate — the strongest ordering
-// flexitype can promise. The topic's publisher must have message
-// ordering enabled.
+// PerAggregate derives one ordering key per aggregate. The topic's publisher
+// must have message ordering enabled.
+//
+// It scopes BROKER-side ordering of what was published; it is not an
+// end-to-end per-aggregate ordering guarantee. The outbox relay claims in id
+// order but retries a failed row later, and several relay replicas claim
+// concurrently, so two envelopes for one aggregate can reach Publish out of
+// order. What the key buys is that messages published under it are delivered
+// to subscribers in the order the broker accepted them.
 func PerAggregate(env events.Envelope) string {
 	return env.TenantID + "/" + env.AggregateType + "/" + env.AggregateID
 }
@@ -31,6 +37,9 @@ func PerAggregate(env events.Envelope) string {
 // publisher is the seam over *pubsub.Publisher for tests.
 type publisher interface {
 	Publish(ctx context.Context, msg *pubsub.Message) result
+	// ResumePublish clears the paused state a failed publish leaves on an
+	// ordering key. Without it the key never recovers inside the process.
+	ResumePublish(orderingKey string)
 }
 
 type result interface {
@@ -42,6 +51,8 @@ type gcpPublisher struct{ p *pubsub.Publisher }
 func (g gcpPublisher) Publish(ctx context.Context, msg *pubsub.Message) result {
 	return g.p.Publish(ctx, msg)
 }
+
+func (g gcpPublisher) ResumePublish(orderingKey string) { g.p.ResumePublish(orderingKey) }
 
 // Handler publishes envelopes to one Pub/Sub topic.
 type Handler struct {
@@ -81,6 +92,16 @@ func (h *Handler) Handle(ctx context.Context, env events.Envelope) error {
 		return err
 	}
 	if _, err := h.pub.Publish(ctx, msg).Get(ctx); err != nil {
+		// A failed publish on an ordering key PAUSES that key: every later
+		// Publish with the same key fails immediately until it is resumed.
+		// Nothing resumed it, so one transient error — a deadline, an
+		// UNAVAILABLE — permanently stopped every event for that aggregate for
+		// the life of the process, and the outbox retried the same row on
+		// every pass while failing instantly. Resuming here lets the retry do
+		// its job; the error still propagates so the relay reschedules.
+		if msg.OrderingKey != "" {
+			h.pub.ResumePublish(msg.OrderingKey)
+		}
 		return fmt.Errorf("publish %s to pub/sub: %w", env.Type, err)
 	}
 	return nil

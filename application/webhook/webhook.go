@@ -166,14 +166,24 @@ type ClaimedDelivery struct {
 	// Endpoint is the subscription's URL/secret snapshot at claim time.
 	URL    string
 	Secret string
+	// LeaseExpiresAt is the lease this claim took. It is the worker's proof
+	// of ownership: it travels back on the Outcome so Record can refuse to
+	// write the result of a delivery whose lease has since been released and
+	// re-claimed by another worker.
+	LeaseExpiresAt time.Time
 }
 
 // Outcome records one delivery attempt.
 type Outcome struct {
-	DeliveryID   ulid.ID
-	Delivered    bool
-	ResponseCode int
-	Err          string
+	DeliveryID ulid.ID
+	// LeaseExpiresAt is the lease the worker held when it made the attempt.
+	// Record writes only while it still matches the stored lease, so a worker
+	// whose lease lapsed cannot overwrite the state of the worker that took
+	// over.
+	LeaseExpiresAt time.Time
+	Delivered      bool
+	ResponseCode   int
+	Err            string
 	// NextAttemptAt schedules the retry when not delivered; ignored when
 	// Dead is set.
 	NextAttemptAt time.Time
@@ -196,8 +206,14 @@ type DeliveryStore interface {
 	// is what keeps per-subscription ordering in the happy path.
 	ClaimDue(ctx context.Context, limit int, leaseFor time.Duration, now time.Time) ([]ClaimedDelivery, error)
 
-	// Record persists attempt outcomes.
-	Record(ctx context.Context, now time.Time, outcomes ...Outcome) error
+	// Record persists attempt outcomes for the deliveries the caller still
+	// owns. An outcome whose lease no longer matches the stored one is
+	// skipped, and reported in the returned count of lost claims.
+	//
+	// Without the ownership predicate a worker whose lease lapsed mid-POST
+	// overwrote the new owner's row — including rewinding a delivered row to
+	// pending with a next_attempt_at, which caused a third send.
+	Record(ctx context.Context, now time.Time, outcomes ...Outcome) (lost int, err error)
 
 	// ReleaseExpired returns inflight deliveries whose lease lapsed (a
 	// worker crashed mid-delivery) to pending.

@@ -96,9 +96,12 @@ func TestDeliveryClaimIntegration(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(first, ShouldHaveLength, 1)
 
-			So(deliveries.Record(ctx, now, webhook.Outcome{
-				DeliveryID: first[0].ID, Delivered: true, ResponseCode: 200,
-			}), ShouldBeNil)
+			lost, err := deliveries.Record(ctx, now, webhook.Outcome{
+				DeliveryID: first[0].ID, LeaseExpiresAt: first[0].LeaseExpiresAt,
+				Delivered: true, ResponseCode: 200,
+			})
+			So(err, ShouldBeNil)
+			So(lost, ShouldEqual, 0)
 
 			second, err := deliveries.ClaimDue(ctx, 10, time.Minute, now)
 			So(err, ShouldBeNil)

@@ -229,12 +229,17 @@ func TestSubscriptionInteractor(t *testing.T) {
 				So(domainerrors.IsConflict(err), ShouldBeTrue)
 			})
 
-			Convey("And rotating the secret keeps the previous one", func() {
+			Convey("And rotating the secret does not keep a copy of the old one", func() {
+				// A delivery carries one signature, computed with Secret, so
+				// the stored previous secret was never consulted when signing:
+				// it promised a grace window that did not exist, and left a
+				// second plaintext secret in the row. The grace window is on
+				// the receiving side — VerifyRequest takes a list of secrets.
 				newSecret := "n3w"
 				updated, err := i.Update(ctx, UpdateInput{ID: sub.ID.String(), RotateSecret: &newSecret})
 				So(err, ShouldBeNil)
 				So(updated.Secret, ShouldEqual, "n3w")
-				So(updated.PreviousSecret, ShouldEqual, "s3cret")
+				So(updated.PreviousSecret, ShouldBeEmpty)
 			})
 
 			Convey("And Ensure upserts by name", func() {

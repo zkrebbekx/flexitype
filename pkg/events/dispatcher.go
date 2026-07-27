@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -88,6 +89,10 @@ func WithEventTypes(types ...Type) RegisterOption {
 // registered at composition time (before serving); Dispatch is safe for
 // concurrent use.
 type Dispatcher struct {
+	// mu guards registrations. Registration is expected during composition,
+	// but the facade hands the dispatcher out, so a late Register must not
+	// corrupt a concurrent Dispatch.
+	mu            sync.RWMutex
 	registrations []registration
 	now           func() time.Time
 }
@@ -97,14 +102,29 @@ func NewDispatcher() *Dispatcher {
 	return &Dispatcher{now: time.Now}
 }
 
-// Register adds a handler. Not safe to call concurrently with Dispatch;
-// wire handlers up during composition.
+// Register adds a handler. Prefer registering during composition, so that
+// every event sees the same handler set. Registering later is safe, but a
+// dispatch already in flight does not pick the new handler up.
 func (d *Dispatcher) Register(h Handler, opts ...RegisterOption) {
 	reg := registration{handler: h}
 	for _, opt := range opts {
 		opt(&reg)
 	}
-	d.registrations = append(d.registrations, reg)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// Copy on write. deliverAll reads its snapshot without holding the
+	// lock, so appending in place could reallocate under it.
+	next := make([]registration, len(d.registrations), len(d.registrations)+1)
+	copy(next, d.registrations)
+	d.registrations = append(next, reg)
+}
+
+// snapshot returns the current handler set. The caller delivers without
+// holding the lock, so a handler may itself register another handler.
+func (d *Dispatcher) snapshot() []registration {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.registrations
 }
 
 // RegisterFunc registers a plain function hook.
@@ -145,7 +165,7 @@ func (d *Dispatcher) DispatchEnvelopes(ctx context.Context, envs ...Envelope) er
 // matters, and that is preserved.
 func (d *Dispatcher) deliverAll(ctx context.Context, envs []Envelope) []error {
 	var errs []error
-	for _, reg := range d.registrations {
+	for _, reg := range d.snapshot() {
 		// Narrow to the envelopes this handler subscribes to. An unfiltered
 		// handler (empty type set) sees them all without copying.
 		matched := envs

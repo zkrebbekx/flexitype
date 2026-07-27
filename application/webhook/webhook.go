@@ -38,7 +38,14 @@ type Subscription struct {
 	Name     string                `json:"name"`
 	URL      string                `json:"url"`
 	Secret   string                `json:"-"`
-	// PreviousSecret stays signing-valid during rotation.
+	// PreviousSecret is always empty and is no longer written.
+	//
+	// Deprecated: a delivery carries one signature, computed with Secret,
+	// so a second stored secret was never consulted when signing. The
+	// rotation grace window is on the receiving side — see VerifyRequest,
+	// which accepts a list of secrets — and the rotation order is in
+	// docs/design/event-delivery.md. The field and its column are retained
+	// for one release and are removed in the next major version.
 	PreviousSecret string `json:"-"`
 	// EventTypes filters deliveries; empty means every event.
 	EventTypes []string  `json:"event_types"`

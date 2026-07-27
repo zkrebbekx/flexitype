@@ -45,7 +45,14 @@ surface** — the only symbols that carry the SemVer compatibility promise from
   - `pkg/blob`: `Store` (via `WithBlobStore`).
   - `pkg/serviceaccount`: `Authenticator`/`AuthenticatorCtx`, `Account`, `Scope`
     (the auth boundary for the standalone server).
-  - `pkg/db`: `Transactor` (the pool handle passed to `New`).
+
+`pkg/db` is **not** an extension port. It was listed as one through 1.0, in
+error: no facade option accepts a `Transactor`, and `New` takes an
+`*sqlx.DB` and builds the transactor itself. `db.Transactor`, `db.Tx` and
+`db.TxMarker` are internal wiring and change without notice — `Tx` was
+resealed as an opaque marker in 1.1.0. Supply your own pool to `New` to
+control connection settings; there is no supported way to substitute a
+transaction manager.
 
 Everything else is **internal, with no compatibility promise**, even though Go
 requires it to be exported for the facade to wire it together — treat it as you

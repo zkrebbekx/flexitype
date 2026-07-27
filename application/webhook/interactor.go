@@ -148,7 +148,12 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*Subscription,
 			sub.Active = *in.Active
 		}
 		if in.RotateSecret != nil {
-			sub.PreviousSecret = sub.Secret
+			// Rotation is a cutover on the sending side: the next delivery
+			// is signed with the new secret only. Keeping a copy of the old
+			// one bought nothing — nothing signed with it — and left a
+			// second plaintext secret in the row. Receivers hold the grace
+			// window instead (VerifyRequest takes a list).
+			sub.PreviousSecret = ""
 			sub.Secret = *in.RotateSecret
 		}
 		sub.UpdatedAt = i.now()

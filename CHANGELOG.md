@@ -282,8 +282,31 @@ upgrading; the first can reject requests that previously succeeded.
 A post-1.0 independent review (security, architecture, performance and
 coding-standards) plus follow-ups — every issue implemented and merged. The
 REST API (`/api/v1`), the storage schema (forward-only migrations), and the
-supported Go facade stay backward-compatible; changes to them are additive. The
-only breaking changes are to unsupported Go internals — see below.
+supported Go facade stay backward-compatible; changes to them are additive.
+
+### BREAKING — `pkg/db.Transactor` (documented after the fact)
+
+`docs/api-stability.md` listed `pkg/db: Transactor` as a supported extension
+port through 1.0. That listing was wrong, and this release changed the type
+incompatibly without saying so. Anyone who read the stability document and
+supplied their own `Transactor` fails to compile on the minor bump.
+
+`db.Transactor` lost its query surface. Repositories now take an opaque
+`db.Tx` marker, and the interface is sealed: only this package's transaction
+types, and out-of-package types embedding `db.TxMarker`, satisfy it.
+
+To repair an out-of-module implementation, embed the marker:
+
+```go
+type myTx struct {
+    db.TxMarker // add this
+    // …
+}
+```
+
+`pkg/db` is no longer listed as an extension port. No facade option ever
+accepted a `Transactor` — `New` takes an `*sqlx.DB` and builds one itself —
+so the type is internal wiring and continues to change without notice.
 
 ### Security
 

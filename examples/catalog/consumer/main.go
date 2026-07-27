@@ -15,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/zkrebbekx/flexitype/pkg/events"
@@ -34,7 +35,10 @@ func main() {
 	}
 
 	// Track seen event IDs so a redelivery (at-least-once) is a no-op.
-	seen := map[string]bool{}
+	// net/http serves each delivery on its own goroutine, so this is
+	// guarded — and marked in one atomic step, so two concurrent
+	// redeliveries of the same event cannot both see it as new.
+	seen := &seenSet{ids: map[string]bool{}}
 
 	http.HandleFunc("/hook", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
@@ -59,12 +63,11 @@ func main() {
 		}
 
 		// Idempotency: dedupe on the envelope id (delivery is at-least-once).
-		if seen[env.ID] {
+		if !seen.markNew(env.ID) {
 			log.Printf("duplicate %s (%s) — acked, skipped", env.ID, env.Type)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		seen[env.ID] = true
 
 		// Acknowledge quickly; do real work asynchronously in a real
 		// consumer so a slow handler never trips the sender's retry.
@@ -85,4 +88,30 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// seenSet records which event ids this process already handled, so that an
+// at-least-once redelivery is a no-op. Every delivery arrives on its own
+// goroutine, so the map needs a lock.
+//
+// A real consumer keeps this in the same store as the work the event
+// drives, and in the same transaction, so that a crash between "marked
+// seen" and "work done" cannot drop an event. An in-process map also grows
+// without bound; bound it by size or age, or key it on a durable store.
+type seenSet struct {
+	mu  sync.Mutex
+	ids map[string]bool
+}
+
+// markNew records id and reports whether it was new. The check and the
+// write are one step, so two concurrent redeliveries of one event cannot
+// both be treated as new.
+func (s *seenSet) markNew(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ids[id] {
+		return false
+	}
+	s.ids[id] = true
+	return true
 }

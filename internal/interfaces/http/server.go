@@ -49,7 +49,22 @@ type ServerConfig struct {
 	// DisableConsole omits the admin-console SPA, for an API-only deployment.
 	// An unmatched path then returns a JSON 404 like any other API error.
 	DisableConsole bool
+	// MaxImportBytes caps a CSV import upload. 0 uses DefaultMaxImportBytes.
+	// The ceiling is reported by GET /features so a client can chunk a bulk
+	// load against the real limit rather than guessing at it.
+	MaxImportBytes int64
+	// MaxMediaBytes caps a media upload. 0 uses DefaultMaxMediaBytes.
+	MaxMediaBytes int64
 }
+
+// Upload ceilings. They were compile-time constants, absent from the
+// configuration document, the OpenAPI spec and the client — so a team sizing
+// a bulk CSV load had no way to discover the limit, and hit it part-way
+// through a migration. Both are now configurable and reported by /features.
+const (
+	DefaultMaxImportBytes int64 = 16 << 20 // 16 MiB
+	DefaultMaxMediaBytes  int64 = 32 << 20 // 32 MiB
+)
 
 // NewHandler builds the service's HTTP handler: versioned API plus
 // operational endpoints, instrumented with OpenTelemetry.
@@ -60,7 +75,13 @@ func NewHandler(cfg ServerConfig) http.Handler {
 // buildRouter constructs the raw chi router (before OpenTelemetry wrapping) so
 // tests can walk the registered routes.
 func buildRouter(cfg ServerConfig) *chi.Mux {
-	s := &server{factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex, recompute: cfg.RecomputeComputed, admin: cfg.Admin, blobs: cfg.BlobStore, graphql: cfg.GraphQL}
+	s := &server{
+		factory: cfg.Factory, log: cfg.Logger, reindex: cfg.Reindex,
+		recompute: cfg.RecomputeComputed, admin: cfg.Admin, blobs: cfg.BlobStore,
+		graphql:        cfg.GraphQL,
+		maxImportBytes: orDefault(cfg.MaxImportBytes, DefaultMaxImportBytes),
+		maxMediaBytes:  orDefault(cfg.MaxMediaBytes, DefaultMaxMediaBytes),
+	}
 
 	r := chi.NewRouter()
 	r.Use(recoverer(cfg.Logger))
@@ -310,4 +331,16 @@ type server struct {
 	admin     *admin.Interactor
 	blobs     blob.Store
 	graphql   *gql.Engine
+
+	maxImportBytes int64
+	maxMediaBytes  int64
+}
+
+// orDefault returns v when it is a positive ceiling, and fallback otherwise,
+// so a zero-valued config keeps the documented default.
+func orDefault(v, fallback int64) int64 {
+	if v > 0 {
+		return v
+	}
+	return fallback
 }

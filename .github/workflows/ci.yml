@@ -55,6 +55,12 @@ jobs:
       - name: Client module (build, vet, test)
         run: |
           cd client && go build ./... && go vet ./... && go test -race ./...
+      - name: Server module (build, vet, test)
+        run: |
+          cd cmd/flexitype && go build ./... && go vet ./... && go test -race ./...
+      - name: Pub/Sub adapter module (build, vet, test)
+        run: |
+          cd infrastructure/gcppubsub && go build ./... && go vet ./... && go test -race ./...
       - name: Client conformance (client SDK vs the real handler)
         run: |
           cd conformance && go test -race ./...
@@ -68,7 +74,7 @@ jobs:
           # development stack.
           FLEXITYPE_DEV_INSECURE: "true"
         run: |
-          go build -o /tmp/flexitype ./cmd/flexitype
+          (cd cmd/flexitype && go build -o /tmp/flexitype .)
           /tmp/flexitype &
           SERVICE_PID=$!
           for i in $(seq 1 30); do

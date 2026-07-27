@@ -956,11 +956,15 @@ func (s *server) listEntityRelationships(w http.ResponseWriter, r *http.Request)
 
 func (s *server) features(w http.ResponseWriter, r *http.Request) {
 	f := application.FromContext(r.Context()).Features()
-	writeJSON(w, http.StatusOK, map[string]bool{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"search":         !f.DisableSearch,
 		"activity":       !f.DisableActivity,
 		"search_index":   f.SearchIndex,
 		"event_delivery": f.EventDelivery,
+		// The upload ceilings, so a client can chunk a bulk load against the
+		// real limit instead of discovering it as a failure part-way through.
+		"max_import_bytes": s.maxImportBytes,
+		"max_media_bytes":  s.maxMediaBytes,
 	})
 }
 

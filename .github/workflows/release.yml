@@ -44,8 +44,40 @@ jobs:
             os=${target%/*}; arch=${target#*/}
             out="dist/flexitype_${VERSION}_${os}_${arch}"
             GOOS=$os GOARCH=$arch CGO_ENABLED=0 \
-              go build -ldflags "-s -w -X main.version=${VERSION}" -o "$out" ./cmd/flexitype
+              go build -C cmd/flexitype -ldflags "-s -w -X main.version=${VERSION}" -o "../../$out" .
             (cd dist && sha256sum "$(basename "$out")" >> checksums.txt)
+          done
+
+      # Nested-module tags are cut BEFORE the release, so a failure blocks
+      # the release rather than following it. The previous order published
+      # vX.Y.Z first and swallowed every tag failure — permissions, rate
+      # limit, network — as "already exists", leaving a green pipeline and a
+      # client module that `go get .../client@vX.Y.Z` could not resolve.
+      - name: Tag the nested modules
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for module in client cmd/flexitype infrastructure/gcppubsub; do
+            tag="${module}/${VERSION}"
+            # An existing tag on this exact commit is the only benign
+            # failure — a re-run of the same release. Anything else fails.
+            existing=$(gh api "repos/${REPO}/git/ref/tags/${tag}" --jq .object.sha 2>/dev/null || true)
+            if [ -n "$existing" ]; then
+              if [ "$existing" = "$SHA" ]; then
+                echo "${tag} already points at ${SHA}"
+                continue
+              fi
+              echo "::error::${tag} exists and points at ${existing}, not ${SHA}" >&2
+              exit 1
+            fi
+            gh api "repos/${REPO}/git/refs" \
+              -f "ref=refs/tags/${tag}" \
+              -f "sha=${SHA}"
+            echo "tagged ${tag}"
           done
 
       - name: Create release
@@ -57,18 +89,6 @@ jobs:
           gh release create "$VERSION" dist/* \
             --title "$VERSION" \
             --notes "${notes:-See CHANGELOG.md.}"
-
-      - name: Tag the client module
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.ref_name }}
-        run: |
-          # The first-party client is a nested Go module, versioned by
-          # client/vX.Y.Z tags, kept in lockstep with the main tag so
-          # `go get github.com/zkrebbekx/flexitype/client@vX.Y.Z` resolves.
-          gh api "repos/${{ github.repository }}/git/refs" \
-            -f "ref=refs/tags/client/${VERSION}" \
-            -f "sha=${{ github.sha }}" || echo "client/${VERSION} tag already exists"
 
   # Publish the container image (console embedded) to GHCR on the same tag.
   docker:

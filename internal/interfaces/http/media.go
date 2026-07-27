@@ -10,14 +10,11 @@ import (
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 )
 
-// maxMediaUpload caps a media upload request body.
-const maxMediaUpload = 32 << 20 // 32 MiB
-
 // uploadMedia stores an uploaded file for a media attribute and writes the
 // resulting media value. The multipart form carries the file as "file".
 func (s *server) uploadMedia(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxMediaUpload)
-	if err := r.ParseMultipartForm(maxMediaUpload); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxMediaBytes)
+	if err := r.ParseMultipartForm(s.maxMediaBytes); err != nil {
 		writeError(w, s.log, domainerrors.NewValidation("could not read upload: "+err.Error()))
 		return
 	}

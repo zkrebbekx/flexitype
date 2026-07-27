@@ -17,9 +17,6 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
 
-// maxImportUpload caps an import upload's size.
-const maxImportUpload = 16 << 20 // 16 MiB
-
 // importMapping is the JSON side of the import multipart form.
 type importMapping struct {
 	KeyColumn string            `json:"key_column"`
@@ -32,8 +29,8 @@ type importMapping struct {
 // form carries the CSV as "file" and a JSON "mapping" describing the key
 // column, column→attribute map, commit mode and dry-run flag.
 func (s *server) importEntities(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxImportUpload)
-	if err := r.ParseMultipartForm(maxImportUpload); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxImportBytes)
+	if err := r.ParseMultipartForm(s.maxImportBytes); err != nil {
 		writeError(w, s.log, domainerrors.NewValidation("could not read upload: "+err.Error()))
 		return
 	}

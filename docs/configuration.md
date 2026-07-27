@@ -113,6 +113,18 @@ These switches let one image serve as both an API tier and a worker tier.
 | `FLEXITYPE_RUN_PRUNER` | `true` | Enforce event retention. |
 | `FLEXITYPE_RUN_SCHEDULER` | `true` | Publish approved change-sets whose `publish_at` has arrived. |
 | `FLEXITYPE_ENABLE_CONSOLE` | `true` | Serve the embedded admin console. With `false`, the SPA is not mounted and an unmatched path returns a JSON 404. |
+| `FLEXITYPE_MAX_IMPORT_BYTES` | `16777216` (16 MiB) | Maximum size of a CSV import upload. A larger body is refused before it is read. |
+| `FLEXITYPE_MAX_MEDIA_BYTES` | `33554432` (32 MiB) | Maximum size of a media upload. |
+
+`GET /api/v1/features` reports both ceilings as `max_import_bytes` and
+`max_media_bytes`, so a client chunks a bulk load against the deployment's
+real limit rather than assuming the default. Size an onboarding job against
+that response, not against these numbers.
+
+Both peers hold a whole upload in memory today — the server buffers the
+multipart form, and the Go client builds the request body before sending — so
+raising these ceilings raises peak memory on both sides. Prefer more, smaller
+chunks over one large one.
 
 A typical split:
 

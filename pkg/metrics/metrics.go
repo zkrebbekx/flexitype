@@ -14,6 +14,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/zkrebbekx/flexitype/pkg/deliverystats"
 )
 
 // Metrics holds the registry and the instruments the service reports.
@@ -148,17 +150,15 @@ func (w *statusWriter) Flush() {
 
 // DeliveryStats reports current event-delivery depth. The postgres layer
 // implements it; the collector below turns it into scrape-time gauges.
-type DeliveryStats interface {
-	// Snapshot returns current counts. Called on each scrape, so it must be
-	// cheap (indexed COUNT queries).
-	Snapshot(ctx context.Context) (DeliveryDepth, error)
-}
+//
+// The contract itself lives in pkg/deliverystats, which depends on the
+// standard library alone, so the storage layer can satisfy it without
+// importing this package — and with it chi and the Prometheus client. These
+// aliases keep the old names working.
+type DeliveryStats = deliverystats.Source
 
 // DeliveryDepth is a point-in-time view of the outbox and delivery queues.
-type DeliveryDepth struct {
-	OutboxPending      int64
-	DeliveriesByStatus map[string]int64 // pending / inflight / delivered / dead
-}
+type DeliveryDepth = deliverystats.Depth
 
 // RegisterDeliveryCollector wires a scrape-time collector over stats. The
 // registry queries stats.Snapshot when Prometheus scrapes, so the gauges

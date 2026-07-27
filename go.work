@@ -1,0 +1,13 @@
+// The workspace wires the repository's modules together for local
+// development, so a change to the library is picked up by the server, the
+// client conformance suite and the Pub/Sub adapter without a replace
+// directive in any published go.mod.
+go 1.25.8
+
+use (
+	.
+	./client
+	./cmd/flexitype
+	./conformance
+	./infrastructure/gcppubsub
+)

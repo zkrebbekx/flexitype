@@ -548,9 +548,15 @@ under `/api/v1`). Develop it with the Go service running:
 cd web && npm ci && npm run dev   # http://localhost:5173, proxies /api
 ```
 
-Production builds embed the console into the binary: `npm run build` in
-`web/`, then `go build ./cmd/flexitype`. A committed stub keeps `go build`
-working without Node.
+**The console ships only in the container image and the published release
+binaries.** Both run `npm run build` before compiling. A binary built any
+other way — including from a plain checkout — embeds a committed stub that
+serves a page saying the console was not built in. The stub is what keeps
+`go build` working without a Node toolchain.
+
+To embed it yourself: `npm ci && npm run build` in `web/`, then
+`go build -C cmd/flexitype .`. The server is its own Go module, so build it
+from its directory rather than from the repository root.
 
 ## Upgrades
 

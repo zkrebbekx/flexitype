@@ -36,15 +36,33 @@ paths:
   /features:
     get:
       tags: [ops]
-      summary: Report enabled capabilities
+      summary: Report enabled capabilities and upload ceilings
       responses:
         "200":
-          description: Feature flags
+          description: Feature flags and limits
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: { type: boolean }
+                properties:
+                  search: { type: boolean }
+                  activity: { type: boolean }
+                  search_index: { type: boolean }
+                  event_delivery: { type: boolean }
+                  max_import_bytes:
+                    type: integer
+                    format: int64
+                    description: >-
+                      Maximum size in bytes of a CSV import upload (default
+                      16777216). Chunk a bulk load against this value rather
+                      than assuming the default; an operator raises it with
+                      FLEXITYPE_MAX_IMPORT_BYTES.
+                  max_media_bytes:
+                    type: integer
+                    format: int64
+                    description: >-
+                      Maximum size in bytes of a media upload (default
+                      33554432), raised with FLEXITYPE_MAX_MEDIA_BYTES.
 
   /type-definitions:
     get:

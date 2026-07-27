@@ -5,6 +5,10 @@ type inheritance, a unique key, an enum, a cascading dependency, a
 symmetric relationship, FQL queries, and a signed webhook consumer. Every
 command here is verified against the running stack.
 
+**Prerequisites:** a running flexitype (see the repository README), `curl`
+and `jq`. `seed.sh` parses every response with `jq` and checks for it up
+front.
+
 ```
 product (base)
 ├── name    string   required, max 200

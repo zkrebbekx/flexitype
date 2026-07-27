@@ -99,7 +99,7 @@ func TestFeedInteractor(t *testing.T) {
 			feedEvent(7, "type.a"),
 		}}
 		cursors := &fakeCursorStore{positions: map[string]int64{}}
-		i := NewInteractor(store, cursors)
+		i := NewInteractor(store, cursors, nil)
 		ctx := context.Background()
 
 		Convey("When listing from the start", func() {
@@ -185,7 +185,7 @@ func TestFeedCursorNaming(t *testing.T) {
 	Convey("Given a feed interactor with a committed consumer cursor", t, func() {
 		store := &fakeFeedStore{}
 		cursors := &fakeCursorStore{positions: map[string]int64{}}
-		i := NewInteractor(store, cursors)
+		i := NewInteractor(store, cursors, nil)
 		ctx := context.Background()
 		So(i.CommitCursor(ctx, "billing-sync", 12, 0), ShouldBeNil)
 
@@ -277,7 +277,7 @@ func (s *errFeedStore) calls() []time.Time {
 func TestFeedListStoreErrors(t *testing.T) {
 	Convey("Given a feed interactor over a store that can fail", t, func() {
 		store := &errFeedStore{}
-		i := NewInteractor(store, &fakeCursorStore{positions: map[string]int64{}})
+		i := NewInteractor(store, &fakeCursorStore{positions: map[string]int64{}}, nil)
 		ctx := context.Background()
 
 		Convey("When the retention floor cannot be read", func() {

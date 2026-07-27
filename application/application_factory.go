@@ -15,6 +15,7 @@ import (
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	apperasure "github.com/zkrebbekx/flexitype/application/erasure"
 	"github.com/zkrebbekx/flexitype/application/feed"
+	"github.com/zkrebbekx/flexitype/application/fieldacl"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apprevision "github.com/zkrebbekx/flexitype/application/revision"
@@ -249,7 +250,7 @@ func (f *factory) New(context.Context) *Interactors {
 		deps:          appdependency.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.ValueReader, repos.Dependencies),
 		relationships: apprelationship.NewInteractor(unit, repos.TypeDefinitions, repos.RelationshipDefinitions, repos.Relationships),
 		query:         appquery.NewInteractor(repos.TypeDefinitions, repos.Attributes, repos.RelationshipDefinitions, repos.Query, f.cfg.Features.SearchIndex, f.cfg.UnitFamilies),
-		activity:      &ActivityInteractor{log: activityLog},
+		activity:      &ActivityInteractor{log: activityLog, acl: fieldacl.New(repos.Attributes)},
 		schemaVersion: repos.SchemaVersions,
 		features:      f.cfg.Features,
 	}
@@ -273,7 +274,7 @@ func (f *factory) New(context.Context) *Interactors {
 	i.schema = appschema.NewInteractor(i.typeDefs, i.attrs, i.relationships, i.deps, i.units)
 	if f.cfg.Features.EventDelivery {
 		i.webhooks = webhook.NewInteractor(unit, f.cfg.Subscriptions, f.cfg.Deliveries, f.cfg.WebhookURLPolicy)
-		i.feed = feed.NewInteractor(f.cfg.FeedStore, f.cfg.CursorStore)
+		i.feed = feed.NewInteractor(f.cfg.FeedStore, f.cfg.CursorStore, fieldacl.New(repos.Attributes))
 	}
 	return i
 }

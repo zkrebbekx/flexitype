@@ -7,6 +7,31 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Security — field ACL is enforced on every value surface
+
+The per-attribute permission set was applied by the value API, the grid,
+facets, CSV export and FQL, but five other surfaces returned the same values
+unfiltered. A principal restricted from reading an attribute could read it
+anyway through any of them. Review before upgrading: a restricted principal
+now sees less than it did.
+
+- `GET /api/v1/values` applies the permission set. It was the only value read
+  path that did not, so passing `attribute_definition_id` returned a
+  restricted attribute's values for every entity in the tenant (#275).
+- Revisions (`Get`, `AsOf`, `Diff`) omit unreadable attributes. Capture stays
+  complete, so an admin restore still replays every value (#280).
+- The activity log and the events feed mask value fields instead of returning
+  them. The audit skeleton, the envelope and the feed sequence are preserved,
+  so cursors stay gap-free; a masked record carries `"redacted": true` (#280).
+- Media download requires read permission on an attribute referencing the
+  object key, not only tenant ownership of it (#280).
+- Duplicate detection requires read permission on a match rule's attribute,
+  at rule creation and again on every scan (#280).
+- Removing an entity requires write permission on every attribute it holds.
+  It previously archived them all under a tenant check alone, so a principal
+  barred from writing one attribute could erase it by removing the entity
+  (#280).
+
 ### Changed — migrations no longer block a live fleet
 
 An upgrade used to apply every pending migration in one transaction. That form
@@ -40,6 +65,17 @@ with health checks still green, because reads were unaffected.
   also lists the rules a migration must follow, two of which CI enforces
   (#319).
 
+### Added
+
+- `uow.Access.Default` sets the level for an attribute the permission set does
+  not name. Its zero value keeps the existing deny-list behaviour; setting it
+  to `uow.PermNone` makes the set an allow-list, so an attribute added later
+  is unreadable until it is granted.
+- `flexitype.WithFailClosedACL()` inverts the field-ACL default for embedders:
+  a request that carries no `uow.Access` policy denies every attribute instead
+  of granting admin. Use `uow.WithSystemAccess` for host-owned background work
+  that has no principal (#298).
+
 ### Fixed
 
 - The Postgres-backed test packages no longer share one schema. Go runs
@@ -51,6 +87,18 @@ with health checks still green, because reads were unaffected.
 - The migration advisory lock is keyed by schema instead of being a constant,
   so two flexitype schemas in one database no longer serialize against each
   other's upgrades.
+
+- `Repository.GetMany` issues one statement for the whole key set. Outside a
+  transaction it awaited each dataloader thunk before requesting the next, so
+  every key closed its own batch and paid the full 2 ms batch window — N round
+  trips for a call whose contract is one. It runs on every non-admin value
+  read, so restricting a principal's permissions made its reads dramatically
+  slower than the admin path over identical data (#341).
+- `Repository.GetMany` skips an id with no row instead of returning NotFound.
+  An activity entry or a feed envelope can name an attribute a purge has since
+  removed, and one such row must not fail the whole page. Callers decide what a
+  miss means: the search indexer skips the value, the field ACL treats the
+  attribute as unreadable (#341).
 
 ## [1.2.0] — 2026-07-18
 

@@ -126,6 +126,9 @@ func (r *attrRepo) GetMany(ctx context.Context, ids []valueobjects.AttributeDefi
 	out := make([]*domainattribute.Definition, 0, len(ids))
 	for _, id := range ids {
 		a, err := r.Get(ctx, id)
+		if domainerrors.IsNotFound(err) {
+			continue // absent by contract, matching the Postgres repository
+		}
 		if err != nil {
 			return nil, err
 		}

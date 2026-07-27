@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/zkrebbekx/flexitype/application/fieldacl"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -60,12 +61,15 @@ type CursorStore interface {
 type Interactor struct {
 	store   Store
 	cursors CursorStore
+	acl     *fieldacl.Resolver
 	now     func() time.Time
 }
 
-// NewInteractor wires the feed usecases.
-func NewInteractor(store Store, cursors CursorStore) *Interactor {
-	return &Interactor{store: store, cursors: cursors, now: uow.UTCNow}
+// NewInteractor wires the feed usecases. The resolver applies the field ACL
+// to value payloads; pass nil to serve the feed unfiltered, which is only
+// correct when every caller of this interactor is already privileged.
+func NewInteractor(store Store, cursors CursorStore, acl *fieldacl.Resolver) *Interactor {
+	return &Interactor{store: store, cursors: cursors, acl: acl, now: uow.UTCNow}
 }
 
 // ListInput is one feed page request.
@@ -114,7 +118,45 @@ func (i *Interactor) List(ctx context.Context, in ListInput) (*ListOutput, error
 	if len(items) > 0 {
 		out.NextCursor = items[len(items)-1].Seq
 	}
+	if out.Items, err = i.redact(ctx, out.Items); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// redact masks the value fields of every event whose attribute the principal
+// may not read. The envelope, its sequence and its identifiers stay intact so
+// cursors remain gap-free and a consumer still learns that the attribute
+// changed; only the value itself is replaced, and the payload carries the
+// redaction marker.
+//
+// The SSE tail pages through List, so it inherits the same filter.
+func (i *Interactor) redact(ctx context.Context, items []Event) ([]Event, error) {
+	if i.acl == nil || uow.AccessFromContext(ctx).Admin || len(items) == 0 {
+		return items, nil
+	}
+	var ids []valueobjects.AttributeDefinitionID
+	for _, e := range items {
+		if id, ok := fieldacl.PayloadAttribute(e.Envelope.Payload); ok {
+			ids = append(ids, id)
+		}
+	}
+	readable, err := i.acl.Readable(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for idx := range items {
+		id, ok := fieldacl.PayloadAttribute(items[idx].Envelope.Payload)
+		if !ok || readable[id.String()] {
+			continue
+		}
+		masked, err := fieldacl.MaskPayload(items[idx].Envelope.Payload)
+		if err != nil {
+			return nil, err
+		}
+		items[idx].Envelope.Payload = masked
+	}
+	return items, nil
 }
 
 // Cursor returns a named consumer's committed position (0 = start).

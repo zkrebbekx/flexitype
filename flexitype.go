@@ -21,6 +21,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/gql"
 	"github.com/zkrebbekx/flexitype/application/outbox"
 	"github.com/zkrebbekx/flexitype/application/search"
+	"github.com/zkrebbekx/flexitype/application/uow"
 	"github.com/zkrebbekx/flexitype/application/webhook"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -67,6 +68,7 @@ type options struct {
 	retention           time.Duration
 	webhookAllowPrivate bool
 	searchIndex         bool
+	failClosedACL       bool
 	blobs               blob.Store
 }
 
@@ -132,6 +134,24 @@ func WithCleanupObserver(fn func(err error)) Option {
 	return func(o *options) { o.onCleanup = fn }
 }
 
+// WithFailClosedACL inverts the field-ACL default: a context that carries no
+// uow.Access policy denies every attribute instead of granting admin.
+//
+// The standalone service always stamps a policy from the authenticated
+// service account, so this option is for embedders. In library mode the host
+// is responsible for stamping the policy on every request, and nothing
+// otherwise enforces that it did — a background job or a new resolver that
+// forgets silently runs with full field access. With this option it fails
+// instead.
+//
+// Stamp uow.WithAccess on every request path, and uow.WithSystemAccess on
+// host-owned background work that legitimately has no principal. The setting
+// applies to the whole process and cannot be undone; see
+// uow.RequireAccessPolicy.
+func WithFailClosedACL() Option {
+	return func(o *options) { o.failClosedACL = true }
+}
+
 // WithoutSearch disables the FQL query surface for this deployment.
 func WithoutSearch() Option {
 	return func(o *options) { o.features.DisableSearch = true }
@@ -191,6 +211,9 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	o := &options{dispatcher: events.NewDispatcher()}
 	for _, opt := range opts {
 		opt(o)
+	}
+	if o.failClosedACL {
+		uow.RequireAccessPolicy()
 	}
 
 	transactor := db.NewTransactor(pool)
@@ -304,6 +327,9 @@ func NewInMemory(opts ...Option) *Service {
 	for _, opt := range opts {
 		opt(o)
 	}
+	if o.failClosedACL {
+		uow.RequireAccessPolicy()
+	}
 
 	store := memory.NewStore()
 	newRepos := func() application.Repositories { return store.Repositories() }
@@ -374,6 +400,10 @@ func (s *Service) RunOutboxRelay(ctx context.Context) {
 	if s.relay == nil {
 		return
 	}
+	// The delivery machinery has no principal, so it stamps the system policy
+	// explicitly rather than inheriting the default — WithFailClosedACL
+	// inverts that default to deny-all.
+	ctx = uow.WithSystemAccess(ctx)
 	// Block until all three loops have observed ctx cancellation and
 	// returned, so shutdown can be ordered around this call: the relay,
 	// delivery worker and pruner are fully stopped before the pool or
@@ -394,6 +424,7 @@ func (s *Service) RunChangeSetScheduler(ctx context.Context, interval time.Durat
 	if interval <= 0 {
 		interval = time.Minute
 	}
+	ctx = uow.WithSystemAccess(ctx) // a scheduler tick has no principal
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -434,7 +465,7 @@ func (s *Service) ReindexSearch(ctx context.Context, tenant valueobjects.TenantI
 	if s.indexer == nil {
 		return 0, domainerrors.NewValidation("the search index is disabled; enable it with WithSearchIndex")
 	}
-	return s.indexer.Reindex(ctx, tenant)
+	return s.indexer.Reindex(uow.WithSystemAccess(ctx), tenant)
 }
 
 // RecomputeComputed re-materializes every entity's computed attributes for a
@@ -443,7 +474,7 @@ func (s *Service) ReindexSearch(ctx context.Context, tenant valueobjects.TenantI
 // process crash between commit and that post-commit can leave a computed value
 // stale; this rebuilds them all. Returns the number of entities recomputed.
 func (s *Service) RecomputeComputed(ctx context.Context, tenant valueobjects.TenantID) (int, error) {
-	return s.materializer.RecomputeTenant(ctx, tenant)
+	return s.materializer.RecomputeTenant(uow.WithSystemAccess(ctx), tenant)
 }
 
 // Migrate applies flexitype's embedded schema migrations. Safe to call on

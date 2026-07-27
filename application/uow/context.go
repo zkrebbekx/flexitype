@@ -5,6 +5,7 @@ package uow
 
 import (
 	"context"
+	"sync/atomic"
 
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -82,12 +83,51 @@ const (
 )
 
 // Access is a principal's field-level permissions. Admin grants everything;
-// otherwise Attr maps an attribute internal name to its level. Attributes
-// not listed are fully accessible (a permission set restricts specific
-// fields rather than allow-listing all of them).
+// otherwise Attr maps an attribute internal name to its level.
+//
+// Default is the level applied to an attribute that Attr does not list. Its
+// zero value means "unrestricted", so a permission set is a deny-list: it
+// restricts the fields it names and leaves the rest accessible. Set Default
+// to PermNone to invert that into an allow-list, where only the attributes
+// Attr names are reachable. A multi-tenant host that derives permissions
+// from its own roles should prefer the allow-list form, because a newly
+// added attribute is then unreadable until the host grants it.
 type Access struct {
-	Admin bool
-	Attr  map[string]Perm
+	Admin   bool
+	Attr    map[string]Perm
+	Default Perm
+}
+
+// DenyAll is the fail-closed policy: no admin rights and an allow-list with
+// nothing on it, so every attribute is unreadable and unwritable. It is what
+// a context with no policy resolves to once RequireAccessPolicy is set.
+func DenyAll() Access {
+	return Access{Default: PermNone}
+}
+
+// SystemAccess is the unrestricted policy internal maintenance runs under:
+// the outbox relay, the delivery worker, the retention pruner, the search
+// reindex and the computed recompute. Those loops have no principal, so they
+// stamp it explicitly rather than relying on the default — which
+// RequireAccessPolicy inverts.
+func SystemAccess() Access {
+	return Access{Admin: true}
+}
+
+// WithSystemAccess stamps SystemAccess onto a background context.
+func WithSystemAccess(ctx context.Context) context.Context {
+	return WithAccess(ctx, SystemAccess())
+}
+
+// level returns the effective permission for an attribute name.
+func (a Access) level(name string) Perm {
+	if p, ok := a.Attr[name]; ok {
+		return p
+	}
+	if a.Default != "" {
+		return a.Default
+	}
+	return PermWrite
 }
 
 // CanRead reports whether the principal may read the named attribute.
@@ -95,10 +135,7 @@ func (a Access) CanRead(name string) bool {
 	if a.Admin {
 		return true
 	}
-	p, ok := a.Attr[name]
-	if !ok {
-		return true
-	}
+	p := a.level(name)
 	return p == PermRead || p == PermWrite
 }
 
@@ -107,11 +144,7 @@ func (a Access) CanWrite(name string) bool {
 	if a.Admin {
 		return true
 	}
-	p, ok := a.Attr[name]
-	if !ok {
-		return true
-	}
-	return p == PermWrite
+	return a.level(name) == PermWrite
 }
 
 type accessKey struct{}
@@ -124,12 +157,51 @@ func WithAccess(ctx context.Context, a Access) context.Context {
 // AccessFromContext returns the principal's field-level permissions,
 // defaulting to full (admin) access — so unauthenticated development and
 // admin accounts see everything.
+//
+// The default is permissive, which is convenient for the standalone service
+// (its authentication middleware always stamps a policy) but is the wrong
+// direction for an embedder that forgets to. Embedders select
+// flexitype.WithFailClosedACL, which inverts the default to DenyAll for the
+// whole process.
 func AccessFromContext(ctx context.Context) Access {
-	if a, ok := ctx.Value(accessKey{}).(Access); ok {
-		return a
-	}
-	return Access{Admin: true}
+	a, _ := AccessFromContextOK(ctx)
+	return a
 }
+
+// AccessFromContextOK returns the principal's field-level permissions and
+// reports whether the context actually carried a policy. A caller uses the
+// second result to distinguish "no policy was stamped" from "an unrestricted
+// policy was stamped".
+func AccessFromContextOK(ctx context.Context) (Access, bool) {
+	if a, ok := ctx.Value(accessKey{}).(Access); ok {
+		return a, true
+	}
+	if failClosed.Load() {
+		return DenyAll(), false
+	}
+	return Access{Admin: true}, false
+}
+
+// failClosed inverts the default of AccessFromContext for the whole process.
+// It is process-wide rather than per-service because it describes a
+// deployment posture, and it only ever moves toward the stricter setting, so
+// two services in one process cannot weaken each other.
+var failClosed atomic.Bool
+
+// RequireAccessPolicy makes a context with no access policy deny every
+// attribute instead of granting admin. Select it through
+// flexitype.WithFailClosedACL.
+//
+// It applies to the whole process and cannot be undone. Both properties come
+// from the guarantee it provides: a code path that reaches an interactor
+// without stamping a policy — a background job, a scheduled task, a new
+// resolver — must fail rather than run with more privilege than the host
+// intended, and no later construction may relax that.
+func RequireAccessPolicy() { failClosed.Store(true) }
+
+// AccessPolicyRequired reports whether the process denies access when a
+// context carries no policy.
+func AccessPolicyRequired() bool { return failClosed.Load() }
 
 // EnsureTenant hides cross-tenant resources: a caller asking for another
 // tenant's aggregate by ID gets NotFound — never confirmation it exists.

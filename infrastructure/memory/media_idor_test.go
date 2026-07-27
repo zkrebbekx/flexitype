@@ -35,19 +35,19 @@ func TestMediaKeyTenantOwnership(t *testing.T) {
 		So(key, ShouldNotEqual, "")
 
 		Convey("Then tenant A owns the key", func() {
-			owned, err := svc.Interactors(ctxA).Values().MediaKeyOwned(ctxA, key)
+			owned, err := svc.Interactors(ctxA).Values().MediaKeyReadable(ctxA, key)
 			So(err, ShouldBeNil)
 			So(owned, ShouldBeTrue)
 		})
 
 		Convey("And tenant B does not own it — the cross-tenant download (IDOR) is blocked", func() {
-			owned, err := svc.Interactors(ctxB).Values().MediaKeyOwned(ctxB, key)
+			owned, err := svc.Interactors(ctxB).Values().MediaKeyReadable(ctxB, key)
 			So(err, ShouldBeNil)
 			So(owned, ShouldBeFalse)
 		})
 
 		Convey("And an unknown key is owned by no tenant", func() {
-			owned, err := svc.Interactors(ctxA).Values().MediaKeyOwned(ctxA, "does-not-exist.txt")
+			owned, err := svc.Interactors(ctxA).Values().MediaKeyReadable(ctxA, "does-not-exist.txt")
 			So(err, ShouldBeNil)
 			So(owned, ShouldBeFalse)
 		})

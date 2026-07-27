@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/appctx"
+	"github.com/zkrebbekx/flexitype/application/fieldacl"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
@@ -158,8 +159,22 @@ func (i *Interactor) List(ctx context.Context, rawTypeID, entityID string) ([]Re
 	return revs, nil
 }
 
-// Get returns one revision with its full value snapshot.
+// Get returns one revision with its value snapshot, less the values of any
+// attribute the principal may not read.
 func (i *Interactor) Get(ctx context.Context, rawRevisionID string) (*Revision, error) {
+	rev, err := i.get(ctx, rawRevisionID)
+	if err != nil {
+		return nil, err
+	}
+	return i.redact(ctx, rev)
+}
+
+// get loads one revision with its complete value snapshot, before the field
+// ACL is applied. Restore uses it: a restore replays every captured value
+// through the value write path, which enforces write permission per
+// attribute, so restoring from a redacted copy would silently archive the
+// values the principal cannot see.
+func (i *Interactor) get(ctx context.Context, rawRevisionID string) (*Revision, error) {
 	id, err := ulid.Parse(rawRevisionID)
 	if err != nil {
 		return nil, domainerrors.NewValidation(err.Error())
@@ -172,13 +187,44 @@ func (i *Interactor) Get(ctx context.Context, rawRevisionID string) (*Revision, 
 }
 
 // AsOf returns the entity's state at an instant: the latest revision at or
-// before the timestamp.
+// before the timestamp, with the field ACL applied.
 func (i *Interactor) AsOf(ctx context.Context, rawTypeID, entityID string, at time.Time) (*Revision, error) {
 	rev, err := i.store.AsOf(ctx, uow.TenantFromContext(ctx), rawTypeID, entityID, at)
 	if err != nil {
 		return nil, err
 	}
-	return &rev, nil
+	return i.redact(ctx, &rev)
+}
+
+// redact drops the values of attributes the principal may not read. A
+// revision is captured in full — it is the point-in-time recovery record —
+// so the filter is applied on the way out, once per read, rather than at
+// capture time where it would make the record depend on who took it.
+func (i *Interactor) redact(ctx context.Context, rev *Revision) (*Revision, error) {
+	if uow.AccessFromContext(ctx).Admin || len(rev.Values) == 0 {
+		return rev, nil
+	}
+	ids := make([]valueobjects.AttributeDefinitionID, 0, len(rev.Values))
+	for _, v := range rev.Values {
+		id, err := valueobjects.ParseAttributeDefinitionID(v.AttributeDefinitionID)
+		if err != nil {
+			return nil, domainerrors.NewValidation(err.Error())
+		}
+		ids = append(ids, id)
+	}
+	readable, err := fieldacl.New(i.attrs).Readable(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Value, 0, len(rev.Values))
+	for _, v := range rev.Values {
+		if readable[v.AttributeDefinitionID] {
+			out = append(out, v)
+		}
+	}
+	clone := *rev
+	clone.Values = out
+	return &clone, nil
 }
 
 // Change is one attribute's difference between two revisions, at one scope.
@@ -272,7 +318,7 @@ func change(v Value, kind, before, after string) Change {
 // snapshot through the normal value write path, then captures the result as
 // a new revision. History is never mutated.
 func (i *Interactor) Restore(ctx context.Context, rawRevisionID string) (*Revision, error) {
-	rev, err := i.Get(ctx, rawRevisionID)
+	rev, err := i.get(ctx, rawRevisionID)
 	if err != nil {
 		return nil, err
 	}

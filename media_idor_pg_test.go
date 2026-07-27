@@ -46,15 +46,15 @@ func TestMediaTenantOwnershipPostgres(t *testing.T) {
 		So(key, ShouldNotEqual, "")
 
 		Convey("Then only tenant A owns the key; tenant B and unknown keys are denied", func() {
-			ownedA, err := svc.Interactors(ctxA).Values().MediaKeyOwned(ctxA, key)
+			ownedA, err := svc.Interactors(ctxA).Values().MediaKeyReadable(ctxA, key)
 			So(err, ShouldBeNil)
 			So(ownedA, ShouldBeTrue)
 
-			ownedB, err := svc.Interactors(ctxB).Values().MediaKeyOwned(ctxB, key)
+			ownedB, err := svc.Interactors(ctxB).Values().MediaKeyReadable(ctxB, key)
 			So(err, ShouldBeNil)
 			So(ownedB, ShouldBeFalse)
 
-			unknown, err := svc.Interactors(ctxA).Values().MediaKeyOwned(ctxA, "nope.txt")
+			unknown, err := svc.Interactors(ctxA).Values().MediaKeyReadable(ctxA, "nope.txt")
 			So(err, ShouldBeNil)
 			So(unknown, ShouldBeFalse)
 		})

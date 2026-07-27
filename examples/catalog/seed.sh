@@ -7,6 +7,14 @@
 # Set TOKEN to a service-account token if the target requires auth.
 set -euo pipefail
 
+# jq parses every response below. Without this check the first call fails
+# with an opaque "command not found" under set -e, which reads like a server
+# error rather than a missing prerequisite.
+if ! command -v jq > /dev/null 2>&1; then
+  echo "seed.sh needs jq. Install it (brew install jq / apt-get install jq) and re-run." >&2
+  exit 1
+fi
+
 BASE="${BASE:-http://localhost:8080}"
 API="$BASE/api/v1"
 DIR="$(cd "$(dirname "$0")" && pwd)"

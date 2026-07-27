@@ -425,6 +425,13 @@ type Features struct {
 	Activity      bool `json:"activity"`
 	SearchIndex   bool `json:"search_index"`
 	EventDelivery bool `json:"event_delivery"`
+
+	// MaxImportBytes and MaxMediaBytes are the deployment's upload ceilings.
+	// They were compile-time constants the client could not discover, so a
+	// bulk CSV load was sized against a guess and failed part-way through.
+	// Chunk against these rather than assuming the defaults.
+	MaxImportBytes int64 `json:"max_import_bytes"`
+	MaxMediaBytes  int64 `json:"max_media_bytes"`
 }
 
 // KindCount tallies created vs skipped objects of one kind on import.

@@ -44,6 +44,11 @@ type Config struct {
 	// API-only deployment: the SPA is then not mounted at all, and an unknown
 	// path returns a JSON 404 rather than the app shell.
 	EnableConsole bool
+	// MaxImportBytes caps a CSV import upload; 0 uses the server default
+	// (16 MiB). Raise it for a bulk onboarding rather than forking.
+	MaxImportBytes int64
+	// MaxMediaBytes caps a media upload; 0 uses the server default (32 MiB).
+	MaxMediaBytes int64
 
 	// RunRelay, RunDeliveryWorker, RunPruner and RunScheduler select which
 	// background loops THIS process runs. All default to true, so a
@@ -143,6 +148,8 @@ func Load() (Config, error) {
 		DevInsecure:          e.bool("FLEXITYPE_DEV_INSECURE", false),
 		RequireAuth:          e.bool("FLEXITYPE_REQUIRE_AUTH", true),
 		EnableConsole:        e.bool("FLEXITYPE_ENABLE_CONSOLE", true),
+		MaxImportBytes:       int64(e.int("FLEXITYPE_MAX_IMPORT_BYTES", 0)),
+		MaxMediaBytes:        int64(e.int("FLEXITYPE_MAX_MEDIA_BYTES", 0)),
 		RunRelay:             e.bool("FLEXITYPE_RUN_RELAY", true),
 		RunDeliveryWorker:    e.bool("FLEXITYPE_RUN_DELIVERY_WORKER", true),
 		RunPruner:            e.bool("FLEXITYPE_RUN_PRUNER", true),

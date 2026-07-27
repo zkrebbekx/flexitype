@@ -253,6 +253,8 @@ func run(log *logger.Logger) error {
 		RateLimiter:        limiter,
 		TenantRateLimiter:  tenantLimiter,
 		DisableConsole:     !cfg.EnableConsole,
+		MaxImportBytes:     cfg.MaxImportBytes,
+		MaxMediaBytes:      cfg.MaxMediaBytes,
 	})
 
 	server := &http.Server{

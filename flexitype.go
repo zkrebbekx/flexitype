@@ -580,6 +580,12 @@ type APIConfig struct {
 	// DisableConsole omits the admin-console SPA, for an API-only deployment.
 	// An unmatched path then returns a JSON 404 like any other API error.
 	DisableConsole bool
+	// MaxImportBytes caps a CSV import upload; 0 uses the 16 MiB default.
+	// GET /features reports the effective value, so a client can chunk a
+	// bulk load against the real ceiling instead of guessing.
+	MaxImportBytes int64
+	// MaxMediaBytes caps a media upload; 0 uses the 32 MiB default.
+	MaxMediaBytes int64
 }
 
 // NewAccountLookup returns a database-backed authenticator over this
@@ -667,6 +673,8 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 
 		TenantRateLimiter: cfg.TenantRateLimiter,
 		DisableConsole:    cfg.DisableConsole,
+		MaxImportBytes:    cfg.MaxImportBytes,
+		MaxMediaBytes:     cfg.MaxMediaBytes,
 	}
 	if cfg.EnableProvisioning {
 		var adminOpts []admin.Option

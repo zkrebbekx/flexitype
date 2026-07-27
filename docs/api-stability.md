@@ -80,6 +80,40 @@ They may change in any release.
 - Its exported surface follows SemVer from 1.0, tracking the REST API's
   compatibility guarantees. It depends only on the standard library.
 
+## Module layout
+
+The repository holds five Go modules. The split exists so that the library a
+team embeds carries only what the library needs:
+
+| Module | Path | Purpose |
+|---|---|---|
+| Core library | `github.com/zkrebbekx/flexitype` | The embedded API. This is what an adopter imports. |
+| Go client | `.../client` | REST client. Zero dependencies. |
+| Standalone server | `.../cmd/flexitype` | The binary. Built from source or taken as an image. |
+| Pub/Sub adapter | `.../infrastructure/gcppubsub` | Optional Google Cloud publisher. |
+| Conformance suite | `conformance` | Tests only; not published. |
+
+The server and the Pub/Sub adapter are separate modules because the Pub/Sub
+client pulls 132 modules (`cloud.google.com`, `google.golang.org/{api,grpc,
+genproto}`, `googleapis`, `s2a-go`, `opencensus`) and declared a **patch-exact
+`go 1.25.8`** floor. While they lived in the core module, that floor applied
+to every embedder: a monorepo pinned to a Go 1.25.0–1.25.7 SDK — and
+`rules_go` effectively runs `GOTOOLCHAIN=local` — could not build flexitype at
+all, for an optional publisher it never linked. The core module now requires
+124 modules rather than 271, needs `go 1.25`, and links no
+`cloud.google.com` package.
+
+The server and adapter modules currently carry `replace` directives to the
+repository root, so they build from a checkout but are not yet
+independently `go get`-able. Making them so needs a staged release: the core
+module must first publish a version whose zip excludes those directories,
+otherwise a build that requires both the old core and a nested module sees the
+same package path in two modules. Until then, build them from source or take
+the container image.
+
+`go.work` wires all five together for local development, so a change to the
+library is picked up everywhere without a `replace` in a published manifest.
+
 ## Storage schema
 
 - Migrations are forward-only and idempotent; applying a newer binary to

@@ -12,16 +12,20 @@ RUN npm run build
 FROM golang:1.25-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache git
+# The server is its own module (see cmd/flexitype/go.mod), so warm the cache
+# from every module's manifest before copying the tree.
 COPY go.mod go.sum ./
-RUN go mod download
+COPY cmd/flexitype/go.mod cmd/flexitype/go.sum ./cmd/flexitype/
+COPY infrastructure/gcppubsub/go.mod infrastructure/gcppubsub/go.sum ./infrastructure/gcppubsub/
+RUN go mod download && go mod download -C cmd/flexitype
 COPY . .
 # The console is embedded via web/embed.go (//go:embed all:dist); drop the
 # freshly built assets in before compiling.
 COPY --from=web /web/dist ./web/dist
 ARG VERSION=docker
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 go build -C cmd/flexitype -trimpath \
     -ldflags "-s -w -X main.version=${VERSION}" \
-    -o /flexitype ./cmd/flexitype
+    -o /flexitype .
 
 # 3. Minimal runtime image.
 FROM gcr.io/distroless/static-debian12:nonroot

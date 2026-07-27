@@ -1,6 +1,15 @@
-// Package web embeds the built admin console SPA. A committed stub
-// index.html keeps `go build` working without Node; `npm run build` in
-// web/ replaces the stub with the real console before release builds.
+// Package web embeds the built admin console SPA.
+//
+// dist/index.html is committed as a stub so that `go build` works from a
+// clean checkout with no Node toolchain. Keep it committed: `all:dist` is a
+// hard error when the directory is missing or holds nothing embeddable, so
+// deleting it breaks `go build` in a package unrelated to whatever the
+// caller was changing. `.gitignore` ignores everything else under dist/, so
+// real build output is never committed.
+//
+// The console therefore ships only in the container image and the release
+// binaries, both of which run `npm run build` first. A binary built any
+// other way serves the stub, which says so.
 package web
 
 import "embed"

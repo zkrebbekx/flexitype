@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/zkrebbekx/flexitype/pkg/db"
-	"github.com/zkrebbekx/flexitype/pkg/metrics"
+	"github.com/zkrebbekx/flexitype/pkg/deliverystats"
 )
 
 // deliveryStats reports event-delivery depth for the metrics collector via
@@ -15,12 +15,12 @@ type deliveryStats struct {
 }
 
 // NewDeliveryStats builds the delivery-depth stats source.
-func NewDeliveryStats(q db.QueryExecer) metrics.DeliveryStats {
+func NewDeliveryStats(q db.QueryExecer) deliverystats.Source {
 	return &deliveryStats{q: q}
 }
 
-func (s *deliveryStats) Snapshot(ctx context.Context) (metrics.DeliveryDepth, error) {
-	depth := metrics.DeliveryDepth{DeliveriesByStatus: map[string]int64{}}
+func (s *deliveryStats) Snapshot(ctx context.Context) (deliverystats.Depth, error) {
+	depth := deliverystats.Depth{DeliveriesByStatus: map[string]int64{}}
 
 	if err := s.q.GetContext(ctx, &depth.OutboxPending,
 		`SELECT count(*) FROM flexitype_event_outbox WHERE dispatched_at IS NULL`); err != nil {

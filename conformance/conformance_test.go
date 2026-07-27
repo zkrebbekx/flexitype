@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
@@ -258,6 +259,200 @@ func TestEventCursorConformance(t *testing.T) {
 				position, gerr := c.Events().GetCursor(ctx, "search-indexer")
 				So(gerr, ShouldBeNil)
 				So(position, ShouldEqual, int64(7))
+			})
+		})
+	})
+}
+
+// TestSilentlyBrokenMethodsConformance drives the methods that could never
+// return a correct result, so none of them can regress to silence.
+//
+// AsOf decoded a bare Revision object through the {"items":[...]} list
+// helper, found no "items" key, and returned an empty slice with a NIL error
+// on every call — so a point-in-time audit read rendered an empty entity and
+// concluded the data was never set. Diff sent no query where the server
+// requires ?to=. ListServiceAccounts sent `tenant` where the server reads
+// `tenant_name`, so the filter was dropped and the call 422'd whether or not
+// a tenant was passed.
+func TestSilentlyBrokenMethodsConformance(t *testing.T) {
+	Convey("Given a standalone service and its Go client", t, func() {
+		svc := flexitype.NewInMemory()
+		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{}))
+		Reset(ts.Close)
+
+		c, err := client.New(ts.URL)
+		So(err, ShouldBeNil)
+		ctx := context.Background()
+
+		product, err := c.Types().Create(ctx, client.CreateTypeInput{
+			InternalName: "widget", DisplayName: "Widget",
+		})
+		So(err, ShouldBeNil)
+		name, err := c.Attributes().Create(ctx, client.CreateAttributeInput{
+			TypeDefinitionID: product.ID, InternalName: "name",
+			DisplayName: "Name", DataType: "string",
+		})
+		So(err, ShouldBeNil)
+		_, err = c.Values().Set(ctx, client.SetValueInput{
+			AttributeDefinitionID: name.ID, EntityID: "w1",
+			TypeDefinitionID: product.ID, Value: json.RawMessage(`"first"`),
+		})
+		So(err, ShouldBeNil)
+
+		first, err := c.Entities().CreateRevision(ctx, product.ID, "w1", "v1")
+		So(err, ShouldBeNil)
+
+		Convey("When reading the entity as of a time after the revision", func() {
+			at := first.CreatedAt.Add(time.Second).UTC().Format(time.RFC3339)
+			values, err := c.Entities().AsOf(ctx, product.ID, "w1", at)
+
+			Convey("Then the values come back, rather than an empty slice", func() {
+				So(err, ShouldBeNil)
+				So(values, ShouldNotBeEmpty)
+				So(values[0].InternalName, ShouldEqual, "name")
+			})
+
+			Convey("Then the whole revision is reachable too", func() {
+				rev, rerr := c.Entities().AsOfRevision(ctx, product.ID, "w1", at)
+				So(rerr, ShouldBeNil)
+				So(rev.ID, ShouldEqual, first.ID)
+				So(rev.Seq, ShouldEqual, first.Seq)
+			})
+		})
+
+		Convey("When no timestamp is given", func() {
+			_, err := c.Entities().AsOf(ctx, product.ID, "w1", "")
+
+			Convey("Then it says a timestamp is required, without a round trip", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "timestamp")
+			})
+		})
+
+		Convey("When diffing one revision against another", func() {
+			_, err := c.Values().Set(ctx, client.SetValueInput{
+				AttributeDefinitionID: name.ID, EntityID: "w1",
+				TypeDefinitionID: product.ID, Value: json.RawMessage(`"second"`),
+			})
+			So(err, ShouldBeNil)
+			second, err := c.Entities().CreateRevision(ctx, product.ID, "w1", "v2")
+			So(err, ShouldBeNil)
+
+			diff, err := c.Revisions().Diff(ctx, first.ID, second.ID)
+
+			Convey("Then the diff is returned, not a validation error", func() {
+				So(err, ShouldBeNil)
+				So(string(diff), ShouldContainSubstring, "second")
+			})
+		})
+
+		Convey("When listing service accounts with no tenant", func() {
+			_, err := c.Admin().ListServiceAccounts(ctx, "")
+
+			Convey("Then it says a tenant is required, without a round trip", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "tenant")
+			})
+		})
+	})
+}
+
+// TestErasureAndValuesConformance drives the capabilities that had no client
+// method at all — most importantly both right-to-erasure endpoints, which
+// docs/erasure.md documents and only raw net/http could reach.
+func TestErasureAndValuesConformance(t *testing.T) {
+	Convey("Given a standalone service and its Go client", t, func() {
+		svc := flexitype.NewInMemory()
+		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{}))
+		Reset(ts.Close)
+
+		c, err := client.New(ts.URL)
+		So(err, ShouldBeNil)
+		ctx := context.Background()
+
+		product, err := c.Types().Create(ctx, client.CreateTypeInput{
+			InternalName: "product", DisplayName: "Product",
+		})
+		So(err, ShouldBeNil)
+		sku, err := c.Attributes().Create(ctx, client.CreateAttributeInput{
+			TypeDefinitionID: product.ID, InternalName: "sku",
+			DisplayName: "SKU", DataType: "string",
+		})
+		So(err, ShouldBeNil)
+		for _, entity := range []string{"p1", "p2"} {
+			_, err := c.Values().Set(ctx, client.SetValueInput{
+				AttributeDefinitionID: sku.ID, EntityID: entity,
+				TypeDefinitionID: product.ID, Value: json.RawMessage(`"ABC"`),
+			})
+			So(err, ShouldBeNil)
+		}
+
+		Convey("When listing values filtered by attribute", func() {
+			page, err := c.Values().List(ctx, client.ListValuesOptions{
+				AttributeDefinitionID: sku.ID,
+			})
+
+			Convey("Then both entities' values come back", func() {
+				So(err, ShouldBeNil)
+				So(page.Items, ShouldHaveLength, 2)
+			})
+		})
+
+		Convey("When listing values filtered to one entity", func() {
+			page, err := c.Values().List(ctx, client.ListValuesOptions{EntityID: "p1"})
+
+			Convey("Then only that entity's values come back", func() {
+				So(err, ShouldBeNil)
+				So(page.Items, ShouldHaveLength, 1)
+			})
+		})
+
+		Convey("When purging one entity", func() {
+			report, err := c.Entities().Purge(ctx, product.ID, "p1")
+
+			Convey("Then the report says what was erased", func() {
+				So(err, ShouldBeNil)
+				So(report.ValuesPurged, ShouldEqual, 1)
+			})
+
+			Convey("Then the entity's values are gone, not archived", func() {
+				So(err, ShouldBeNil)
+				page, lerr := c.Values().List(ctx, client.ListValuesOptions{
+					EntityID: "p1", IncludeArchived: true,
+				})
+				So(lerr, ShouldBeNil)
+				So(page.Items, ShouldBeEmpty)
+			})
+
+			Convey("Then the other entity is untouched", func() {
+				So(err, ShouldBeNil)
+				page, lerr := c.Values().List(ctx, client.ListValuesOptions{EntityID: "p2"})
+				So(lerr, ShouldBeNil)
+				So(page.Items, ShouldHaveLength, 1)
+			})
+		})
+
+		Convey("When purging the whole tenant", func() {
+			report, err := c.PurgeTenant(ctx)
+
+			Convey("Then every entity's values are erased", func() {
+				So(err, ShouldBeNil)
+				So(report.ValuesPurged, ShouldEqual, 2)
+
+				page, lerr := c.Values().List(ctx, client.ListValuesOptions{IncludeArchived: true})
+				So(lerr, ShouldBeNil)
+				So(page.Items, ShouldBeEmpty)
+			})
+		})
+
+		Convey("When recomputing computed attributes", func() {
+			// No computed attributes are defined, so this checks the route is
+			// reachable at all: it used to be gated behind the search index.
+			count, err := c.RecomputeComputed(ctx)
+
+			Convey("Then it is served and reports a count", func() {
+				So(err, ShouldBeNil)
+				So(count, ShouldBeGreaterThanOrEqualTo, 0)
 			})
 		})
 	})

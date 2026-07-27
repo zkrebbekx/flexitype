@@ -22,6 +22,20 @@ const (
 	CodeForbidden           ErrorCode = "FORBIDDEN"
 	CodeRateLimited         ErrorCode = "RATE_LIMITED"
 	CodeInternal            ErrorCode = "INTERNAL"
+
+	// CodeFeatureDisabled means the deployment does not run this optional
+	// capability — search, the outbox, media storage, GraphQL. It is
+	// permanent for that deployment, so retrying cannot help.
+	CodeFeatureDisabled ErrorCode = "FEATURE_DISABLED"
+
+	// CodeCursorConflict means another consumer committed the cursor first.
+	// Re-read the cursor and retry from the position it now holds.
+	CodeCursorConflict ErrorCode = "CURSOR_CONFLICT"
+
+	// CodeCursorExpired means the position is older than the feed's
+	// retention. Re-baseline: the events between the cursor and the feed's
+	// oldest retained event are gone.
+	CodeCursorExpired ErrorCode = "CURSOR_EXPIRED"
 )
 
 // Sentinels for errors.Is. Each matches an APIError with the corresponding
@@ -38,6 +52,9 @@ var (
 	ErrForbidden           = &APIError{Code: CodeForbidden}
 	ErrRateLimited         = &APIError{Code: CodeRateLimited}
 	ErrInternal            = &APIError{Code: CodeInternal}
+	ErrFeatureDisabled     = &APIError{Code: CodeFeatureDisabled}
+	ErrCursorConflict      = &APIError{Code: CodeCursorConflict}
+	ErrCursorExpired       = &APIError{Code: CodeCursorExpired}
 )
 
 // APIError is a structured error returned by the service. Details carries the

@@ -117,6 +117,58 @@ func (i *Interactor) Update(ctx context.Context, rawID string, in Input) (*View,
 	return &existing, nil
 }
 
+// PatchInput is a sparse update: a nil field is left unchanged.
+//
+// PATCH on a saved view used to be a full replace — the handler decoded into
+// a value struct, so any field the caller omitted was written back as its
+// zero value. Editing a view's name through one client silently cleared the
+// sort order another client had configured, and a saved view's whole point is
+// that it reproduces a view.
+type PatchInput struct {
+	Name     *string
+	RootType *string
+	Query    *string
+	Columns  *[]string
+	Sort     *string
+}
+
+// Patch applies only the fields the caller supplied and leaves the rest as
+// they are. The merged result is validated, so a patch cannot leave a view
+// without a name or a root type.
+func (i *Interactor) Patch(ctx context.Context, rawID string, in PatchInput) (*View, error) {
+	id, err := ulid.Parse(rawID)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	existing, err := i.store.Get(ctx, tenantOf(ctx), id)
+	if err != nil {
+		return nil, err
+	}
+	merged := Input{
+		Name:     existing.Name,
+		RootType: existing.RootType,
+		Query:    existing.Query,
+		Columns:  existing.Columns,
+		Sort:     existing.Sort,
+	}
+	if in.Name != nil {
+		merged.Name = *in.Name
+	}
+	if in.RootType != nil {
+		merged.RootType = *in.RootType
+	}
+	if in.Query != nil {
+		merged.Query = *in.Query
+	}
+	if in.Columns != nil {
+		merged.Columns = *in.Columns
+	}
+	if in.Sort != nil {
+		merged.Sort = *in.Sort
+	}
+	return i.Update(ctx, rawID, merged)
+}
+
 // Get loads one view.
 func (i *Interactor) Get(ctx context.Context, rawID string) (*View, error) {
 	id, err := ulid.Parse(rawID)

@@ -1857,6 +1857,12 @@ components:
           additionalProperties:
             type: array
             items: { $ref: "#/components/schemas/FacetBucket" }
+        truncated:
+          type: boolean
+          description: >-
+            At least one attribute has more distinct values than the buckets
+            returned. A partial bucket list is otherwise indistinguishable
+            from a complete one.
     FacetBucket:
       type: object
       properties:

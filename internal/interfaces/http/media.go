@@ -47,7 +47,11 @@ func (s *server) uploadMedia(w http.ResponseWriter, r *http.Request) {
 // URL points here.
 func (s *server) downloadMedia(w http.ResponseWriter, r *http.Request) {
 	if s.blobs == nil {
-		writeError(w, s.log, domainerrors.NewValidation("media storage is not configured"))
+		// A deployment with no blob store cannot ever serve this, so it is a
+		// capability gap, not a caller error. Reporting VALIDATION/422 made it
+		// indistinguishable from a malformed request, and retry logic kept
+		// retrying against a deployment that structurally cannot answer.
+		s.featureDisabled(w, "media storage")
 		return
 	}
 	key := chi.URLParam(r, "objectKey")

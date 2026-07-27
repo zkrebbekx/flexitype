@@ -22,7 +22,9 @@ type graphqlRequest struct {
 // caller's own schema.
 func (s *server) graphqlQuery(w http.ResponseWriter, r *http.Request) {
 	if s.graphql == nil {
-		writeError(w, s.log, domainerrors.NewValidation("the GraphQL API is not enabled in this deployment"))
+		// Not a caller error: this deployment does not run GraphQL. See the
+		// media guard for why VALIDATION was the wrong code.
+		s.featureDisabled(w, "GraphQL API")
 		return
 	}
 

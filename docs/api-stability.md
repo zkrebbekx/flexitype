@@ -24,8 +24,10 @@ depend on `main`.
   header.
 - Error responses carry stable machine codes (`VALIDATION`, `NOT_FOUND`,
   `CONFLICT`, `ARCHIVED`, `DEPENDENCY_VIOLATION`, `FEATURE_DISABLED`,
-  `CURSOR_CONFLICT`, `CURSOR_EXPIRED`, `UNAUTHENTICATED`, `FORBIDDEN`).
-  New codes may be added; existing codes keep their meaning.
+  `CURSOR_CONFLICT`, `CURSOR_EXPIRED`, `UNAUTHENTICATED`, `FORBIDDEN`,
+  `RATE_LIMITED`, `INTERNAL`). New codes may be added; existing codes keep
+  their meaning. This list, the `Error.code` enum in `api/openapi.yaml` and
+  the `ErrorCode` constants in the Go client are held equal by a test.
 - The event envelope has a `schema_version` field; a bump signals a
   breaking payload change and is called out in the changelog.
 

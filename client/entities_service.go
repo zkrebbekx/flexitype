@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"io"
 	"iter"
 	"net/http"
@@ -193,12 +194,36 @@ func (s *EntitiesService) UploadMedia(ctx context.Context, typeID, entityID, att
 }
 
 // AsOf reads an entity's values as they stood at a timestamp (RFC3339).
-func (s *EntitiesService) AsOf(ctx context.Context, typeID, entityID string, at string) ([]RevisionValue, error) {
-	q := url.Values{}
-	if at != "" {
-		q.Set("at", at)
+// at is required; the server has no default point in time.
+//
+// Use AsOfRevision when you also need the revision's id, seq or label.
+func (s *EntitiesService) AsOf(ctx context.Context, typeID, entityID, at string) ([]RevisionValue, error) {
+	rev, err := s.AsOfRevision(ctx, typeID, entityID, at)
+	if err != nil {
+		return nil, err
 	}
-	return items[RevisionValue](ctx, s.c, "/entities/"+typeID+"/"+url.PathEscape(entityID)+"/as-of", q)
+	return rev.Values, nil
+}
+
+// AsOfRevision reads the whole revision an entity stood at, at a timestamp
+// (RFC3339). at is required.
+func (s *EntitiesService) AsOfRevision(ctx context.Context, typeID, entityID, at string) (*EntityRevision, error) {
+	if at == "" {
+		// The server answers 422 for a missing at, which reads as though the
+		// caller's data is wrong. Say what is actually missing, without a
+		// round trip.
+		return nil, fmt.Errorf("flexitype: AsOf requires a timestamp (RFC3339)")
+	}
+	// The endpoint returns one revision object, not an {"items":[...]} list.
+	// Decoding it through the list helper found no "items" key, so it
+	// returned an empty slice and a nil error for every call.
+	var out EntityRevision
+	q := url.Values{"at": {at}}
+	if err := s.c.do(ctx, http.MethodGet,
+		"/entities/"+typeID+"/"+url.PathEscape(entityID)+"/as-of", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Revisions lists an entity's captured revisions.

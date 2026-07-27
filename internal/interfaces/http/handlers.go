@@ -389,6 +389,16 @@ func (s *server) setValuesBatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": out.Items})
 }
 
+// savedViewPatchRequest is the sparse form of savedViewRequest: a nil field
+// was absent from the body and is left unchanged.
+type savedViewPatchRequest struct {
+	Name     *string   `json:"name"`
+	RootType *string   `json:"root_type"`
+	Query    *string   `json:"query"`
+	Columns  *[]string `json:"columns"`
+	Sort     *string   `json:"sort"`
+}
+
 type savedViewRequest struct {
 	Name     string   `json:"name"`
 	RootType string   `json:"root_type"`
@@ -457,12 +467,16 @@ func (s *server) updateSavedView(w http.ResponseWriter, r *http.Request) {
 	if sv == nil {
 		return
 	}
-	var req savedViewRequest
+	// PATCH is sparse: a field the caller omits keeps its stored value. The
+	// handler used to decode into a value struct, so omitting sort wrote it
+	// back as "" — editing a view's name through any client silently cleared
+	// the sort order configured through another.
+	var req savedViewPatchRequest
 	if err := decode(r, &req); err != nil {
 		writeError(w, s.log, err)
 		return
 	}
-	v, err := sv.Update(r.Context(), chi.URLParam(r, "id"), appsavedview.Input{
+	v, err := sv.Patch(r.Context(), chi.URLParam(r, "id"), appsavedview.PatchInput{
 		Name: req.Name, RootType: req.RootType, Query: req.Query, Columns: req.Columns, Sort: req.Sort,
 	})
 	if err != nil {

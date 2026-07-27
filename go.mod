@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/getkin/kin-openapi v0.142.0
+	github.com/getkin/kin-openapi v0.144.0
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/graph-gophers/dataloader/v7 v7.2.0
 	github.com/graphql-go/graphql v0.8.1
@@ -33,6 +33,7 @@ require (
 	github.com/go-openapi/swag/jsonname v0.25.5 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gopherjs/gopherjs v1.17.2 // indirect
+	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect

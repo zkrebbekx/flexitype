@@ -116,10 +116,16 @@ func TestStatementIsEmpty(t *testing.T) {
 // check at run time, because by then the damage is done: a file that builds an
 // index on a hot table must declare no-transaction, and a no-transaction file
 // must not carry a statement whose partial application would be unrecoverable.
+//
+// It covers down-migrations too. A down-file dropping an index CONCURRENTLY
+// needs the directive exactly as its up-file does, and MigrateDown honours it.
 func TestEmbeddedMigrationDirectives(t *testing.T) {
-	Convey("Given the embedded up-migrations", t, func() {
-		names, err := upMigrations()
+	Convey("Given the embedded migrations", t, func() {
+		ups, err := upMigrations()
 		So(err, ShouldBeNil)
+		downs, err := listMigrations(".down.sql")
+		So(err, ShouldBeNil)
+		names := append(append([]string{}, ups...), downs...)
 
 		for _, name := range names {
 			body, err := migrationsFS.ReadFile("migrations/" + name)

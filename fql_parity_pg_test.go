@@ -128,6 +128,11 @@ func seedProductCatalog(ctx context.Context, t *testing.T, svc *flexitype.Servic
 	set(ratingID, "e3", "4.5")
 	set(releasedID, "e3", "2024-03-10")
 	set(nameID, "e4", "Delta")
+	// e5 carries the three characters LIKE treats specially. contains() is a
+	// literal substring test on both backends, so the SQL compiler must escape
+	// them; without escaping `contains(name, "%")` would match every entity and
+	// `contains(name, "a_c")` would match "abc".
+	set(nameID, "e5", `100% pure_grade \ raw`)
 
 	// Scoped blurbs: e1 differs by locale within one channel; e2 differs by
 	// channel within one locale. Base (unscoped) reads must see neither.
@@ -258,6 +263,13 @@ var parityCorpus = []parityQuery{
 	// string matching (case-sensitive and insensitive)
 	{q: `contains(name, "lph")`},
 	{q: `icontains(name, "ET")`},
+	// LIKE metacharacters are literal in a contains() needle on both backends.
+	{q: `contains(name, "%")`}, // only e5, not every entity
+	{q: `contains(name, "100% pure")`},
+	{q: `contains(name, "e_g")`}, // only e5's literal underscore
+	{q: `contains(name, "a_c")`}, // matches nothing: _ is not a wildcard
+	{q: `icontains(name, "PURE_GRADE")`},
+	{q: `contains(name, "\\")`}, // a literal backslash
 	{q: `iequals(name, "alpha")`},
 	// scalar length()
 	{q: `length(name) = 5`},

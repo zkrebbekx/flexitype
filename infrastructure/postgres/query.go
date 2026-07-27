@@ -71,10 +71,20 @@ func (r *queryRepository) Search(ctx context.Context, tenant valueobjects.Tenant
 	// GROUP BY over the whole value table with a plain index scan. The FQL
 	// filter compiled below applies as EXISTS subqueries over the raw value
 	// rows, so it is unaffected — only this enumeration base changed.
+	// A single root type compiles to an equality, not `= ANY`, so the
+	// (tenant_id, type_definition_id, last_updated_at DESC, entity_id) ordering
+	// index serves the page as a bounded index scan. With `= ANY` the planner
+	// cannot use the index for ordering, so every query sequentially scanned
+	// the tenant's whole entity population and sorted it — measured at 200k
+	// entities, 57 ms and an external merge sort on disk versus 0.15 ms as an
+	// index-only scan. The LIMIT offers no protection, because the sort happens
+	// before it. typeDefPredicate is the same helper the entity browser uses.
+	tenantArg := c.arg(tenant.String())
+	typePred, typeArg := typeDefPredicate(rootIDs)
+	typeClause := strings.Replace(typePred, "?", c.arg(typeArg), 1)
 	base := fmt.Sprintf(`SELECT tenant_id, type_definition_id, entity_id, value_count, last_updated_at
 	 FROM flexitype_entity_summary
-	 WHERE tenant_id = %s AND type_definition_id = ANY(%s)`,
-		c.arg(tenant.String()), c.arg(pq.Array(rootIDs)))
+	 WHERE tenant_id = %s AND %s`, tenantArg, typeClause)
 
 	where, err := r.compile(c, node, entityRef{
 		tenant: "e.tenant_id",
@@ -198,10 +208,15 @@ func (r *queryRepository) compile(c *compiler, node query.BoundNode, e entityRef
 		scope := r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e)
 		var pred string
 		switch n.Kind {
+		// LIKE/ILIKE rather than strpos: strpos is opaque to the planner, so a
+		// substring match could only ever be a filter applied per candidate row,
+		// and no index could serve it. The pattern operators can be served by a
+		// pg_trgm GIN index, which migration 000021 restores. The needle is
+		// escaped so a value containing % or _ matches literally.
 		case fql.MatchContains:
-			pred = fmt.Sprintf("strpos(%s.value_text, %s) > 0", v, c.arg(n.Value))
+			pred = fmt.Sprintf("%s.value_text LIKE %s ESCAPE '\\'", v, c.arg(containsPattern(n.Value)))
 		case fql.MatchIContains:
-			pred = fmt.Sprintf("strpos(lower(%s.value_text), lower(%s)) > 0", v, c.arg(n.Value))
+			pred = fmt.Sprintf("%s.value_text ILIKE %s ESCAPE '\\'", v, c.arg(containsPattern(n.Value)))
 		case fql.MatchIEquals:
 			pred = fmt.Sprintf("lower(%s.value_text) = lower(%s)", v, c.arg(n.Value))
 		default:
@@ -222,6 +237,16 @@ func (r *queryRepository) compile(c *compiler, node query.BoundNode, e entityRef
 	default:
 		return "", fmt.Errorf("unsupported bound node %T", node)
 	}
+}
+
+// likeEscaper escapes the three characters LIKE treats specially, so a needle
+// containing them matches literally. The backslash must be replaced first, or
+// the escapes introduced for % and _ would themselves be escaped.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+
+// containsPattern wraps an escaped needle in wildcards for a substring match.
+func containsPattern(needle string) string {
+	return "%" + likeEscaper.Replace(needle) + "%"
 }
 
 // valueScope renders the correlated FROM/WHERE prefix selecting the

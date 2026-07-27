@@ -32,6 +32,52 @@ now sees less than it did.
   barred from writing one attribute could erase it by removing the entity
   (#280).
 
+### Performance — query shapes that no index could serve
+
+Six hot paths used predicates the planner cannot index. Each returned correct
+results, so each survived review; the difference is only visible in the plan.
+`infrastructure/postgres/plan_integration_test.go` now pins every one of them
+to the index that serves it, and EXPLAINs the shape it replaced alongside, so
+the difference is recorded rather than asserted as an unexplained constant.
+
+- FQL always emitted `type_definition_id = ANY(...)`, even for a single root
+  type, so the entity-summary ordering index could not supply the ordering and
+  every query scanned the tenant's whole entity population and sorted it. It
+  now compiles to an equality for a single type, reusing the helper the entity
+  browser already used. Measured at 200k entities: 57 ms with an external merge
+  sort on disk, against 0.15 ms as an index-only scan (#331).
+- `contains` / `icontains` compiled to `strpos(...) > 0`, which is opaque to
+  the planner, so the substring test could only ever be a per-row filter.
+  Migration 000018 had diagnosed this and resolved it by dropping the trigram
+  indexes, leaving a documented operator with no index support at all. They now
+  compile to `LIKE` / `ILIKE` with `%`, `_` and `\` escaped in the needle, and
+  000021 restores the `gin_trgm_ops` indexes, which do serve them (#333).
+- Archived-inclusive entity lookups had no usable index: every entity-leading
+  index is partial on `archived_at IS NULL`, while `PurgeEntity` and media
+  download include archived rows by design. Both sequentially scanned the value
+  table — 573 ms to delete 20 rows at 4.16M rows, and 252 ms per media
+  authorization, which a gallery page issues dozens of times. 000021 adds a
+  non-partial `(tenant_id, entity_id)` index and an expression index on the
+  media object key (#332).
+- The FQL value scope probed `(tenant_id, entity_id)` and filtered the
+  attribute afterwards, so every candidate entity's whole value set was read.
+  000021 adds `(tenant_id, entity_id, attribute_definition_id)` (#333).
+- `CountLiveLinks` put the entity only in an aggregate `FILTER`, never in the
+  `WHERE` clause, so cardinality enforcement counted every live link of the
+  relationship definition rather than the endpoint's own. It runs twice per
+  link create. Measured at 400k links: 15.6 ms against 0.29 ms (#334).
+- `flexitype_webhook_delivery.envelope_id` is an `ON DELETE CASCADE` foreign
+  key with no index — Postgres never indexes the referencing side — so every
+  pruned envelope sequentially scanned the delivery table at 13.7 ms each.
+  000021 adds the index the cascade and the pruner's anti-join both need
+  (#335).
+- Outbox expansion loaded every active webhook subscription in the database on
+  every pass, filtered by tenant in Go, and did so while holding the global
+  expansion lock — so delivery throughput tracked total tenant count rather
+  than event volume. It now filters by the claimed batch's tenants in SQL,
+  selects only the three columns matching needs (signing secrets no longer
+  cross the wire on this path), and 000021 adds the supporting index (#340).
+
 ### Changed — migrations no longer block a live fleet
 
 An upgrade used to apply every pending migration in one transaction. That form

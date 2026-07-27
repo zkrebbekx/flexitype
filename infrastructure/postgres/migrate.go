@@ -301,18 +301,25 @@ func UnknownSchemaVersions(ctx context.Context, q db.QueryExecer) ([]int, error)
 
 // MigrateDown reverts applied migrations whose version is greater than
 // target, newest first, running each .down.sql and removing its
-// schema-migrations row — all in one transaction. It is NOT called at
-// startup; use it in local development and reversibility tests. target=0
-// reverts everything.
+// schema-migrations row. It is NOT called at startup; use it in local
+// development and reversibility tests. target=0 reverts everything.
+//
+// Like Migrate, each migration is reverted in its own transaction unless its
+// down-file declares -- +flexitype:no-transaction, which a file dropping an
+// index CONCURRENTLY must.
 //
 // Rollback of a deployed release is redeploying the previous binary, not
 // running this: see docs/upgrades.md.
 func MigrateDown(ctx context.Context, tx db.Transactor, target int) error {
-	return tx.InTransaction(ctx, func(tx db.Transactor) error {
-		q := txExecer(tx)
-		if _, err := q.ExecContext(ctx, `SELECT pg_advisory_xact_lock(`+advisoryLockKey+`)`); err != nil {
+	conn, ok := tx.(db.SessionConnector)
+	if !ok {
+		return fmt.Errorf("migrate down: this transactor cannot pin a connection")
+	}
+	return conn.WithConn(ctx, func(q db.QueryExecer) error {
+		if _, err := q.ExecContext(ctx, `SELECT pg_advisory_lock(`+advisoryLockKey+`)`); err != nil {
 			return fmt.Errorf("acquire migration lock: %w", err)
 		}
+		defer func() { _, _ = q.ExecContext(ctx, `SELECT pg_advisory_unlock(`+advisoryLockKey+`)`) }()
 
 		var versions []int
 		if err := q.SelectContext(ctx, &versions,
@@ -322,21 +329,20 @@ func MigrateDown(ctx context.Context, tx db.Transactor, target int) error {
 		}
 
 		for _, version := range versions {
-			name := fmt.Sprintf("%06d", version)
 			down, err := downMigration(version)
 			if err != nil {
 				return err
 			}
-			sqlBytes, err := migrationsFS.ReadFile("migrations/" + down)
+			body, err := migrationsFS.ReadFile("migrations/" + down)
 			if err != nil {
 				return fmt.Errorf("read down migration %s: %w", down, err)
 			}
-			if _, err := q.ExecContext(ctx, string(sqlBytes)); err != nil {
-				return fmt.Errorf("revert migration %s: %w", down, err)
+			directives, err := parseDirectives(down, string(body))
+			if err != nil {
+				return err
 			}
-			if _, err := q.ExecContext(ctx,
-				`DELETE FROM flexitype_schema_migrations WHERE version = $1`, version); err != nil {
-				return fmt.Errorf("record reverting %s: %w", name, err)
+			if err := revert(ctx, q, down, version, string(body), directives); err != nil {
+				return err
 			}
 		}
 		// A reverted schema must re-run its backfills if it is re-applied.
@@ -345,6 +351,48 @@ func MigrateDown(ctx context.Context, tx db.Transactor, target int) error {
 		}
 		return nil
 	})
+}
+
+// revert runs one down-migration and forgets its version.
+func revert(ctx context.Context, q db.QueryExecer, name string, version int, body string, d migrationDirectives) (err error) {
+	forget := func() error {
+		if _, err := q.ExecContext(ctx,
+			`DELETE FROM flexitype_schema_migrations WHERE version = $1`, version); err != nil {
+			return fmt.Errorf("record reverting %06d: %w", version, err)
+		}
+		return nil
+	}
+
+	if d.NoTransaction {
+		for _, stmt := range splitStatements(body) {
+			if statementIsEmpty(stmt) {
+				continue
+			}
+			if _, err := q.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("revert migration %s: %w", name, err)
+			}
+		}
+		return forget()
+	}
+
+	if _, err := q.ExecContext(ctx, `BEGIN`); err != nil {
+		return fmt.Errorf("begin reverting %s: %w", name, err)
+	}
+	defer func() {
+		if err != nil {
+			_, _ = q.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+	if _, err = q.ExecContext(ctx, body); err != nil {
+		return fmt.Errorf("revert migration %s: %w", name, err)
+	}
+	if err = forget(); err != nil {
+		return err
+	}
+	if _, err = q.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("commit reverting %s: %w", name, err)
+	}
+	return nil
 }
 
 // upMigrations lists embedded up-migrations in version order.

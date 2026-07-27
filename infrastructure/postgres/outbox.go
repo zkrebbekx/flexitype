@@ -200,23 +200,44 @@ func (s *outboxStore) expand(ctx context.Context, q db.QueryExecer, done []strin
 		return fmt.Errorf("stamp feed sequence: %w", err)
 	}
 
-	var subs []subscriptionRow
+	// Only the claimed batch's tenants, and only the three columns matching
+	// needs. Loading every active subscription in the database made expansion
+	// cost a function of total tenant count rather than of the events being
+	// dispatched — onboarding a tenant slowed delivery for every existing one,
+	// invisibly to any per-tenant metric — and it ran inside the global
+	// expansion lock every other relay replica waits on. It also put every
+	// tenant's webhook signing secret on the wire on every pass, for a decision
+	// that never reads them.
+	tenants := make([]string, 0, len(rows))
+	seenTenant := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		if !seenTenant[r.TenantID] {
+			seenTenant[r.TenantID] = true
+			tenants = append(tenants, r.TenantID)
+		}
+	}
+	var subs []matchingSubscription
 	if err := q.SelectContext(ctx, &subs, bind(
-		`SELECT id, tenant_id, name, url, secret, previous_secret, event_types, active, created_at, updated_at
-		 FROM flexitype_webhook_subscription WHERE active`)); err != nil {
+		`SELECT id, tenant_id, event_types
+		   FROM flexitype_webhook_subscription
+		  WHERE active AND tenant_id = ANY(?)`), pq.Array(tenants)); err != nil {
 		return fmt.Errorf("load active subscriptions: %w", err)
 	}
 	if len(subs) == 0 {
 		return nil
 	}
 
+	byTenant := make(map[string][]matchingSubscription, len(tenants))
+	for _, sub := range subs {
+		byTenant[sub.TenantID] = append(byTenant[sub.TenantID], sub)
+	}
+
 	var valueRows []string
 	var args []any
 	now := time.Now().UTC()
 	for i, r := range rows {
-		for _, sr := range subs {
-			sub := sr.toSubscription()
-			if sub.TenantID.String() != r.TenantID || !sub.Matches(r.EventType) {
+		for _, sub := range byTenant[r.TenantID] {
+			if !sub.matches(r.EventType) {
 				continue
 			}
 			valueRows = append(valueRows, "(?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)")
@@ -234,4 +255,29 @@ func (s *outboxStore) expand(ctx context.Context, q db.QueryExecer, done []strin
 		return fmt.Errorf("fan out deliveries: %w", err)
 	}
 	return nil
+}
+
+// matchingSubscription is the projection expansion needs: which subscription,
+// for which tenant, and which event types it wants. The subscription's URL and
+// signing secrets are deliberately absent — the delivery worker loads those
+// when it actually sends.
+type matchingSubscription struct {
+	ID         ulid.ID        `db:"id"`
+	TenantID   string         `db:"tenant_id"`
+	EventTypes pq.StringArray `db:"event_types"`
+}
+
+// matches reports whether the subscription wants an event type. An empty
+// list means every type, matching webhook.Subscription.Matches; the active
+// flag is already applied by the query.
+func (s matchingSubscription) matches(eventType string) bool {
+	if len(s.EventTypes) == 0 {
+		return true
+	}
+	for _, t := range s.EventTypes {
+		if t == eventType {
+			return true
+		}
+	}
+	return false
 }

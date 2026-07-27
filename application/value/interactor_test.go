@@ -234,6 +234,28 @@ func (r *fakeValueRepo) PurgeTenant(context.Context, valueobjects.TenantID) ([]s
 	return nil, 0, nil
 }
 
+func (r *fakeValueRepo) EntityAnchor(_ context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) (valueobjects.TypeDefinitionID, bool, error) {
+	for _, snap := range r.values {
+		if snap.TenantID == tenant && snap.EntityID == entityID {
+			return snap.TypeDefinitionID, true, nil
+		}
+	}
+	return valueobjects.TypeDefinitionID{}, false, nil
+}
+
+func (r *fakeValueRepo) ReanchorEntity(_ context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID, to valueobjects.TypeDefinitionID) (int, error) {
+	moved := 0
+	for id, snap := range r.values {
+		if snap.TenantID != tenant || snap.EntityID != entityID || snap.TypeDefinitionID.Equals(to) {
+			continue
+		}
+		snap.TypeDefinitionID = to
+		r.values[id] = snap
+		moved++
+	}
+	return moved, nil
+}
+
 func (r *fakeValueRepo) MediaValueForKey(_ context.Context, tenant valueobjects.TenantID, objectKey string) (valueobjects.Value, bool, error) {
 	for _, snap := range r.values {
 		if snap.TenantID == tenant && snap.Value.DataType() == valueobjects.DataTypeMedia &&

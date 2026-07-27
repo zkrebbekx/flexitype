@@ -190,11 +190,60 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 
 		// Resolve the entity's declared type and prove the attribute is in
 		// its inherited schema.
+		//
+		// The anchor is an INVARIANT of the entity, not an input to each
+		// write. An entity that already holds values keeps the type it was
+		// first written under; a caller naming a different one is rejected
+		// rather than silently splitting the entity in two.
+		//
+		// It used to default to the attribute's DECLARING type, so writing an
+		// inherited attribute (declared on the parent) and an own attribute
+		// (declared on the subtype) produced rows under two anchors. Reads,
+		// dependency source loading, completeness scoring, revision capture,
+		// facets, the grid and PurgeEntity are all keyed on the anchor, so
+		// each saw only half the entity — and PurgeEntity, the right-to-
+		// erasure primitive, reported success while permanently missing the
+		// rows under the other anchor.
+		anchor, anchored, err := values.EntityAnchor(ctx, uow.TenantFromContext(ctx), entityID)
+		if err != nil {
+			return err
+		}
 		entityType := def.TypeDefinitionID()
+		if anchored {
+			entityType = anchor
+		}
 		if in.TypeDefinitionID != "" {
-			if entityType, err = valueobjects.ParseTypeDefinitionID(in.TypeDefinitionID); err != nil {
-				return domainerrors.NewValidation(err.Error())
+			supplied, perr := valueobjects.ParseTypeDefinitionID(in.TypeDefinitionID)
+			if perr != nil {
+				return domainerrors.NewValidation(perr.Error())
 			}
+			if anchored && !supplied.Equals(anchor) {
+				// One anchor change is legitimate: NARROWING. A client that
+				// writes an inherited attribute before it names the subtype
+				// anchors the entity to the declaring parent, and naming the
+				// subtype afterwards should narrow the entity rather than
+				// fail. The rows already written move with it, or the entity
+				// is split — which is the whole defect. Anything else is a
+				// conflict, reported rather than resolved silently.
+				typeDefs := i.typeDefs.WithTx(tx)
+				suppliedType, terr := typeDefs.Get(ctx, supplied)
+				if terr != nil {
+					return terr
+				}
+				narrowing, terr := apptypedef.IsAncestorOrSelf(ctx, typeDefs, suppliedType, anchor)
+				if terr != nil {
+					return terr
+				}
+				if !narrowing {
+					return domainerrors.NewValidation(
+						"the entity is already anchored to an unrelated type",
+						"entity", in.EntityID, "anchor", anchor.String(), "supplied", supplied.String())
+				}
+				if _, rerr := values.ReanchorEntity(ctx, uow.TenantFromContext(ctx), entityID, supplied); rerr != nil {
+					return rerr
+				}
+			}
+			entityType = supplied
 		}
 		if !entityType.Equals(def.TypeDefinitionID()) {
 			typeDefs := i.typeDefs.WithTx(tx)

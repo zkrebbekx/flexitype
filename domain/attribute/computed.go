@@ -65,6 +65,16 @@ func (c *Computed) Validate() ([]string, error) {
 		}
 		return expr.Refs(), nil
 	case ComputedRollup:
+		// No evaluator exists for rollups, so a rollup attribute never
+		// produces a value. Accepting the definition made the schema promise
+		// something that never arrives: the API accepted it, the console
+		// displayed it, FQL filters on it matched nothing, completeness
+		// scoring treated it as permanently absent, and no error appeared at
+		// any point to say the attribute was inert.
+		//
+		// Refusing it is loud and immediate. The spec below is still
+		// validated first, so an author who writes a malformed rollup learns
+		// that too rather than only the headline.
 		if c.Rollup == nil {
 			return nil, domainerrors.NewValidation("computed rollup spec is required")
 		}
@@ -85,7 +95,11 @@ func (c *Computed) Validate() ([]string, error) {
 		default:
 			return nil, domainerrors.NewValidation("unknown rollup aggregate", "aggregate", string(c.Rollup.Aggregate))
 		}
-		return nil, nil
+		return nil, domainerrors.NewValidation(
+			"computed rollups are not implemented: no evaluator materializes them, "+
+				"so the attribute would never hold a value. Use a formula over the "+
+				"entity's own attributes, or aggregate in the caller.",
+			"kind", string(ComputedRollup))
 	default:
 		return nil, domainerrors.NewValidation("unknown computed kind", "kind", string(c.Kind))
 	}

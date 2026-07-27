@@ -291,6 +291,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	// their derived values are ordinary (FQL-queryable) values — maintained in
 	// the writing request regardless of the outbox.
 	materializer := computed.NewMaterializer(factory)
+	materializer.OnSchemaChange(schemaChangeRecomputer(materializer, o.onBgError))
 	projections.Register(materializer, events.WithEventTypes(computed.EventTypes()...))
 
 	// The GraphQL schema mirrors the live type definitions; an internal-projection
@@ -377,6 +378,7 @@ func NewInMemory(opts ...Option) *Service {
 		SearchStore:     searchStore, // may be nil; enables entity-data erasure of the projection
 	})
 	materializer := computed.NewMaterializer(factory)
+	materializer.OnSchemaChange(schemaChangeRecomputer(materializer, o.onBgError))
 	projections.Register(materializer, events.WithEventTypes(computed.EventTypes()...))
 	graphqlEngine := gql.NewEngine(gql.WithErrorObserver(o.onBgError))
 	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
@@ -692,3 +694,37 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 	server.RecomputeComputed = s.RecomputeComputed
 	return httpapi.NewHandler(server)
 }
+
+// schemaChangeRecomputer rebuilds a type's materialized computed values after
+// a schema change, in the background.
+//
+// Editing a formula used to converge only when each entity happened to be
+// written again, or when an operator remembered to run the tenant-wide
+// recompute — an unbounded, operator-dependent staleness window in which the
+// old values stayed queryable and the correction appeared to have been
+// applied. Adding a computed attribute to a populated type had the same shape.
+//
+// It runs off the request goroutine deliberately: a schema edit on a type with
+// millions of entities must not hold the editing request open. The cost is
+// that convergence is shortly after the edit rather than at it, and that a
+// process restart mid-rebuild leaves the remainder to the next write or to
+// RecomputeComputed. Errors go to the background-error sink.
+func schemaChangeRecomputer(m *computed.Materializer, onErr func(error)) func(valueobjects.TenantID, string) {
+	return func(tenant valueobjects.TenantID, typeID string) {
+		go func() {
+			// Detached from the request: the rebuild outlives the response,
+			// and a cancelled request must not abandon it half-done.
+			ctx, cancel := context.WithTimeout(
+				uow.WithSystemAccess(context.WithoutCancel(context.Background())),
+				schemaRecomputeTimeout)
+			defer cancel()
+			if _, err := m.RecomputeType(ctx, tenant, typeID); err != nil && onErr != nil {
+				onErr(fmt.Errorf("recompute computed attributes for type %s: %w", typeID, err))
+			}
+		}()
+	}
+}
+
+// schemaRecomputeTimeout bounds one background rebuild, so a pathological
+// type cannot pin a goroutine and a connection for ever.
+const schemaRecomputeTimeout = 30 * time.Minute

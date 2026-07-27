@@ -6,8 +6,16 @@
 //
 // The subscriber recomputes on any value change to the entity and converges:
 // re-setting an unchanged computed value emits no event, so the recompute
-// loop terminates. Rollup aggregates over relationships are a planned
-// follow-up.
+// loop terminates.
+//
+// A schema change to a computed attribute also rebuilds the affected type's
+// entities, off the request goroutine, so a corrected formula converges
+// without waiting for each entity to be written again.
+//
+// Rollup aggregates over relationships are NOT implemented, and a rollup
+// definition is refused at create/update rather than accepted — see
+// domain/attribute/computed.go. An accepted rollup would have produced an
+// attribute that the schema advertises and that never holds a value.
 package computed
 
 import (
@@ -16,7 +24,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +58,24 @@ type Materializer struct {
 	// flushed wholesale on any attribute/type definition event (see invalidate).
 	mu          sync.RWMutex
 	hasComputed map[string]bool
+
+	// onSchemaChange, when set, is called with a type definition id whose
+	// computed attributes may have changed. The facade wires it to a
+	// background recompute.
+	//
+	// Editing a formula used to converge only when each entity happened to be
+	// written again, or when an operator remembered to run the tenant-wide
+	// recompute. Until then the old materialized values stayed queryable in
+	// FQL and visible in the console, so the correction appeared to have been
+	// applied while the data still reflected the old formula.
+	onSchemaChange func(tenant valueobjects.TenantID, typeID string)
+}
+
+// OnSchemaChange registers the callback invoked when a schema change may have
+// invalidated materialized values. It is not safe to call once the
+// materializer is dispatching; wire it during composition.
+func (m *Materializer) OnSchemaChange(fn func(tenant valueobjects.TenantID, typeID string)) {
+	m.onSchemaChange = fn
 }
 
 // NewMaterializer builds the computed-attribute subscriber.
@@ -86,6 +114,115 @@ func isDefinitionEvent(t events.Type) bool {
 	return false
 }
 
+// definitionPayload carries the ids an attribute or type-definition event
+// names. Both event families share these two fields.
+type definitionPayload struct {
+	TenantID         string `json:"tenant_id"`
+	TypeDefinitionID string `json:"type_definition_id"`
+	// TypeDefinitionEventID is the id a type-definition event reports for
+	// itself, where an attribute event reports its parent type instead.
+	TypeDefinitionEventID string `json:"type_definition_id_self"`
+	ID                    string `json:"id"`
+}
+
+// scheduleRecompute asks the registered callback to rebuild the affected
+// type's materialized values. It is best effort: with no callback wired (the
+// in-memory default, and any embedder that has not asked for it) the values
+// converge on the next write to each entity, as before.
+func (m *Materializer) scheduleRecompute(env events.Envelope) {
+	if m.onSchemaChange == nil {
+		return
+	}
+	var p definitionPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return
+	}
+	tenant, err := valueobjects.ParseTenantID(p.TenantID)
+	if err != nil {
+		return
+	}
+	typeID := p.TypeDefinitionID
+	if typeID == "" {
+		// A type-definition event names itself by its aggregate id.
+		typeID = env.AggregateID
+	}
+	if typeID == "" {
+		return
+	}
+	m.onSchemaChange(tenant, typeID)
+}
+
+// recomputeTargetOf returns the type definition id a definition event
+// concerns, or "" when it names none.
+func (m *Materializer) recomputeTargetOf(env events.Envelope) string {
+	var p definitionPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return ""
+	}
+	if p.TypeDefinitionID != "" {
+		return p.TypeDefinitionID
+	}
+	return env.AggregateID
+}
+
+// RecomputeType rebuilds every entity of one type, and of its subtypes, since
+// an inherited computed attribute belongs to those too. It returns the number
+// of entities recomputed.
+func (m *Materializer) RecomputeType(ctx context.Context, tenant valueobjects.TenantID, typeID string) (int, error) {
+	ctx = uow.WithTenant(ctx, tenant)
+	it := m.factory.New(ctx)
+
+	td, err := it.TypeDefinitions().Get(ctx, typeID)
+	if err != nil {
+		if domainerrors.IsNotFound(err) {
+			return 0, nil // archived or removed between the event and here
+		}
+		return 0, fmt.Errorf("load type %s: %w", typeID, err)
+	}
+	// Walk the subtype tree: an inherited computed attribute belongs to every
+	// descendant, so editing it on the parent invalidates their values too.
+	ids := []string{td.ID.String()}
+	for i := 0; i < len(ids); i++ {
+		children, cerr := it.TypeDefinitions().Children(ctx, ids[i])
+		if cerr != nil {
+			return 0, fmt.Errorf("load subtypes of %s: %w", ids[i], cerr)
+		}
+		for _, c := range children {
+			ids = append(ids, c.ID.String())
+		}
+	}
+
+	limit := 200
+	count := 0
+	for _, id := range ids {
+		has, err := m.typeHasComputed(ctx, it, id)
+		if err != nil {
+			return count, err
+		}
+		if !has {
+			continue
+		}
+		var cursor *string
+		for {
+			entities, err := it.Values().ListEntities(ctx, id, false, db.PageArgs{Limit: &limit, Cursor: cursor})
+			if err != nil {
+				return count, fmt.Errorf("list entities of %s: %w", id, err)
+			}
+			for _, e := range entities.Items {
+				if err := m.Recompute(ctx, id, e.EntityID); err != nil {
+					return count, fmt.Errorf("recompute %s: %w", e.EntityID, err)
+				}
+				count++
+			}
+			if !entities.PageInfo.HasNextPage || entities.PageInfo.NextCursor == nil {
+				break
+			}
+			cursor = entities.PageInfo.NextCursor
+		}
+	}
+	return count, nil
+}
+
 type valuePayload struct {
 	TenantID         string `json:"tenant_id"`
 	TypeDefinitionID string `json:"type_definition_id"`
@@ -98,6 +235,7 @@ type valuePayload struct {
 func (m *Materializer) Handle(ctx context.Context, env events.Envelope) error {
 	if isDefinitionEvent(env.Type) {
 		m.invalidate()
+		m.scheduleRecompute(env)
 		return nil
 	}
 	var p valuePayload
@@ -123,6 +261,7 @@ func (m *Materializer) HandleBatch(ctx context.Context, envs []events.Envelope) 
 	seen := make(map[key]struct{}, len(envs))
 	order := make([]key, 0, len(envs))
 	invalidated := false
+	rebuilt := map[string]bool{} // one rebuild per type per batch
 	var errs []error
 
 	for _, env := range envs {
@@ -130,6 +269,14 @@ func (m *Materializer) HandleBatch(ctx context.Context, envs []events.Envelope) 
 			if !invalidated {
 				m.invalidate()
 				invalidated = true
+			}
+			// The batch path is the one that runs: a BatchHandler takes
+			// precedence over Handle, so a rebuild scheduled only in Handle
+			// would never fire. One rebuild per type per batch — a schema
+			// import emits many definition events for one type.
+			if id := m.recomputeTargetOf(env); id != "" && !rebuilt[id] {
+				rebuilt[id] = true
+				m.scheduleRecompute(env)
 			}
 			continue
 		}
@@ -304,6 +451,12 @@ func (m *Materializer) Recompute(ctx context.Context, typeID, entityID string) e
 	// Numeric inputs by internal name (base scope only). Also index computed
 	// value ids so a now-undefined formula can be cleared.
 	inputs := map[string]float64{}
+	// exact carries the same inputs as rationals, for decimal targets. A
+	// decimal evaluated in binary float64 materialized artifacts —
+	// 0.1 + 0.2 stored as 0.30000000000000004 — which then failed exact
+	// equality in FQL and appeared verbatim in exports. Choosing `decimal` is
+	// how a schema author asks for exactness.
+	exact := map[string]*big.Rat{}
 	computedValueID := map[string]string{} // attr id -> value id
 	nameByID := map[string]string{}
 	for _, a := range attrs {
@@ -313,9 +466,12 @@ func (m *Materializer) Recompute(ctx context.Context, typeID, entityID string) e
 		if v.Locale != "" || v.Channel != "" {
 			continue
 		}
-		if f, ok := toFloat(v.Value); ok {
-			if name := nameByID[v.AttributeDefinitionID.String()]; name != "" {
+		if name := nameByID[v.AttributeDefinitionID.String()]; name != "" {
+			if f, ok := toFloat(v.Value); ok {
 				inputs[name] = f
+			}
+			if r, ok := toRat(v.Value); ok {
+				exact[name] = r
 			}
 		}
 		computedValueID[v.AttributeDefinitionID.String()] = v.ID.String()
@@ -346,8 +502,15 @@ func (m *Materializer) Recompute(ctx context.Context, typeID, entityID string) e
 		if err != nil {
 			continue // a malformed formula shouldn't have persisted; skip defensively
 		}
-		result, ok := expr.Eval(inputs)
-		raw, representable := numberForType(c.DataType, result, ok)
+		var raw json.RawMessage
+		var representable bool
+		if c.DataType == valueobjects.DataTypeDecimal {
+			r, ok := expr.EvalRat(exact)
+			raw, representable = decimalForRat(r, ok)
+		} else {
+			result, ok := expr.Eval(inputs)
+			raw, representable = numberForType(c.DataType, result, ok)
+		}
 		if !representable {
 			// Undefined or non-representable (missing input, division by zero,
 			// NaN, infinity, or integer overflow): clear any stale value rather
@@ -417,6 +580,61 @@ func cyclicNames(computed []domainattribute.Snapshot) map[string]bool {
 		}
 	}
 	return bad
+}
+
+// toRat extracts an exact rational from a numeric value, for decimal
+// evaluation. It reads a decimal's stored text rather than a float form of
+// it, so no precision is lost on the way in.
+func toRat(v valueobjects.Value) (*big.Rat, bool) {
+	switch v.DataType() {
+	case valueobjects.DataTypeBool:
+		if v.Bool() {
+			return big.NewRat(1, 1), true
+		}
+		return new(big.Rat), true
+	case valueobjects.DataTypeInteger:
+		return new(big.Rat).SetInt64(v.Int()), true
+	case valueobjects.DataTypeDecimal:
+		return new(big.Rat).SetString(v.Text())
+	case valueobjects.DataTypeFloat:
+		// A float input is already inexact; convert it as-is rather than
+		// pretending otherwise.
+		r := new(big.Rat)
+		if math.IsNaN(v.Float()) || math.IsInf(v.Float(), 0) {
+			return nil, false
+		}
+		return r.SetFloat64(v.Float()), true
+	default:
+		return nil, false
+	}
+}
+
+// maxDecimalScale bounds the rendering of a rational with no finite decimal
+// expansion (1/3). Everything that terminates is rendered exactly; only a
+// repeating expansion is rounded, and it is rounded here rather than silently
+// at some earlier float step.
+const maxDecimalScale = 20
+
+// decimalForRat renders an exact result as the decimal string the value type
+// parses.
+func decimalForRat(r *big.Rat, ok bool) (json.RawMessage, bool) {
+	if !ok || r == nil {
+		return nil, false
+	}
+	text := r.FloatString(maxDecimalScale)
+	if r.IsInt() {
+		text = r.Num().String()
+	} else if strings.Contains(text, ".") {
+		// FloatString pads to the full scale; drop the padding so an exact
+		// result reads as the author would write it (0.3, not 0.30000…).
+		text = strings.TrimRight(text, "0")
+		text = strings.TrimSuffix(text, ".")
+	}
+	b, err := json.Marshal(text)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
 }
 
 // toFloat extracts a numeric value from bool/int/float/decimal values. A

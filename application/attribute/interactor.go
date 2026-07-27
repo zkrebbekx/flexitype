@@ -261,6 +261,21 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			if terr != nil {
 				return terr
 			}
+			// Lock the hierarchy root before reading the other formulas, the
+			// way Create does. Locking only the edited attribute's row let two
+			// concurrent edits — A set to "b + 1" and B set to "a + 1" — each
+			// validate against the other's pre-edit formula and both commit,
+			// so the pair formed a cycle that no write ever reported. The
+			// materializer's cyclic guard then skipped both permanently, and
+			// an operator saw two stale computed attributes with valid-looking
+			// formulas and nothing naming the cause.
+			root, rerr := apptypedef.Root(ctx, typeDefs, td)
+			if rerr != nil {
+				return rerr
+			}
+			if _, lerr := typeDefs.GetForUpdate(ctx, root.ID()); lerr != nil {
+				return lerr
+			}
 			hierarchy, herr := apptypedef.Chain(ctx, typeDefs, td)
 			if herr != nil {
 				return herr

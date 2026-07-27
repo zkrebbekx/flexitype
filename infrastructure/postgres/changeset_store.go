@@ -37,6 +37,7 @@ type changesetRow struct {
 	CreatedAt       time.Time    `db:"created_at"`
 	UpdatedAt       time.Time    `db:"updated_at"`
 	PublishedAt     sql.NullTime `db:"published_at"`
+	Version         int          `db:"version"`
 }
 
 func (r changesetRow) toChangeSet() (changeset.ChangeSet, error) {
@@ -59,36 +60,56 @@ func (r changesetRow) toChangeSet() (changeset.ChangeSet, error) {
 		CreatedAt:       r.CreatedAt,
 		UpdatedAt:       r.UpdatedAt,
 		PublishedAt:     timePtr(r.PublishedAt),
+		Version:         r.Version,
 	}, nil
 }
 
 const changesetColumns = `id, tenant_id, name, state, require_approval, author, approver,
-	mutations, publish_at, created_at, updated_at, published_at`
+	mutations, publish_at, created_at, updated_at, published_at, version`
 
-func (s *changesetStore) upsert(ctx context.Context, cs changeset.ChangeSet) error {
+func (s *changesetStore) Create(ctx context.Context, cs changeset.ChangeSet) error {
 	muts, _ := json.Marshal(cs.Mutations)
+	if cs.Version == 0 {
+		cs.Version = 1
+	}
 	_, err := s.q.ExecContext(ctx, bind(
 		`INSERT INTO flexitype_changeset (`+changesetColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (id) DO UPDATE SET
-		   name = EXCLUDED.name, state = EXCLUDED.state,
-		   require_approval = EXCLUDED.require_approval, approver = EXCLUDED.approver,
-		   mutations = EXCLUDED.mutations, publish_at = EXCLUDED.publish_at,
-		   updated_at = EXCLUDED.updated_at, published_at = EXCLUDED.published_at`),
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		cs.ID, cs.TenantID.String(), cs.Name, string(cs.State), cs.RequireApproval, cs.Author, cs.Approver,
-		jsonbParam(muts), nullableTime(cs.PublishAt), cs.CreatedAt, cs.UpdatedAt, nullableTime(cs.PublishedAt))
+		jsonbParam(muts), nullableTime(cs.PublishAt), cs.CreatedAt, cs.UpdatedAt, nullableTime(cs.PublishedAt),
+		cs.Version)
 	if err != nil {
 		return fmt.Errorf("save change-set: %w", err)
 	}
 	return nil
 }
 
-func (s *changesetStore) Create(ctx context.Context, cs changeset.ChangeSet) error {
-	return s.upsert(ctx, cs)
-}
-
+// Update is a compare-and-swap on version. A caller holding a stale read gets
+// a conflict instead of overwriting whatever landed in between — which is how
+// concurrent edits used to lose mutations, and how an edit racing an approval
+// wrote the pre-approval state back.
 func (s *changesetStore) Update(ctx context.Context, cs changeset.ChangeSet) error {
-	return s.upsert(ctx, cs)
+	muts, _ := json.Marshal(cs.Mutations)
+	res, err := s.q.ExecContext(ctx, bind(
+		`UPDATE flexitype_changeset
+		    SET name = ?, state = ?, require_approval = ?, approver = ?,
+		        mutations = ?, publish_at = ?, updated_at = ?, published_at = ?,
+		        version = version + 1
+		  WHERE id = ? AND tenant_id = ? AND version = ?`),
+		cs.Name, string(cs.State), cs.RequireApproval, cs.Approver,
+		jsonbParam(muts), nullableTime(cs.PublishAt), cs.UpdatedAt, nullableTime(cs.PublishedAt),
+		cs.ID, cs.TenantID.String(), cs.Version)
+	if err != nil {
+		return fmt.Errorf("save change-set: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("save change-set: %w", err)
+	}
+	if n == 0 {
+		return changeset.ErrStaleVersion(cs.ID.String(), cs.Version)
+	}
+	return nil
 }
 
 func (s *changesetStore) Get(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) (changeset.ChangeSet, error) {

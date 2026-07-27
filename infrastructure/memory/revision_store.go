@@ -168,6 +168,13 @@ func (s *revisionStore) PurgeTenant(_ context.Context, tenant valueobjects.Tenan
 	return count, nil
 }
 
+// LockEntitySeq is a no-op for the in-memory backend: it holds one store
+// mutex, so sequence allocation and the insert that follows it cannot
+// interleave with another writer's.
+func (s *revisionStore) LockEntitySeq(context.Context, valueobjects.TenantID, string, string) error {
+	return nil
+}
+
 func (s *revisionStore) LastSeq(_ context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

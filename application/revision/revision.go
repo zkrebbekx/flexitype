@@ -65,6 +65,18 @@ type Store interface {
 	// LastSeq returns the highest revision sequence for an entity, or 0.
 	LastSeq(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error)
 
+	// LockEntitySeq serializes sequence allocation for one entity against
+	// concurrent snapshots, until the caller's transaction ends.
+	//
+	// Seq is allocated as MAX(seq)+1. Under READ COMMITTED two concurrent
+	// snapshots of the same entity both read the same MAX and both insert the
+	// same seq, and the readers order by seq alone — so a point-in-time read
+	// or a restore then selects whichever row Postgres returns first, which can
+	// differ between replicas and between runs. That is the worst property for
+	// a recovery primitive, because it is the operation an operator reaches for
+	// when they already have a problem.
+	LockEntitySeq(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) error
+
 	// PurgeEntity HARD-deletes every revision of one entity — the
 	// right-to-erasure primitive — and returns the number of rows removed.
 	PurgeEntity(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error)
@@ -93,6 +105,7 @@ type SnapshotCell struct {
 
 // Interactor implements the entity-revision usecases.
 type Interactor struct {
+	unit     uow.UnitOfWork
 	store    Store
 	typeDefs domaintypedef.Repository
 	attrs    domainattribute.Repository
@@ -103,6 +116,7 @@ type Interactor struct {
 
 // NewInteractor wires the entity-revision usecases.
 func NewInteractor(
+	unit uow.UnitOfWork,
 	store Store,
 	typeDefs domaintypedef.Repository,
 	attrs domainattribute.Repository,
@@ -113,7 +127,7 @@ func NewInteractor(
 	if now == nil {
 		now = uow.UTCNow
 	}
-	return &Interactor{store: store, typeDefs: typeDefs, attrs: attrs, values: values, applier: applier, now: now}
+	return &Interactor{unit: unit, store: store, typeDefs: typeDefs, attrs: attrs, values: values, applier: applier, now: now}
 }
 
 // Create captures the entity's current live values as a new revision.
@@ -126,21 +140,34 @@ func (i *Interactor) Create(ctx context.Context, rawTypeID, entityID, label stri
 	if err != nil {
 		return nil, err
 	}
-	last, err := i.store.LastSeq(ctx, tenant, rawTypeID, entityID)
+	// Allocating the sequence and inserting the row must be one atomic step.
+	// The lock is transaction-scoped, so it only serializes writers if the
+	// allocation and the insert share a transaction — outside one, each
+	// statement is its own transaction and the lock is released before the
+	// insert, which is no protection at all.
+	var rev Revision
+	err = i.unit.Execute(ctx, func(tx db.Transactor, _ *uow.Collector) error {
+		store := i.store.WithTx(tx)
+		if err := store.LockEntitySeq(ctx, tenant, rawTypeID, entityID); err != nil {
+			return err
+		}
+		last, err := store.LastSeq(ctx, tenant, rawTypeID, entityID)
+		if err != nil {
+			return err
+		}
+		rev = Revision{
+			ID:               ulid.New(),
+			TenantID:         tenant,
+			TypeDefinitionID: rawTypeID,
+			EntityID:         entityID,
+			Seq:              last + 1,
+			Label:            label,
+			CreatedAt:        i.now(),
+			Values:           values,
+		}
+		return store.Create(ctx, rev)
+	})
 	if err != nil {
-		return nil, err
-	}
-	rev := Revision{
-		ID:               ulid.New(),
-		TenantID:         tenant,
-		TypeDefinitionID: rawTypeID,
-		EntityID:         entityID,
-		Seq:              last + 1,
-		Label:            label,
-		CreatedAt:        i.now(),
-		Values:           values,
-	}
-	if err := i.store.Create(ctx, rev); err != nil {
 		return nil, err
 	}
 	return &rev, nil

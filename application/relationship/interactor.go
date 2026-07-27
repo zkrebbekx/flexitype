@@ -487,6 +487,15 @@ func enforceCardinality(
 	defID valueobjects.RelationshipDefinitionID,
 	parent, child valueobjects.EntityID,
 ) error {
+	// This is a read followed by a write, which would admit two concurrent
+	// link creates past the same bound under READ COMMITTED. It is safe only
+	// because Link took a row lock on the relationship definition, in this same
+	// transaction, before calling here: every link create under this definition
+	// serializes on that row, so the second create's counts observe the first
+	// one's committed link. Removing or weakening that lock reintroduces the
+	// race, and the violation it admits is permanent — there is no
+	// reconciliation pass, and downstream code is entitled to assume a bound
+	// the schema declares. TestConcurrencyInvariantsPostgres pins the invariant.
 	pAsParent, pAsChild, err := links.CountLiveLinks(ctx, defID, parent)
 	if err != nil {
 		return err

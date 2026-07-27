@@ -60,7 +60,7 @@ func TestEntitySummaryBackfillIntegration(t *testing.T) {
 
 		// Insert value rows with the trigger disabled, which is exactly the
 		// state a deployment is in for rows written before 000019 ran.
-		pool.MustExec(`ALTER TABLE flexitype_attribute_value DISABLE TRIGGER flexitype_entity_summary_maintain`)
+		pool.MustExec(`ALTER TABLE flexitype_attribute_value DISABLE TRIGGER USER`)
 		for _, e := range []struct {
 			entity string
 			values int
@@ -74,7 +74,7 @@ func TestEntitySummaryBackfillIntegration(t *testing.T) {
 					ulid.New().String(), typeID, attrIDs[i], e.entity)
 			}
 		}
-		pool.MustExec(`ALTER TABLE flexitype_attribute_value ENABLE TRIGGER flexitype_entity_summary_maintain`)
+		pool.MustExec(`ALTER TABLE flexitype_attribute_value ENABLE TRIGGER USER`)
 		pool.MustExec(`DELETE FROM flexitype_schema_backfill WHERE name = $1`, entitySummaryBackfill.name)
 
 		count := func() int {

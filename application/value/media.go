@@ -87,6 +87,9 @@ func (i *Interactor) UploadMedia(ctx context.Context, rawTypeID, entityID, rawAt
 		EntityID:              entityID,
 		TypeDefinitionID:      rawTypeID,
 		Value:                 raw,
+		// This is the one write that may declare media metadata, because it
+		// derived that metadata from the bytes it just stored.
+		fromUpload: true,
 	})
 	if err != nil {
 		i.deleteOrphanedUpload(ctx, key) // constraint rejected the value; don't orphan the blob

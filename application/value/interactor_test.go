@@ -234,6 +234,27 @@ func (r *fakeValueRepo) PurgeTenant(context.Context, valueobjects.TenantID) ([]s
 	return nil, 0, nil
 }
 
+func (r *fakeValueRepo) MediaValueForKey(_ context.Context, tenant valueobjects.TenantID, objectKey string) (valueobjects.Value, bool, error) {
+	for _, snap := range r.values {
+		if snap.TenantID == tenant && snap.Value.DataType() == valueobjects.DataTypeMedia &&
+			snap.Value.Media().ObjectKey == objectKey {
+			return snap.Value, true, nil
+		}
+	}
+	return valueobjects.Value{}, false, nil
+}
+
+func (r *fakeValueRepo) MediaKeyRefCount(_ context.Context, objectKey string, exclude valueobjects.AttributeValueID) (int, error) {
+	n := 0
+	for _, snap := range r.values {
+		if snap.Value.DataType() == valueobjects.DataTypeMedia &&
+			snap.Value.Media().ObjectKey == objectKey && !snap.ID.Equals(exclude) {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (r *fakeValueRepo) MediaKeyAttributes(_ context.Context, tenant valueobjects.TenantID, objectKey string) ([]valueobjects.AttributeDefinitionID, error) {
 	var out []valueobjects.AttributeDefinitionID
 	for _, snap := range r.values {

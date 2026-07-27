@@ -127,6 +127,11 @@ type SetInput struct {
 	// Internal marks a write from the computed-attribute materializer,
 	// which is the only writer allowed to set a read-only computed value.
 	Internal bool
+	// fromUpload marks the write that UploadMedia performs after storing the
+	// bytes. It is unexported deliberately: an API caller cannot set it, so
+	// every media write from outside this package must name an object key the
+	// tenant already owns, and inherits that key's stored metadata.
+	fromUpload bool
 }
 
 // Set writes a value for an entity attribute: it locks the definition,
@@ -220,7 +225,25 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 		}
 
 		var v valueobjects.Value
-		if def.DataType() == valueobjects.DataTypeQuantity {
+		if def.DataType() == valueobjects.DataTypeMedia && !in.fromUpload {
+			// A media value is a reference to stored bytes, so a write that did
+			// not come from the upload path may only point at an object key
+			// this tenant already owns — and it inherits that key's stored
+			// metadata rather than declaring its own.
+			//
+			// Accepting raw media metadata here was a cross-tenant read and a
+			// cross-tenant delete. Download authorization asks "does any value
+			// row in my tenant reference this key", so a caller who learned
+			// another tenant's key — they leak into revision payloads, CSV
+			// exports and URLs — could mint that row themselves and then stream
+			// the file, or remove the value and have GC delete the other
+			// tenant's blob. The declared MIME type and size were also
+			// attacker-chosen, so the media constraint's allowlist and the
+			// upload path's content sniffing were both bypassable.
+			if v, err = i.adoptMediaValue(ctx, values, in.Value); err != nil {
+				return err
+			}
+		} else if def.DataType() == valueobjects.DataTypeQuantity {
 			// Quantities convert to the family's base unit; a unit outside the
 			// family is rejected (mixing families).
 			if v, err = i.quantityValue(ctx, def, in.Value); err != nil {
@@ -299,7 +322,7 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			// the old value pointed at (when it actually changed).
 			if before.Value.DataType() == valueobjects.DataTypeMedia &&
 				before.Value.Media().ObjectKey != snap.Value.Media().ObjectKey {
-				i.gcMediaAfterCommit(tx, before.Value)
+				i.gcMediaAfterCommit(tx, before.ID, before.Value)
 			}
 			c.CollectEvents(evts...)
 			c.RecordChange(activity.Change{
@@ -478,7 +501,7 @@ func (i *Interactor) RemoveEntity(ctx context.Context, rawTypeDefID, rawEntityID
 			if err := values.Save(ctx, av); err != nil {
 				return fmt.Errorf("archive value: %w", err)
 			}
-			i.gcMediaAfterCommit(tx, before.Value)
+			i.gcMediaAfterCommit(tx, before.ID, before.Value)
 			c.CollectEvents(evts...)
 			c.RecordChange(activity.Change{
 				Entity:   domainvalue.AggregateType,
@@ -660,6 +683,11 @@ func (i *Interactor) Remove(ctx context.Context, rawID string) (*domainvalue.Sna
 		if err := values.Save(ctx, av); err != nil {
 			return fmt.Errorf("save attribute value: %w", err)
 		}
+		// Register the blob GC on the transaction, like every other archival
+		// path. Removing it deleted the bytes unconditionally after the call
+		// returned, so a key another value still referenced lost its bytes —
+		// and a rolled-back removal deleted them anyway.
+		i.gcMediaAfterCommit(tx, before.ID, before.Value)
 
 		snap = av.Snapshot()
 		c.CollectEvents(evts...)
@@ -674,25 +702,32 @@ func (i *Interactor) Remove(ctx context.Context, rawID string) (*domainvalue.Sna
 	if err != nil {
 		return nil, err
 	}
-	// Deletion lifecycle: once the archival has committed, drop the backing
-	// blob of a media value (best effort; storage errors don't fail the API
-	// call, but a failure is surfaced to the cleanup observer, not swallowed).
-	i.gcMedia(ctx, snap.Value)
 	return &snap, nil
 }
 
-// gcMedia removes the object backing a media value from storage. It is a
-// no-op for non-media values or when no blob store is configured. A delete
-// failure is surfaced to the cleanup observer rather than silently dropped.
-func (i *Interactor) gcMedia(ctx context.Context, v valueobjects.Value) {
-	if i.blobs == nil || v.DataType() != valueobjects.DataTypeMedia {
-		return
+// adoptMediaValue resolves a caller-supplied media reference to the value the
+// tenant already stores for that object key. It rejects a key the tenant does
+// not own, and discards the caller's metadata in favour of the stored copy.
+func (i *Interactor) adoptMediaValue(ctx context.Context, values domainvalue.Repository, raw json.RawMessage) (valueobjects.Value, error) {
+	declared, err := valueobjects.ParseValue(valueobjects.DataTypeMedia, raw)
+	if err != nil {
+		return valueobjects.Value{}, domainerrors.NewValidation(err.Error())
 	}
-	if key := v.Media().ObjectKey; key != "" {
-		if err := i.blobs.Delete(ctx, key); err != nil {
-			i.observeCleanup(fmt.Errorf("gc media blob %s: %w", key, err))
-		}
+	key := declared.Media().ObjectKey
+	if key == "" {
+		return valueobjects.Value{}, domainerrors.NewValidation("media value requires an object key")
 	}
+	stored, ok, err := values.MediaValueForKey(ctx, uow.TenantFromContext(ctx), key)
+	if err != nil {
+		return valueobjects.Value{}, err
+	}
+	if !ok {
+		// The same message whether the key belongs to another tenant or to
+		// nobody, so ownership is not probeable from the error.
+		return valueobjects.Value{}, domainerrors.NewValidation(
+			"unknown media object key; upload the file through the media endpoint", "object_key", key)
+	}
+	return stored, nil
 }
 
 // gcMediaAfterCommit schedules the blob backing an archived or overwritten
@@ -701,7 +736,11 @@ func (i *Interactor) gcMedia(ctx context.Context, v valueobjects.Value) {
 // cleanup observer). Registering on the transaction keeps GC correct across
 // every archival path — overwrite, entity removal, mutation apply and snapshot
 // restore — not just single-value Remove.
-func (i *Interactor) gcMediaAfterCommit(tx db.Transactor, v valueobjects.Value) {
+//
+// The delete is reference-counted: a key another value row still references
+// keeps its bytes. Without the count, two values sharing an object key meant
+// removing either one deleted the blob out from under the other.
+func (i *Interactor) gcMediaAfterCommit(tx db.Transactor, valueID valueobjects.AttributeValueID, v valueobjects.Value) {
 	if i.blobs == nil || v.DataType() != valueobjects.DataTypeMedia {
 		return
 	}
@@ -710,6 +749,14 @@ func (i *Interactor) gcMediaAfterCommit(tx db.Transactor, v valueobjects.Value) 
 		return
 	}
 	tx.OnPostCommit(func(ctx context.Context) error {
+		refs, err := i.values.MediaKeyRefCount(ctx, key, valueID)
+		if err != nil {
+			i.observeCleanup(fmt.Errorf("count media references for %s: %w", key, err))
+			return nil // never fail a committed write on a GC bookkeeping error
+		}
+		if refs > 0 {
+			return nil // another value still points at these bytes
+		}
 		if err := i.blobs.Delete(ctx, key); err != nil {
 			i.observeCleanup(fmt.Errorf("gc media blob %s: %w", key, err))
 		}

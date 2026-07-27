@@ -78,6 +78,29 @@ the difference is recorded rather than asserted as an unexplained constant.
   selects only the three columns matching needs (signing secrets no longer
   cross the wire on this path), and 000021 adds the supporting index (#340).
 
+### Security — media values may only reference an object key the tenant owns
+
+`POST /api/v1/values` accepted raw media metadata, so a caller could write a
+media value naming any `object_key`. Download authorization asks "does any value
+row in my tenant reference this key", so minting that row was enough to read
+another tenant's file — and removing it was enough to delete their bytes. Object
+keys are not secret: they leak into revision payloads, CSV exports and URLs.
+
+- A media write that did not come from `UploadMedia` must name an object key the
+  tenant already owns, and **inherits that key's stored metadata**. The declared
+  MIME type and size were attacker-chosen, so the media constraint's allowlist
+  and the upload path's content sniffing were both bypassable; they are now
+  taken from the stored value and the caller's copy is discarded. An unknown key
+  and another tenant's key produce the same error, so ownership is not probeable
+  (#276).
+- **Blob GC is reference-counted.** Two values sharing an object key meant
+  removing either deleted the bytes out from under the other. A key another row
+  still references — in any tenant, archived rows included — keeps its bytes
+  (#276).
+- `Remove` registers its blob GC on the transaction like every other archival
+  path, instead of deleting unconditionally after the call returned. It
+  previously deleted the bytes even when the removal rolled back.
+
 ### Security — authentication is required by default
 
 `FLEXITYPE_REQUIRE_AUTH` defaulted to `false`, so a deployment that set only

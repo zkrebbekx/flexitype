@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -10,6 +11,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/admin"
 	"github.com/zkrebbekx/flexitype/application/gql"
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/blob"
 	"github.com/zkrebbekx/flexitype/pkg/health"
@@ -40,6 +42,9 @@ type ServerConfig struct {
 	BlobStore blob.Store
 	// GraphQL serves the read-only GraphQL API; nil disables the endpoint.
 	GraphQL *gql.Engine
+	// DisableConsole omits the admin-console SPA, for an API-only deployment.
+	// An unmatched path then returns a JSON 404 like any other API error.
+	DisableConsole bool
 }
 
 // NewHandler builds the service's HTTP handler: versioned API plus
@@ -259,9 +264,35 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 		})
 	})
 
-	// Everything that is not the API or an operational endpoint is the
-	// admin console SPA.
-	r.NotFound(spaHandler(cfg.Logger))
+	// An unknown path under the API namespace is a JSON 404, never the app
+	// shell. Mounting the console as the global NotFound handler meant a typo'd
+	// or removed endpoint answered 200 with text/html, so "endpoint absent" and
+	// "endpoint succeeded" were the same response: version negotiation was
+	// impossible, a client that checks the status before parsing reported an
+	// HTML parse error instead of the real cause, and a misconfigured caller
+	// never appeared on an error-rate dashboard.
+	//
+	// The decision is by prefix rather than on the /api/v1 subrouter, so an
+	// unversioned or future-versioned path — /api/foo, /api/v2/... — is JSON
+	// too, instead of falling through to the console.
+	notFoundJSON := func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, cfg.Logger, domainerrors.NewNotFound("route", r.URL.Path))
+	}
+	notFound := notFoundJSON
+	if !cfg.DisableConsole {
+		// Everything that is not the API or an operational endpoint is the
+		// admin console SPA.
+		spa := spaHandler(cfg.Logger)
+		notFound = func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				notFoundJSON(w, r)
+				return
+			}
+			spa(w, r)
+		}
+	}
+	r.NotFound(notFound)
+	r.MethodNotAllowed(notFound)
 
 	return r
 }

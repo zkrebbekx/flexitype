@@ -9,8 +9,7 @@ import (
 )
 
 func TestRequireAuth(t *testing.T) {
-	Convey("Given FLEXITYPE_REQUIRE_AUTH is set", t, func() {
-		t.Setenv("FLEXITYPE_REQUIRE_AUTH", "true")
+	Convey("Given the default (authentication required)", t, func() {
 
 		Convey("When no account source is configured", func() {
 			t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "")
@@ -19,7 +18,7 @@ func TestRequireAuth(t *testing.T) {
 			Convey("Then Load refuses to boot", func() {
 				_, err := config.Load()
 				So(err, ShouldNotBeNil)
-				So(err.Error(), ShouldContainSubstring, "FLEXITYPE_REQUIRE_AUTH")
+				So(err.Error(), ShouldContainSubstring, "no account source is configured")
 			})
 		})
 
@@ -63,6 +62,7 @@ func TestRequireAuth(t *testing.T) {
 func TestMalformedValueFailsLoud(t *testing.T) {
 	Convey("Given a malformed boolean value", t, func() {
 		t.Setenv("FLEXITYPE_OUTBOX", "ture") // typo
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 
 		Convey("Then Load fails loudly instead of silently defaulting", func() {
 			_, err := config.Load()
@@ -74,6 +74,7 @@ func TestMalformedValueFailsLoud(t *testing.T) {
 
 func TestSSLModeGuard(t *testing.T) {
 	Convey("Given sslmode=disable and a non-loopback DB host", t, func() {
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 		t.Setenv("FLEXITYPE_DB_SSLMODE", "disable")
 		t.Setenv("FLEXITYPE_DB_HOST", "db.internal")
 
@@ -85,6 +86,7 @@ func TestSSLModeGuard(t *testing.T) {
 	})
 
 	Convey("Given sslmode=disable and a loopback DB host", t, func() {
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 		t.Setenv("FLEXITYPE_DB_SSLMODE", "disable")
 		t.Setenv("FLEXITYPE_DB_HOST", "localhost")
 

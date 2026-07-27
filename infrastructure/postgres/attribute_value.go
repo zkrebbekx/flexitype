@@ -577,6 +577,47 @@ func typeDefPredicate(ids []string) (string, any) {
 	return "type_definition_id = ANY(?)", pq.Array(ids)
 }
 
+// EntityAnchor returns the type an entity's values are anchored to. Served by
+// the non-partial (tenant_id, entity_id) index, because it deliberately counts
+// archived rows.
+func (r *attributeValueRepository) EntityAnchor(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) (valueobjects.TypeDefinitionID, bool, error) {
+	var raw []string
+	if err := r.q.SelectContext(ctx, &raw, bind(
+		`SELECT type_definition_id FROM flexitype_attribute_value
+		  WHERE tenant_id = ? AND entity_id = ?
+		  ORDER BY created_at
+		  LIMIT 1`),
+		tenant.String(), entityID.String()); err != nil {
+		return valueobjects.TypeDefinitionID{}, false, fmt.Errorf("entity anchor: %w", err)
+	}
+	if len(raw) == 0 {
+		return valueobjects.TypeDefinitionID{}, false, nil
+	}
+	id, err := valueobjects.ParseTypeDefinitionID(raw[0])
+	if err != nil {
+		return valueobjects.TypeDefinitionID{}, false, fmt.Errorf("entity anchor: %w", err)
+	}
+	return id, true, nil
+}
+
+// ReanchorEntity moves an entity's rows onto a narrower type. Keyed on
+// (tenant_id, entity_id), so it is served by the non-partial index.
+func (r *attributeValueRepository) ReanchorEntity(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID, to valueobjects.TypeDefinitionID) (int, error) {
+	if !r.inTx {
+		return 0, fmt.Errorf("attribute value repository: ReanchorEntity requires a transaction")
+	}
+	res, err := r.q.ExecContext(ctx, bind(
+		`UPDATE flexitype_attribute_value
+		    SET type_definition_id = ?
+		  WHERE tenant_id = ? AND entity_id = ? AND type_definition_id <> ?`),
+		to.String(), tenant.String(), entityID.String(), to.String())
+	if err != nil {
+		return 0, fmt.Errorf("reanchor entity: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // MediaValueForKey returns the media value the tenant stores for an object key.
 // It is served by the same (tenant_id, object_key) expression index the
 // download-authorization probe uses.

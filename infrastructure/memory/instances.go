@@ -188,6 +188,41 @@ func (r *valueRepo) Save(_ context.Context, av *domainvalue.AttributeValue) erro
 	return nil
 }
 
+func (r *valueRepo) EntityAnchor(_ context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) (valueobjects.TypeDefinitionID, bool, error) {
+	r.s.mu.RLock()
+	defer r.s.mu.RUnlock()
+	var best *domainvalue.Snapshot
+	for _, snap := range r.s.values {
+		if snap.TenantID != tenant || snap.EntityID != entityID {
+			continue
+		}
+		if best == nil || snap.CreatedAt.Before(best.CreatedAt) {
+			s := snap
+			best = &s
+		}
+	}
+	if best == nil {
+		return valueobjects.TypeDefinitionID{}, false, nil
+	}
+	return best.TypeDefinitionID, true, nil
+}
+
+func (r *valueRepo) ReanchorEntity(_ context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID, to valueobjects.TypeDefinitionID) (int, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	moved := 0
+	for id, snap := range r.s.values {
+		if snap.TenantID != tenant || snap.EntityID != entityID || snap.TypeDefinitionID.Equals(to) {
+			continue
+		}
+		captureMap(r.j, collValues, r.s.values, id)
+		snap.TypeDefinitionID = to
+		r.s.values[id] = snap
+		moved++
+	}
+	return moved, nil
+}
+
 func (r *valueRepo) MediaValueForKey(_ context.Context, tenant valueobjects.TenantID, objectKey string) (valueobjects.Value, bool, error) {
 	r.s.mu.RLock()
 	defer r.s.mu.RUnlock()

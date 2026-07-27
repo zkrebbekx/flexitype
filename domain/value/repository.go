@@ -68,6 +68,31 @@ type Repository interface {
 	// row count. Only valid on a transaction-bound repository.
 	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (purgedMediaKeys []string, count int, err error)
 
+	// EntityAnchor returns the type definition an entity's values are already
+	// anchored to, and whether the entity has any values at all. Archived rows
+	// count: an entity whose values were all removed keeps its anchor, so
+	// re-adding a value does not silently move it.
+	//
+	// The anchor is an invariant of the entity, not an input to each write.
+	// It was caller-supplied per write and defaulted to the attribute's
+	// DECLARING type, so writing an inherited attribute and an own attribute
+	// produced rows under two different anchors — and reads, dependency
+	// evaluation, completeness, revision capture and PurgeEntity are all keyed
+	// on it, so each saw only part of the entity.
+	EntityAnchor(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) (valueobjects.TypeDefinitionID, bool, error)
+
+	// ReanchorEntity moves every value row of one entity, archived rows
+	// included, onto a new type anchor, returning the number moved. Only
+	// valid on a transaction-bound repository.
+	//
+	// It exists for the one legitimate anchor change: narrowing. A client that
+	// writes an inherited attribute before it names the subtype anchors the
+	// entity to the declaring parent; naming the subtype afterwards should
+	// narrow the entity rather than fail, and the rows already written have to
+	// come with it or the entity is split — which is the defect the anchor
+	// invariant exists to prevent.
+	ReanchorEntity(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID, to valueobjects.TypeDefinitionID) (int, error)
+
 	// MediaValueForKey returns the media value the tenant already stores for an
 	// object key, and whether one exists. Archived rows count.
 	//

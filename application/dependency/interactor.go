@@ -16,7 +16,6 @@ import (
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
-	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
@@ -343,11 +342,13 @@ func (i *Interactor) EffectiveSchema(ctx context.Context, rawAttrID, rawEntityID
 
 	sourceValues := make(map[valueobjects.AttributeDefinitionID]valueobjects.Value)
 	if len(targeting) > 0 {
-		entityValues, err := i.values.ListByEntity(ctx, domainvalue.EntityKey{
-			TenantID:         def.TenantID(),
-			TypeDefinitionID: def.TypeDefinitionID(),
-			EntityID:         entityID,
-		})
+		// Read the entity's whole value set, not the slice anchored to this
+		// attribute's DECLARING type. For an entity of a subtype the declaring
+		// type is the parent, so this endpoint reported the un-narrowed schema
+		// for every subtype entity — the cascading-picklist case it exists to
+		// serve. ListByEntities keys on (tenant, entity) with no type filter,
+		// which is what GraphQL already used.
+		entityValues, err := i.values.ListByEntities(ctx, def.TenantID(), []valueobjects.EntityID{entityID})
 		if err != nil {
 			return nil, err
 		}

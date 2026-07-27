@@ -7,6 +7,8 @@ package revision
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sort"
 	"time"
 
@@ -34,7 +36,22 @@ type Value struct {
 	DataType              string `json:"data_type"`
 	Locale                string `json:"locale,omitempty"`
 	Channel               string `json:"channel,omitempty"`
-	Value                 string `json:"value"`
+	// Value is the display form (Value.String) — what the console and the
+	// diff show. It is lossy for structured types and must not be used to
+	// reconstruct a value; Typed is what a restore reads.
+	Value string `json:"value"`
+	// Typed is the self-describing round-trippable form (Value.MarshalTyped).
+	//
+	// It exists because the display form is not JSON for two data types:
+	// media renders as a bare object key and quantity as "10 kg", and feeding
+	// either back through the import decoder fails — so restoring ANY entity
+	// holding media or a quantity aborted the whole unit of work and rolled
+	// back. Revisions are the point-in-time recovery primitive, so those two
+	// types had no working restore path at all.
+	//
+	// Absent on revisions captured before this field existed; Restore falls
+	// back to the display form for those, which behaves exactly as it did.
+	Typed json.RawMessage `json:"typed,omitempty"`
 }
 
 // Revision is an immutable snapshot of an entity's live values.
@@ -100,7 +117,11 @@ type SnapshotCell struct {
 	DataType              string
 	Locale                string
 	Channel               string
-	Value                 string
+	// Value is the display form, used only when Typed is absent (a revision
+	// captured before the typed form existed).
+	Value string
+	// Typed is the round-trippable form. When set it is authoritative.
+	Typed json.RawMessage
 }
 
 // Interactor implements the entity-revision usecases.
@@ -283,27 +304,42 @@ func (i *Interactor) Diff(ctx context.Context, rawFrom, rawTo string) (*DiffOutp
 		return nil, err
 	}
 
-	// Key by (attribute, locale, channel) so each scope of a scoped value is
-	// diffed independently rather than collapsing onto one entry per attribute.
-	fromByScope := map[string]Value{}
-	for _, v := range from.Values {
-		fromByScope[scopeKey(v)] = v
-	}
-	toByScope := map[string]Value{}
-	for _, v := range to.Values {
-		toByScope[scopeKey(v)] = v
-	}
+	// Group by (attribute, locale, channel) and compare the groups as SETS.
+	//
+	// Keying one Value per scope collapsed a multi-valued attribute: several
+	// values of one attribute shared a map entry and only the last survived,
+	// so adding or removing a member of a multi-valued attribute produced no
+	// change — or, worse, a spurious "changed" between two unrelated members.
+	// A scoped value still diffs independently at its own (locale, channel).
+	fromByScope := groupByScope(from.Values)
+	toByScope := groupByScope(to.Values)
 
 	out := &DiffOutput{FromSeq: from.Seq, ToSeq: to.Seq, Changes: []Change{}}
-	for k, tv := range toByScope {
-		if fv, ok := fromByScope[k]; !ok {
-			out.Changes = append(out.Changes, change(tv, "added", "", tv.Value))
-		} else if fv.Value != tv.Value {
-			out.Changes = append(out.Changes, change(tv, "changed", fv.Value, tv.Value))
+	for k, tvs := range toByScope {
+		fvs := fromByScope[k]
+		for _, tv := range tvs {
+			if !containsValue(fvs, tv.Value) {
+				kind, before := "added", ""
+				// A single-valued attribute reads better as "changed": there
+				// is exactly one value on each side, so naming the one it
+				// replaced is the useful report.
+				if len(tvs) == 1 && len(fvs) == 1 {
+					kind, before = "changed", fvs[0].Value
+				}
+				out.Changes = append(out.Changes, change(tv, kind, before, tv.Value))
+			}
 		}
 	}
-	for k, fv := range fromByScope {
-		if _, ok := toByScope[k]; !ok {
+	for k, fvs := range fromByScope {
+		tvs := toByScope[k]
+		for _, fv := range fvs {
+			if containsValue(tvs, fv.Value) {
+				continue
+			}
+			// Already reported as the "changed" half above.
+			if len(tvs) == 1 && len(fvs) == 1 {
+				continue
+			}
 			out.Changes = append(out.Changes, change(fv, "removed", fv.Value, ""))
 		}
 	}
@@ -326,6 +362,27 @@ func (i *Interactor) Diff(ctx context.Context, rawFrom, rawTo string) (*DiffOutp
 // values of the same attribute are distinct map entries.
 func scopeKey(v Value) string {
 	return v.AttributeDefinitionID + "\x00" + v.Locale + "\x00" + v.Channel
+}
+
+// groupByScope collects the values of each (attribute, scope), so a
+// multi-valued attribute keeps every member instead of one arbitrary one.
+func groupByScope(vs []Value) map[string][]Value {
+	out := make(map[string][]Value, len(vs))
+	for _, v := range vs {
+		k := scopeKey(v)
+		out[k] = append(out[k], v)
+	}
+	return out
+}
+
+// containsValue reports whether a group already holds this display value.
+func containsValue(vs []Value, value string) bool {
+	for _, v := range vs {
+		if v.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 // change builds a Change carrying the value's attribute identity and scope.
@@ -357,6 +414,7 @@ func (i *Interactor) Restore(ctx context.Context, rawRevisionID string) (*Revisi
 			Locale:                v.Locale,
 			Channel:               v.Channel,
 			Value:                 v.Value,
+			Typed:                 v.Typed,
 		})
 	}
 	if err := i.applier.ApplySnapshot(ctx, rev.TypeDefinitionID, rev.EntityID, cells); err != nil {
@@ -403,6 +461,10 @@ func (i *Interactor) snapshotValues(ctx context.Context, tenant valueobjects.Ten
 		}
 		s := def.Snapshot()
 		scope := av.Scope()
+		typed, err := av.Value().MarshalTyped()
+		if err != nil {
+			return nil, fmt.Errorf("capture value %s: %w", av.ID(), err)
+		}
 		out = append(out, Value{
 			AttributeDefinitionID: av.AttributeDefinitionID().String(),
 			InternalName:          s.InternalName,
@@ -411,6 +473,7 @@ func (i *Interactor) snapshotValues(ctx context.Context, tenant valueobjects.Ten
 			Locale:                scope.Locale,
 			Channel:               scope.Channel,
 			Value:                 av.Value().String(),
+			Typed:                 typed,
 		})
 	}
 	sort.SliceStable(out, func(a, b int) bool {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 )
@@ -146,14 +147,37 @@ func (t *txTransactor) Commit(ctx context.Context) error {
 	}
 	t.done = true
 
+	// Post-commit work runs on a DETACHED context. The write is already
+	// durable, so its derived state — the search document, the computed
+	// values, the GraphQL cache invalidation, the blob GC — must be
+	// maintained regardless of what happens to the caller.
+	//
+	// On the request context it was not. An HTTP client that disconnected, or
+	// a load balancer whose request timeout expired, cancelled the context the
+	// moment the transaction committed, so every projection silently failed
+	// and the entity's derived state diverged from its stored values until an
+	// operator ran a full-tenant reindex or recompute. Behind a timeout
+	// shorter than a slow write that is continuous rather than rare, and each
+	// occurrence is a per-entity divergence with only a log line.
+	//
+	// The deadline bounds a hung projection so a dropped request cannot leak a
+	// goroutine indefinitely.
+	hookCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postCommitTimeout)
+	defer cancel()
+
 	var errs []error
 	for _, h := range t.postCommit {
-		if err := h(ctx); err != nil {
+		if err := h(hookCtx); err != nil {
 			errs = append(errs, fmt.Errorf("post-commit hook: %w", err))
 		}
 	}
 	return errors.Join(errs...)
 }
+
+// postCommitTimeout bounds post-commit maintenance on the detached context.
+// Generous, because the work is a projection rebuild rather than a request:
+// the point is that it cannot run forever, not that it must be fast.
+const postCommitTimeout = 30 * time.Second
 
 func (t *txTransactor) Rollback(ctx context.Context) error {
 	if t.done {

@@ -63,6 +63,18 @@ func WithHTTPClient(c *http.Client) WorkerOption {
 	return func(w *Worker) { w.client = c }
 }
 
+// defaultLease must exceed the worst-case time to drain one batch through the
+// concurrency semaphore, or the last delivery of a pass starts after its own
+// lease expired. At the defaults — batch 32, concurrency 4, HTTP timeout 10s —
+// that worst case is (32/4 - 1) x 10s = 70s, so a 60s lease was already too
+// short: another replica reclaimed the delivery while the first worker's POST
+// was still queued, and both sent it.
+//
+// 5 minutes leaves margin for a slower endpoint. Worker options that raise the
+// batch or lower the concurrency should raise the lease with them; the ratio
+// to keep is lease >= (batch / concurrency) x timeout.
+const defaultLease = 5 * time.Minute
+
 // NewWorker builds a delivery worker over the store. The default HTTP
 // client refuses non-public targets (SSRF guard); override with
 // WithHTTPClient (e.g. safedial.NewClient with AllowPrivate for on-prem).
@@ -71,7 +83,7 @@ func NewWorker(deliveries DeliveryStore, opts ...WorkerOption) *Worker {
 		deliveries:  deliveries,
 		client:      safedial.NewClient(safedial.Options{Timeout: 10 * time.Second}),
 		interval:    time.Second,
-		lease:       time.Minute,
+		lease:       defaultLease,
 		batch:       32,
 		concurrency: 4,
 		maxAttempts: 25,
@@ -130,7 +142,17 @@ func (w *Worker) pass(ctx context.Context) {
 			return
 		}
 
-		outcomes := make([]Outcome, len(claimed))
+		// Deliver under a context that survives shutdown. Cancelling the run
+		// context mid-batch used to abort the POSTs AND the write that records
+		// them, so an already-successful 2xx was lost, the row stayed inflight
+		// until its lease expired, and another replica re-delivered it — a
+		// duplicate on every rolling deploy, attributable to the deploy rather
+		// than to any consumer fault. The batch is bounded by the lease, so
+		// this cannot outlive the shutdown budget by more than that.
+		batchCtx := context.WithoutCancel(ctx)
+		outcomes := make([]Outcome, 0, len(claimed))
+		results := make([]Outcome, len(claimed))
+		skipped := make([]bool, len(claimed))
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, w.concurrency)
 		for idx, d := range claimed {
@@ -139,13 +161,41 @@ func (w *Worker) pass(ctx context.Context) {
 			go func(idx int, d ClaimedDelivery) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				outcomes[idx] = w.deliver(ctx, d)
+				// A batch drains through the semaphore, so the last delivery
+				// can start long after the claim. Check the lease before
+				// spending an HTTP timeout on a delivery another worker may
+				// already own: ReleaseExpired on any replica returns an
+				// expired lease to pending, and Record would reject the
+				// outcome anyway.
+				if !w.now().Before(d.LeaseExpiresAt) {
+					skipped[idx] = true
+					w.report(fmt.Errorf("delivery %s: lease expired before the attempt started; abandoning to the new owner", d.ID))
+					return
+				}
+				results[idx] = w.deliver(batchCtx, d)
 			}(idx, d)
 		}
 		wg.Wait()
+		for idx := range results {
+			if !skipped[idx] {
+				outcomes = append(outcomes, results[idx])
+			}
+		}
 
-		if err := w.deliveries.Record(ctx, w.now(), outcomes...); err != nil {
+		lost, err := w.deliveries.Record(batchCtx, w.now(), outcomes...)
+		if err != nil {
 			w.report(fmt.Errorf("record outcomes: %w", err))
+			return
+		}
+		if lost > 0 {
+			// The lease lapsed while the POST was in flight and another worker
+			// took over. Its outcome stands; ours is dropped rather than
+			// overwriting it.
+			w.report(fmt.Errorf("discarded %d delivery outcome(s) whose lease was lost mid-attempt", lost))
+		}
+		// Stop claiming new work once shutdown began; the batch above was
+		// finished and recorded first.
+		if ctx.Err() != nil {
 			return
 		}
 		// Keep claiming until nothing is due (the top of the loop returns on an
@@ -156,9 +206,11 @@ func (w *Worker) pass(ctx context.Context) {
 	}
 }
 
-// deliver POSTs one envelope and classifies the outcome.
+// deliver POSTs one envelope and classifies the outcome. The claim's lease
+// travels back on the Outcome, so Record writes only while this worker still
+// owns the row.
 func (w *Worker) deliver(ctx context.Context, d ClaimedDelivery) Outcome {
-	out := Outcome{DeliveryID: d.ID}
+	out := Outcome{DeliveryID: d.ID, LeaseExpiresAt: d.LeaseExpiresAt}
 
 	body, err := json.Marshal(d.Envelope)
 	if err != nil {

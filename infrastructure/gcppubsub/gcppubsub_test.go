@@ -23,11 +23,30 @@ func (r fakeResult) Get(context.Context) (string, error) { return r.id, r.err }
 type fakePublisher struct {
 	messages []*pubsub.Message
 	err      error
+	// paused models the broker's per-ordering-key pause: a failed publish
+	// pauses the key, and every later publish on it fails immediately until
+	// ResumePublish clears it.
+	paused  map[string]bool
+	resumed []string
 }
 
 func (f *fakePublisher) Publish(_ context.Context, msg *pubsub.Message) result {
+	if f.paused[msg.OrderingKey] {
+		return fakeResult{err: errors.New("pubsub: publishing paused for ordering key")}
+	}
 	f.messages = append(f.messages, msg)
+	if f.err != nil && msg.OrderingKey != "" {
+		if f.paused == nil {
+			f.paused = map[string]bool{}
+		}
+		f.paused[msg.OrderingKey] = true
+	}
 	return fakeResult{id: "m-1", err: f.err}
+}
+
+func (f *fakePublisher) ResumePublish(key string) {
+	f.resumed = append(f.resumed, key)
+	delete(f.paused, key)
 }
 
 func envelope() events.Envelope {
@@ -88,6 +107,67 @@ func TestHandler(t *testing.T) {
 			Convey("Then the error surfaces so the outbox retries", func() {
 				So(err, ShouldNotBeNil)
 				So(err.Error(), ShouldContainSubstring, "deadline exceeded")
+			})
+		})
+	})
+}
+
+// TestOrderingKeyResumesAfterFailure covers the state a failed publish leaves
+// behind.
+//
+// With ordering enabled, a publish failure PAUSES that ordering key: every
+// later publish with the same key fails immediately until ResumePublish is
+// called. Nothing called it, so one transient error — a deadline, an
+// UNAVAILABLE — permanently stopped every event for that aggregate for the
+// life of the process. The outbox then retried the same row on every pass and
+// failed instantly each time, and because the relay claims in id order and had
+// no backoff, those rows starved every newer envelope. Only a restart cleared
+// it, and the same trigger re-armed it.
+func TestOrderingKeyResumesAfterFailure(t *testing.T) {
+	Convey("Given a handler publishing with a per-aggregate ordering key", t, func() {
+		fake := &fakePublisher{}
+		h := &Handler{name: "gcp-pubsub", pub: fake, orderingKey: PerAggregate}
+		ctx := context.Background()
+		env := envelope()
+		key := PerAggregate(env)
+
+		Convey("When a publish fails", func() {
+			fake.err = errors.New("rpc error: code = Unavailable")
+			err := h.Handle(ctx, env)
+			So(err, ShouldNotBeNil)
+
+			Convey("Then the ordering key is resumed, so a retry can succeed", func() {
+				So(fake.resumed, ShouldResemble, []string{key})
+			})
+
+			Convey("Then the outbox retry does publish", func() {
+				fake.err = nil
+				So(h.Handle(ctx, env), ShouldBeNil)
+			})
+
+			Convey("Then a later event for the same aggregate is not stuck behind it", func() {
+				fake.err = nil
+				next := envelope()
+				next.ID = "01ARZ3NDEKTSV4RRFFQ69G5FBW"
+				So(h.Handle(ctx, next), ShouldBeNil)
+			})
+		})
+
+		Convey("When a publish fails without an ordering key", func() {
+			plain := &fakePublisher{err: errors.New("boom")}
+			unordered := &Handler{name: "gcp-pubsub", pub: plain}
+			So(unordered.Handle(ctx, env), ShouldNotBeNil)
+
+			Convey("Then there is no key to resume", func() {
+				So(plain.resumed, ShouldBeEmpty)
+			})
+		})
+
+		Convey("When a publish succeeds", func() {
+			So(h.Handle(ctx, env), ShouldBeNil)
+
+			Convey("Then nothing is resumed, because nothing paused", func() {
+				So(fake.resumed, ShouldBeEmpty)
 			})
 		})
 	})

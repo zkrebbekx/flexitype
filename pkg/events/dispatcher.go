@@ -114,9 +114,10 @@ func (d *Dispatcher) Register(h Handler, opts ...RegisterOption) {
 	defer d.mu.Unlock()
 	// Copy on write. deliverAll reads its snapshot without holding the
 	// lock, so appending in place could reallocate under it.
-	next := make([]registration, len(d.registrations), len(d.registrations)+1)
-	copy(next, d.registrations)
-	d.registrations = append(next, reg)
+	next := make([]registration, 0, len(d.registrations)+1)
+	next = append(next, d.registrations...)
+	next = append(next, reg)
+	d.registrations = next
 }
 
 // snapshot returns the current handler set. The caller delivers without

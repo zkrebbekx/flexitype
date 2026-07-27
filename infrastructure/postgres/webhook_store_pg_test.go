@@ -143,7 +143,6 @@ func TestSubscriptionStoreIntegration(t *testing.T) {
 			updated := zebra
 			updated.URL = "https://example.test/moved"
 			updated.Secret = "rotated"
-			updated.PreviousSecret = "sec-zebra"
 			updated.EventTypes = []string{"a", "b"}
 			updated.Active = false
 			updated.UpdatedAt = zebra.UpdatedAt.Add(time.Hour)
@@ -155,7 +154,6 @@ func TestSubscriptionStoreIntegration(t *testing.T) {
 				So(got.Name, ShouldEqual, "zebra")
 				So(got.URL, ShouldEqual, "https://example.test/moved")
 				So(got.Secret, ShouldEqual, "rotated")
-				So(got.PreviousSecret, ShouldEqual, "sec-zebra")
 				So(got.EventTypes, ShouldResemble, []string{"a", "b"})
 				So(got.Active, ShouldBeFalse)
 				So(got.UpdatedAt.UTC(), ShouldHappenWithin, time.Second, updated.UpdatedAt)

@@ -37,6 +37,12 @@ var allKeys = []string{
 	"FLEXITYPE_PUBSUB_ORDERING",
 	"FLEXITYPE_DB_HOST",
 	"FLEXITYPE_DB_PORT",
+	"FLEXITYPE_DEV_INSECURE",
+	"FLEXITYPE_ENABLE_CONSOLE",
+	"FLEXITYPE_RUN_RELAY",
+	"FLEXITYPE_RUN_DELIVERY_WORKER",
+	"FLEXITYPE_RUN_PRUNER",
+	"FLEXITYPE_RUN_SCHEDULER",
 	"FLEXITYPE_DB_USER",
 	"FLEXITYPE_DB_PASSWORD",
 	"FLEXITYPE_DB_NAME",
@@ -54,9 +60,43 @@ func clearEnv(t *testing.T) {
 	}
 }
 
-func TestLoadDefaults(t *testing.T) {
+func TestLoadRefusesToBootUnauthenticated(t *testing.T) {
 	Convey("Given an environment with no FLEXITYPE_* variables set", t, func() {
 		clearEnv(t)
+
+		Convey("When configuration is loaded", func() {
+			_, err := config.Load()
+
+			Convey("Then it refuses, rather than serving the API anonymously", func() {
+				// The failure this guards is an omission, not a mistake: a
+				// deployment that forgets one variable used to serve the whole
+				// multi-tenant API — including the irreversible admin purge —
+				// to anonymous callers, with every symptom of correct operation
+				// present.
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "no account source is configured")
+				So(err.Error(), ShouldContainSubstring, "FLEXITYPE_DEV_INSECURE")
+			})
+		})
+
+		Convey("When the insecure mode is asked for by name", func() {
+			t.Setenv("FLEXITYPE_DEV_INSECURE", "true")
+			cfg, err := config.Load()
+
+			Convey("Then it boots with authentication off", func() {
+				So(err, ShouldBeNil)
+				So(cfg.DevInsecure, ShouldBeTrue)
+				So(cfg.RequireAuth, ShouldBeFalse)
+			})
+		})
+	})
+}
+
+func TestLoadDefaults(t *testing.T) {
+	Convey("Given an environment with only an account source configured", t, func() {
+		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 
 		Convey("When configuration is loaded", func() {
 			cfg, err := config.Load()
@@ -64,8 +104,13 @@ func TestLoadDefaults(t *testing.T) {
 
 			Convey("Then the service defaults are the production-safe values", func() {
 				So(cfg.Port, ShouldEqual, 8080)
-				So(cfg.ServiceAccountsPath, ShouldEqual, "")
-				So(cfg.RequireAuth, ShouldBeFalse)
+				So(cfg.RequireAuth, ShouldBeTrue)
+				So(cfg.DevInsecure, ShouldBeFalse)
+				So(cfg.EnableConsole, ShouldBeTrue)
+				So(cfg.RunRelay, ShouldBeTrue)
+				So(cfg.RunDeliveryWorker, ShouldBeTrue)
+				So(cfg.RunPruner, ShouldBeTrue)
+				So(cfg.RunScheduler, ShouldBeTrue)
 				So(cfg.LogLevel, ShouldEqual, "info")
 				So(cfg.LogFormat, ShouldEqual, "json")
 				So(cfg.ShutdownTimeout, ShouldEqual, 30*time.Second)
@@ -106,6 +151,7 @@ func TestLoadDefaults(t *testing.T) {
 func TestLoadOverrides(t *testing.T) {
 	Convey("Given every setting overridden with a valid value", t, func() {
 		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 		t.Setenv("FLEXITYPE_PORT", "9090")
 		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 		t.Setenv("FLEXITYPE_REQUIRE_AUTH", "true")
@@ -184,6 +230,7 @@ func TestLoadOverrides(t *testing.T) {
 func TestTypedEnvParsers(t *testing.T) {
 	Convey("Given a malformed integer value", t, func() {
 		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 		t.Setenv("FLEXITYPE_DB_MAX_OPEN_CONNS", "twenty-five")
 
 		Convey("When configuration is loaded", func() {
@@ -201,6 +248,7 @@ func TestTypedEnvParsers(t *testing.T) {
 
 	Convey("Given a malformed float value", t, func() {
 		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 		t.Setenv("FLEXITYPE_RATE_LIMIT_RPS", "fast")
 
 		Convey("When configuration is loaded", func() {
@@ -216,6 +264,7 @@ func TestTypedEnvParsers(t *testing.T) {
 
 	Convey("Given a malformed duration value", t, func() {
 		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 		t.Setenv("FLEXITYPE_SHUTDOWN_TIMEOUT", "30 seconds")
 
 		Convey("When configuration is loaded", func() {
@@ -232,6 +281,7 @@ func TestTypedEnvParsers(t *testing.T) {
 
 	Convey("Given several malformed values at once", t, func() {
 		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 		t.Setenv("FLEXITYPE_DB_PORT", "five-four-three-two")
 		t.Setenv("FLEXITYPE_OUTBOX", "ture")
 		t.Setenv("FLEXITYPE_EVENT_RETENTION", "a week")
@@ -251,6 +301,7 @@ func TestTypedEnvParsers(t *testing.T) {
 
 	Convey("Given a malformed port that would fall back to the default", t, func() {
 		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 		t.Setenv("FLEXITYPE_PORT", "eighty-eighty")
 
 		Convey("When configuration is loaded", func() {
@@ -270,6 +321,7 @@ func TestTypedEnvParsers(t *testing.T) {
 func TestPortRange(t *testing.T) {
 	Convey("Given an out-of-range port", t, func() {
 		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 
 		Convey("When the port is zero", func() {
 			t.Setenv("FLEXITYPE_PORT", "0")
@@ -314,8 +366,11 @@ func TestPortRange(t *testing.T) {
 }
 
 func TestLoopbackSSLGuard(t *testing.T) {
+	// These cases exercise the SSL guard, not authentication, so they configure
+	// an account source to get past the (separate) auth requirement.
 	Convey("Given sslmode=disable", t, func() {
 		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 		t.Setenv("FLEXITYPE_DB_SSLMODE", "disable")
 
 		Convey("When the host is an IPv4 loopback address", func() {
@@ -350,6 +405,7 @@ func TestLoopbackSSLGuard(t *testing.T) {
 
 	Convey("Given a non-loopback host with TLS required", t, func() {
 		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 		t.Setenv("FLEXITYPE_DB_HOST", "db.internal")
 		t.Setenv("FLEXITYPE_DB_SSLMODE", "verify-full")
 
@@ -384,6 +440,7 @@ func TestDatabaseDSN(t *testing.T) {
 
 		Convey("When the settings come from a loaded config", func() {
 			clearEnv(t)
+			t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
 			t.Setenv("FLEXITYPE_DB_NAME", "ft_pkgdb")
 			t.Setenv("FLEXITYPE_DB_PORT", "55433")
 			cfg, err := config.Load()

@@ -63,6 +63,10 @@ jobs:
           FLEXITYPE_PORT: "58080"
           FLEXITYPE_DB_HOST: localhost
           FLEXITYPE_DB_PORT: "5432"
+          # Authentication is required by default; this smoke test drives the
+          # API with no credentials, so it opts out by name like any other
+          # development stack.
+          FLEXITYPE_DEV_INSECURE: "true"
         run: |
           go build -o /tmp/flexitype ./cmd/flexitype
           /tmp/flexitype &
@@ -75,6 +79,37 @@ jobs:
           curl -fs -X POST localhost:58080/api/v1/type-definitions \
             -d '{"internal_name":"smoke","display_name":"Smoke"}' | grep -q '"internal_name":"smoke"'
           kill $SERVICE_PID
+
+  compose:
+    name: compose quickstart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # The quickstart is the project's first-touch experience, and it broke
+      # once already: a loopback-only SSL guard refused the compose file's
+      # container hostname, so `docker compose up` crash-looped on config
+      # validation and no test noticed, because CI only ever booted against
+      # localhost.
+      - name: Boot the stack
+        run: docker compose up --build --detach --wait --wait-timeout 180
+      - name: The service is ready and serves the API
+        run: |
+          curl -fs localhost:8080/readyz
+          curl -fs -X POST localhost:8080/api/v1/type-definitions \
+            -d '{"internal_name":"smoke","display_name":"Smoke"}' | grep -q '"internal_name":"smoke"'
+      - name: An unknown API path is a JSON 404, not the console
+        run: |
+          code=$(curl -s -o /tmp/body -w '%{http_code}' localhost:8080/api/v1/does-not-exist)
+          test "$code" = "404"
+          grep -q '"code"' /tmp/body
+      - name: Service logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Tear down
+        if: always()
+        run: docker compose down --volumes
 
   lint:
     name: lint

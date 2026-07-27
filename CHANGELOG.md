@@ -78,6 +78,54 @@ the difference is recorded rather than asserted as an unexplained constant.
   selects only the three columns matching needs (signing secrets no longer
   cross the wire on this path), and 000021 adds the supporting index (#340).
 
+### Security — authentication is required by default
+
+`FLEXITYPE_REQUIRE_AUTH` defaulted to `false`, so a deployment that set only
+database variables served the entire multi-tenant API to anonymous callers with
+admin access — including `POST /api/v1/admin/purge`, the irreversible hard
+delete. Every symptom of correct operation was present: health checks passed,
+the console worked, and the only signal was one warning line at startup.
+
+**This is a breaking change for any deployment that relied on the old
+default.** A service with no account source now refuses to boot.
+
+- `FLEXITYPE_REQUIRE_AUTH` defaults to `true` (#328).
+- `FLEXITYPE_DEV_INSECURE=true` is the explicit opt-out, so the insecure
+  configuration has to be asked for by name in a manifest rather than being
+  what a deployment gets by forgetting a variable. It also permits
+  `FLEXITYPE_DB_SSLMODE=disable` against a non-loopback host (#328, #284).
+- The compose quickstart sets it, and boots again. It could not: the compose
+  file uses the container hostname `postgres`, which the loopback-only SSL
+  guard refused, so `docker compose up --build` crash-looped on config
+  validation. CI now boots the compose stack, so the documented first-touch
+  experience stays exercised — it was never covered, because CI only ever
+  booted against `localhost` (#284).
+
+### Changed — API contract and deployment topology
+
+- **An unknown path under `/api/` is a JSON 404.** The admin console was
+  mounted as the global `NotFound` handler, so a typo'd or removed endpoint
+  answered `200` with `text/html`: "endpoint absent" and "endpoint succeeded"
+  were the same response, a client that checks the status before parsing
+  reported an HTML parse error rather than the real cause, and a misconfigured
+  caller never appeared on an error-rate dashboard. Only non-API paths reach
+  the app shell (#321).
+- **The access log records the requested path.** The SPA handler rewrote
+  `r.URL.Path` to `/` in place, before the logger ran, so every console
+  response logged as `/` and an unmatched path could not be diagnosed after the
+  fact. It now serves a clone (#321).
+- **`FLEXITYPE_ENABLE_CONSOLE=false` gives an API-only deployment.** The SPA is
+  not mounted at all, and an unmatched path returns a JSON 404 (#323).
+- **`FLEXITYPE_RUN_RELAY`, `_RUN_DELIVERY_WORKER`, `_RUN_PRUNER` and
+  `_RUN_SCHEDULER`** select which background loops a process runs, all
+  defaulting to true. One image can now serve as an API tier and a worker tier
+  with different resource profiles, autoscaling signals and disruption budgets.
+  No leader election is involved: every loop claims work with a lease and
+  `FOR UPDATE SKIP LOCKED`. Embedders pass `flexitype.DeliveryLoops` to
+  `RunOutboxRelay` (#322).
+- A malformed environment value is now reported before the account-source
+  requirement, so a typo names the variable it is in rather than being masked.
+
 ### Fixed — concurrency invariants
 
 Four check-then-write invariants were reported as racy. Two were, two were

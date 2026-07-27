@@ -34,6 +34,10 @@ services:
       FLEXITYPE_DB_USER: flexitype
       FLEXITYPE_DB_PASSWORD: flexitype
       FLEXITYPE_DB_NAME: flexitype
+      # A local development stack: no service accounts, and an unencrypted
+      # connection to a container-network host. Both production guards are
+      # opted out of by name here — never set this in a real deployment.
+      FLEXITYPE_DEV_INSECURE: "true"
       FLEXITYPE_MIGRATE_ON_START: "true"
       FLEXITYPE_OUTBOX: "true"
       FLEXITYPE_FEATURE_SEARCH_INDEX: "true"

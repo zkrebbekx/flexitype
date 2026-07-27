@@ -210,7 +210,10 @@ func run(log *logger.Logger) error {
 	default:
 		// Reached only when RequireAuth is off (config.Load rejects
 		// RequireAuth with no account source before we get here).
-		log.Warn().Msg("no service accounts configured; authentication is DISABLED and the full multi-tenant API is served with admin access — configure FLEXITYPE_SERVICE_ACCOUNTS or FLEXITYPE_PROVISIONING for production, or set FLEXITYPE_REQUIRE_AUTH=true to refuse booting unauthenticated")
+		log.Warn().Msg("FLEXITYPE_DEV_INSECURE is set: authentication is DISABLED and the full multi-tenant " +
+			"API — including the irreversible admin purge — is served to anonymous callers. " +
+			"Configure FLEXITYPE_SERVICE_ACCOUNTS or FLEXITYPE_PROVISIONING and remove FLEXITYPE_DEV_INSECURE " +
+			"for any deployment reachable by anything but you")
 	}
 
 	healthChecker := health.NewService("flexitype", version)
@@ -237,6 +240,7 @@ func run(log *logger.Logger) error {
 		Metrics:            appMetrics,
 		EnableProvisioning: cfg.EnableProvisioning,
 		RateLimiter:        limiter,
+		DisableConsole:     !cfg.EnableConsole,
 	})
 
 	server := &http.Server{
@@ -282,11 +286,21 @@ func run(log *logger.Logger) error {
 	// to hooks. On shutdown (priority 60, before pub/sub at 40 and the
 	// pool at 10) we cancel their context and wait for them to fully stop,
 	// so no publish or query fires against an already-closed client.
+	//
+	// Which of them THIS process runs is configurable, so an API tier and a
+	// worker tier can be scaled, autoscaled and drained separately from one
+	// image. All default to true, so a single-process deployment is unchanged.
+	// No leader election is involved: every loop claims work with a lease and
+	// FOR UPDATE SKIP LOCKED, so any number of replicas may run one.
 	relayCtx, relayCancel := context.WithCancel(ctx)
 	relayDone := make(chan struct{})
 	go func() {
 		defer close(relayDone)
-		svc.RunOutboxRelay(relayCtx)
+		svc.RunOutboxRelay(relayCtx, flexitype.DeliveryLoops{
+			Relay:  cfg.RunRelay,
+			Worker: cfg.RunDeliveryWorker,
+			Pruner: cfg.RunPruner,
+		})
 	}()
 	shutdownHandler.RegisterTask(shutdown.Task{
 		Name:     "outbox-relay",
@@ -300,9 +314,17 @@ func run(log *logger.Logger) error {
 			return nil
 		},
 	})
+	log.Info().
+		Bool("relay", cfg.RunRelay).
+		Bool("delivery_worker", cfg.RunDeliveryWorker).
+		Bool("pruner", cfg.RunPruner).
+		Bool("scheduler", cfg.RunScheduler).
+		Msg("background loops")
 
 	// Publish approved change-sets whose scheduled time has arrived.
-	go svc.RunChangeSetScheduler(relayCtx, time.Minute)
+	if cfg.RunScheduler {
+		go svc.RunChangeSetScheduler(relayCtx, time.Minute)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {

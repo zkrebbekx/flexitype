@@ -29,6 +29,9 @@ environment variables. Every variable, its default, and its meaning:
 
 ## Authentication
 
+**Authentication is required by default.** The service refuses to boot unless
+an account source is configured, or the insecure mode is asked for by name.
+
 Three modes, in precedence order:
 
 1. **Provisioning** (`FLEXITYPE_PROVISIONING=true`) — accounts live in the
@@ -36,19 +39,29 @@ Three modes, in precedence order:
    authenticated against the `flexitype_service_account` table.
 2. **File** (`FLEXITYPE_SERVICE_ACCOUNTS=<path>`) — accounts are read from a
    JSON file at startup (static; edit-and-redeploy to change).
-3. **Development** (neither set) — authentication is disabled and every
-   request runs as the system actor with admin scope. This is opt-out:
-   set `FLEXITYPE_REQUIRE_AUTH=true` in production so the service refuses to
-   boot unless an account source is configured, rather than silently serving
-   the whole multi-tenant API unauthenticated.
+3. **Development** (`FLEXITYPE_DEV_INSECURE=true`) — authentication is
+   disabled and every request runs as the system actor with admin scope.
 
 Provisioning wins if both it and a file are set.
+
+`FLEXITYPE_DEV_INSECURE` exists so the insecure configuration has to be asked
+for by name. Without it, a deployment that set only database variables served
+the entire multi-tenant API to anonymous callers with admin access — including
+`POST /api/v1/admin/purge`, the irreversible hard delete — while every symptom
+of correct operation was present: health checks passed, the console worked, and
+the only signal was one warning line at startup. A configuration error must
+cause the service to refuse traffic, not to serve it with maximum privilege.
+
+The flag also permits `FLEXITYPE_DB_SSLMODE=disable` against a non-loopback
+host, which is what the compose quickstart needs to reach a container-network
+hostname. Never set it in a deployment reachable by anything but you.
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `FLEXITYPE_SERVICE_ACCOUNTS` | _(unset)_ | Path to the service-account JSON file (file mode). |
 | `FLEXITYPE_PROVISIONING` | `false` | Enable database-backed auth and the admin-scoped tenant/service-account API. |
-| `FLEXITYPE_REQUIRE_AUTH` | `false` | Refuse to boot unless an account source (file or provisioning) is configured. Set to `true` in production to prevent accidentally running with authentication disabled. |
+| `FLEXITYPE_DEV_INSECURE` | `false` | Run with authentication disabled, and permit an unencrypted database connection to a non-loopback host. Local development only. |
+| `FLEXITYPE_REQUIRE_AUTH` | `true` | Refuse to boot unless an account source (file or provisioning) is configured. `FLEXITYPE_DEV_INSECURE` overrides it. |
 | `FLEXITYPE_BOOTSTRAP_ADMIN` | `false` | On startup, if no accounts exist, seed a `default` tenant and `bootstrap-admin` admin account. Its token is printed to **stdout once** (never to the structured log) — capture it. |
 | `FLEXITYPE_AUTH_CACHE_TTL` | `30s` | How long a database-backed auth result is cached. Bounds how quickly a revoked or rotated credential stops working. |
 
@@ -76,6 +89,41 @@ is off. See `api/openapi.yaml` for the full contract.
 | `GET /api/v1/service-accounts?tenant_name=` | List a tenant's accounts (no secrets). |
 | `POST /api/v1/service-accounts/{id}/rotate` | Rotate the secret; new token returned once. |
 | `DELETE /api/v1/service-accounts/{id}` | Revoke the account. |
+
+## Deployment topology
+
+Every background loop defaults to running in every replica, which is correct
+for a single-process deployment and wrong for a fleet: ten API replicas would
+each poll the outbox every two seconds, and autoscaling the API on CPU would
+autoscale the delivery machinery with it.
+
+These switches let one image serve as both an API tier and a worker tier.
+**No leader election is needed** — every loop claims work with a lease and
+`FOR UPDATE SKIP LOCKED`, so running one on any number of replicas is safe.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `FLEXITYPE_RUN_RELAY` | `true` | Expand the outbox and dispatch to in-process hooks. |
+| `FLEXITYPE_RUN_DELIVERY_WORKER` | `true` | Deliver webhook subscriptions. |
+| `FLEXITYPE_RUN_PRUNER` | `true` | Enforce event retention. |
+| `FLEXITYPE_RUN_SCHEDULER` | `true` | Publish approved change-sets whose `publish_at` has arrived. |
+| `FLEXITYPE_ENABLE_CONSOLE` | `true` | Serve the embedded admin console. With `false`, the SPA is not mounted and an unmatched path returns a JSON 404. |
+
+A typical split:
+
+```yaml
+# API tier — scales on request rate
+FLEXITYPE_RUN_RELAY: "false"
+FLEXITYPE_RUN_DELIVERY_WORKER: "false"
+FLEXITYPE_RUN_PRUNER: "false"
+FLEXITYPE_RUN_SCHEDULER: "false"
+
+# Worker tier — scales on queue depth, console off
+FLEXITYPE_ENABLE_CONSOLE: "false"
+```
+
+An unknown path under `/api/` is always a JSON 404, whether or not the console
+is mounted. Only non-API paths reach the app shell.
 
 ## Features
 

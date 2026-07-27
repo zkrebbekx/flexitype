@@ -396,24 +396,60 @@ func NewInMemory(opts ...Option) *Service {
 // outbox relay (expansion + in-process dispatch), the webhook delivery
 // worker and the retention pruner. No-op without WithOutbox. Run it as a
 // goroutine next to the server; every replica runs it safely.
-func (s *Service) RunOutboxRelay(ctx context.Context) {
+func (s *Service) RunOutboxRelay(ctx context.Context, loops ...DeliveryLoops) {
 	if s.relay == nil {
 		return
+	}
+	run := AllDeliveryLoops()
+	if len(loops) > 0 {
+		run = loops[0]
 	}
 	// The delivery machinery has no principal, so it stamps the system policy
 	// explicitly rather than inheriting the default — WithFailClosedACL
 	// inverts that default to deny-all.
 	ctx = uow.WithSystemAccess(ctx)
-	// Block until all three loops have observed ctx cancellation and
+	// Block until every selected loop has observed ctx cancellation and
 	// returned, so shutdown can be ordered around this call: the relay,
 	// delivery worker and pruner are fully stopped before the pool or
 	// broker clients they depend on are closed.
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); s.worker.Run(ctx) }()
-	go func() { defer wg.Done(); s.pruner.Run(ctx) }()
-	s.relay.Run(ctx)
+	if run.Worker {
+		wg.Add(1)
+		go func() { defer wg.Done(); s.worker.Run(ctx) }()
+	}
+	if run.Pruner {
+		wg.Add(1)
+		go func() { defer wg.Done(); s.pruner.Run(ctx) }()
+	}
+	if run.Relay {
+		s.relay.Run(ctx)
+	} else {
+		<-ctx.Done()
+	}
 	wg.Wait()
+}
+
+// DeliveryLoops selects which delivery loops a process runs, so an API tier
+// and a worker tier can be scaled, autoscaled and drained separately from one
+// image.
+//
+// No leader election is involved: every loop claims work with a lease and
+// FOR UPDATE SKIP LOCKED, so running one on any number of replicas is safe.
+// The switches exist because ten API replicas polling the outbox every two
+// seconds is load that a scaling decision made for request traffic should not
+// create.
+type DeliveryLoops struct {
+	// Relay expands the outbox and dispatches to in-process hooks.
+	Relay bool
+	// Worker delivers webhook subscriptions.
+	Worker bool
+	// Pruner enforces event retention.
+	Pruner bool
+}
+
+// AllDeliveryLoops runs everything — the single-process default.
+func AllDeliveryLoops() DeliveryLoops {
+	return DeliveryLoops{Relay: true, Worker: true, Pruner: true}
 }
 
 // RunChangeSetScheduler publishes approved change-sets whose publish_at has
@@ -535,6 +571,9 @@ type APIConfig struct {
 	// RateLimiter, when set, throttles API requests per service account
 	// (429 + Retry-After). Build one with ratelimit.New.
 	RateLimiter *ratelimit.Limiter
+	// DisableConsole omits the admin-console SPA, for an API-only deployment.
+	// An unmatched path then returns a JSON 404 like any other API error.
+	DisableConsole bool
 }
 
 // NewAccountLookup returns a database-backed authenticator over this
@@ -615,6 +654,8 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 		RateLimiter: cfg.RateLimiter,
 		BlobStore:   s.blobs,
 		GraphQL:     s.graphql,
+
+		DisableConsole: cfg.DisableConsole,
 	}
 	if cfg.EnableProvisioning {
 		server.Admin = s.AdminInteractor()

@@ -20,6 +20,16 @@ type Config struct {
 	// ServiceAccountsPath points at the service-account JSON file. Empty
 	// disables authentication (development only).
 	ServiceAccountsPath string
+	// DevInsecure is the explicit opt-out from the production guards: it turns
+	// authentication off, and permits an unencrypted database connection to a
+	// non-loopback host.
+	//
+	// It exists so the insecure configuration has to be asked for by name, in
+	// a manifest, rather than being what a deployment gets by forgetting a
+	// variable. It reads as deliberate at a glance, which "REQUIRE_AUTH is
+	// absent" did not.
+	DevInsecure bool
+
 	// RequireAuth refuses to boot unless an account source is configured
 	// (a service-account file or provisioning). It turns the default
 	// fail-open "no accounts → auth disabled" behaviour into a hard error,
@@ -30,6 +40,25 @@ type Config struct {
 	LogFormat string
 	// ShutdownTimeout bounds graceful shutdown.
 	ShutdownTimeout time.Duration
+	// EnableConsole serves the embedded admin console. Turn it off for an
+	// API-only deployment: the SPA is then not mounted at all, and an unknown
+	// path returns a JSON 404 rather than the app shell.
+	EnableConsole bool
+
+	// RunRelay, RunDeliveryWorker, RunPruner and RunScheduler select which
+	// background loops THIS process runs. All default to true, so a
+	// single-process deployment is unchanged; set them per replica set to
+	// split an API tier from a worker tier.
+	//
+	// No leader election is needed either way: every loop claims work with a
+	// lease and FOR UPDATE SKIP LOCKED, so running one is safe on any number
+	// of replicas. The switches exist so ten API replicas do not each poll the
+	// outbox, and so the two tiers can be scaled and drained separately.
+	RunRelay          bool
+	RunDeliveryWorker bool
+	RunPruner         bool
+	RunScheduler      bool
+
 	// MigrateOnStart applies embedded migrations during boot.
 	MigrateOnStart bool
 	// EnableSearch toggles the FQL query surface.
@@ -102,7 +131,13 @@ func Load() (Config, error) {
 	cfg := Config{
 		Port:                e.int("FLEXITYPE_PORT", 8080),
 		ServiceAccountsPath: os.Getenv("FLEXITYPE_SERVICE_ACCOUNTS"),
-		RequireAuth:         e.bool("FLEXITYPE_REQUIRE_AUTH", false),
+		DevInsecure:         e.bool("FLEXITYPE_DEV_INSECURE", false),
+		RequireAuth:         e.bool("FLEXITYPE_REQUIRE_AUTH", true),
+		EnableConsole:       e.bool("FLEXITYPE_ENABLE_CONSOLE", true),
+		RunRelay:            e.bool("FLEXITYPE_RUN_RELAY", true),
+		RunDeliveryWorker:   e.bool("FLEXITYPE_RUN_DELIVERY_WORKER", true),
+		RunPruner:           e.bool("FLEXITYPE_RUN_PRUNER", true),
+		RunScheduler:        e.bool("FLEXITYPE_RUN_SCHEDULER", true),
 		LogLevel:            envStr("FLEXITYPE_LOG_LEVEL", "info"),
 		LogFormat:           envStr("FLEXITYPE_LOG_FORMAT", "json"),
 		ShutdownTimeout:     e.duration("FLEXITYPE_SHUTDOWN_TIMEOUT", 30*time.Second),
@@ -138,14 +173,39 @@ func Load() (Config, error) {
 	if cfg.Port <= 0 || cfg.Port > 65535 {
 		return Config{}, fmt.Errorf("invalid FLEXITYPE_PORT %d", cfg.Port)
 	}
+	// Authentication is required by default, and the opt-out is a variable of
+	// its own rather than RequireAuth=false. The failure this prevents is an
+	// omission, not a mistake: a deployment that forgets one variable served
+	// the entire multi-tenant API to anonymous callers with admin access —
+	// including POST /api/v1/admin/purge, the irreversible hard delete — while
+	// every symptom of correct operation was present. A configuration error
+	// must cause the service to refuse traffic, not to serve it with maximum
+	// privilege.
+	if len(e.errs) > 0 {
+		return Config{}, fmt.Errorf("invalid configuration: %w", errors.Join(e.errs...))
+	}
+	if cfg.DevInsecure {
+		cfg.RequireAuth = false
+	}
 	if cfg.RequireAuth && cfg.ServiceAccountsPath == "" && !cfg.EnableProvisioning {
-		return Config{}, fmt.Errorf("FLEXITYPE_REQUIRE_AUTH is set but no account source is configured: set FLEXITYPE_SERVICE_ACCOUNTS or FLEXITYPE_PROVISIONING=true")
+		return Config{}, fmt.Errorf(
+			"no account source is configured: set FLEXITYPE_SERVICE_ACCOUNTS or FLEXITYPE_PROVISIONING=true. " +
+				"To run without authentication — which serves the whole API, including the irreversible " +
+				"admin purge, to anonymous callers — set FLEXITYPE_DEV_INSECURE=true explicitly")
 	}
 	// Unencrypted database traffic is only tolerated to a loopback host (local
 	// dev / a sidecar). A non-loopback host with sslmode=disable would send
 	// credentials and data in the clear, so refuse it.
-	if cfg.Database.SSLMode == "disable" && !isLoopbackHost(cfg.Database.Host) {
-		return Config{}, fmt.Errorf("FLEXITYPE_DB_SSLMODE=disable is not allowed for non-loopback host %q; use require/verify-full", cfg.Database.Host)
+	//
+	// The dev opt-out exists because a container-network hostname is not
+	// loopback but is also not production — the compose quickstart connects to
+	// a host called "postgres", which this guard refused, so the documented
+	// first-touch experience crash-looped on config validation. Treating
+	// RFC1918 or container hostnames as loopback would have been too broad.
+	if cfg.Database.SSLMode == "disable" && !isLoopbackHost(cfg.Database.Host) && !cfg.DevInsecure {
+		return Config{}, fmt.Errorf(
+			"FLEXITYPE_DB_SSLMODE=disable is not allowed for non-loopback host %q; use require/verify-full, "+
+				"or set FLEXITYPE_DEV_INSECURE=true for a local development stack", cfg.Database.Host)
 	}
 	if len(e.errs) > 0 {
 		return Config{}, fmt.Errorf("invalid configuration: %w", errors.Join(e.errs...))

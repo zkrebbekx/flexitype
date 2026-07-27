@@ -390,9 +390,12 @@ a tenant. (The human-identity / SSO roadmap is in
 ]
 ```
 
-No file configured → auth disabled (development mode). Set
-`FLEXITYPE_REQUIRE_AUTH=true` in production to refuse booting without an account
-source.
+**Authentication is required by default**: with no account source configured
+the service refuses to boot. To run without it — which serves the whole API,
+including the irreversible admin purge, to anonymous callers — set
+`FLEXITYPE_DEV_INSECURE=true` explicitly. That flag also permits an
+unencrypted database connection to a non-loopback host, which is what the
+compose quickstart needs.
 
 #### Field permissions
 

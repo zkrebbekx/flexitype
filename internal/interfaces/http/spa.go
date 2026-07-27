@@ -38,7 +38,14 @@ func spaHandler(log *logger.Logger) http.HandlerFunc {
 		}
 
 		// Client-side route: hand the app shell to the SPA router.
-		r.URL.Path = "/"
-		fileServer.ServeHTTP(w, r)
+		//
+		// Serve a clone rather than rewriting r in place. The access-log
+		// middleware reads r.URL.Path after the handler returns, so rewriting
+		// the request made every SPA response log as "/" — and an operator
+		// could not tell from the logs which path a misconfigured client had
+		// actually asked for.
+		shell := r.Clone(r.Context())
+		shell.URL.Path = "/"
+		fileServer.ServeHTTP(w, shell)
 	}
 }

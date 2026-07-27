@@ -37,6 +37,7 @@ Returns a receipt of what was erased:
   "relationships_gone": 2,
   "search_docs_purged": 0,
   "media_blobs_purged": 1,
+  "records_redacted": 12,
   "media_blobs_failed": 0,
   "unpurged_blob_keys": []
 }
@@ -65,6 +66,7 @@ curl -sS -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
   "relationships_gone": 205,
   "search_docs_purged": 640,
   "media_blobs_purged": 88,
+  "records_redacted": 4021,
   "media_blobs_failed": 2,
   "unpurged_blob_keys": ["t1/9f/a0c2…", "t1/1b/77de…"]
 }
@@ -88,6 +90,23 @@ report, err = it.Values().PurgeTenant(ctx) // tenant from ctx
 ```
 
 ## Notes
+
+- **Copies of the value** — deleting the value rows is not enough. The event
+  log embeds the value in every set/updated/removed payload, and the feed
+  serves those payloads until retention pruning: 7 days by default,
+  arbitrarily long by configuration, and **forever** for rows never expanded,
+  because pruning requires a `feed_seq`. The activity log persists a value
+  snapshot in every entry's before/after state. Webhook deliveries read the
+  event payload through their envelope reference, so redacting the event log
+  covers them too.
+
+  Both are redacted in the erasure transaction, and the count lands in
+  `records_redacted`. **Redacted, not deleted**: the activity log has to
+  survive for the erasure to be provable, and the event feed's sequence is
+  gapless by design — deleting rows would break the one guarantee a consumer
+  relies on. The row and its identifiers stay; the value content becomes a
+  marker. A tenant purge leaves schema history alone, because it erases entity
+  data rather than definitions.
 
 - **Access control** — both endpoints require the `admin` scope
   (`requireAdmin`); a non-admin credential gets `403 Forbidden`.

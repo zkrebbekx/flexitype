@@ -45,6 +45,15 @@ type ChangeSet struct {
 	CreatedAt       time.Time           `json:"created_at"`
 	UpdatedAt       time.Time           `json:"updated_at"`
 	PublishedAt     *time.Time          `json:"published_at,omitempty"`
+	// Version increments on every mutation and guards against a lost update.
+	// Without it, two reviewers editing one set overwrote each other's
+	// mutations, and an edit that raced an approval wrote the pre-approval
+	// state back — silently reverting the approval. Every other aggregate in
+	// this repository takes a row lock; change-sets take this instead,
+	// because a review artifact is edited over minutes, not milliseconds, and
+	// a conflict should be reported to the reviewer rather than serialized
+	// behind a lock they cannot see.
+	Version int `json:"version"`
 }
 
 // Store persists change-sets, scoped by tenant.
@@ -52,6 +61,9 @@ type Store interface {
 	Create(ctx context.Context, cs ChangeSet) error
 	Get(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) (ChangeSet, error)
 	List(ctx context.Context, tenant valueobjects.TenantID) ([]ChangeSet, error)
+	// Update persists the set only if the stored version still matches
+	// cs.Version, and returns a conflict otherwise. It increments the stored
+	// version on success.
 	Update(ctx context.Context, cs ChangeSet) error
 	// DueForPublish returns approved change-sets whose publish_at has
 	// arrived, across all tenants (the scheduler runs outside a request).
@@ -60,9 +72,13 @@ type Store interface {
 
 // Interactor implements the change-management usecases.
 type Interactor struct {
-	store  Store
-	values *appvalue.Interactor
-	now    func() time.Time
+	// onPublishFailure observes a scheduled publish that failed. nil drops
+	// the report, which is the pre-existing behaviour for an embedder that
+	// wires no observer.
+	onPublishFailure func(cs ChangeSet, err error)
+	store            Store
+	values           *appvalue.Interactor
+	now              func() time.Time
 }
 
 // NewInteractor wires the change-set usecases.
@@ -97,6 +113,9 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*ChangeSet, er
 		PublishAt:       in.PublishAt,
 		CreatedAt:       now,
 		UpdatedAt:       now,
+		// A new set starts at 1, so the first read a client takes already
+		// carries a version it can compare-and-swap against.
+		Version: 1,
 	}
 	if err := i.store.Create(ctx, cs); err != nil {
 		return nil, err
@@ -241,7 +260,13 @@ func (i *Interactor) PublishDue(ctx context.Context) (int, error) {
 		cs := due[idx]
 		tctx := uow.WithTenant(ctx, cs.TenantID)
 		if err := i.publish(tctx, &cs); err != nil {
-			continue // a failed set stays approved for the next tick / manual retry
+			// A failed set stays approved for the next tick, so it retries —
+			// but the failure has to be visible. This used to be a bare
+			// `continue`: a set that could never publish retried for ever
+			// with no log line, no metric and no observer callback, and the
+			// only symptom was a scheduled change that never arrived.
+			i.reportPublishFailure(cs, err)
+			continue
 		}
 		published++
 	}
@@ -265,5 +290,30 @@ func (i *Interactor) mutate(ctx context.Context, rawID string, fn func(*ChangeSe
 	if err := i.store.Update(ctx, cs); err != nil {
 		return nil, err
 	}
+	cs.Version++
 	return &cs, nil
+}
+
+// ErrStaleVersion is the conflict a store returns when a change-set was
+// modified between the caller's read and its write. The caller re-reads and
+// re-applies; nothing is written from a stale view.
+func ErrStaleVersion(id string, version int) error {
+	return domainerrors.NewConflict(
+		"the change-set was modified by someone else; re-read it and retry",
+		"change_set", id, "version", version)
+}
+
+// OnPublishFailure registers the observer for a scheduled publish failure.
+// Wire it during composition.
+func (i *Interactor) OnPublishFailure(fn func(cs ChangeSet, err error)) {
+	i.onPublishFailure = fn
+}
+
+// reportPublishFailure surfaces one set's failure without stopping the tick:
+// one bad set must not block the others, and it must not be silent either.
+func (i *Interactor) reportPublishFailure(cs ChangeSet, err error) {
+	if i.onPublishFailure == nil {
+		return
+	}
+	i.onPublishFailure(cs, err)
 }

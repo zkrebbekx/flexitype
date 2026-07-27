@@ -249,8 +249,12 @@ func TestChangeSetStoreDirect(t *testing.T) {
 		})
 
 		Convey("When a change-set is updated", func() {
-			middle.State = appchangeset.StatePublished
-			So(store.Update(ctx, middle), ShouldBeNil)
+			// Update is a compare-and-swap on version, so write from a fresh
+			// read rather than from the literal built above.
+			fresh, ferr := store.Get(ctx, tenantA, middle.ID)
+			So(ferr, ShouldBeNil)
+			fresh.State = appchangeset.StatePublished
+			So(store.Update(ctx, fresh), ShouldBeNil)
 
 			Convey("Then the new state is read back and it no longer counts as due", func() {
 				got, err := store.Get(ctx, tenantA, middle.ID)

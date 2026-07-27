@@ -26,13 +26,27 @@ func NewChangeSetStore() changeset.Store {
 func (s *changesetStore) Create(_ context.Context, cs changeset.ChangeSet) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if cs.Version == 0 {
+		cs.Version = 1
+	}
 	s.sets[cs.ID.String()] = cs
 	return nil
 }
 
+// Update is a compare-and-swap on version, mirroring the Postgres store: a
+// caller holding a stale read gets a conflict rather than overwriting
+// whatever landed in between.
 func (s *changesetStore) Update(_ context.Context, cs changeset.ChangeSet) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	stored, ok := s.sets[cs.ID.String()]
+	if !ok || stored.TenantID != cs.TenantID {
+		return domainerrors.NewNotFound("changeset", cs.ID.String())
+	}
+	if stored.Version != cs.Version {
+		return changeset.ErrStaleVersion(cs.ID.String(), cs.Version)
+	}
+	cs.Version = stored.Version + 1
 	s.sets[cs.ID.String()] = cs
 	return nil
 }

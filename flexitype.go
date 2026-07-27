@@ -16,6 +16,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/admin"
+	"github.com/zkrebbekx/flexitype/application/changeset"
 	"github.com/zkrebbekx/flexitype/application/computed"
 	"github.com/zkrebbekx/flexitype/application/feed"
 	"github.com/zkrebbekx/flexitype/application/gql"
@@ -472,6 +473,16 @@ func (s *Service) RunChangeSetScheduler(ctx context.Context, interval time.Durat
 		case <-ticker.C:
 			cs := s.factory.New(ctx).ChangeSets()
 			if cs != nil {
+				// Per-set failures used to be swallowed by a bare continue
+				// inside PublishDue, so a set that could never publish
+				// retried for ever with nothing reported. They now reach the
+				// same observer as the tick's own error.
+				if s.onBgError != nil {
+					cs.OnPublishFailure(func(set changeset.ChangeSet, err error) {
+						s.onBgError(fmt.Errorf("publish scheduled change-set %s (%s): %w",
+							set.ID, set.Name, err))
+					})
+				}
 				if _, err := cs.PublishDue(ctx); err != nil && s.onBgError != nil {
 					s.onBgError(err)
 				}

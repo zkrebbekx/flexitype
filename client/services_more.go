@@ -512,22 +512,33 @@ func (s *EventsService) List(ctx context.Context, opts ...ListEventsOptions) ([]
 	return items[FeedEvent](ctx, s.c, "/events", q)
 }
 
-// GetCursor reads a named consumer cursor's committed sequence.
+// GetCursor reads a named consumer cursor's committed position.
+//
+// The wire field is `position`, matching the server and api/openapi.yaml. It
+// was `after_seq` here, which the server never writes, so this returned 0 on
+// every call with a NIL error — indistinguishable from a fresh consumer's
+// legitimate start, so a documented at-least-once consumer replayed the whole
+// retained feed on every restart with nothing reporting a failure.
 func (s *EventsService) GetCursor(ctx context.Context, consumer string) (int64, error) {
 	var out struct {
-		AfterSeq int64 `json:"after_seq"`
+		Position int64 `json:"position"`
 	}
 	if err := s.c.do(ctx, http.MethodGet, "/event-cursors/"+url.PathEscape(consumer), nil, nil, &out); err != nil {
 		return 0, err
 	}
-	return out.AfterSeq, nil
+	return out.Position, nil
 }
 
 // CommitCursor advances a named consumer cursor with compare-and-swap on the
-// expected previous sequence.
-func (s *EventsService) CommitCursor(ctx context.Context, consumer string, afterSeq, expectedSeq int64) error {
+// expected previous position.
+//
+// The wire fields are `position` and `expected`. They were `after_seq` and
+// `expected_seq`, and the server decodes strictly, so every commit was a hard
+// 422 — the cursor never advanced and the CURSOR_CONFLICT / CURSOR_EXPIRED
+// recovery paths this endpoint exists for were unreachable.
+func (s *EventsService) CommitCursor(ctx context.Context, consumer string, position, expected int64) error {
 	return s.c.do(ctx, http.MethodPut, "/event-cursors/"+url.PathEscape(consumer), nil,
-		map[string]int64{"after_seq": afterSeq, "expected_seq": expectedSeq}, nil)
+		map[string]int64{"position": position, "expected": expected}, nil)
 }
 
 // --- admin (provisioning) ----------------------------------------------------

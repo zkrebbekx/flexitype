@@ -5,6 +5,8 @@ module flexitype-conformance
 go 1.25.8
 
 require (
+	github.com/jmoiron/sqlx v1.4.0
+	github.com/lib/pq v1.12.3
 	github.com/smartystreets/goconvey v1.8.1
 	github.com/zkrebbekx/flexitype v0.0.0
 	github.com/zkrebbekx/flexitype/client v0.0.0
@@ -20,9 +22,7 @@ require (
 	github.com/gopherjs/gopherjs v1.17.2 // indirect
 	github.com/graph-gophers/dataloader/v7 v7.2.0 // indirect
 	github.com/graphql-go/graphql v0.8.1 // indirect
-	github.com/jmoiron/sqlx v1.4.0 // indirect
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
-	github.com/lib/pq v1.12.3 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect

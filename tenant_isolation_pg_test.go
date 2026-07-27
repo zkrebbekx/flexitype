@@ -3,7 +3,6 @@ package flexitype_test
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -18,34 +17,26 @@ import (
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
 
-// openTestDB connects to FLEXITYPE_TEST_DSN or skips. Every flexitype_*
-// table is truncated so each goconvey leaf re-execution starts clean.
+// openTestDB returns a pool scoped to this package's own schema. The
+// DB-backed packages run in parallel against one DSN and each truncates and
+// seeds the same table names, so sharing a schema makes them collide
+// non-deterministically. See internal/testdb.
+//
+// Callers still migrate: the schema starts empty.
 func openTestDB(t *testing.T) *sqlx.DB {
 	t.Helper()
-	dsn := os.Getenv("FLEXITYPE_TEST_DSN")
-	if dsn == "" {
-		t.Skip("FLEXITYPE_TEST_DSN not set; skipping database integration test")
-	}
-	pool, err := sqlx.Connect("postgres", dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	return pool
+	return testdb.Open(t, "root")
 }
 
+// truncateAll empties every flexitype table in this package's schema so each
+// goconvey leaf re-execution starts clean.
 func truncateAll(t *testing.T, pool *sqlx.DB) {
 	t.Helper()
-	var stmt string
-	err := pool.Get(&stmt, `SELECT 'TRUNCATE ' || string_agg(format('%I', tablename), ', ') || ' CASCADE'
-		FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'flexitype_%'
-		  AND tablename <> 'flexitype_schema_migrations'`)
-	if err != nil {
-		t.Fatalf("build truncate: %v", err)
-	}
-	pool.MustExec(stmt)
+	testdb.TruncateAll(t, pool)
 }
 
 // TestTenantIsolationPostgres re-runs the isolation matrix over the real

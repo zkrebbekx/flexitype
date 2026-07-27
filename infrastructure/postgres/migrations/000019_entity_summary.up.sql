@@ -85,14 +85,21 @@ CREATE TRIGGER flexitype_entity_summary_maintain
     AFTER INSERT OR UPDATE OR DELETE ON flexitype_attribute_value
     FOR EACH ROW EXECUTE FUNCTION flexitype_entity_summary_trg();
 
--- Backfill existing data. The migration runs in one transaction with no
--- concurrent writers, so a single grouped INSERT captures every live entity.
--- ON CONFLICT DO NOTHING keeps it idempotent against any rows the trigger may
--- have already produced.
-INSERT INTO flexitype_entity_summary
-    (tenant_id, type_definition_id, entity_id, value_count, last_updated_at)
-SELECT tenant_id, type_definition_id, entity_id, count(*), max(updated_at)
-  FROM flexitype_attribute_value
- WHERE archived_at IS NULL
- GROUP BY tenant_id, type_definition_id, entity_id
-ON CONFLICT (tenant_id, type_definition_id, entity_id) DO NOTHING;
+-- Existing data is NOT backfilled here. It is backfilled in bounded batches
+-- after this migration commits, by the "000019_entity_summary" step in
+-- migrate_backfill.go.
+--
+-- A grouped INSERT over the whole value table used to live at this point. It
+-- was wrong for a live deployment on two counts. CREATE TRIGGER above takes
+-- SHARE ROW EXCLUSIVE on flexitype_attribute_value, which conflicts with every
+-- INSERT, UPDATE and DELETE on it; running the aggregate in the same
+-- transaction held that lock for the entire scan, so every value write in the
+-- fleet blocked until the upgrade finished — tens of minutes at 10^8 rows,
+-- with health checks still green because reads were unaffected. And killing
+-- the pod to escape rolled the aggregate back, so the next pod started over.
+--
+-- Correctness does not depend on the backfill being immediate: the trigger is
+-- live from this commit, so every write after it maintains its own summary
+-- row. The backfill only has to catch up history, and it may run while the
+-- fleet serves traffic. Until it completes, an entity written before the
+-- upgrade and not since is missing from the entity browser.

@@ -158,6 +158,18 @@ func run(log *logger.Logger) error {
 		log.Info().Msg("schema migrations applied")
 	}
 
+	// A schema newer than this binary means another generation migrated it.
+	// That is supported during a rolling deploy, but it must be visible: an
+	// operator debugging a mixed-version fleet should not have to infer it
+	// from behaviour.
+	if newer, err := svc.SchemaDrift(ctx); err != nil {
+		log.Warn().Err(err).Msg("could not compare the database schema version with this binary")
+	} else if len(newer) > 0 {
+		log.Warn().Ints("versions", newer).
+			Msg("the database has schema migrations this binary does not know; another release migrated it " +
+				"(expected briefly during a rolling deploy, otherwise this binary is older than the fleet)")
+	}
+
 	if envWebhookURL != "" && cfg.EnableOutbox {
 		if err := svc.EnsureWebhookSubscription(ctx, "env-webhook", envWebhookURL,
 			os.Getenv("FLEXITYPE_WEBHOOK_SECRET")); err != nil {

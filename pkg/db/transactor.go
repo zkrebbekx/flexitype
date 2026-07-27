@@ -25,6 +25,16 @@ func NewTransactor(db *sqlx.DB) Transactor {
 	return &sqlxTransactor{db: db}
 }
 
+// WithConn pins one pooled connection for fn. See db.SessionConnector.
+func (t *sqlxTransactor) WithConn(ctx context.Context, fn func(QueryExecer) error) error {
+	conn, err := t.db.Connx(ctx)
+	if err != nil {
+		return fmt.Errorf("pin connection: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	return fn(conn)
+}
+
 func (t *sqlxTransactor) GetContext(ctx context.Context, dest any, query string, args ...any) error {
 	return t.db.GetContext(ctx, dest, query, args...)
 }

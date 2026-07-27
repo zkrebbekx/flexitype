@@ -3,7 +3,6 @@ package postgres_test
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/outbox"
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
@@ -26,15 +26,7 @@ import (
 //	FLEXITYPE_TEST_DSN='postgres://postgres:postgres@localhost:55433/flexitype_it?sslmode=disable' go test ./infrastructure/postgres/ -run Integration
 func openIntegrationDB(t *testing.T) *sqlx.DB {
 	t.Helper()
-	dsn := os.Getenv("FLEXITYPE_TEST_DSN")
-	if dsn == "" {
-		t.Skip("FLEXITYPE_TEST_DSN not set; skipping database integration test")
-	}
-	pool, err := sqlx.Connect("postgres", dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	return pool
+	return testdb.Open(t, "postgres")
 }
 
 func writeEnvelopes(ctx context.Context, tx db.Transactor, store outbox.Store, n int) []string {

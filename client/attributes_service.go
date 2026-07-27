@@ -105,31 +105,46 @@ func (s *AttributesService) All(ctx context.Context, opts ...ListAttributesOptio
 // Get loads one attribute definition.
 func (s *AttributesService) Get(ctx context.Context, id string) (*AttributeDefinition, error) {
 	var out AttributeDefinition
-	return &out, s.c.do(ctx, http.MethodGet, "/attributes/"+id, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/attributes/"+id, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Create creates an attribute definition.
 func (s *AttributesService) Create(ctx context.Context, in CreateAttributeInput) (*AttributeDefinition, error) {
 	var out AttributeDefinition
-	return &out, s.c.do(ctx, http.MethodPost, "/attributes", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/attributes", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Update mutates an attribute definition.
 func (s *AttributesService) Update(ctx context.Context, id string, in UpdateAttributeInput) (*AttributeDefinition, error) {
 	var out AttributeDefinition
-	return &out, s.c.do(ctx, http.MethodPatch, "/attributes/"+id, nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPatch, "/attributes/"+id, nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Archive soft-deletes an attribute definition.
 func (s *AttributesService) Archive(ctx context.Context, id string) (*AttributeDefinition, error) {
 	var out AttributeDefinition
-	return &out, s.c.do(ctx, http.MethodPost, "/attributes/"+id+"/archive", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/attributes/"+id+"/archive", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Restore reverses an archive.
 func (s *AttributesService) Restore(ctx context.Context, id string) (*AttributeDefinition, error) {
 	var out AttributeDefinition
-	return &out, s.c.do(ctx, http.MethodPost, "/attributes/"+id+"/restore", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/attributes/"+id+"/restore", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // ValidateValue dry-runs a raw JSON value against an attribute — parse, type

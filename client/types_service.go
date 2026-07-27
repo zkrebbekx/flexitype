@@ -66,31 +66,46 @@ func (s *TypesService) All(ctx context.Context, opts ...ListTypesOptions) iter.S
 // Get loads one type definition.
 func (s *TypesService) Get(ctx context.Context, id string) (*TypeDefinition, error) {
 	var out TypeDefinition
-	return &out, s.c.do(ctx, http.MethodGet, "/type-definitions/"+id, nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/type-definitions/"+id, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Create creates a type definition.
 func (s *TypesService) Create(ctx context.Context, in CreateTypeInput) (*TypeDefinition, error) {
 	var out TypeDefinition
-	return &out, s.c.do(ctx, http.MethodPost, "/type-definitions", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/type-definitions", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Update mutates a type definition.
 func (s *TypesService) Update(ctx context.Context, id string, in UpdateTypeInput) (*TypeDefinition, error) {
 	var out TypeDefinition
-	return &out, s.c.do(ctx, http.MethodPatch, "/type-definitions/"+id, nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPatch, "/type-definitions/"+id, nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Archive soft-deletes a type definition.
 func (s *TypesService) Archive(ctx context.Context, id string) (*TypeDefinition, error) {
 	var out TypeDefinition
-	return &out, s.c.do(ctx, http.MethodPost, "/type-definitions/"+id+"/archive", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/type-definitions/"+id+"/archive", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Restore reverses an archive.
 func (s *TypesService) Restore(ctx context.Context, id string) (*TypeDefinition, error) {
 	var out TypeDefinition
-	return &out, s.c.do(ctx, http.MethodPost, "/type-definitions/"+id+"/restore", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/type-definitions/"+id+"/restore", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // CloneResult reports a clone's outcome.
@@ -105,7 +120,10 @@ type CloneResult struct {
 func (s *TypesService) Clone(ctx context.Context, id, newInternalName, newDisplayName string) (*CloneResult, error) {
 	body := map[string]string{"internal_name": newInternalName, "display_name": newDisplayName}
 	var out CloneResult
-	return &out, s.c.do(ctx, http.MethodPost, "/type-definitions/"+id+"/clone", nil, body, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/type-definitions/"+id+"/clone", nil, body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Attributes lists a type's own (declared) attributes.
@@ -127,7 +145,10 @@ func (s *TypesService) Children(ctx context.Context, id string) ([]TypeDefinitio
 // Completeness aggregates completeness across a type's entities.
 func (s *TypesService) Completeness(ctx context.Context, id string) (*TypeCompleteness, error) {
 	var out TypeCompleteness
-	return &out, s.c.do(ctx, http.MethodGet, "/type-definitions/"+id+"/completeness", nil, nil, &out)
+	if err := s.c.do(ctx, http.MethodGet, "/type-definitions/"+id+"/completeness", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // MatchRules lists the duplicate-detection rules for a type.
@@ -145,5 +166,8 @@ type CreateMatchRuleInput struct {
 // CreateMatchRule adds a duplicate-detection rule to a type.
 func (s *TypesService) CreateMatchRule(ctx context.Context, id string, in CreateMatchRuleInput) (*MatchRule, error) {
 	var out MatchRule
-	return &out, s.c.do(ctx, http.MethodPost, "/type-definitions/"+id+"/match-rules", nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPost, "/type-definitions/"+id+"/match-rules", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

@@ -7,6 +7,55 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Added — Go client: opt-in retrying, and the throttle hint it dropped
+
+`Client.do` made exactly one attempt, and `decodeError` never read
+`resp.Header`, so the `Retry-After` the server sets on every throttle was
+thrown away. Callers saw `RATE_LIMITED` with no wait hint and either failed
+outright or invented their own backoff — while the hint they needed was on
+the wire.
+
+- `APIError.RetryAfter` carries the parsed hint (both RFC 9110 forms: a delay
+  in seconds and an HTTP date). A date in the past gives zero, not a negative
+  wait.
+- `WithRetry(RetryPolicy)` enables retrying; `DefaultRetryPolicy()` is three
+  attempts on 429/502/503/504 with exponential backoff from 200ms to 5s and
+  ±20% jitter. A server-supplied `Retry-After` always beats the computed
+  delay, and the loop stops when the caller's context ends.
+- **Only idempotent methods are retried** — GET, HEAD, PUT, DELETE. A POST is
+  never replayed, whatever the policy says: it may have been applied before
+  the connection broke.
+
+Retrying stays off by default. The paginating `All(...)` iterators are the
+case that most wants it: they issue many requests in tight succession, which
+is the exact shape a per-account token bucket targets, so a bulk walk used to
+abort part-way with no resumption point.
+
+### Changed — Go client: nil on error, and a base URL that must be usable
+
+`New` rejected only the empty string and a `url.Parse` failure, which almost
+nothing triggers — `url.Parse("localhost:8080")` succeeds, reading
+`localhost` as the scheme. So `client.New("localhost:8080")`, the most
+natural thing to type for a local service, constructed successfully and then
+failed every request with "unsupported protocol scheme", pointing an adopter
+at their network or their token rather than at one missing `http://`. `New`
+now requires an http/https scheme and a host, and says which is missing.
+
+About fifty methods returned a non-nil pointer to a zero value alongside
+their error, while a handful returned nil. **They now all return nil.** Code
+that checks the error is unaffected; code that nil-checked instead used to
+carry on with an empty id and zero timestamps, and now fails where the
+mistake is. The convention is stated once in the package doc.
+
+### Added — Go client: `CursorStack` for backward paging
+
+`PageInfo.HasPreviousPage` reports that a previous page exists, but the API
+has no `before` cursor and no direction, so an adopter who wired a Back
+button found nothing to call — and the field read like a supported
+capability. Its godoc now says what it does and does not mean, and
+`CursorStack` keeps the visited cursors so a paged view can step back, the
+way the admin console already does in its own composable.
+
 ### BREAKING — Go client: `Revisions().Diff` takes two revision ids
 
 `Diff(ctx, id)` becomes `Diff(ctx, fromID, toID)`. The endpoint diffs one

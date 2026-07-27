@@ -8,6 +8,23 @@
 //	prod, err := c.Types().Create(ctx, client.CreateTypeInput{InternalName: "product", DisplayName: "Product"})
 //	for row, err := range c.Query(ctx, "product", `price > 10`) { ... }
 //
+// # Conventions
+//
+// A method that returns a pointer returns nil on error. Check the error, not
+// the pointer. (Some methods used to return a pointer to a zero value
+// alongside the error, so code that nil-checked instead of error-checking
+// carried on with an empty id and zero timestamps — a bug that surfaced far
+// from here.)
+//
+// Retrying is opt-in, through WithRetry. It applies only to idempotent
+// methods, so a POST that may already have been applied is never replayed.
+// A 429 carries the server's Retry-After in APIError.RetryAfter, and the
+// retry loop honours it over its own backoff.
+//
+// Listing is forward-only keyset pagination. PageInfo.HasPreviousPage says a
+// previous page exists but the API has no backward cursor; keep the cursors
+// you visited, or use CursorStack.
+//
 // The client depends only on the standard library.
 package client
 
@@ -39,6 +56,7 @@ type Client struct {
 	http      *http.Client
 	token     string
 	userAgent string
+	retry     RetryPolicy
 }
 
 // Option configures a Client.
@@ -74,8 +92,22 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("flexitype client: base URL is required")
 	}
-	if _, err := url.Parse(baseURL); err != nil {
-		return nil, fmt.Errorf("flexitype client: invalid base URL: %w", err)
+	// url.Parse alone accepts almost anything: it reads "localhost:8080" as
+	// the scheme "localhost" with opaque "8080", so the most natural thing to
+	// type for a local service used to construct successfully and then fail
+	// every request with "unsupported protocol scheme" — which points an
+	// adopter at their network or token rather than at one missing "http://".
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("flexitype client: invalid base URL %q: %w", baseURL, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf(
+			"flexitype client: base URL must include a scheme, e.g. http://%s (got %q)",
+			baseURL, baseURL)
+	}
+	if parsed.Host == "" {
+		return nil, fmt.Errorf("flexitype client: base URL must include a host (got %q)", baseURL)
 	}
 	base := strings.TrimRight(baseURL, "/")
 	if !strings.HasSuffix(base, "/api/v1") {
@@ -204,37 +236,77 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 
 	var reader io.Reader
+	var rawBody []byte
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("flexitype client: encode request: %w", err)
 		}
+		rawBody = raw
 		reader = bytes.NewReader(raw)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, u, reader)
-	if err != nil {
-		return fmt.Errorf("flexitype client: build request: %w", err)
-	}
-	c.setHeaders(req, body != nil)
+	return c.attempt(ctx, method, func() error {
+		if reader != nil {
+			// A retry needs its own reader: the previous attempt consumed
+			// the first one.
+			reader = bytes.NewReader(rawBody)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, u, reader)
+		if err != nil {
+			return fmt.Errorf("flexitype client: build request: %w", err)
+		}
+		c.setHeaders(req, body != nil)
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("flexitype client: %s %s: %w", method, path, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return fmt.Errorf("flexitype client: %s %s: %w", method, path, err)
+		}
+		defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return decodeError(resp)
-	}
-	if out == nil {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return decodeError(resp)
+		}
+		if out == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil
+		}
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return fmt.Errorf("flexitype client: decode response: %w", err)
+		}
 		return nil
+	})
+}
+
+// attempt runs fn, retrying per the client's policy. It returns the last
+// error, so a caller sees the real failure rather than "gave up".
+//
+// The policy retries only idempotent methods, so a POST that may already have
+// been applied is never replayed. A cancelled context ends the loop
+// immediately: a retry must not outlive the caller's deadline.
+func (c *Client) attempt(ctx context.Context, method string, fn func() error) error {
+	var err error
+	for n := 1; ; n++ {
+		err = fn()
+		if err == nil {
+			return nil
+		}
+		if n >= c.retry.MaxAttempts {
+			return err
+		}
+		status := statusOf(err)
+		retryable := c.retry.retries(method, status)
+		if status == 0 {
+			// No typed status: a transport failure, not a server answer.
+			retryable = c.retry.retriesTransport(method)
+		}
+		if !retryable || ctx.Err() != nil {
+			return err
+		}
+		if !sleep(ctx, c.retry.waitBefore(n+1, retryHint(err))) {
+			return err
+		}
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("flexitype client: decode response: %w", err)
-	}
-	return nil
 }
 
 // doRaw performs a GET returning the raw body and its content type — for
@@ -244,24 +316,33 @@ func (c *Client) doRaw(ctx context.Context, path string, query url.Values) ([]by
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	var body []byte
+	var contentType string
+	err := c.attempt(ctx, http.MethodGet, func() error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return fmt.Errorf("flexitype client: build request: %w", err)
+		}
+		c.setHeaders(req, false)
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return fmt.Errorf("flexitype client: GET %s: %w", path, err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return decodeError(resp)
+		}
+		body, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("flexitype client: read response: %w", err)
+		}
+		contentType = resp.Header.Get("Content-Type")
+		return nil
+	})
 	if err != nil {
-		return nil, "", fmt.Errorf("flexitype client: build request: %w", err)
+		return nil, "", err
 	}
-	c.setHeaders(req, false)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("flexitype client: GET %s: %w", path, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", decodeError(resp)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", fmt.Errorf("flexitype client: read response: %w", err)
-	}
-	return body, resp.Header.Get("Content-Type"), nil
+	return body, contentType, nil
 }
 
 // doMultipart POSTs a multipart form (extra text fields plus one file) and

@@ -87,7 +87,10 @@ func (s *ValuesService) All(ctx context.Context, opts ...ListValuesOptions) iter
 // Update mutates a relationship definition.
 func (s *RelationshipDefinitionsService) Update(ctx context.Context, id string, in CreateRelationshipDefinitionInput) (*RelationshipDefinition, error) {
 	var out RelationshipDefinition
-	return &out, s.c.do(ctx, http.MethodPatch, "/relationship-definitions/"+id, nil, in, &out)
+	if err := s.c.do(ctx, http.MethodPatch, "/relationship-definitions/"+id, nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // AttributeSets returns the attribute-set ids a relationship definition

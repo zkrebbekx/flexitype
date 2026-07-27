@@ -10,10 +10,83 @@ import (
 // PageInfo describes a page's position in the full result set. TotalCount is
 // present only when the request asked for it (ListOptions.Total).
 type PageInfo struct {
-	HasNextPage     bool    `json:"has_next_page"`
-	HasPreviousPage bool    `json:"has_previous_page"`
-	NextCursor      *string `json:"next_cursor,omitempty"`
-	TotalCount      *int    `json:"total_count,omitempty"`
+	// HasNextPage reports that NextCursor will fetch more.
+	HasNextPage bool `json:"has_next_page"`
+
+	// HasPreviousPage reports only that this is not the first page. It is
+	// not a backward-paging capability: the API has no "before" cursor and
+	// no direction, so there is nothing to call to go back.
+	//
+	// To offer a Back button, keep the cursors you have already used and
+	// re-request one — CursorStack does exactly that.
+	HasPreviousPage bool `json:"has_previous_page"`
+
+	NextCursor *string `json:"next_cursor,omitempty"`
+	TotalCount *int    `json:"total_count,omitempty"`
+}
+
+// CursorStack remembers the cursor of each page a caller has visited, so a
+// paged UI can step backwards over a forward-only keyset API.
+//
+// PageInfo.HasPreviousPage says a previous page exists but the API offers no
+// way to ask for it, so every paged UI has to keep this state itself. The
+// admin console does, in its own composable; this is the same thing for Go
+// callers.
+//
+// A CursorStack is not safe for concurrent use: it belongs to one view.
+//
+//	var st client.CursorStack
+//	page, err := c.Types().List(ctx, client.ListOptions{Cursor: st.Current()})
+//	// forward:
+//	st.Push(page.PageInfo)
+//	// backward:
+//	st.Pop()
+type CursorStack struct {
+	// visited holds the cursor used for each page in order. The first entry
+	// is "" — the first page takes no cursor.
+	visited []string
+}
+
+// Current returns the cursor for the page the stack is on. It is "" on the
+// first page, which is what a list call wants there.
+func (s *CursorStack) Current() string {
+	if len(s.visited) == 0 {
+		return ""
+	}
+	return s.visited[len(s.visited)-1]
+}
+
+// Push records that the caller moved forward, and returns the cursor for the
+// next page. It reports false when info has no next page, leaving the stack
+// untouched — so a Next button at the end of a list is a no-op rather than an
+// empty page.
+func (s *CursorStack) Push(info PageInfo) (string, bool) {
+	if !info.HasNextPage || info.NextCursor == nil || *info.NextCursor == "" {
+		return s.Current(), false
+	}
+	if len(s.visited) == 0 {
+		s.visited = append(s.visited, "")
+	}
+	s.visited = append(s.visited, *info.NextCursor)
+	return s.Current(), true
+}
+
+// Pop steps back one page and returns that page's cursor. It reports false on
+// the first page, where there is nothing to go back to.
+func (s *CursorStack) Pop() (string, bool) {
+	if len(s.visited) < 2 {
+		return "", false
+	}
+	s.visited = s.visited[:len(s.visited)-1]
+	return s.Current(), true
+}
+
+// Depth is the zero-based index of the page the stack is on.
+func (s *CursorStack) Depth() int {
+	if len(s.visited) == 0 {
+		return 0
+	}
+	return len(s.visited) - 1
 }
 
 // Page is one page of a list response.

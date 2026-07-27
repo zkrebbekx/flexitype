@@ -156,6 +156,12 @@ func (i *Interactor) CreateRule(ctx context.Context, in CreateRuleInput) (*Rule,
 	if !attr.TypeDefinitionID().Equals(typeID) {
 		return nil, domainerrors.NewValidation("attribute does not belong to the type", "attribute", in.AttributeDefinitionID)
 	}
+	// A rule is a read instrument: scanning it reports the attribute's values
+	// pairwise. A principal who cannot read the attribute must not be able to
+	// build one and read the values through the candidate report instead.
+	if !uow.AccessFromContext(ctx).CanRead(attr.InternalName()) {
+		return nil, domainerrors.NewNotFound("attribute_definition", in.AttributeDefinitionID)
+	}
 
 	rule := Rule{
 		ID:                    ulid.New(),
@@ -236,6 +242,16 @@ func (i *Interactor) Scan(ctx context.Context, rawRuleID string) (*ScanOutput, e
 	attrID, err := valueobjects.ParseAttributeDefinitionID(rule.AttributeDefinitionID)
 	if err != nil {
 		return nil, domainerrors.NewValidation(err.Error())
+	}
+	// Re-check on every scan, not only at rule creation: a permission can be
+	// narrowed after a rule exists, and the candidate report carries the raw
+	// values of both sides of each pair.
+	attr, err := i.attrs.Get(ctx, attrID)
+	if err != nil {
+		return nil, err
+	}
+	if !uow.AccessFromContext(ctx).CanRead(attr.InternalName()) {
+		return nil, domainerrors.NewNotFound("match_rule", rawRuleID)
 	}
 
 	entities, values, truncated, err := i.loadEntityValues(ctx, attrID)

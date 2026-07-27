@@ -352,29 +352,22 @@ func (r *attributeDefinitionRepository) GetMany(ctx context.Context, ids []value
 		keys = append(keys, id.String())
 	}
 
-	var snaps map[string]domainattribute.Snapshot
-	var err error
-	if r.inTx {
-		snaps, err = r.batchByID(ctx, keys)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		snaps = make(map[string]domainattribute.Snapshot, len(keys))
-		for _, k := range keys {
-			snap, lerr := load(ctx, r.byID, k)
-			if lerr != nil {
-				return nil, lerr
-			}
-			snaps[k] = snap
-		}
+	// One query for the whole key set, in or out of a transaction. Routing the
+	// keys through the dataloader here would await each thunk before issuing
+	// the next, so every key would close its own batch and pay the full batch
+	// window — N round trips for a call whose contract is one. GetMany already
+	// holds the complete key set, which is exactly what the loader exists to
+	// accumulate.
+	snaps, err := r.batchByID(ctx, keys)
+	if err != nil {
+		return nil, err
 	}
 
 	out := make([]*domainattribute.Definition, 0, len(keys))
 	for _, k := range keys {
-		snap := snaps[k]
-		if snap.ID.IsZero() {
-			return nil, domainerrors.NewNotFound(domainattribute.AggregateType, k)
+		snap, ok := snaps[k]
+		if !ok || snap.ID.IsZero() {
+			continue // absent by contract; the caller decides what a miss means
 		}
 		out = append(out, domainattribute.Rehydrate(snap))
 	}

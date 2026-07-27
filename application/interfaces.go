@@ -6,6 +6,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 
@@ -17,6 +18,7 @@ import (
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	apperasure "github.com/zkrebbekx/flexitype/application/erasure"
 	appfeed "github.com/zkrebbekx/flexitype/application/feed"
+	"github.com/zkrebbekx/flexitype/application/fieldacl"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apprevision "github.com/zkrebbekx/flexitype/application/revision"
@@ -27,6 +29,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	appwebhook "github.com/zkrebbekx/flexitype/application/webhook"
+	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
 
@@ -161,6 +164,7 @@ func (i *Interactors) Units() *appunit.Interactor { return i.units }
 // ActivityInteractor serves the audit-log read side.
 type ActivityInteractor struct {
 	log activity.Log
+	acl *fieldacl.Resolver
 }
 
 // ActivityListInput holds filter and pagination arguments.
@@ -201,8 +205,53 @@ func (a *ActivityInteractor) List(ctx context.Context, in ActivityListInput) (*A
 	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(e activity.Entry) string {
 		return db.EncodeKeyset(db.KeysetTime(e.OccurredAt), e.ID.String())
 	})
+	items, err = a.redact(ctx, items)
+	if err != nil {
+		return nil, err
+	}
 	return &ActivityListOutput{
 		Items:    items,
 		PageInfo: info,
 	}, nil
+}
+
+// redact masks the value fields of activity entries whose attribute the
+// principal may not read. The audit skeleton — actor, action, entity,
+// timestamp — always survives, so the log still proves that a change
+// happened; only the before/after values are replaced, and each masked entry
+// carries the redaction marker so a reader can tell a mask from an absent
+// value.
+//
+// Without this, the audit log is a complete second copy of every value ever
+// written, reachable by any principal the field ACL restricts elsewhere.
+func (a *ActivityInteractor) redact(ctx context.Context, items []activity.Entry) ([]activity.Entry, error) {
+	if a.acl == nil || uow.AccessFromContext(ctx).Admin || len(items) == 0 {
+		return items, nil
+	}
+	var ids []valueobjects.AttributeDefinitionID
+	for _, e := range items {
+		for _, raw := range []json.RawMessage{e.Before, e.After} {
+			if id, ok := fieldacl.PayloadAttribute(raw); ok {
+				ids = append(ids, id)
+			}
+		}
+	}
+	readable, err := a.acl.Readable(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for idx := range items {
+		for _, field := range []*json.RawMessage{&items[idx].Before, &items[idx].After} {
+			id, ok := fieldacl.PayloadAttribute(*field)
+			if !ok || readable[id.String()] {
+				continue
+			}
+			masked, err := fieldacl.MaskPayload(*field)
+			if err != nil {
+				return nil, err
+			}
+			*field = masked
+		}
+	}
+	return items, nil
 }

@@ -394,6 +394,34 @@ No file configured → auth disabled (development mode). Set
 `FLEXITYPE_REQUIRE_AUTH=true` in production to refuse booting without an account
 source.
 
+#### Field permissions
+
+A field permission names an attribute and a level: `none`, `read` or `write`.
+An account holding the `admin` scope, or holding no field permissions at all,
+reads and writes every attribute.
+
+The permission set applies to every surface that returns an attribute value:
+
+| Surface | Behaviour for an unreadable attribute |
+| --- | --- |
+| `GET /api/v1/values`, `ListByEntity`, `Get` by id | the value is omitted; a `Get` by id returns `404` |
+| Grid, facets, CSV export, FQL | the attribute is unknown — it cannot be selected, bucketed or filtered |
+| Revisions (`Get`, `AsOf`, `Diff`) | the value is omitted from the snapshot and from the diff |
+| Activity log | the audit entry survives; its `before`/`after` values are `null` and the entry carries `"redacted": true` |
+| Events feed | the envelope and its sequence survive; the payload's value fields are `null` and it carries `"redacted": true` |
+| Media download | `GET /api/v1/media/{key}` returns `404` |
+| Duplicate detection | a match rule on the attribute cannot be created, and an existing rule cannot be scanned |
+
+Writes are symmetric: a `write` level is required to set or remove a value, and
+removing a whole entity requires `write` on every attribute that entity holds.
+
+Embedders stamp the policy themselves with `uow.WithAccess`. Set
+`uow.Access.Default` to `uow.PermNone` to turn the permission set into an
+allow-list, so an attribute added later is unreadable until it is granted.
+Select `flexitype.WithFailClosedACL()` so a request that carries no policy
+denies everything instead of granting admin, and stamp `uow.WithSystemAccess`
+on host-owned background work that has no principal.
+
 #### Runtime provisioning (multi-tenant control plane)
 
 Instead of (or as well as) a static file, run with `FLEXITYPE_PROVISIONING=true`

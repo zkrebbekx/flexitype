@@ -26,7 +26,15 @@ type Repository interface {
 	// Get loads one definition by ID (batched).
 	Get(ctx context.Context, id valueobjects.AttributeDefinitionID) (*Definition, error)
 
-	// GetMany loads many definitions in one round trip, preserving order.
+	// GetMany loads many definitions in one round trip, preserving the order
+	// of ids. An id with no row is skipped rather than reported, so the result
+	// may be shorter than ids.
+	//
+	// The caller decides what a miss means, because the two callers disagree:
+	// the search indexer skips the value, while the field ACL treats an
+	// unresolvable attribute as unreadable. Returning NotFound here would make
+	// one page of the activity log or the events feed fail outright when it
+	// referenced an attribute a purge had since removed.
 	GetMany(ctx context.Context, ids []valueobjects.AttributeDefinitionID) ([]*Definition, error)
 
 	// GetForUpdate loads one definition with a row lock. Only valid on a

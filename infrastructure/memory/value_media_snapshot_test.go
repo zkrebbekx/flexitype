@@ -100,12 +100,12 @@ func TestUploadMediaGuards(t *testing.T) {
 			})
 
 			Convey("And the caller's tenant owns the object key", func() {
-				owned, err := it.Values().MediaKeyOwned(ctx, snap.Value.Media().ObjectKey)
+				owned, err := it.Values().MediaKeyReadable(ctx, snap.Value.Media().ObjectKey)
 				So(err, ShouldBeNil)
 				So(owned, ShouldBeTrue)
 
 				other := uow.WithTenant(context.Background(), valueobjects.TenantID("other"))
-				owned, err = it.Values().MediaKeyOwned(other, snap.Value.Media().ObjectKey)
+				owned, err = it.Values().MediaKeyReadable(other, snap.Value.Media().ObjectKey)
 				So(err, ShouldBeNil)
 				So(owned, ShouldBeFalse)
 			})

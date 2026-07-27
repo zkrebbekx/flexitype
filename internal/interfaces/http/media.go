@@ -51,17 +51,20 @@ func (s *server) downloadMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := chi.URLParam(r, "objectKey")
-	// Confirm the caller's tenant owns this object key before serving it. Keys
-	// are flat ULIDs in a shared blob namespace and leak into value payloads,
-	// exports and revision snapshots, so streaming one unchecked is a
-	// cross-tenant file read (IDOR). A mismatch is a NotFound — the same
-	// response as a missing key, so ownership isn't probeable.
-	owned, err := application.FromContext(r.Context()).Values().MediaKeyOwned(r.Context(), key)
+	// Confirm the caller's tenant owns this object key, and that the caller may
+	// read an attribute referencing it, before serving the bytes. Keys are flat
+	// ULIDs in a shared blob namespace and leak into value payloads, exports and
+	// revision snapshots, so streaming one unchecked is a cross-tenant file read
+	// (IDOR); serving one for an unreadable attribute defeats the field ACL that
+	// masks the same value on every other read surface. Either failure is a
+	// NotFound — the same response as a missing key, so neither ownership nor
+	// permission is probeable.
+	readable, err := application.FromContext(r.Context()).Values().MediaKeyReadable(r.Context(), key)
 	if err != nil {
 		writeError(w, s.log, err)
 		return
 	}
-	if !owned {
+	if !readable {
 		writeError(w, s.log, domainerrors.NewNotFound("media", key))
 		return
 	}

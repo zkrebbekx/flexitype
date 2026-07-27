@@ -12,6 +12,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/activity"
 	"github.com/zkrebbekx/flexitype/application/appctx"
+	"github.com/zkrebbekx/flexitype/application/fieldacl"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	appunit "github.com/zkrebbekx/flexitype/application/unit"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -424,6 +425,15 @@ func (i *Interactor) RemoveEntity(ctx context.Context, rawTypeDefID, rawEntityID
 			return domainerrors.NewNotFound("entity", rawEntityID)
 		}
 
+		// A cascade delete removes every value of the entity, so it needs write
+		// permission on every attribute it touches. Without this check a
+		// principal barred from writing one attribute could still erase that
+		// attribute's values by removing the whole entity — the single-value
+		// Remove and removeScopedWithin paths already enforce it.
+		if err := i.assertWritableValues(ctx, vals); err != nil {
+			return err
+		}
+
 		for _, av := range vals {
 			before := av.Snapshot()
 			evts, err := av.Remove(i.now())
@@ -698,13 +708,23 @@ func (i *Interactor) Get(ctx context.Context, rawID string) (*domainvalue.Snapsh
 	return &snap, nil
 }
 
-// MediaKeyOwned reports whether the caller's tenant owns a media value backed
-// by objectKey. The media download handler calls it before streaming a blob:
-// object keys are shared-namespace ULIDs that leak into value payloads, exports
-// and revision snapshots, so serving one without an ownership check is a
-// cross-tenant file read (IDOR).
-func (i *Interactor) MediaKeyOwned(ctx context.Context, objectKey string) (bool, error) {
-	return i.values.MediaKeyBelongsToTenant(ctx, uow.TenantFromContext(ctx), objectKey)
+// MediaKeyReadable reports whether the caller may download the blob behind
+// objectKey. The media download handler calls it before streaming.
+//
+// Two conditions must hold. The caller's tenant must own a value referencing
+// the key — object keys are shared-namespace ULIDs that leak into value
+// payloads, exports and revision snapshots, so serving one without an
+// ownership check is a cross-tenant file read (IDOR). And the caller must be
+// able to read at least one attribute that references it, so the field ACL
+// that redacts a media value on Get and ListByEntity also governs the bytes
+// behind it. A caller who obtains a key for an attribute it may not read gets
+// the same NotFound as for a key that does not exist.
+func (i *Interactor) MediaKeyReadable(ctx context.Context, objectKey string) (bool, error) {
+	attrs, err := i.values.MediaKeyAttributes(ctx, uow.TenantFromContext(ctx), objectKey)
+	if err != nil {
+		return false, err
+	}
+	return fieldacl.New(i.attrs).AnyReadable(ctx, attrs)
 }
 
 // ListByEntity loads every live value of one entity — the hydration hot
@@ -758,32 +778,62 @@ func (i *Interactor) ListByEntities(ctx context.Context, rawEntityIDs []string) 
 	return i.redactUnreadable(ctx, snaps)
 }
 
+// assertWritableValues rejects the operation unless the principal may write
+// every attribute the values belong to. It reports the first offending
+// attribute by internal name so the caller can see which permission is
+// missing.
+func (i *Interactor) assertWritableValues(ctx context.Context, vals []*domainvalue.AttributeValue) error {
+	access := uow.AccessFromContext(ctx)
+	if access.Admin || len(vals) == 0 {
+		return nil
+	}
+	acl := fieldacl.New(i.attrs)
+	ids := make([]valueobjects.AttributeDefinitionID, 0, len(vals))
+	for _, av := range vals {
+		ids = append(ids, av.AttributeDefinitionID())
+	}
+	writable, err := acl.Writable(ctx, ids)
+	if err != nil {
+		return err
+	}
+	names, err := acl.Names(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if writable[id.String()] {
+			continue
+		}
+		name := names[id.String()]
+		if name == "" {
+			name = id.String()
+		}
+		return domainerrors.NewForbidden("attribute " + name + " is not writable by this principal")
+	}
+	return nil
+}
+
 // redactUnreadable drops values of attributes the principal may not read.
 // Admins (and unauthenticated development) keep everything.
 func (i *Interactor) redactUnreadable(ctx context.Context, snaps []domainvalue.Snapshot) ([]domainvalue.Snapshot, error) {
-	access := uow.AccessFromContext(ctx)
-	if access.Admin {
+	if uow.AccessFromContext(ctx).Admin {
 		return snaps, nil
 	}
 	ids := make([]valueobjects.AttributeDefinitionID, 0, len(snaps))
-	seen := map[string]bool{}
 	for _, s := range snaps {
-		if id := s.AttributeDefinitionID; !seen[id.String()] {
-			seen[id.String()] = true
-			ids = append(ids, id)
-		}
+		ids = append(ids, s.AttributeDefinitionID)
 	}
-	defs, err := i.attrs.GetMany(ctx, ids)
+	// An attribute the repository cannot resolve is unreadable, not readable:
+	// resolving is what proves the policy permits it. The shared resolver
+	// applies that rule everywhere, so no surface can drift into treating an
+	// unresolvable attribute as unrestricted.
+	readable, err := fieldacl.New(i.attrs).Readable(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
-	name := make(map[string]string, len(defs))
-	for _, d := range defs {
-		name[d.ID().String()] = d.InternalName()
-	}
 	out := snaps[:0]
 	for _, s := range snaps {
-		if access.CanRead(name[s.AttributeDefinitionID.String()]) {
+		if readable[s.AttributeDefinitionID.String()] {
 			out = append(out, s)
 		}
 	}
@@ -906,12 +956,17 @@ func (i *Interactor) List(ctx context.Context, in ListInput) (*ListOutput, error
 	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(av *domainvalue.AttributeValue) string {
 		return db.EncodeKeyset(av.ID().String())
 	})
-	out := &ListOutput{
-		Items:    make([]domainvalue.Snapshot, 0, len(items)),
-		PageInfo: info,
-	}
+	snaps := make([]domainvalue.Snapshot, 0, len(items))
 	for _, av := range items {
-		out.Items = append(out.Items, av.Snapshot())
+		snaps = append(snaps, av.Snapshot())
 	}
-	return out, nil
+	// The field ACL applies here exactly as it does on every other value read
+	// surface. The caller chooses attribute_definition_id and type_definition_id
+	// as query parameters, so without this an unreadable attribute's values are
+	// listable tenant-wide by asking for them directly.
+	snaps, err = i.redactUnreadable(ctx, snaps)
+	if err != nil {
+		return nil, err
+	}
+	return &ListOutput{Items: snaps, PageInfo: info}, nil
 }

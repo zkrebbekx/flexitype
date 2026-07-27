@@ -68,11 +68,17 @@ type Repository interface {
 	// row count. Only valid on a transaction-bound repository.
 	PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) (purgedMediaKeys []string, count int, err error)
 
-	// MediaKeyBelongsToTenant reports whether the tenant holds a media value
-	// (live or archived) backed by the given object key. Media object keys are
-	// fresh per-upload ULIDs in a shared blob namespace, so the media download
-	// handler must confirm ownership before streaming a key — otherwise any
-	// tenant could read another's file by its key (IDOR). Archived rows count:
-	// their blobs may still exist and remain the owning tenant's.
-	MediaKeyBelongsToTenant(ctx context.Context, tenant valueobjects.TenantID, objectKey string) (bool, error)
+	// MediaKeyAttributes returns the distinct attribute definitions of every
+	// value row in the tenant, live or archived, that references the object
+	// key. An empty result means the tenant holds no such value.
+	//
+	// The media download handler needs both facts this returns. Ownership
+	// comes first: media object keys are fresh per-upload ULIDs in a shared
+	// blob namespace, so streaming a key without confirming the tenant owns it
+	// is a cross-tenant file read (IDOR). The attribute identity comes second:
+	// a blob is only reachable through an attribute the principal may read, so
+	// the download path applies the same field ACL the value reads apply.
+	// Archived rows count for both: their blobs may still exist and remain the
+	// owning tenant's.
+	MediaKeyAttributes(ctx context.Context, tenant valueobjects.TenantID, objectKey string) ([]valueobjects.AttributeDefinitionID, error)
 }

@@ -49,8 +49,17 @@ Highlights:
   with `ListOptions{Total: true}`.
 - **Typed errors**: `*client.APIError` with `errors.Is` sentinels
   (`ErrNotFound`, `ErrConflict`, `ErrValidation`, `ErrForbidden`, …).
-- **Conformance-tested**: a CI test drives this client against the real handler
-  in-process, so it can never drift from the API.
+- **Conformance-tested, partially**: CI drives the client against the real
+  handler in-process. The suite covers the paths it exercises — it does not
+  cover every method, so read it as a regression net, not a guarantee.
+
+  This bullet used to claim the client "can never drift from the API". It
+  drifted five times in services the suite never touched: the event cursors
+  sent field names the server does not read, `Entities().AsOf` returned an
+  empty slice with a nil error on every call, `Revisions().Diff` and
+  `Admin().ListServiceAccounts` could not succeed at all. Each is now covered.
+  `TestClientRouteCoverage` additionally fails when a REST route has no client
+  method, which is the gap that let whole services go untested.
 
 The client depends only on the standard library.
 

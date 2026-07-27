@@ -41,10 +41,15 @@ stopping him from writing an invalid value.
 ```
 Sidebar (fixed, icon+label)
 ├── Types            → /types                (primary landing)
-│    └── Type detail → /types/:id            tabs: Attributes | Dependencies | Entities
+│    └── Type detail → /types/:id            tabs: Attributes | Relationships |
+│                                                  Dependencies | Entities
 ├── Entities         → /entities             cross-type browser (pick type → list)
 │    └── Inspector   → /entities/:typeId/:entityId
-├── Activity         → /activity             global stream w/ filters
+├── GraphQL          → /graphql              read-only query console
+├── Delivery         → /delivery             shown when event delivery is on
+├── Activity         → /activity             global stream w/ filters (hidden
+│                                            when the activity feature is off)
+├── Settings         → /settings
 └── (footer) health chip + version
 ```
 
@@ -73,8 +78,14 @@ empty-state pattern (explain the concept + primary action).
   `DEPENDENCY_VIOLATION`, `ARCHIVED`, `NOT_FOUND` map to distinct, plain
   language inline messages — never a toast with a raw 422.
 - **Archive is soft and visible.** Archived items stay listable behind a
-  filter toggle, rendered dimmed with a Restore affordance. No destructive
-  irreversibility anywhere in the console.
+  filter toggle, rendered dimmed with a Restore affordance.
+- **Schema and data objects are never hard-deleted from the console.** Three
+  configuration objects are the exception, because they hold no entity data
+  and the API offers no soft delete for them: webhook subscriptions (with
+  their delivery history), saved views and match rules. Each is behind a
+  confirm modal that says the deletion cannot be undone. This paragraph used
+  to claim there was "no destructive irreversibility anywhere in the
+  console", which its own confirm modals contradicted.
 - **Audit diff.** Before/after JSON rendered as a two-column diff with
   changed keys highlighted; identical keys collapsed by default.
 
@@ -103,10 +114,14 @@ owned kit keeps the bundle lean and the look coherent.
 ## Component kit
 
 Button (primary/secondary/ghost/danger), Input, Select, Toggle, Badge,
-Chip (data-type), Table (sticky header, skeleton rows), Drawer, Modal
-(confirm), Tabs, Toast (errors that aren't inline), EmptyState, JsonView
-(collapsible), DiffView, Pagination (cursor-based), PageHeader
-(breadcrumb + actions).
+TypeChip (data-type), SkeletonRows, Drawer, Modal (confirm), Tabs, Toasts
+(errors that aren't inline), EmptyState, ErrorState, JsonView (collapsible),
+DiffView, Pagination (cursor-based), PageHeader (breadcrumb + actions),
+RelativeTime.
+
+There is no shared Table component: each list page renders its own table,
+because the column sets have little in common. Pages share SkeletonRows for
+the loading state instead.
 
 ## Stack (principal frontend engineer decision)
 
@@ -114,7 +129,7 @@ Chip (data-type), Table (sticky header, skeleton rows), Drawer, Modal
 project's direction to evaluate Vue; its SFC model suits a form-heavy
 console and Composition API composables map cleanly onto the API client.
 
-- **Vite 7** — build/dev; dev server proxies `/api` to the Go service so
+- **Vite 6** — build/dev; dev server proxies `/api` to the Go service so
   no CORS pathway exists to misconfigure.
 - **vue-router 4** — flat route table mirroring the IA above.
 - **@tanstack/vue-query 5** — server state: caching, invalidation after

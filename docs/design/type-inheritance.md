@@ -55,8 +55,15 @@ when its endpoint matches any ancestor.
 ## Effective attributes
 
 `GET /type-definitions/{id}/effective-attributes` returns the chain-resolved
-attribute list, each entry tagged with the declaring type. Own attributes
-first, then each ancestor's, root last. The entity inspector, dependency
+attribute list, each entry tagged with the declaring type.
+
+The list is ordered by the attributes' own presentation order — `(group,
+sort_order)` — not by where they were declared. The declaring type is only a
+stable-sort tiebreak, so an inherited attribute and an own attribute
+interleave when their group and sort order say they should. Order the schema
+for the form you want; do not rely on inheritance depth to do it. (This
+paragraph used to promise "own attributes first, then each ancestor's, root
+last", which the resolver has never done.) The entity inspector, dependency
 builder and validation paths all consume this one shape, so the subtype
 experience is identical to the plain-type experience everywhere.
 

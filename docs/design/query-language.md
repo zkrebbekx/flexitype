@@ -13,7 +13,7 @@ A query runs against one root type (subtypes included by default) and is a
 boolean expression over conditions:
 
 ```
-category = "bike" and (min(price) >= 500 or "sale" in tags) and
+category = "bike" and (min(price) >= 500 or tags in ("sale")) and
 child(supplied_by) { contains(contact_email, "acme") and link.lead_time_days <= 14 }
 ```
 
@@ -25,7 +25,7 @@ or         := and ( OR and )*
 and        := unary ( AND unary )*
 unary      := NOT unary | primary
 primary    := "(" expr ")" | traversal | condition
-traversal  := ("child" | "parent") "(" ident ")" "{" expr "}"
+traversal  := ("child" | "parent" | "linked") "(" ident ")" "{" expr "}"
 condition  := comparison | inExpr | boolFunc
 comparison := operand op literal
 inExpr     := operand IN "(" literal ("," literal)* ")"
@@ -34,15 +34,34 @@ boolFunc   := RANGE "(" operand "," literal "," literal ")"
             | CONTAINS  "(" field "," literal ")"
             | ICONTAINS "(" field "," literal ")"
             | IEQUALS   "(" field "," literal ")"
+            | MATCHES   "(" literal ")"
 operand    := (MIN | MAX | COUNT | LENGTH) "(" field ")" | field
 field      := ident | "link" "." ident | "type"
 op         := "=" | "!=" | ">" | ">=" | "<" | "<=" | "isa"
             | EQ | NEQ | GT | GTE | LT | LTE
 literal    := string | number | true | false | ident
+quantity   := number ident        // a bare unit suffix: `weight > 1500 g`
 ```
 
 Keywords are case-insensitive; identifiers are attribute / relationship /
 type internal names. Strings take double or single quotes.
+
+Three constructs above are easy to miss, and two of them are mandatory
+rather than optional:
+
+- **`linked(rel) { ... }`** traverses a relationship without naming a
+  direction. A **symmetric** relationship has no parent or child, so
+  `child()`/`parent()` are refused for one and `linked()` is the only way to
+  traverse it.
+- **A unit suffix is required on a quantity comparison.** `weight > 1500`
+  is refused; write `weight > 1500 g`. Without the unit the bound has no
+  meaning, because values are stored against a family's base unit.
+- **`matches("...")`** is best-effort relevance search. It is deliberately
+  excluded from the backend-parity corpus (see the note below), so prefer
+  `contains`/`iequals` when you need a deterministic predicate.
+
+The left side of `in` is the attribute, not the literal: write
+`tags in ("sale")`, not `"sale" in tags`.
 
 ## Semantics
 
@@ -81,6 +100,6 @@ Identifiers never reach SQL — only resolved ULIDs and bound `?` arguments
 do.
 
 ```
-GET  /api/v1/query?type=<internal_name>&q=<expr>&include_descendants=&limit=&cursor=
-POST /api/v1/query/validate   {type, q} → bound field report or positioned error
+GET  /api/v1/query?type=<internal_name>&q=<expr>&limit=&cursor=&total=&locale=&channel=
+POST /api/v1/query/validate   {type, q} → {"valid": true} or a positioned error
 ```

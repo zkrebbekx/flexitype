@@ -456,6 +456,22 @@ func (s *Service) Migrate(ctx context.Context) error {
 	return postgres.Migrate(ctx, s.transactor)
 }
 
+// SchemaDrift reports migration versions the database has applied that this
+// binary does not carry — the schema is newer than this build.
+//
+// A rolling deploy makes that state normal for a while: the first new pod
+// migrates while the previous generation keeps serving. flexitype supports it
+// (each release's migrations stay compatible with the previous binary, see
+// docs/upgrades.md), but an operator should be able to see a mixed-version
+// fleet rather than infer it. It returns nothing for an in-memory service and
+// nothing when the schema matches.
+func (s *Service) SchemaDrift(ctx context.Context) ([]int, error) {
+	if s.pool == nil {
+		return nil, nil
+	}
+	return postgres.UnknownSchemaVersions(ctx, s.pool)
+}
+
 // Interactors returns a request-scoped usecase set. Call once per request
 // or unit of work so dataloader caches stay request-local.
 func (s *Service) Interactors(ctx context.Context) *application.Interactors {

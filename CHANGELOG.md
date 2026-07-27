@@ -7,6 +7,51 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Changed — migrations no longer block a live fleet
+
+An upgrade used to apply every pending migration in one transaction. That form
+cannot carry the statements a large deployment needs, and migration 000019 made
+the consequence concrete: `CREATE TRIGGER` on the value table takes
+`SHARE ROW EXCLUSIVE`, and holding it through the whole-table backfill in the
+same transaction blocked every value write in the fleet for the duration —
+with health checks still green, because reads were unaffected.
+
+- Each migration now applies in **its own transaction**, in version order,
+  under a session-scoped advisory lock held for the whole run. A failure
+  part-way leaves earlier migrations applied and resumes at the failing one
+  (#319, #339).
+- A migration file may declare `-- +flexitype:no-transaction`, which runs its
+  statements one at a time outside any transaction. Migration 000018 now uses
+  it to build its value-table indexes `CONCURRENTLY` instead of taking a
+  write-blocking lock for the whole build (#319).
+- Data movement moved out of `.sql` files into **backfill steps** that run
+  after the schema is in place, in bounded batches, each committing on its own
+  and tracked in `flexitype_schema_backfill`. Migration 000019's whole-table
+  aggregate is now the `000019_entity_summary` step. Its trigger keeps new
+  writes correct from the moment it exists, so the backfill only catches up
+  history and may run while the fleet serves traffic (#339).
+- A binary that finds schema versions it does not carry logs a warning at
+  startup, so a mixed-version fleet is visible during a rolling deploy rather
+  than inferred. Embedders read the same fact with `Service.SchemaDrift`
+  (#319).
+- `docs/upgrades.md` states the rolling-upgrade and rollback contract: release
+  N's migrations stay compatible with release N-1's binary, rollback is
+  redeploying the previous binary, and `MigrateDown` is a development tool. It
+  also lists the rules a migration must follow, two of which CI enforces
+  (#319).
+
+### Fixed
+
+- The Postgres-backed test packages no longer share one schema. Go runs
+  different packages' tests in parallel and each suite truncated and seeded the
+  same table names, so `go test ./...` failed intermittently with a
+  duplicate-key error deep inside a fixture helper, in a test unrelated to the
+  change under review. `internal/testdb` now gives each package its own schema,
+  which removes the shared state rather than serializing around it (#297).
+- The migration advisory lock is keyed by schema instead of being a constant,
+  so two flexitype schemas in one database no longer serialize against each
+  other's upgrades.
+
 ## [1.2.0] — 2026-07-18
 
 ### Changed — REST behaviour

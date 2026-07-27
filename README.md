@@ -521,6 +521,22 @@ Production builds embed the console into the binary: `npm run build` in
 `web/`, then `go build ./cmd/flexitype`. A committed stub keeps `go build`
 working without Node.
 
+## Upgrades
+
+Migrations run at startup by default, each in its own transaction, serialized
+across replicas by an advisory lock. Index builds on the value table run
+`CONCURRENTLY` and data backfills run in bounded batches after the schema is in
+place, so an upgrade never holds a write-blocking lock over a whole-table scan.
+
+Release N's migrations stay compatible with release N-1's binary, so a rolling
+deploy is safe and a rollback is redeploying the previous binary — not running
+`MigrateDown`, which is a development tool. A binary that finds a schema newer
+than itself logs a warning, so a mixed-version fleet is visible rather than
+inferred.
+
+The full contract, and the rules for writing a migration that is safe against a
+live fleet, are in [docs/upgrades.md](docs/upgrades.md).
+
 ## Development
 
 ```bash

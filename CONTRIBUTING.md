@@ -16,6 +16,24 @@ Some tests exercise PostgreSQL; CI runs them against a Postgres 16 service.
 Locally, point the DB env vars (see [docs/configuration.md](docs/configuration.md))
 at any Postgres 16 instance.
 
+Each DB-backed test package gets **its own schema** inside that database, via
+`internal/testdb`. Go runs different packages' tests in parallel, and the
+suites truncate and seed the same table names, so sharing one schema made them
+collide non-deterministically — a duplicate-key error deep inside a fixture
+helper, in a test unrelated to the change under review, which a re-run cleared.
+
+If you add a DB-backed test package, call `testdb.Open(t, "<unique-name>")` and
+`testdb.TruncateAll(t, pool)` rather than connecting to the DSN directly, and
+pick a name no other package uses.
+
+### Migrations
+
+Read [docs/upgrades.md](docs/upgrades.md) before adding one. An index on
+`flexitype_attribute_value` must be built `CONCURRENTLY` in a file declaring
+`-- +flexitype:no-transaction`, and moving data belongs in a batched backfill
+step rather than in the migration. `TestEmbeddedMigrationDirectives` enforces
+part of this in CI.
+
 ### Coverage
 
 ```bash

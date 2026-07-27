@@ -44,6 +44,22 @@ type QueryExecer interface {
 	RawQuerier
 }
 
+// SessionConnector pins one pooled connection for the duration of a callback.
+//
+// It exists for session-scoped state, which a pool cannot carry: a
+// session-level advisory lock must be acquired and released on the same
+// connection, and statements that Postgres forbids inside a transaction block
+// — CREATE INDEX CONCURRENTLY above all — must run on a connection the caller
+// controls rather than on whichever one the pool hands out next.
+//
+// Only the pool-level transactor implements it. A transaction-bound transactor
+// does not, because it already holds a connection.
+type SessionConnector interface {
+	// WithConn runs fn against one pinned connection and returns it to the
+	// pool afterwards, whether fn succeeds or fails.
+	WithConn(ctx context.Context, fn func(QueryExecer) error) error
+}
+
 // Tx is an opaque handle to an open transaction. The unit of work hands it to a
 // domain repository's WithTx (and to the outbox and activity-log sinks); each
 // backend down-casts it to the concrete transaction type it understands — the

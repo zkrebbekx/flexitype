@@ -128,7 +128,7 @@ func TestAttributeCreateValidation(t *testing.T) {
 
 			Convey("Then the shadowing attempt conflicts and names where it is declared", func() {
 				So(domainerrors.IsConflict(err), ShouldBeTrue)
-				So(err.Error(), ShouldContainSubstring, "shadow")
+				So(err.Error(), ShouldContainSubstring, "already declared elsewhere in the type hierarchy")
 				So(domainerrors.DetailsOf(err)["declared_in"], ShouldEqual, "product")
 			})
 		})
@@ -147,7 +147,7 @@ func TestAttributeCreateValidation(t *testing.T) {
 
 			Convey("Then the shadowing attempt conflicts from the other direction too", func() {
 				So(domainerrors.IsConflict(err), ShouldBeTrue)
-				So(err.Error(), ShouldContainSubstring, "shadow")
+				So(err.Error(), ShouldContainSubstring, "already declared elsewhere in the type hierarchy")
 			})
 		})
 

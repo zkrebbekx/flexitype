@@ -262,6 +262,26 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			}
 		}
 
+		// An archived type accepts no new data. Archiving was a pure soft
+		// delete with no write-path guard, while the FQL binder excludes
+		// archived types from query scope — so a write under an archived type
+		// succeeded and the data was then unqueryable, invisible to the very
+		// surface an operator would use to find it.
+		//
+		// The materializer is exempt: it may clear or rewrite a derived value
+		// on a type being wound down, and blocking it would strand stale
+		// computed values that the archive is meant to retire.
+		if !in.Internal {
+			typeDefs := i.typeDefs.WithTx(tx)
+			entityTypeDef, terr := typeDefs.Get(ctx, entityType)
+			if terr != nil {
+				return terr
+			}
+			if entityTypeDef.IsArchived() {
+				return domainerrors.NewArchived("type_definition", entityType.String())
+			}
+		}
+
 		// Computed attributes are read-only: only the materializer (Internal)
 		// may write their derived value.
 		if def.IsComputed() && !in.Internal {

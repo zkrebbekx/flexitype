@@ -547,9 +547,24 @@ func (e cellEntry) text() string {
 	return string(e.Value)
 }
 
-// multiValueCellKey tags the multi-value cell format, so it cannot be
-// confused with a JSON value that happens to share its shape.
+// multiValueCellKey tags the LEGACY multi-value cell format, still accepted on
+// import for files an earlier release produced.
 const multiValueCellKey = "values"
+
+// multiValueCellPrefix marks a multi-value cell OUT OF BAND.
+//
+// Every in-band sentinel drawn from the JSON grammar can be forged by a JSON
+// payload. The format was a bare array of {"value",…} objects; retagging it
+// as {"values":[…]} moved WHICH documents collide rather than whether they
+// can, and the tagged shape is exactly what an earlier export of a json
+// column looks like — so re-importing this tool's own output turned one
+// document into two writes to a single-valued attribute, kept the last, and
+// reported one row written with zero errors.
+//
+// A '#' cannot begin a JSON document, so a cell carrying this prefix is never
+// a value and a value never carries it. The marker therefore works for a
+// json column too, which no in-band form can.
+const multiValueCellPrefix = "#flexitype-values:"
 
 // scopedCell decodes a cell holding several values.
 //
@@ -561,10 +576,32 @@ const multiValueCellKey = "values"
 // tagged form is one value, whatever its shape.
 //
 // The untagged form is still ACCEPTED on import, so a file exported by an
-// earlier release still loads — but only for a non-json column, where it
-// cannot be confused with the data.
+// earlier release still loads.
+//
+// NEITHER form is looked for on a json column. See below: that is what makes
+// the exclusion effective, rather than leaving it behind a branch the tagged
+// form never reaches.
 func scopedCell(cell string, dt valueobjects.DataType) ([]cellEntry, bool) {
+	// A json cell is ALWAYS exactly one value, so the multi-value format has
+	// no meaning there and is not looked for. Any in-band sentinel drawn from
+	// the JSON grammar can be forged by a JSON payload: the first format was
+	// a bare array, retagging it to {"values":[…]} only moved WHICH documents
+	// collide — and `{"values":[{"value":…},…]}` is what an earlier export of
+	// a json column looks like, so re-importing this tool's own output was
+	// enough to reproduce it. One document became two writes to a
+	// single-valued attribute, the second overwrote the first, and the report
+	// said one row written with zero errors.
 	trimmed := strings.TrimSpace(cell)
+	if rest, found := strings.CutPrefix(trimmed, multiValueCellPrefix); found {
+		return decodeCellEntries(rest)
+	}
+	// Below here are the LEGACY in-band forms, kept so a file an earlier
+	// release exported still loads. Neither is looked for on a json column:
+	// both are shapes a json document can have, and reading a document as a
+	// member list is the silent corruption this prefix exists to end.
+	if dt == valueobjects.DataTypeJSON {
+		return nil, false
+	}
 	if strings.HasPrefix(trimmed, "{") {
 		var tagged struct {
 			Values []cellEntry `json:"values"`
@@ -579,11 +616,17 @@ func scopedCell(cell string, dt valueobjects.DataType) ([]cellEntry, bool) {
 		}
 		return tagged.Values, true
 	}
-	if dt == valueobjects.DataTypeJSON || !strings.HasPrefix(trimmed, "[") {
+	if !strings.HasPrefix(trimmed, "[") {
 		return nil, false
 	}
+	return decodeCellEntries(trimmed)
+}
+
+// decodeCellEntries reads a JSON array of members, refusing one with a member
+// that carries no value.
+func decodeCellEntries(raw string) ([]cellEntry, bool) {
 	var entries []cellEntry
-	if err := json.Unmarshal([]byte(trimmed), &entries); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &entries); err != nil {
 		return nil, false
 	}
 	for _, e := range entries {
@@ -809,18 +852,18 @@ func exportCell(vals []*domainvalue.AttributeValue) string {
 	for _, v := range vals {
 		parts = append(parts, exportScoped(v))
 	}
-	// TAGGED as an object, not written as a bare array.
+	// Marked OUT OF BAND with a prefix a JSON document cannot begin with.
 	//
-	// An untagged array of {"value",…} objects is indistinguishable from a
-	// legitimate JSON payload of the same shape: exporting and re-importing
-	// `[{"value":{"x":1}},{"value":{"y":2}}]` in a json column read the cell
-	// as two scoped members and stored the last one, silently, with zero
-	// errors reported. The wrapper makes the format unambiguous.
-	raw, err := json.Marshal(map[string]any{multiValueCellKey: parts})
+	// Any in-band shape is forgeable by a payload: a bare array of
+	// {"value",…} objects is ordinary JSON, and so is {"values":[…]} — which
+	// is what this function used to write, so re-importing an export of a
+	// json column read one document as two members and kept the last,
+	// silently, with zero errors reported.
+	raw, err := json.Marshal(parts)
 	if err != nil {
 		return ""
 	}
-	return string(raw)
+	return multiValueCellPrefix + string(raw)
 }
 
 // exportScalar renders one unscoped value as the JSON the importer accepts.

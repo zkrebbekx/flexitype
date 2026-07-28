@@ -169,6 +169,48 @@ func TestSavedViewPatchIsVersionGuarded(t *testing.T) {
 			})
 		})
 
+		// Two users open the same view and both PATCH. Each request re-reads
+		// inside itself, so both compare-and-swaps passed and the second
+		// silently overwrote the first — the 409 was reachable only for
+		// writes interleaving INSIDE one request, which is not the lost
+		// update that was reported. A caller that sends the version it read
+		// gets the conflict instead.
+		Convey("When a patch carries the version the caller read", func() {
+			sort := "name asc"
+			name := "renamed"
+			_, first := svc.Interactors(ctx).SavedViews().Patch(ctx, view.ID.String(),
+				appsavedview.PatchInput{Sort: &sort, Version: &view.Version})
+			So(first, ShouldBeNil)
+
+			staleVersion := view.Version // the version read before the first patch
+			_, second := svc.Interactors(ctx).SavedViews().Patch(ctx, view.ID.String(),
+				appsavedview.PatchInput{Name: &name, Version: &staleVersion})
+
+			Convey("Then the stale second patch is refused as a conflict", func() {
+				So(second, ShouldNotBeNil)
+				So(domainerrors.IsConflict(second), ShouldBeTrue)
+			})
+
+			Convey("Then the first patch survives", func() {
+				got, gerr := svc.Interactors(ctx).SavedViews().Get(ctx, view.ID.String())
+				So(gerr, ShouldBeNil)
+				So(got.Sort, ShouldEqual, "name asc")
+				So(got.Name, ShouldEqual, "all products")
+			})
+		})
+
+		Convey("When a patch carries the CURRENT version", func() {
+			name := "renamed"
+			current := view.Version
+			got, perr := svc.Interactors(ctx).SavedViews().Patch(ctx, view.ID.String(),
+				appsavedview.PatchInput{Name: &name, Version: &current})
+
+			Convey("Then it is applied", func() {
+				So(perr, ShouldBeNil)
+				So(got.Name, ShouldEqual, "renamed")
+			})
+		})
+
 		Convey("When a full replace is written against a stale version", func() {
 			// Update is a full replace and reads the current version, so it
 			// intentionally does not conflict; the guard is on Patch, which

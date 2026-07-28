@@ -155,6 +155,19 @@ type PatchInput struct {
 	Query    *string
 	Columns  *[]string
 	Sort     *string
+	// Version, when set, is the version the CALLER read. The patch is written
+	// only if the stored version still matches, and a conflict is reported
+	// otherwise.
+	//
+	// Without it the compare-and-swap was unreachable: Patch re-read the view
+	// microseconds before writing it, so both of two users editing the same
+	// view passed their own check and the second silently overwrote the
+	// first. The 409 the store can raise only covered writes that interleaved
+	// INSIDE one request, which is not the lost update that was reported.
+	//
+	// Nil keeps the old behaviour — last write wins — so a client that does
+	// not track versions still works.
+	Version *int
 }
 
 // Patch applies only the fields the caller supplied and leaves the rest as
@@ -191,10 +204,16 @@ func (i *Interactor) Patch(ctx context.Context, rawID string, in PatchInput) (*V
 	if in.Sort != nil {
 		merged.Sort = *in.Sort
 	}
-	// Merge and write against the version this patch READ, so a concurrent
-	// write is reported rather than silently discarded. Update re-reads, so
-	// the version is threaded explicitly.
-	return i.update(ctx, id, merged, existing.Version)
+	// Merge and write against the version the CALLER read when it supplied
+	// one, so an edit made between their read and their patch is reported
+	// rather than overwritten. Without a caller version, the compare-and-swap
+	// falls back to the version this request just read, which only detects a
+	// write that interleaves inside the request.
+	expect := existing.Version
+	if in.Version != nil {
+		expect = *in.Version
+	}
+	return i.update(ctx, id, merged, expect)
 }
 
 // Get loads one view.

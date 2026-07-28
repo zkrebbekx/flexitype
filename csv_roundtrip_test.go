@@ -203,3 +203,75 @@ func TestImportOrdersEntitiesCanonically(t *testing.T) {
 		})
 	})
 }
+
+// TestJSONColumnSurvivesRoundTrip covers the silent corruption a re-import of
+// this tool's own export produced.
+//
+// The multi-value cell format was in band: first a bare array of
+// {"value",…} objects, then {"values":[…]}. Both are ordinary JSON, and the
+// second is exactly what an export of a json column looks like — so a
+// re-import read one document as two members, wrote both to a single-valued
+// attribute, kept the last, and reported one row written with zero errors. A
+// bulk migration therefore lost data with a clean report.
+func TestJSONColumnSurvivesRoundTrip(t *testing.T) {
+	Convey("Given a json attribute holding a document shaped like the cell format", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		ia := svc.Interactors(ctx)
+
+		product, err := ia.TypeDefinitions().Create(ctx, apptypedef.CreateInput{
+			InternalName: "product", DisplayName: "Product",
+		})
+		So(err, ShouldBeNil)
+		doc, err := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: product.ID.String(), InternalName: "payload",
+			DisplayName: "Payload", DataType: "json",
+		})
+		So(err, ShouldBeNil)
+
+		// The shape the tagged format used, as ordinary data.
+		const payload = `{"values":[{"value":{"x":1}},{"value":{"y":2}}]}`
+		_, err = svc.Interactors(ctx).Values().Set(ctx, appvalue.SetInput{
+			AttributeDefinitionID: doc.ID.String(), EntityID: "p1",
+			TypeDefinitionID: product.ID.String(), Value: json.RawMessage(payload),
+		})
+		So(err, ShouldBeNil)
+
+		exported, eerr := svc.Interactors(ctx).Values().Export(ctx, appvalue.ExportInput{
+			TypeDefinitionID: product.ID.String(),
+		})
+		So(eerr, ShouldBeNil)
+		So(exported.Rows, ShouldHaveLength, 1)
+		cell := func(name string) string {
+			for i, c := range exported.Columns {
+				if c == name {
+					return exported.Rows[0][i]
+				}
+			}
+			return ""
+		}
+
+		Convey("When the export is re-imported into a fresh entity", func() {
+			report, ierr := svc.Interactors(ctx).Values().Import(ctx, appvalue.ImportInput{
+				TypeDefinitionID: product.ID.String(),
+				KeyColumn:        "entity_id",
+				Mapping:          map[string]string{"payload": "payload"},
+				Columns:          exported.Columns,
+				Rows:             [][]string{{"p2", cell("payload")}},
+			})
+			So(ierr, ShouldBeNil)
+			So(report.Errors, ShouldBeEmpty)
+
+			Convey("Then the document comes back whole, not as its last member", func() {
+				vals, verr := svc.Interactors(ctx).Values().ListByEntity(ctx, product.ID.String(), "p2")
+				So(verr, ShouldBeNil)
+				So(vals, ShouldHaveLength, 1)
+
+				var got, want any
+				So(json.Unmarshal([]byte(vals[0].Value.String()), &got), ShouldBeNil)
+				So(json.Unmarshal([]byte(payload), &want), ShouldBeNil)
+				So(got, ShouldResemble, want)
+			})
+		})
+	})
+}

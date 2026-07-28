@@ -157,6 +157,11 @@ type SavedViewPatch struct {
 	Query    *string   `json:"query,omitempty"`
 	Columns  *[]string `json:"columns,omitempty"`
 	Sort     *string   `json:"sort,omitempty"`
+	// Version is the version the caller read (SavedView.Version). Sending it
+	// makes the patch a compare-and-swap: a view someone else edited in the
+	// meantime answers 409 rather than being overwritten. Leaving it nil
+	// keeps last-write-wins.
+	Version *int `json:"version,omitempty"`
 }
 
 // List returns the tenant's saved views.

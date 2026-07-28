@@ -138,3 +138,73 @@ func TestScopedCellIsTagged(t *testing.T) {
 		})
 	})
 }
+
+// TestMultiValueMarkerIsOutOfBand covers the corruption an in-band sentinel
+// could not close.
+//
+// The format was a bare array of {"value",…} objects — ordinary JSON.
+// Retagging it as {"values":[…]} moved WHICH documents collide rather than
+// whether they can, and the tagged shape is exactly what an export of a json
+// column looks like: re-importing this tool's own output read one document as
+// two members, wrote both to a single-valued attribute, kept the last, and
+// reported one row written with zero errors.
+//
+// A '#' cannot begin a JSON document, so the marker is now outside the
+// payload and works for a json column too.
+func TestMultiValueMarkerIsOutOfBand(t *testing.T) {
+	Convey("Given the marked multi-value format the export now writes", t, func() {
+		cell := multiValueCellPrefix + `[{"value":"Widget","locale":"en"},{"value":"Gadget","locale":"fr"}]`
+
+		Convey("Then it decodes for every data type, json included", func() {
+			for _, dt := range []valueobjects.DataType{
+				valueobjects.DataTypeString, valueobjects.DataTypeJSON,
+			} {
+				entries, ok := scopedCell(cell, dt)
+				So(ok, ShouldBeTrue)
+				So(entries, ShouldHaveLength, 2)
+				So(entries[0].text(), ShouldEqual, "Widget")
+			}
+		})
+	})
+
+	Convey("Given a json document shaped like the tagged format", t, func() {
+		cell := `{"values":[{"value":{"x":1}},{"value":{"y":2}}]}`
+
+		Convey("When the column is json", func() {
+			_, ok := scopedCell(cell, valueobjects.DataTypeJSON)
+
+			Convey("Then it is ONE value, so the document survives the round trip", func() {
+				So(ok, ShouldBeFalse)
+			})
+		})
+
+		Convey("When the column is not json", func() {
+			entries, ok := scopedCell(cell, valueobjects.DataTypeString)
+
+			Convey("Then the legacy tagged form still loads, so an older export imports", func() {
+				So(ok, ShouldBeTrue)
+				So(entries, ShouldHaveLength, 2)
+			})
+		})
+	})
+
+	Convey("Given a multi-valued json attribute exported and re-imported", t, func() {
+		// The round trip a bulk migration performs.
+		cell := multiValueCellPrefix + `[{"value":{"x":1}},{"value":{"y":2}}]`
+		entries, ok := scopedCell(cell, valueobjects.DataTypeJSON)
+
+		Convey("Then both documents come back, rather than the last one only", func() {
+			So(ok, ShouldBeTrue)
+			So(entries, ShouldHaveLength, 2)
+			So(string(entries[0].Value), ShouldEqual, `{"x":1}`)
+			So(string(entries[1].Value), ShouldEqual, `{"y":2}`)
+		})
+	})
+
+	Convey("Given a marked cell whose payload is not a member list", t, func() {
+		Convey("Then it is not a multi-value cell", func() {
+			_, ok := scopedCell(multiValueCellPrefix+`{"x":1}`, valueobjects.DataTypeString)
+			So(ok, ShouldBeFalse)
+		})
+	})
+}

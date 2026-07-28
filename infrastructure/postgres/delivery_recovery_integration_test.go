@@ -191,9 +191,9 @@ func TestDeadLetterRetentionIntegration(t *testing.T) {
 	})
 }
 
-// TestRedeliverRampsTheBacklogIntegration covers the two shapes the bulk
-// redrive shared with the pruner before it was bounded: one unbounded
-// statement, and every revived delivery due at the same instant.
+// TestRedeliverRampsTheBacklogIntegration covers the bulk redrive's batching:
+// the statement is bounded, as the pruner's is, so a large backlog is not one
+// long transaction holding locks over a slice of the delivery table.
 func TestRedeliverRampsTheBacklogIntegration(t *testing.T) {
 	pool := testdb.Open(t, "postgres_redrive")
 	ctx := context.Background()
@@ -242,17 +242,23 @@ func TestRedeliverRampsTheBacklogIntegration(t *testing.T) {
 				So(pending, ShouldEqual, rows)
 			})
 
-			Convey("Then they are spread over a ramp rather than all due at once", func() {
+			// The ramp is PER SUBSCRIPTION. Spreading one subscription's rows
+			// over the window was head-of-line blocking rather than
+			// smoothing: ClaimDue takes only the lowest feed_seq, and only
+			// if it is due, so the head's offset gated everything behind it.
+			// See TestRedriveRampIsPerSubscriptionIntegration.
+			Convey("Then one subscription's rows share one instant, so the head is not blocked", func() {
 				var distinct int
 				So(pool.Get(&distinct,
 					`SELECT count(DISTINCT next_attempt_at) FROM flexitype_webhook_delivery`), ShouldBeNil)
-				So(distinct, ShouldBeGreaterThan, 1)
+				So(distinct, ShouldEqual, 1)
 
-				var spread float64
-				So(pool.Get(&spread,
-					`SELECT EXTRACT(EPOCH FROM (max(next_attempt_at) - min(next_attempt_at)))
-					   FROM flexitype_webhook_delivery`), ShouldBeNil)
-				So(spread, ShouldBeGreaterThan, 60) // spread across minutes, not one instant
+				var offset float64
+				So(pool.Get(&offset,
+					`SELECT EXTRACT(EPOCH FROM (min(next_attempt_at) - $1::timestamptz))
+					   FROM flexitype_webhook_delivery`, now), ShouldBeNil)
+				So(offset, ShouldBeGreaterThanOrEqualTo, 0.0)
+				So(offset, ShouldBeLessThan, 300.0) // inside the ramp window
 			})
 
 			Convey("Then none is scheduled before the redrive itself", func() {

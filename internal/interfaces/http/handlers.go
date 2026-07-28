@@ -398,6 +398,10 @@ type savedViewPatchRequest struct {
 	Query    *string   `json:"query"`
 	Columns  *[]string `json:"columns"`
 	Sort     *string   `json:"sort"`
+	// Version is the version the caller read. Supplying it makes the write a
+	// compare-and-swap: a view edited by someone else in the meantime returns
+	// 409 instead of being overwritten. Omitting it keeps last-write-wins.
+	Version *int `json:"version"`
 }
 
 type savedViewRequest struct {
@@ -478,7 +482,8 @@ func (s *server) updateSavedView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := sv.Patch(r.Context(), chi.URLParam(r, "id"), appsavedview.PatchInput{
-		Name: req.Name, RootType: req.RootType, Query: req.Query, Columns: req.Columns, Sort: req.Sort,
+		Name: req.Name, RootType: req.RootType, Query: req.Query, Columns: req.Columns,
+		Sort: req.Sort, Version: req.Version,
 	})
 	if err != nil {
 		writeError(w, s.log, err)

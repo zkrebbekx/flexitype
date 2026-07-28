@@ -60,8 +60,9 @@ account. A role makes that one write, and one record to read.
 ### Resolution
 
 The merge happens at **authentication**, not at write time, so a change to a
-role reaches every account holding it as soon as the auth cache entry expires.
-Nothing is written onto the accounts.
+role reaches an account the next time that account authenticates against a
+process whose cache entry is gone — either because the write evicted it, or
+because it expired. Nothing is written onto the accounts.
 
 | Part | Rule |
 |---|---|
@@ -113,13 +114,15 @@ role list, which is the record an auditor reads.
 - A role write **replaces** the whole role. A partial update would make "what
   does this role allow" a question about history rather than about the current
   record.
-- Deleting a role removes its grants. An account that names it keeps the name
-  and resolves nothing for it, which is the safe direction.
-- **Every permission change evicts the auth cache.**
+- **A permission change evicts the auth cache OF THE PROCESS THAT SERVED IT.**
   `PUT /service-accounts/{id}/roles` drops that account's entries; a role
   write or delete, and a tenant deactivation, drop every entry for the
-  tenant. A change an operator makes during an incident applies at once
-  rather than at the end of the cache TTL on every replica.
+  tenant. The cache is a plain in-process map with no cross-replica signal,
+  so a multi-replica deployment converges over `FLEXITYPE_AUTH_CACHE_TTL`:
+  the replica that served the admin call applies the change at once, and the
+  others keep honouring the old permissions until their own entries expire.
+  During an incident, treat the TTL — not the API response — as the moment a
+  revocation is in force everywhere.
 
 ### The console
 

@@ -941,6 +941,31 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/Delivery" }
                   page_info: { $ref: "#/components/schemas/PageInfo" }
+  /webhook-deliveries/redeliver-dead:
+    post:
+      tags: [events]
+      summary: Return every dead delivery to pending
+      description: >-
+        Bulk redrive. Recovery used to be one call per dead delivery, which
+        after an endpoint outage means thousands. Resets the attempt count, so
+        an endpoint that was down for a day does not exhaust its budget again
+        on the first failure after recovery. Admin scope.
+      parameters:
+        - name: subscription_id
+          in: query
+          description: Narrow the redrive to one subscription.
+          schema: { type: string }
+      responses:
+        "200":
+          description: How many deliveries returned to pending
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  redelivered: { type: integer }
+        "403": { $ref: "#/components/responses/Error" }
+
   /webhook-deliveries/{id}/redeliver:
     parameters: [{ $ref: "#/components/parameters/ID" }]
     post:

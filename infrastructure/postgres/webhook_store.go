@@ -374,6 +374,33 @@ func (s *deliveryStore) List(ctx context.Context, filter webhook.DeliveryFilter,
 	return out, total, nil
 }
 
+// RedeliverMatching returns every dead delivery matching the filter to
+// pending in one statement, and reports how many it moved.
+//
+// It resets attempts as well as the schedule: a redriven delivery starts a
+// fresh retry budget, so an endpoint that was down for a day does not exhaust
+// its attempts again on the first failure after recovery.
+func (s *deliveryStore) RedeliverMatching(ctx context.Context, filter webhook.DeliveryFilter, now time.Time) (int, error) {
+	where := []string{"tenant_id = ?", "status = ?"}
+	args := []any{filter.TenantID.String(), webhook.StatusDead}
+	if !filter.SubscriptionID.IsZero() {
+		where = append(where, "subscription_id = ?")
+		args = append(args, filter.SubscriptionID)
+	}
+	args = append([]any{now, now}, args...)
+	res, err := s.q.ExecContext(ctx, bind(`UPDATE flexitype_webhook_delivery
+	 SET status = 'pending', attempts = 0, next_attempt_at = ?, lease_expires_at = NULL, updated_at = ?
+	 WHERE `+strings.Join(where, " AND ")), args...)
+	if err != nil {
+		return 0, fmt.Errorf("redeliver dead deliveries: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("redeliver dead deliveries: %w", err)
+	}
+	return int(n), nil
+}
+
 func (s *deliveryStore) Redeliver(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID, now time.Time) error {
 	var status string
 	err := s.q.GetContext(ctx, &status, bind(

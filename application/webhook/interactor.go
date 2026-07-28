@@ -279,6 +279,27 @@ func (i *Interactor) Redeliver(ctx context.Context, rawID string) error {
 	return i.deliveries.Redeliver(ctx, uow.TenantFromContext(ctx), id, i.now())
 }
 
+// RedeliverDead returns every dead delivery of a subscription to pending, and
+// reports how many it moved. An empty subscription id covers the tenant.
+//
+// This is the bulk counterpart of Redeliver. After an endpoint outage the
+// dead letters number in the thousands, and one API call each is not a
+// recovery path — it is a script an operator writes during the incident.
+func (i *Interactor) RedeliverDead(ctx context.Context, rawSubscriptionID string) (int, error) {
+	filter := DeliveryFilter{
+		TenantID: uow.TenantFromContext(ctx),
+		Status:   StatusDead,
+	}
+	if rawSubscriptionID != "" {
+		id, err := ulid.Parse(rawSubscriptionID)
+		if err != nil {
+			return 0, domainerrors.NewValidation(err.Error())
+		}
+		filter.SubscriptionID = id
+	}
+	return i.deliveries.RedeliverMatching(ctx, filter, i.now())
+}
+
 // redact strips secrets from activity descriptors.
 func redact(s Subscription) Subscription {
 	s.Secret = ""

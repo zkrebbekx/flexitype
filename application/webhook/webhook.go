@@ -231,4 +231,14 @@ type DeliveryStore interface {
 
 	// Redeliver returns a dead (or delivered) delivery to pending now.
 	Redeliver(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID, now time.Time) error
+
+	// RedeliverMatching returns every dead delivery matching the filter to
+	// pending, and reports how many it moved.
+	//
+	// Recovery used to be one API call per dead delivery. After an endpoint
+	// outage the dead letters number in the thousands, so the only recovery
+	// path was a script that discovers ids and calls the API once each —
+	// which is the tool an operator has to write while the incident is
+	// still open.
+	RedeliverMatching(ctx context.Context, filter DeliveryFilter, now time.Time) (int, error)
 }

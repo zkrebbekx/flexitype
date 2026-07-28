@@ -184,6 +184,28 @@ func (s *server) redeliverWebhook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": appwebhook.StatusPending})
 }
 
+// redeliverDeadWebhooks returns every dead delivery to pending, optionally
+// narrowed to one subscription.
+//
+// Recovery was one call per dead delivery. After an endpoint outage the dead
+// letters number in the thousands, so the only recovery path was a script an
+// operator writes while the incident is still open.
+func (s *server) redeliverDeadWebhooks(w http.ResponseWriter, r *http.Request) {
+	if !s.eventDelivery(w, r) {
+		return
+	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	n, err := application.FromContext(r.Context()).Webhooks().RedeliverDead(
+		r.Context(), r.URL.Query().Get("subscription_id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"redelivered": n})
+}
+
 // --- events feed ---------------------------------------------------------------
 
 func (s *server) listEvents(w http.ResponseWriter, r *http.Request) {

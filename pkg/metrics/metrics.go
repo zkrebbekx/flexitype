@@ -8,6 +8,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -26,6 +27,11 @@ type Metrics struct {
 	httpInFlight    prometheus.Gauge
 	tenantRequests  *prometheus.CounterVec
 	rateLimitReject *prometheus.CounterVec
+
+	// mu guards tenantLabels, the bounded set of tenant ids admitted as a
+	// metric label.
+	mu           sync.RWMutex
+	tenantLabels map[string]bool
 }
 
 // New builds a Metrics with a private registry (Go runtime + process
@@ -60,9 +66,56 @@ func New() *Metrics {
 			Name: "flexitype_ratelimit_rejected_total",
 			Help: "Requests rejected by the rate limiter, by tenant.",
 		}, []string{"tenant"}),
+		tenantLabels: map[string]bool{},
 	}
 	reg.MustRegister(m.httpRequests, m.httpDuration, m.httpInFlight, m.tenantRequests, m.rateLimitReject)
 	return m
+}
+
+// MaxTenantLabels bounds how many distinct tenant ids appear as a metric
+// label. Everything beyond it is folded into OverflowTenantLabel.
+//
+// The two tenant counters were labelled with the raw tenant id and nothing
+// bounded the set, so time-series cardinality grew linearly with tenant count
+// and never decayed: a deployment with many tenants pays for those series in
+// scrape size, in the store, and in every query that touches them — and the
+// series for a tenant that has gone away never expire.
+//
+// The bound is deliberately generous. A deployment with fewer tenants than
+// this keeps exact per-tenant visibility; one with more keeps it for the
+// tenants it saw first and can still see the aggregate.
+const MaxTenantLabels = 100
+
+// OverflowTenantLabel is the label value that stands for every tenant beyond
+// MaxTenantLabels. It is a visible, greppable marker rather than a silent
+// drop: an operator has to be able to tell "no traffic" from "not labelled".
+const OverflowTenantLabel = "other"
+
+// tenantLabel maps a tenant id to the label to record under, admitting new
+// ids until the cap is reached.
+func (m *Metrics) tenantLabel(tenant string) string {
+	m.mu.RLock()
+	known := m.tenantLabels[tenant]
+	full := len(m.tenantLabels) >= MaxTenantLabels
+	m.mu.RUnlock()
+	if known {
+		return tenant
+	}
+	if full {
+		return OverflowTenantLabel
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Re-check under the write lock: another request may have taken the last
+	// slot in between.
+	if m.tenantLabels[tenant] {
+		return tenant
+	}
+	if len(m.tenantLabels) >= MaxTenantLabels {
+		return OverflowTenantLabel
+	}
+	m.tenantLabels[tenant] = true
+	return tenant
 }
 
 // CountTenantRequest records one authenticated request for a tenant. Safe
@@ -71,7 +124,7 @@ func (m *Metrics) CountTenantRequest(tenant string) {
 	if m == nil {
 		return
 	}
-	m.tenantRequests.WithLabelValues(tenant).Inc()
+	m.tenantRequests.WithLabelValues(m.tenantLabel(tenant)).Inc()
 }
 
 // CountRateLimitReject records one rate-limited request for a tenant. Safe
@@ -80,7 +133,7 @@ func (m *Metrics) CountRateLimitReject(tenant string) {
 	if m == nil {
 		return
 	}
-	m.rateLimitReject.WithLabelValues(tenant).Inc()
+	m.rateLimitReject.WithLabelValues(m.tenantLabel(tenant)).Inc()
 }
 
 // Registry exposes the underlying registry so callers can register extra
@@ -176,11 +229,19 @@ var (
 		"flexitype_outbox_pending", "Undispatched envelopes awaiting expansion.", nil, nil)
 	deliveriesDesc = prometheus.NewDesc(
 		"flexitype_webhook_deliveries", "Webhook deliveries by status.", []string{"status"}, nil)
+	// The expansion lag: how long the oldest undispatched envelope has been
+	// waiting. A depth alone cannot tell a healthy backlog from a stalled
+	// relay — 500 pending is normal under load and alarming if the oldest of
+	// them is an hour old. Alert on this, not on the count.
+	oldestPendingDesc = prometheus.NewDesc(
+		"flexitype_outbox_oldest_pending_seconds",
+		"Age of the oldest undispatched envelope, in seconds. 0 when none is pending.", nil, nil)
 )
 
 func (c *deliveryCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- outboxPendingDesc
 	ch <- deliveriesDesc
+	ch <- oldestPendingDesc
 }
 
 func (c *deliveryCollector) Collect(ch chan<- prometheus.Metric) {
@@ -193,6 +254,7 @@ func (c *deliveryCollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 	ch <- prometheus.MustNewConstMetric(outboxPendingDesc, prometheus.GaugeValue, float64(depth.OutboxPending))
+	ch <- prometheus.MustNewConstMetric(oldestPendingDesc, prometheus.GaugeValue, depth.OldestPendingAge.Seconds())
 	for _, status := range []string{"pending", "inflight", "delivered", "dead"} {
 		ch <- prometheus.MustNewConstMetric(deliveriesDesc, prometheus.GaugeValue,
 			float64(depth.DeliveriesByStatus[status]), status)

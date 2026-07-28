@@ -138,6 +138,12 @@ type fakeDeliveryStore struct {
 	perCall  int // when >0, cap how many rows one ClaimDue returns (models the per-subscription claim)
 }
 
+// RedeliverMatching is unused by the worker tests; the bulk redrive is
+// exercised through the interactor's own store double.
+func (s *fakeDeliveryStore) RedeliverMatching(context.Context, DeliveryFilter, time.Time) (int, error) {
+	return 0, nil
+}
+
 func (s *fakeDeliveryStore) ClaimDue(_ context.Context, limit int, leaseFor time.Duration, now time.Time) ([]ClaimedDelivery, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

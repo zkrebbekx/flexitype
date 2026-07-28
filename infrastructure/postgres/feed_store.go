@@ -76,18 +76,47 @@ func (s *feedStore) Floor(ctx context.Context, tenant valueobjects.TenantID) (in
 	return floor, nil
 }
 
+// pruneBatch bounds one DELETE. The pruner used to issue a single unbounded
+// statement per hour: on a busy deployment that is one long transaction
+// holding locks on a large slice of the outbox and cascading into every
+// matching delivery row, which is exactly the shape that stalls writers.
+const pruneBatch = 5000
+
 func (s *feedStore) Prune(ctx context.Context, cutoff time.Time) (int, error) {
-	// Deliveries cascade with their envelope; pending/inflight ones keep
-	// the envelope alive until they settle.
-	res, err := s.q.ExecContext(ctx, bind(`DELETE FROM flexitype_event_outbox o
-	 WHERE o.feed_seq IS NOT NULL AND o.recorded_at < ?
-	   AND NOT EXISTS (SELECT 1 FROM flexitype_webhook_delivery d
-	                   WHERE d.envelope_id = o.id AND d.status IN ('pending', 'inflight'))`), cutoff)
-	if err != nil {
-		return 0, fmt.Errorf("prune events: %w", err)
+	// Deliveries cascade with their envelope, so an envelope is only
+	// deletable once none of its deliveries still needs it.
+	//
+	// pending and inflight keep it alive until they settle. DEAD keeps it
+	// alive too, and that is the point: a dead letter is the record of a
+	// delivery that never succeeded, and it used to vanish with its envelope
+	// at the retention cutoff — so the evidence an operator needs in order to
+	// redrive it was deleted on a timer.
+	total := 0
+	for {
+		res, err := s.q.ExecContext(ctx, bind(
+			`DELETE FROM flexitype_event_outbox
+			  WHERE id IN (
+			      SELECT o.id FROM flexitype_event_outbox o
+			       WHERE o.feed_seq IS NOT NULL AND o.recorded_at < ?
+			         AND NOT EXISTS (SELECT 1 FROM flexitype_webhook_delivery d
+			                          WHERE d.envelope_id = o.id
+			                            AND d.status IN ('pending', 'inflight', 'dead'))
+			       ORDER BY o.recorded_at
+			       LIMIT ?)`), cutoff, pruneBatch)
+		if err != nil {
+			return total, fmt.Errorf("prune events: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		total += int(n)
+		if int(n) < pruneBatch {
+			return total, nil
+		}
+		// Give other writers a turn between batches, and stop promptly when
+		// the process is shutting down.
+		if err := ctx.Err(); err != nil {
+			return total, nil
+		}
 	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
 }
 
 // cursorStore persists named feed cursors.

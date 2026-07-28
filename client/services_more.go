@@ -586,6 +586,26 @@ func (s *WebhooksService) Deliveries(ctx context.Context, id, status string, opt
 	return listPage[WebhookDelivery](ctx, s.c, "/webhook-subscriptions/"+id+"/deliveries", q, firstOpts(opts))
 }
 
+// RedeliverDead returns every dead delivery to pending and reports how many
+// it moved. An empty subscriptionID covers the whole tenant. Admin scope.
+//
+// The per-delivery Redeliver is not a recovery path after an outage: the dead
+// letters number in the thousands, and one call each is a script an operator
+// has to write while the incident is still open.
+func (s *WebhooksService) RedeliverDead(ctx context.Context, subscriptionID string) (int, error) {
+	q := url.Values{}
+	if subscriptionID != "" {
+		q.Set("subscription_id", subscriptionID)
+	}
+	var out struct {
+		Redelivered int `json:"redelivered"`
+	}
+	if err := s.c.do(ctx, http.MethodPost, "/webhook-deliveries/redeliver-dead", q, nil, &out); err != nil {
+		return 0, err
+	}
+	return out.Redelivered, nil
+}
+
 // Redeliver requeues a dead or delivered delivery.
 func (s *WebhooksService) Redeliver(ctx context.Context, deliveryID string) error {
 	return s.c.do(ctx, http.MethodPost, "/webhook-deliveries/"+deliveryID+"/redeliver", nil, nil, nil)

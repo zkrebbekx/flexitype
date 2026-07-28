@@ -14,7 +14,10 @@
 // import it without either seeing the other.
 package deliverystats
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Source reports current event-delivery depth. The storage layer implements
 // it; the metrics layer turns it into scrape-time gauges.
@@ -28,4 +31,11 @@ type Source interface {
 type Depth struct {
 	OutboxPending      int64
 	DeliveriesByStatus map[string]int64 // pending / inflight / delivered / dead
+
+	// OldestPendingAge is how long the oldest undispatched envelope has been
+	// waiting. It is the metric that actually tells an operator whether the
+	// relay is keeping up: a depth of 500 is healthy under load and alarming
+	// if the oldest of them is an hour old, and a count alone cannot tell
+	// those apart. Zero when nothing is pending.
+	OldestPendingAge time.Duration
 }

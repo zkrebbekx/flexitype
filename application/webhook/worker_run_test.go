@@ -22,6 +22,12 @@ type countingDeliveryStore struct {
 	claimErr   error
 }
 
+// RedeliverMatching is unused by the worker tests; the bulk redrive is
+// exercised through the interactor.
+func (s *countingDeliveryStore) RedeliverMatching(context.Context, DeliveryFilter, time.Time) (int, error) {
+	return 0, nil
+}
+
 func (s *countingDeliveryStore) ReleaseExpired(ctx context.Context, now time.Time) (int, error) {
 	s.mu.Lock()
 	err := s.releaseErr

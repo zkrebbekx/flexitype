@@ -263,6 +263,7 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 			r.Get("/{id}/deliveries", s.listSubscriptionDeliveries)
 		})
 		api.Post("/webhook-deliveries/{id}/redeliver", s.redeliverWebhook)
+		api.Post("/webhook-deliveries/redeliver-dead", s.redeliverDeadWebhooks)
 
 		api.Get("/events", s.listEvents)
 		api.Get("/events/stream", s.streamEvents)

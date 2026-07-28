@@ -24,9 +24,18 @@ For the API compatibility policy, see [api-stability.md](api-stability.md).
 
 ## Rolling deploys
 
-Every replica calls `Migrate` at startup, and they serialize on an advisory
-lock, so it is safe for the whole fleet to start at once. The first new pod
-migrates; the rest wait and then find nothing to do.
+Every replica calls `Migrate` at startup, and they serialize, so it is safe
+for the whole fleet to start at once. The first new pod migrates; the rest
+wait and then find nothing to do.
+
+That holds **through a transaction-mode pooler**, which is what the fleet
+usually connects through. The runner takes no session-scoped lock: mutual
+exclusion is a lease row (`flexitype_schema_lock`), and each migration
+additionally claims its version row inside the transaction that applies it, so
+the database serializes the runners for exactly as long as an apply takes. A
+runner that dies mid-run frees the lease by expiry rather than stranding a
+lock on a pooled backend that only a manual `pg_terminate_backend` could
+clear.
 
 During the rollout the previous generation serves against the new schema. That
 is the state the contract above is written for. The binary reports it:
@@ -44,8 +53,16 @@ Embedders can read the same fact with `Service.SchemaDrift(ctx)`.
 
 ## How migrations are applied
 
-Each migration runs in **its own transaction**, in version order, under a
-session-scoped advisory lock held for the whole run.
+Each migration runs in **its own transaction**, in version order, while the
+runner holds the migration lease.
+
+The lease is a row, not a session lock, and it is refreshed between
+statements; a runner that loses it — because one statement outlasted the
+15-minute TTL and another runner took over — stops rather than applying DDL
+alongside the new holder. Correctness does not rest on the lease alone: a
+transactional migration inserts its version row **before** the DDL, in the
+same transaction, so a second runner's insert blocks on the primary key and
+then finds the version taken.
 
 Applying all pending migrations in one transaction would be tidier, but it
 cannot coexist with what a large deployment needs. `CREATE INDEX CONCURRENTLY`

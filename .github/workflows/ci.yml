@@ -79,6 +79,7 @@ jobs:
             -e DB_PASSWORD=postgres -e DB_NAME=flexitype \
             -e POOL_MODE=transaction -e AUTH_TYPE=scram-sha-256 \
             -e LISTEN_PORT=6432 -e MAX_PREPARED_STATEMENTS=100 \
+            -e DEFAULT_POOL_SIZE=2 -e MAX_CLIENT_CONN=100 \
             edoburu/pgbouncer:v1.24.1-p1
           for i in $(seq 1 30); do
             if pg_isready -h localhost -p 6432 -U postgres > /dev/null 2>&1; then break; fi
@@ -90,6 +91,12 @@ jobs:
           # test harness, not of the product's SQL — which is exactly what
           # this job exists to prove.
           FLEXITYPE_TEST_SHARED_SCHEMA=1 go test -count=1 -p 1 ./infrastructure/postgres/... .
+          # The concurrent-migration case again on a CONTENDED pool
+          # (DEFAULT_POOL_SIZE=2, six runners). The serial run above cannot
+          # catch the hazard it targets: with an idle pool PgBouncer hands
+          # consecutive statements to the same backend, so a session-scoped
+          # lock appears to work. A rolling deploy is neither serial nor idle.
+          FLEXITYPE_TEST_SHARED_SCHEMA=1 go test -count=1 -run TestConcurrentMigrateIntegration ./infrastructure/postgres/
           docker rm -f pgbouncer
       - name: Smoke test (migrations + service boot)
         env:

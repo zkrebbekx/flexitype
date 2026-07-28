@@ -3,20 +3,35 @@ package postgres
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/lib/pq"
 
 	"github.com/zkrebbekx/flexitype/pkg/db"
+	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
 // advisoryLockKey serializes concurrent migration runners over the schema they
-// are migrating. Every replica calls Migrate at startup, so one of them applies
-// and the rest wait.
+// are migrating, on the ONE path that can still hold a lock safely: the
+// single-transaction fallback, where pg_advisory_xact_lock is released by the
+// transaction that took it.
+//
+// The multi-transaction path must not use a session lock. flexitype supports
+// transaction-mode pooling, where consecutive statements run on different
+// backends: a session lock taken there does not serialize the runner's own
+// later transactions, and it is released onto a connection another client then
+// borrows — stranding it on an idle backend where every subsequent migration
+// blocks on it forever, with no way for the application to clear it. That path
+// uses a lease row instead (see migrateLease).
 //
 // The key is derived from current_schema() rather than being a constant,
 // because the lock protects one schema's migrations. Two flexitype schemas in
@@ -60,18 +75,20 @@ func Migrate(ctx context.Context, tx db.Transactor) error {
 		return migrateInOneTransaction(ctx, tx)
 	}
 	return conn.WithConn(ctx, func(q db.QueryExecer) error {
-		// A session-scoped lock, so it spans the per-migration transactions and
-		// the statements that run outside them. It is released explicitly and
-		// again by the connection returning to the pool.
-		if _, err := q.ExecContext(ctx, `SELECT pg_advisory_lock(`+advisoryLockKey+`)`); err != nil {
-			return fmt.Errorf("acquire migration lock: %w", err)
-		}
-		defer func() { _, _ = q.ExecContext(ctx, `SELECT pg_advisory_unlock(`+advisoryLockKey+`)`) }()
-
 		if err := ensureMigrationTables(ctx, q); err != nil {
 			return err
 		}
-		if err := applyPending(ctx, q); err != nil {
+		// A lease row rather than a session lock: the state lives in a table,
+		// so it survives the connection moving between backends under a
+		// transaction-mode pooler, and it expires rather than stranding when
+		// a runner dies.
+		lease, err := acquireMigrationLease(ctx, q)
+		if err != nil {
+			return err
+		}
+		defer lease.release(ctx)
+
+		if err := applyPending(ctx, q, lease); err != nil {
 			return err
 		}
 		return runBackfills(ctx, q)
@@ -110,26 +127,201 @@ func migrateInOneTransaction(ctx context.Context, tx db.Transactor) error {
 	})
 }
 
-// ensureMigrationTables creates the two runner bookkeeping tables.
+// ensureMigrationTables creates the runner bookkeeping tables.
+//
+// Each CREATE runs through createTableIfNotExists, because CREATE TABLE IF NOT
+// EXISTS is NOT safe against a concurrent identical CREATE: both sessions pass
+// the existence check and the loser fails on a unique violation in a catalogue
+// index. Six replicas starting together — the rolling-deploy shape — hit that
+// before any lock could be taken, since this is the step that creates the
+// table the lock lives in.
 func ensureMigrationTables(ctx context.Context, q db.QueryExecer) error {
-	if _, err := q.ExecContext(ctx,
+	if err := createTableIfNotExists(ctx, q, "migrations table",
 		`CREATE TABLE IF NOT EXISTS flexitype_schema_migrations (
 		   version    INTEGER PRIMARY KEY,
 		   applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		 )`); err != nil {
-		return fmt.Errorf("ensure migrations table: %w", err)
+		return err
+	}
+	if err := createTableIfNotExists(ctx, q, "migration lock table",
+		`CREATE TABLE IF NOT EXISTS flexitype_schema_lock (
+		   id          INTEGER PRIMARY KEY CHECK (id = 1),
+		   holder      TEXT NOT NULL,
+		   acquired_at TIMESTAMPTZ NOT NULL,
+		   expires_at  TIMESTAMPTZ NOT NULL
+		 )`); err != nil {
+		return err
+	}
+	if _, err := q.ExecContext(ctx,
+		`INSERT INTO flexitype_schema_lock (id, holder, acquired_at, expires_at)
+		 VALUES (1, '', now(), now()) ON CONFLICT (id) DO NOTHING`); err != nil {
+		return fmt.Errorf("ensure migration lock row: %w", err)
 	}
 	// Backfills are tracked separately from schema versions: a backfill is
 	// resumable and may span many runs, so "the schema is at version N" and
 	// "the data behind version N has caught up" are different facts.
-	if _, err := q.ExecContext(ctx,
+	return createTableIfNotExists(ctx, q, "backfill table",
 		`CREATE TABLE IF NOT EXISTS flexitype_schema_backfill (
 		   name         TEXT PRIMARY KEY,
 		   completed_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		 )`); err != nil {
-		return fmt.Errorf("ensure backfill table: %w", err)
+		 )`)
+}
+
+// createTableIfNotExists runs a CREATE TABLE IF NOT EXISTS and treats a
+// concurrent creation as success.
+//
+// Postgres does not make IF NOT EXISTS atomic against another session running
+// the same statement: both see the table absent, both proceed, and the loser
+// fails with 23505 on a catalogue index (pg_type_typname_nsp_index) or 42P07
+// "relation already exists". Either way the table now exists, which is all the
+// caller asked for.
+func createTableIfNotExists(ctx context.Context, q db.QueryExecer, what, stmt string) error {
+	_, err := q.ExecContext(ctx, stmt)
+	if err == nil || isConcurrentCreate(err) {
+		return nil
 	}
+	return fmt.Errorf("ensure %s: %w", what, err)
+}
+
+// isConcurrentCreate reports whether an error is another session having
+// created the same object first.
+func isConcurrentCreate(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	switch pqErr.Code {
+	case "23505": // unique_violation, on a catalogue index
+		return true
+	case "42P07": // duplicate_table
+		return true
+	case "42710": // duplicate_object, e.g. a constraint
+		return true
+	}
+	return false
+}
+
+// Migration-lease timings. The lease is refreshed between statements, so the
+// TTL only has to outlast one statement; leaseTTL is generous because a
+// CREATE INDEX CONCURRENTLY over a large table is one statement.
+const (
+	leaseTTL      = 15 * time.Minute
+	leaseWait     = 10 * time.Minute
+	leasePoll     = 250 * time.Millisecond
+	leaseRenewGap = time.Minute
+)
+
+// migrateLease is a mutual exclusion held in a TABLE ROW rather than in
+// session state.
+//
+// A session-scoped advisory lock cannot be used here. flexitype supports
+// transaction-mode pooling, and under it the runner's statements run on
+// whichever backend the pooler hands out — so the lock neither serializes the
+// runner's own later transactions nor stays with it. Measured through
+// PgBouncer with a contended pool, five of six concurrent Migrate() calls
+// failed on raw DDL collisions and one lock was left held on an idle pooled
+// backend, where it blocked every subsequent migration attempt with no
+// diagnostic and no application-level recovery.
+//
+// A row does not have those properties: it is visible to every backend, and it
+// carries an expiry, so a runner that dies frees it without an operator having
+// to find and terminate a connection by hand.
+type migrateLease struct {
+	q         db.QueryExecer
+	holder    string
+	renewedAt time.Time
+	now       func() time.Time
+}
+
+// acquireMigrationLease takes the lease, waiting for a live holder to finish
+// or expire.
+func acquireMigrationLease(ctx context.Context, q db.QueryExecer) (*migrateLease, error) {
+	l := &migrateLease{q: q, holder: leaseHolderID(), now: time.Now}
+	deadline := l.now().Add(leaseWait)
+	for {
+		ok, err := l.tryAcquire(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return l, nil
+		}
+		if l.now().After(deadline) {
+			return nil, fmt.Errorf("acquire migration lease: another runner has held it for more than %s", leaseWait)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(leasePoll):
+		}
+	}
+}
+
+// tryAcquire claims the lease if it is free or expired. The read and the write
+// are one transaction over the singleton row, so two runners cannot both win.
+func (l *migrateLease) tryAcquire(ctx context.Context) (bool, error) {
+	var taken bool
+	if err := l.q.GetContext(ctx, &taken,
+		`WITH claim AS (
+		   UPDATE flexitype_schema_lock
+		      SET holder = $1, acquired_at = now(), expires_at = now() + $2::interval
+		    WHERE id = 1 AND (holder = '' OR expires_at <= now())
+		    RETURNING 1
+		 )
+		 SELECT EXISTS (SELECT 1 FROM claim)`,
+		l.holder, leaseTTL.String()); err != nil {
+		return false, fmt.Errorf("acquire migration lease: %w", err)
+	}
+	if taken {
+		l.renewedAt = l.now()
+	}
+	return taken, nil
+}
+
+// renew extends the lease if it is close to expiring. It is called between
+// statements, so a long migration does not lose the lease it holds.
+//
+// A renewal that finds the row held by someone else is an error: the previous
+// statement outlasted the TTL and another runner took over, so continuing
+// would apply DDL alongside them.
+func (l *migrateLease) renew(ctx context.Context) error {
+	if l.now().Sub(l.renewedAt) < leaseRenewGap {
+		return nil
+	}
+	var held bool
+	if err := l.q.GetContext(ctx, &held,
+		`WITH renew AS (
+		   UPDATE flexitype_schema_lock
+		      SET expires_at = now() + $2::interval
+		    WHERE id = 1 AND holder = $1
+		    RETURNING 1
+		 )
+		 SELECT EXISTS (SELECT 1 FROM renew)`,
+		l.holder, leaseTTL.String()); err != nil {
+		return fmt.Errorf("renew migration lease: %w", err)
+	}
+	if !held {
+		return fmt.Errorf("lost the migration lease: a statement outlasted the %s lease and another runner took over", leaseTTL)
+	}
+	l.renewedAt = l.now()
 	return nil
+}
+
+// release frees the lease. A failure here is not fatal: the lease expires.
+func (l *migrateLease) release(ctx context.Context) {
+	_, _ = l.q.ExecContext(ctx,
+		`UPDATE flexitype_schema_lock SET holder = '', expires_at = now()
+		  WHERE id = 1 AND holder = $1`, l.holder)
+}
+
+// leaseHolderID names the runner in the lock row, so an operator inspecting a
+// held lease can see who has it.
+func leaseHolderID() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	return host + "/" + ulid.New().String()
 }
 
 // migration is one embedded up-migration, parsed.
@@ -179,14 +371,17 @@ func pendingMigrations(ctx context.Context, q db.QueryExecer) ([]migration, erro
 
 // applyPending applies each pending migration on the pinned connection, in its
 // own transaction unless the file declares otherwise.
-func applyPending(ctx context.Context, q db.QueryExecer) error {
+func applyPending(ctx context.Context, q db.QueryExecer, lease *migrateLease) error {
 	pending, err := pendingMigrations(ctx, q)
 	if err != nil {
 		return err
 	}
 	for _, m := range pending {
+		if err := lease.renew(ctx); err != nil {
+			return err
+		}
 		if m.directives.NoTransaction {
-			if err := applyOutsideTransaction(ctx, q, m); err != nil {
+			if err := applyOutsideTransaction(ctx, q, m, lease); err != nil {
 				return err
 			}
 			continue
@@ -198,7 +393,16 @@ func applyPending(ctx context.Context, q db.QueryExecer) error {
 	return nil
 }
 
-// applyInTransaction applies one migration and records it atomically.
+// applyInTransaction claims a migration and applies it in one transaction.
+//
+// The CLAIM COMES FIRST, and that ordering is the point. Inserting the version
+// row before the DDL makes the row itself the mutual exclusion: a second
+// runner's insert blocks on the primary key until this transaction ends, then
+// finds the version taken and skips. The lock is therefore held for exactly
+// the transaction that needs it, by the database, with no session state — so
+// it is correct through a transaction-mode pooler, and correct even if the
+// lease has been lost. Both the claim and the DDL roll back together on
+// failure, so a failed migration leaves nothing recorded.
 func applyInTransaction(ctx context.Context, q db.QueryExecer, m migration) (err error) {
 	if _, err := q.ExecContext(ctx, `BEGIN`); err != nil {
 		return fmt.Errorf("begin migration %s: %w", m.name, err)
@@ -208,11 +412,27 @@ func applyInTransaction(ctx context.Context, q db.QueryExecer, m migration) (err
 			_, _ = q.ExecContext(ctx, `ROLLBACK`)
 		}
 	}()
+	var claimed bool
+	if err = q.GetContext(ctx, &claimed,
+		`WITH claim AS (
+		   INSERT INTO flexitype_schema_migrations (version) VALUES ($1)
+		   ON CONFLICT (version) DO NOTHING
+		   RETURNING 1
+		 )
+		 SELECT EXISTS (SELECT 1 FROM claim)`, m.version); err != nil {
+		return fmt.Errorf("claim migration %s: %w", m.name, err)
+	}
+	if !claimed {
+		// Another runner applied it while this one was reading the pending
+		// list. Roll back and move on; err stays nil, so the deferred
+		// ROLLBACK does not fire.
+		if _, cerr := q.ExecContext(ctx, `ROLLBACK`); cerr != nil {
+			return fmt.Errorf("roll back already-applied migration %s: %w", m.name, cerr)
+		}
+		return nil
+	}
 	if _, err = q.ExecContext(ctx, m.body); err != nil {
 		return fmt.Errorf("apply migration %s: %w", m.name, err)
-	}
-	if err = recordMigration(ctx, q, m.version); err != nil {
-		return err
 	}
 	if _, err = q.ExecContext(ctx, `COMMIT`); err != nil {
 		return fmt.Errorf("commit migration %s: %w", m.name, err)
@@ -225,10 +445,17 @@ func applyInTransaction(ctx context.Context, q db.QueryExecer, m migration) (err
 // is the price of running outside a transaction — so every statement in such a
 // file must be idempotent, and the runner replays the whole file if it is
 // interrupted.
-func applyOutsideTransaction(ctx context.Context, q db.QueryExecer, m migration) error {
+func applyOutsideTransaction(ctx context.Context, q db.QueryExecer, m migration, lease *migrateLease) error {
 	for _, stmt := range splitStatements(m.body) {
 		if statementIsEmpty(stmt) {
 			continue
+		}
+		// A statement here can run for a long time — CREATE INDEX
+		// CONCURRENTLY over a large table is the reason this path exists — so
+		// the lease is refreshed between statements rather than only once per
+		// migration.
+		if err := lease.renew(ctx); err != nil {
+			return err
 		}
 		if _, err := q.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("apply migration %s: %w", m.name, err)
@@ -316,10 +543,14 @@ func MigrateDown(ctx context.Context, tx db.Transactor, target int) error {
 		return fmt.Errorf("migrate down: this transactor cannot pin a connection")
 	}
 	return conn.WithConn(ctx, func(q db.QueryExecer) error {
-		if _, err := q.ExecContext(ctx, `SELECT pg_advisory_lock(`+advisoryLockKey+`)`); err != nil {
-			return fmt.Errorf("acquire migration lock: %w", err)
+		if err := ensureMigrationTables(ctx, q); err != nil {
+			return err
 		}
-		defer func() { _, _ = q.ExecContext(ctx, `SELECT pg_advisory_unlock(`+advisoryLockKey+`)`) }()
+		lease, err := acquireMigrationLease(ctx, q)
+		if err != nil {
+			return err
+		}
+		defer lease.release(ctx)
 
 		var versions []int
 		if err := q.SelectContext(ctx, &versions,

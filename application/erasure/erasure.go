@@ -180,7 +180,7 @@ func (i *Interactor) PurgeEntity(ctx context.Context, rawTypeDefID, rawEntityID 
 		if i.revisions != nil {
 			// Join the value transaction: a rollback un-does this purge too, so a
 			// failed erasure never leaves revisions hard-deleted with no audit.
-			n, err := i.revisions.WithTx(tx).PurgeEntity(ctx, tenant, typeDefID.String(), entityID.String())
+			n, err := i.revisions.WithTx(tx).PurgeEntity(ctx, tenant, entityID.String())
 			if err != nil {
 				return fmt.Errorf("purge entity revisions: %w", err)
 			}

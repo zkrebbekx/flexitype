@@ -93,8 +93,9 @@ type Repository interface {
 	// invariant exists to prevent.
 	ReanchorEntity(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID, to valueobjects.TypeDefinitionID) (int, error)
 
-	// MediaValueForKey returns the media value the tenant already stores for an
-	// object key, and whether one exists. Archived rows count.
+	// MediaValueForKey returns the OWNING value for an object key — the
+	// tenant's earliest row referencing it — and whether one exists. Archived
+	// rows count.
 	//
 	// It is how a media write that did not come from the upload path is
 	// validated: the caller supplies an object key, and the metadata that
@@ -102,13 +103,26 @@ type Repository interface {
 	// value rather than from the caller. Trusting caller-supplied metadata
 	// meant the media constraint's type allowlist and the upload path's
 	// content sniffing could both be stated away.
-	MediaValueForKey(ctx context.Context, tenant valueobjects.TenantID, objectKey string) (valueobjects.Value, bool, error)
-
-	// MediaKeyRefCount counts the value rows, in any tenant and including
-	// archived ones, that reference an object key other than excludeValueID.
 	//
-	// Blob GC consults it before deleting: a key referenced by another row must
-	// not have its bytes removed out from under that row.
+	// It returns the whole snapshot because the ATTRIBUTE matters as much as
+	// the value: the bytes belong to the attribute that first referenced them,
+	// and both adoption and download are governed by whether the caller may
+	// read that attribute.
+	MediaValueForKey(ctx context.Context, tenant valueobjects.TenantID, objectKey string) (Snapshot, bool, error)
+
+	// MediaKeyRefCount counts the LIVE value rows, in any tenant, that
+	// reference an object key other than excludeValueID.
+	//
+	// Blob GC consults it before deleting: a key another live row references
+	// must not have its bytes removed out from under that row.
+	//
+	// Archived rows are deliberately NOT counted. Counting them meant a key
+	// shared by N rows was never collected: archiving each one saw the other
+	// N-1 and declined, so once every reference was archived the bytes stayed
+	// in object storage with nothing pointing at them — a "delete my file"
+	// request through the soft-delete path left the file. Adoption is now the
+	// sanctioned way to reuse a key, so shared keys are the expected shape
+	// rather than a corner case.
 	MediaKeyRefCount(ctx context.Context, objectKey string, excludeValueID valueobjects.AttributeValueID) (int, error)
 
 	// MediaKeyAttributes returns the distinct attribute definitions of every

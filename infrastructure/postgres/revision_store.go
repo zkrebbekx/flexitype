@@ -86,13 +86,13 @@ func (s *revisionStore) Get(ctx context.Context, tenant valueobjects.TenantID, i
 	return row.toRevision()
 }
 
-func (s *revisionStore) List(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) ([]revision.Revision, error) {
+func (s *revisionStore) List(ctx context.Context, tenant valueobjects.TenantID, entityID string) ([]revision.Revision, error) {
 	var rows []revisionRow
 	if err := s.q.SelectContext(ctx, &rows, bind(
 		`SELECT id, tenant_id, type_definition_id, entity_id, seq, label, created_at, values
 		 FROM flexitype_entity_revision
-		 WHERE tenant_id = ? AND type_definition_id = ? AND entity_id = ?
-		 ORDER BY seq DESC, id DESC`), tenant.String(), typeDefID, entityID); err != nil {
+		 WHERE tenant_id = ? AND entity_id = ?
+		 ORDER BY seq DESC, id DESC`), tenant.String(), entityID); err != nil {
 		return nil, fmt.Errorf("list entity revisions: %w", err)
 	}
 	out := make([]revision.Revision, 0, len(rows))
@@ -106,13 +106,13 @@ func (s *revisionStore) List(ctx context.Context, tenant valueobjects.TenantID, 
 	return out, nil
 }
 
-func (s *revisionStore) AsOf(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string, at time.Time) (revision.Revision, error) {
+func (s *revisionStore) AsOf(ctx context.Context, tenant valueobjects.TenantID, entityID string, at time.Time) (revision.Revision, error) {
 	var row revisionRow
 	err := s.q.GetContext(ctx, &row, bind(
 		`SELECT id, tenant_id, type_definition_id, entity_id, seq, label, created_at, values
 		 FROM flexitype_entity_revision
-		 WHERE tenant_id = ? AND type_definition_id = ? AND entity_id = ? AND created_at <= ?
-		 ORDER BY seq DESC, id DESC LIMIT 1`), tenant.String(), typeDefID, entityID, at)
+		 WHERE tenant_id = ? AND entity_id = ? AND created_at <= ?
+		 ORDER BY seq DESC, id DESC LIMIT 1`), tenant.String(), entityID, at)
 	if isNoRows(err) {
 		return revision.Revision{}, domainerrors.NewNotFound("entity_revision", "as-of "+at.Format(time.RFC3339))
 	}
@@ -122,11 +122,11 @@ func (s *revisionStore) AsOf(ctx context.Context, tenant valueobjects.TenantID, 
 	return row.toRevision()
 }
 
-func (s *revisionStore) PurgeEntity(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error) {
+func (s *revisionStore) PurgeEntity(ctx context.Context, tenant valueobjects.TenantID, entityID string) (int, error) {
 	res, err := s.q.ExecContext(ctx, bind(
 		`DELETE FROM flexitype_entity_revision
-		 WHERE tenant_id = ? AND type_definition_id = ? AND entity_id = ?`),
-		tenant.String(), typeDefID, entityID)
+		 WHERE tenant_id = ? AND entity_id = ?`),
+		tenant.String(), entityID)
 	if err != nil {
 		return 0, fmt.Errorf("purge entity revisions: %w", err)
 	}
@@ -147,20 +147,20 @@ func (s *revisionStore) PurgeTenant(ctx context.Context, tenant valueobjects.Ten
 // LockEntitySeq takes a transaction-scoped advisory lock on one entity's
 // revision sequence, so LastSeq and the insert that follows it serialize
 // against another snapshot of the same entity.
-func (s *revisionStore) LockEntitySeq(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) error {
-	key := "flexitype-revision-seq\x1f" + tenant.String() + "\x1f" + typeDefID + "\x1f" + entityID
+func (s *revisionStore) LockEntitySeq(ctx context.Context, tenant valueobjects.TenantID, entityID string) error {
+	key := "flexitype-revision-seq\x1f" + tenant.String() + "\x1f" + entityID
 	if _, err := s.q.ExecContext(ctx, bind(`SELECT pg_advisory_xact_lock(hashtext(?))`), key); err != nil {
 		return fmt.Errorf("lock revision sequence: %w", err)
 	}
 	return nil
 }
 
-func (s *revisionStore) LastSeq(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error) {
+func (s *revisionStore) LastSeq(ctx context.Context, tenant valueobjects.TenantID, entityID string) (int, error) {
 	var seq int
 	err := s.q.GetContext(ctx, &seq, bind(
 		`SELECT COALESCE(MAX(seq), 0) FROM flexitype_entity_revision
-		 WHERE tenant_id = ? AND type_definition_id = ? AND entity_id = ?`),
-		tenant.String(), typeDefID, entityID)
+		 WHERE tenant_id = ? AND entity_id = ?`),
+		tenant.String(), entityID)
 	if err != nil {
 		return 0, fmt.Errorf("last revision seq: %w", err)
 	}

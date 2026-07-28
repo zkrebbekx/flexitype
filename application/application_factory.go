@@ -269,7 +269,7 @@ func (f *factory) New(context.Context) *Interactors {
 		i.revisions = apprevision.NewInteractor(unit, f.cfg.Revisions, repos.TypeDefinitions, repos.Attributes, repos.ValueReader, i.values, f.cfg.Now)
 	}
 	if f.cfg.ChangeSets != nil {
-		i.changesets = appchangeset.NewInteractor(f.cfg.ChangeSets, i.values, f.cfg.Now)
+		i.changesets = appchangeset.NewInteractor(f.cfg.ChangeSets, i.values, repos.Attributes, f.cfg.Now)
 	}
 	if f.cfg.UnitFamilies != nil {
 		i.units = appunit.NewInteractor(f.cfg.UnitFamilies)

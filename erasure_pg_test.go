@@ -291,7 +291,7 @@ func TestRevisionPurgeJoinsTransactionPostgres(t *testing.T) {
 		Convey("When they are purged inside a transaction that rolls back", func() {
 			tx, err := transactor.Begin(ctx)
 			So(err, ShouldBeNil)
-			n, err := revStore.WithTx(tx).PurgeEntity(ctx, tenant, "t1", "e1")
+			n, err := revStore.WithTx(tx).PurgeEntity(ctx, tenant, "e1")
 			So(err, ShouldBeNil)
 			So(n, ShouldEqual, 2)
 			So(tx.Rollback(ctx), ShouldBeNil)
@@ -304,7 +304,7 @@ func TestRevisionPurgeJoinsTransactionPostgres(t *testing.T) {
 		Convey("When they are purged inside a transaction that commits", func() {
 			tx, err := transactor.Begin(ctx)
 			So(err, ShouldBeNil)
-			n, err := revStore.WithTx(tx).PurgeEntity(ctx, tenant, "t1", "e1")
+			n, err := revStore.WithTx(tx).PurgeEntity(ctx, tenant, "e1")
 			So(err, ShouldBeNil)
 			So(n, ShouldEqual, 2)
 			So(tx.Commit(ctx), ShouldBeNil)

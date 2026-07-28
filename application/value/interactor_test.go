@@ -285,14 +285,14 @@ func (r *fakeValueRepo) ReanchorEntity(_ context.Context, tenant valueobjects.Te
 	return moved, nil
 }
 
-func (r *fakeValueRepo) MediaValueForKey(_ context.Context, tenant valueobjects.TenantID, objectKey string) (valueobjects.Value, bool, error) {
+func (r *fakeValueRepo) MediaValueForKey(_ context.Context, tenant valueobjects.TenantID, objectKey string) (domainvalue.Snapshot, bool, error) {
 	for _, snap := range r.values {
 		if snap.TenantID == tenant && snap.Value.DataType() == valueobjects.DataTypeMedia &&
 			snap.Value.Media().ObjectKey == objectKey {
-			return snap.Value, true, nil
+			return snap, true, nil
 		}
 	}
-	return valueobjects.Value{}, false, nil
+	return domainvalue.Snapshot{}, false, nil
 }
 
 func (r *fakeValueRepo) MediaKeyRefCount(_ context.Context, objectKey string, exclude valueobjects.AttributeValueID) (int, error) {

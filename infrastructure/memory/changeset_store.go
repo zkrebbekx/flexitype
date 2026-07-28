@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/changeset"
+	"github.com/zkrebbekx/flexitype/application/erasure"
+	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
@@ -21,6 +24,16 @@ type changesetStore struct {
 // NewChangeSetStore builds an in-memory change-set store.
 func NewChangeSetStore() changeset.Store {
 	return &changesetStore{sets: map[string]changeset.ChangeSet{}}
+}
+
+// ChangeSetEraserFor exposes the residual eraser for a store built by
+// NewChangeSetStore, whose concrete type is unexported.
+func ChangeSetEraserFor(s changeset.Store) erasure.ResidualEraser {
+	store, ok := s.(*changesetStore)
+	if !ok {
+		return nil
+	}
+	return store.ChangeSetEraser()
 }
 
 func (s *changesetStore) Create(_ context.Context, cs changeset.ChangeSet) error {
@@ -84,4 +97,59 @@ func (s *changesetStore) DueForPublish(_ context.Context, now time.Time) ([]chan
 		}
 	}
 	return out, nil
+}
+
+// ChangeSetEraser builds the in-memory change-set residual eraser, mirroring
+// the Postgres one.
+//
+// Mutations embed the value verbatim, and a draft or rejected set is never
+// pruned, so a purged value stayed readable there indefinitely while the
+// erasure report said it was gone. The mutation skeleton survives — kind,
+// attribute, entity and scope — so the set still reports what it contains;
+// only the value goes.
+func (s *changesetStore) ChangeSetEraser() erasure.ResidualEraser {
+	return &changeSetEraser{s: s}
+}
+
+type changeSetEraser struct{ s *changesetStore }
+
+func (e *changeSetEraser) Name() string { return "change-sets" }
+
+func (e *changeSetEraser) RedactEntity(_ context.Context, _ db.Tx, tenant valueobjects.TenantID, entityID string) (int, error) {
+	return e.redact(tenant, func(m appvalue.Mutation) bool { return m.EntityID == entityID }), nil
+}
+
+func (e *changeSetEraser) RedactTenant(_ context.Context, _ db.Tx, tenant valueobjects.TenantID) (int, error) {
+	return e.redact(tenant, func(m appvalue.Mutation) bool { return m.EntityID != "" }), nil
+}
+
+// redact rewrites matching mutations and returns how many SETS changed, so
+// the count means the same thing as the Postgres eraser's rows-affected.
+func (e *changeSetEraser) redact(tenant valueobjects.TenantID, match func(appvalue.Mutation) bool) int {
+	e.s.mu.Lock()
+	defer e.s.mu.Unlock()
+	changed := 0
+	for id, cs := range e.s.sets {
+		if cs.TenantID != tenant {
+			continue
+		}
+		touched := false
+		muts := make([]appvalue.Mutation, len(cs.Mutations))
+		copy(muts, cs.Mutations)
+		for idx := range muts {
+			if !match(muts[idx]) || muts[idx].Value == nil {
+				continue
+			}
+			muts[idx].Value = nil
+			muts[idx].Erased = true
+			touched = true
+		}
+		if !touched {
+			continue
+		}
+		cs.Mutations = muts
+		e.s.sets[id] = cs
+		changed++
+	}
+	return changed
 }

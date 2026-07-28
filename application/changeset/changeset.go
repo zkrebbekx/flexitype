@@ -10,8 +10,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/zkrebbekx/flexitype/application/fieldacl"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
+	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
@@ -72,6 +74,10 @@ type Store interface {
 
 // Interactor implements the change-management usecases.
 type Interactor struct {
+	// attrs resolves attribute definitions for the field ACL. A change-set
+	// mutation embeds a value verbatim, so a set read without the ACL served
+	// the very values every other surface redacts.
+	attrs domainattribute.Repository
 	// onPublishFailure observes a scheduled publish that failed. nil drops
 	// the report, which is the pre-existing behaviour for an embedder that
 	// wires no observer.
@@ -82,11 +88,11 @@ type Interactor struct {
 }
 
 // NewInteractor wires the change-set usecases.
-func NewInteractor(store Store, values *appvalue.Interactor, now func() time.Time) *Interactor {
+func NewInteractor(store Store, values *appvalue.Interactor, attrs domainattribute.Repository, now func() time.Time) *Interactor {
 	if now == nil {
 		now = uow.UTCNow
 	}
-	return &Interactor{store: store, values: values, now: now}
+	return &Interactor{store: store, values: values, attrs: attrs, now: now}
 }
 
 // CreateInput carries a new change-set's fields.
@@ -131,6 +137,13 @@ func (i *Interactor) AddMutation(ctx context.Context, rawID string, m appvalue.M
 		}
 		if m.Kind != appvalue.MutationSet && m.Kind != appvalue.MutationRemove {
 			return domainerrors.NewValidation("unknown mutation kind", "kind", m.Kind)
+		}
+		// Staging a value is writing it, only later. Without this check a
+		// principal barred from an attribute could stage a change to it and
+		// have an approver publish it — the write path's ACL never sees the
+		// author.
+		if err := i.assertWritable(ctx, m); err != nil {
+			return err
 		}
 		cs.Mutations = append(cs.Mutations, m)
 		return nil
@@ -238,12 +251,76 @@ func (i *Interactor) Get(ctx context.Context, rawID string) (*ChangeSet, error) 
 	if err != nil {
 		return nil, err
 	}
+	if err := i.redact(ctx, &cs); err != nil {
+		return nil, err
+	}
 	return &cs, nil
 }
 
-// List returns the tenant's change-sets, newest first.
+// List returns the tenant's change-sets, newest first, with the field ACL
+// applied to every mutation.
 func (i *Interactor) List(ctx context.Context) ([]ChangeSet, error) {
-	return i.store.List(ctx, uow.TenantFromContext(ctx))
+	sets, err := i.store.List(ctx, uow.TenantFromContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	for idx := range sets {
+		if err := i.redact(ctx, &sets[idx]); err != nil {
+			return nil, err
+		}
+	}
+	return sets, nil
+}
+
+// redact masks the value of every mutation the caller may not read.
+//
+// The skeleton survives — kind, attribute, entity, scope — so a reviewer sees
+// that a change exists and can count it, exactly as the feed and the activity
+// log do. Only the value goes. Removing the whole mutation would misreport
+// what a set contains, and leaving it meant a principal with `salary: none`
+// read the salary from another user's staged pay review, while the same value
+// was filtered from every other surface.
+func (i *Interactor) redact(ctx context.Context, cs *ChangeSet) error {
+	if len(cs.Mutations) == 0 {
+		return nil
+	}
+	ids := make([]valueobjects.AttributeDefinitionID, 0, len(cs.Mutations))
+	for _, m := range cs.Mutations {
+		id, err := valueobjects.ParseAttributeDefinitionID(m.AttributeDefinitionID)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	readable, err := fieldacl.New(i.attrs).Readable(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for idx := range cs.Mutations {
+		if readable[cs.Mutations[idx].AttributeDefinitionID] {
+			continue
+		}
+		cs.Mutations[idx].Value = nil
+		cs.Mutations[idx].Redacted = true
+	}
+	return nil
+}
+
+// assertWritable refuses a mutation on an attribute the caller may not write.
+func (i *Interactor) assertWritable(ctx context.Context, m appvalue.Mutation) error {
+	id, err := valueobjects.ParseAttributeDefinitionID(m.AttributeDefinitionID)
+	if err != nil {
+		return domainerrors.NewValidation(err.Error())
+	}
+	ok, err := fieldacl.New(i.attrs).CanWrite(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		// The same shape the write path uses for an unwritable attribute.
+		return domainerrors.NewForbidden("the attribute is not writable")
+	}
+	return nil
 }
 
 // PublishDue publishes every approved change-set whose publish_at has

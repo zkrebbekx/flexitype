@@ -268,3 +268,187 @@ func TestChangeSetStoreDirect(t *testing.T) {
 		})
 	})
 }
+
+// TestChangeSetFieldACL covers the surface the ACL-completeness sweep never
+// enumerated.
+//
+// A mutation embeds the value verbatim, so a principal with `salary: none`
+// read the salary from another user's staged pay review — while the same
+// value was filtered from every other surface. Staging a write was unchecked
+// too, so a principal barred from an attribute could stage a change to it and
+// have an approver publish it.
+func TestChangeSetFieldACL(t *testing.T) {
+	Convey("Given a staged change to a restricted attribute", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		emp, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "employee", DisplayName: "Employee"})
+		So(err, ShouldBeNil)
+		mk := func(name string) string {
+			a, e := it.Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: emp.ID.String(), InternalName: name,
+				DisplayName: name, DataType: "integer",
+			})
+			So(e, ShouldBeNil)
+			return a.ID.String()
+		}
+		salary := mk("salary")
+		grade := mk("grade")
+
+		cs, err := it.ChangeSets().Create(ctx, appchangeset.CreateInput{Name: "pay review"})
+		So(err, ShouldBeNil)
+		_, err = it.ChangeSets().AddMutation(ctx, cs.ID.String(), appvalue.Mutation{
+			Kind: appvalue.MutationSet, AttributeDefinitionID: salary,
+			EntityID: "emp-1", TypeDefinitionID: emp.ID.String(),
+			Value: json.RawMessage(`244000`),
+		})
+		So(err, ShouldBeNil)
+		_, err = it.ChangeSets().AddMutation(ctx, cs.ID.String(), appvalue.Mutation{
+			Kind: appvalue.MutationSet, AttributeDefinitionID: grade,
+			EntityID: "emp-1", TypeDefinitionID: emp.ID.String(),
+			Value: json.RawMessage(`7`),
+		})
+		So(err, ShouldBeNil)
+
+		restricted := uow.WithAccess(ctx, uow.Access{
+			Attr: map[string]uow.Perm{"salary": uow.PermNone},
+		})
+		rit := svc.Interactors(restricted)
+
+		Convey("When a restricted principal reads the set", func() {
+			got, err := rit.ChangeSets().Get(restricted, cs.ID.String())
+
+			Convey("Then the restricted value is masked and the readable one is not", func() {
+				So(err, ShouldBeNil)
+				So(got.Mutations, ShouldHaveLength, 2)
+				So(got.Mutations[0].Value, ShouldBeNil)
+				So(got.Mutations[0].Redacted, ShouldBeTrue)
+				So(string(got.Mutations[1].Value), ShouldEqual, "7")
+				So(got.Mutations[1].Redacted, ShouldBeFalse)
+			})
+
+			Convey("Then the skeleton survives, so the change is still visible as a change", func() {
+				So(got.Mutations[0].AttributeDefinitionID, ShouldEqual, salary)
+				So(got.Mutations[0].EntityID, ShouldEqual, "emp-1")
+			})
+		})
+
+		Convey("When a restricted principal lists sets", func() {
+			sets, err := rit.ChangeSets().List(restricted)
+
+			Convey("Then the same masking applies", func() {
+				So(err, ShouldBeNil)
+				So(sets, ShouldHaveLength, 1)
+				So(sets[0].Mutations[0].Value, ShouldBeNil)
+			})
+		})
+
+		Convey("When an unrestricted principal reads the set", func() {
+			got, err := it.ChangeSets().Get(ctx, cs.ID.String())
+
+			Convey("Then nothing is masked", func() {
+				So(err, ShouldBeNil)
+				So(string(got.Mutations[0].Value), ShouldEqual, "244000")
+			})
+		})
+
+		Convey("When a restricted principal stages a change to that attribute", func() {
+			draft, err := rit.ChangeSets().Create(restricted, appchangeset.CreateInput{Name: "sneaky"})
+			So(err, ShouldBeNil)
+			_, err = rit.ChangeSets().AddMutation(restricted, draft.ID.String(), appvalue.Mutation{
+				Kind: appvalue.MutationSet, AttributeDefinitionID: salary,
+				EntityID: "emp-1", TypeDefinitionID: emp.ID.String(),
+				Value: json.RawMessage(`999999`),
+			})
+
+			Convey("Then it is refused: staging a write is writing, only later", func() {
+				So(err, ShouldNotBeNil)
+				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeForbidden)
+			})
+		})
+
+		Convey("When a restricted principal stages a change it may write", func() {
+			draft, err := rit.ChangeSets().Create(restricted, appchangeset.CreateInput{Name: "grade bump"})
+			So(err, ShouldBeNil)
+			_, err = rit.ChangeSets().AddMutation(restricted, draft.ID.String(), appvalue.Mutation{
+				Kind: appvalue.MutationSet, AttributeDefinitionID: grade,
+				EntityID: "emp-1", TypeDefinitionID: emp.ID.String(),
+				Value: json.RawMessage(`8`),
+			})
+
+			Convey("Then it is accepted", func() {
+				So(err, ShouldBeNil)
+			})
+		})
+	})
+}
+
+// TestChangeSetErasureResidue covers the copy an erasure left behind.
+//
+// flexitype_changeset.mutations embeds the value verbatim, and a draft or
+// rejected set is never pruned — so a purged value stayed readable there
+// indefinitely while the report said the erasure had succeeded.
+func TestChangeSetErasureResidue(t *testing.T) {
+	Convey("Given a purged entity whose value is staged in a draft change-set", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		person, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "person", DisplayName: "Person"})
+		So(err, ShouldBeNil)
+		email, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: person.ID.String(), InternalName: "email",
+			DisplayName: "Email", DataType: "string",
+		})
+		So(err, ShouldBeNil)
+		_, err = it.Values().Set(ctx, appvalue.SetInput{
+			AttributeDefinitionID: email.ID.String(), EntityID: "p1",
+			TypeDefinitionID: person.ID.String(), Value: json.RawMessage(`"alice@example.com"`),
+		})
+		So(err, ShouldBeNil)
+
+		cs, err := it.ChangeSets().Create(ctx, appchangeset.CreateInput{Name: "draft"})
+		So(err, ShouldBeNil)
+		_, err = it.ChangeSets().AddMutation(ctx, cs.ID.String(), appvalue.Mutation{
+			Kind: appvalue.MutationSet, AttributeDefinitionID: email.ID.String(),
+			EntityID: "p1", TypeDefinitionID: person.ID.String(),
+			Value: json.RawMessage(`"alice@example.com"`),
+		})
+		So(err, ShouldBeNil)
+
+		Convey("When the entity is erased", func() {
+			report, err := svc.Interactors(ctx).Erasure().PurgeEntity(ctx, person.ID.String(), "p1")
+			So(err, ShouldBeNil)
+
+			Convey("Then the staged copy is redacted, not left readable", func() {
+				So(report.RecordsRedacted, ShouldBeGreaterThan, 0)
+				got, gerr := svc.Interactors(ctx).ChangeSets().Get(ctx, cs.ID.String())
+				So(gerr, ShouldBeNil)
+				So(got.Mutations, ShouldHaveLength, 1)
+				So(got.Mutations[0].Value, ShouldBeNil)
+				So(got.Mutations[0].Erased, ShouldBeTrue)
+			})
+
+			Convey("Then the mutation skeleton survives, so the set still says what it does", func() {
+				got, gerr := svc.Interactors(ctx).ChangeSets().Get(ctx, cs.ID.String())
+				So(gerr, ShouldBeNil)
+				So(got.Mutations[0].EntityID, ShouldEqual, "p1")
+				So(got.Mutations[0].Kind, ShouldEqual, appvalue.MutationSet)
+			})
+		})
+
+		Convey("When a different entity is erased", func() {
+			_, err := svc.Interactors(ctx).Erasure().PurgeEntity(ctx, person.ID.String(), "p2")
+
+			Convey("Then the staged value for p1 is untouched", func() {
+				So(err, ShouldNotBeNil) // nothing to purge
+				got, gerr := svc.Interactors(ctx).ChangeSets().Get(ctx, cs.ID.String())
+				So(gerr, ShouldBeNil)
+				So(string(got.Mutations[0].Value), ShouldEqual, `"alice@example.com"`)
+			})
+		})
+	})
+}

@@ -633,7 +633,7 @@ func (r *attributeValueRepository) ReanchorEntity(ctx context.Context, tenant va
 // MediaValueForKey returns the media value the tenant stores for an object key.
 // It is served by the same (tenant_id, object_key) expression index the
 // download-authorization probe uses.
-func (r *attributeValueRepository) MediaValueForKey(ctx context.Context, tenant valueobjects.TenantID, objectKey string) (valueobjects.Value, bool, error) {
+func (r *attributeValueRepository) MediaValueForKey(ctx context.Context, tenant valueobjects.TenantID, objectKey string) (domainvalue.Snapshot, bool, error) {
 	var rows []valueRow
 	if err := r.q.SelectContext(ctx, &rows, bind(
 		`SELECT `+valueColumnList+`
@@ -642,16 +642,16 @@ func (r *attributeValueRepository) MediaValueForKey(ctx context.Context, tenant 
 		  ORDER BY created_at
 		  LIMIT 1`),
 		tenant.String(), valueobjects.DataTypeMedia.String(), objectKey); err != nil {
-		return valueobjects.Value{}, false, fmt.Errorf("media value for key: %w", err)
+		return domainvalue.Snapshot{}, false, fmt.Errorf("media value for key: %w", err)
 	}
 	if len(rows) == 0 {
-		return valueobjects.Value{}, false, nil
+		return domainvalue.Snapshot{}, false, nil
 	}
 	snap, err := rows[0].snapshot()
 	if err != nil {
-		return valueobjects.Value{}, false, err
+		return domainvalue.Snapshot{}, false, err
 	}
-	return snap.Value, true, nil
+	return snap, true, nil
 }
 
 // MediaKeyRefCount counts other rows referencing an object key, across tenants
@@ -660,7 +660,8 @@ func (r *attributeValueRepository) MediaKeyRefCount(ctx context.Context, objectK
 	var n int
 	if err := r.q.GetContext(ctx, &n, bind(
 		`SELECT count(*) FROM flexitype_attribute_value
-		  WHERE data_type = ? AND value_json->>'object_key' = ? AND id <> ?`),
+		  WHERE data_type = ? AND value_json->>'object_key' = ? AND id <> ?
+		    AND archived_at IS NULL`),
 		valueobjects.DataTypeMedia.String(), objectKey, exclude.String()); err != nil {
 		return 0, fmt.Errorf("media key reference count: %w", err)
 	}

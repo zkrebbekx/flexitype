@@ -286,6 +286,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	var worker *webhook.Worker
 	var pruner *feed.Pruner
 	residualErasers := []erasure.ResidualEraser{
+		postgres.NewChangeSetEraser(),
 		postgres.NewOutboxEraser(),
 		postgres.NewActivityEraser(),
 	}
@@ -438,7 +439,7 @@ func NewInMemory(opts ...Option) *Service {
 		// survives the erasure on purpose so the erasure stays provable, so
 		// its entries are redacted. There is no in-memory event log to
 		// redact: this backend direct-dispatches and keeps no outbox.
-		ErasureResiduals: []erasure.ResidualEraser{store.NewActivityEraser()},
+		ErasureResiduals: residualErasersInMemory(store, changesets),
 		Features:         o.features,
 		SavedViews:       savedViews,
 		MatchRules:       matchRules,
@@ -839,4 +840,18 @@ func gqlOptions(o *options) []gql.EngineOption {
 		opts = append(opts, gql.WithFederation())
 	}
 	return opts
+}
+
+// residualErasersInMemory lists the in-memory stores that copy a value and so
+// must be redacted by an erasure. There is no in-memory event log: this
+// backend direct-dispatches and keeps no outbox.
+func residualErasersInMemory(store *memory.Store, changesets changeset.Store) []erasure.ResidualEraser {
+	// The activity log copies the values an erasure deletes and survives the
+	// erasure on purpose, so the erasure stays provable — which is why its
+	// entries are redacted rather than deleted.
+	out := []erasure.ResidualEraser{store.NewActivityEraser()}
+	if eraser := memory.ChangeSetEraserFor(changesets); eraser != nil {
+		out = append(out, eraser)
+	}
+	return out
 }

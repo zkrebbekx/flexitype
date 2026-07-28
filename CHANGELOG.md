@@ -47,6 +47,36 @@ session lock appears to work.
 
 `docs/upgrades.md` and `docs/configuration.md` stated opposite contracts; both
 now describe the lease. Closes #400.
+### Fixed — Entity-summary lock order, and the cost of an unbounded purge
+
+- **Change-set publish and CSV import still deadlocked** (#412). The statement
+  trigger sorts keys *within one statement*, and `SetBatch` sorted its own
+  items — but every other multi-entity path issues one INSERT per value in
+  caller order, so two of them over the same entities in opposite order
+  deadlocked on the summary rows even though their value rows were disjoint:
+  40 rounds out of 40 in the reported reproduction. `ApplyMutations`,
+  `importTransactional` and `writeChunk` now apply the same canonical order.
+  `ApplySnapshot` needs none — a snapshot restores one entity, so it touches
+  one summary row.
+- **The sort key itself was wrong** (#412). `SetBatch` ordered on the
+  caller-supplied `TypeDefinitionID`, which is optional, so a batch that omits
+  it and one that supplies it sorted the same mixed-type entities differently
+  and could still invert their lock order. The key is now **the entity id
+  alone**: an entity has exactly one anchor type, so it has exactly one
+  summary row, and the entity id is a total order over the rows a transaction
+  takes. The ordering lives in one place (`application/value/lockorder.go`)
+  rather than in each caller's loop.
+- **A tenant purge spilled to temp disk** (#417). The `FOR EACH STATEMENT`
+  trigger uses `REFERENCING OLD TABLE`, so an unbounded `DELETE` materialises
+  every removed row into a tuplestore: measured at 300k rows with
+  `work_mem=4MB`, **17.2x slower** than with the triggers dropped, and ~42MB
+  of temp blocks that did not exist before. At the 10^8 value rows migration
+  000022 cites as the target scale, that is on the order of 14GB of temp files
+  inside a single uninterruptible statement — on erasure, the operation least
+  able to tolerate a partial failure. Both purges now delete in bounded
+  chunks inside the caller's transaction, so the purge stays atomic while each
+  transition table stays proportional to the chunk.
+
 ### Fixed — Erasure and field-ACL residue
 
 Five surfaces where a value survived an operation that reported success, or

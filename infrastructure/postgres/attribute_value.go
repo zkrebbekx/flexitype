@@ -794,26 +794,63 @@ func purgedMediaKeys(rows []purgedValueRow) []string {
 	return keys
 }
 
+// purgeChunk bounds one purge DELETE.
+//
+// The entity-summary trigger is FOR EACH STATEMENT with REFERENCING OLD
+// TABLE, so a bulk delete materialises every removed row into a tuplestore.
+// One unbounded statement therefore spills the whole purge to temp disk:
+// measured on Postgres 16 with 300k value rows and work_mem=4MB, the purge
+// took 17.2x longer than with the triggers dropped and wrote ~42MB of temp
+// blocks that did not exist before. Migration 000022's own comment cites 10^8
+// value rows as the target scale, where that is on the order of 14GB of temp
+// files inside a single uninterruptible statement.
+//
+// Chunking keeps each transition table proportional to the chunk rather than
+// to the tenant. The chunks run in the caller's transaction, so the purge is
+// still atomic.
+const purgeChunk = 5000
+
 func (r *attributeValueRepository) PurgeEntity(ctx context.Context, key domainvalue.EntityKey) ([]string, int, error) {
 	// DELETE ... RETURNING removes every row (archived included) and hands back
-	// the media metadata in one round trip so the interactor can GC the blobs.
-	var rows []purgedValueRow
-	query := bind(`DELETE FROM flexitype_attribute_value
-	 WHERE tenant_id = ? AND type_definition_id = ? AND entity_id = ?
-	 RETURNING data_type, value_json`)
-	if err := r.q.SelectContext(ctx, &rows, query,
-		key.TenantID.String(), key.TypeDefinitionID.String(), key.EntityID.String()); err != nil {
-		return nil, 0, fmt.Errorf("purge entity values: %w", err)
-	}
-	return purgedMediaKeys(rows), len(rows), nil
+	// the media metadata so the interactor can GC the blobs.
+	return r.purgeChunked(ctx, "purge entity values",
+		bind(`DELETE FROM flexitype_attribute_value
+		 WHERE ctid IN (
+		   SELECT ctid FROM flexitype_attribute_value
+		    WHERE tenant_id = ? AND type_definition_id = ? AND entity_id = ?
+		    LIMIT ?)
+		 RETURNING data_type, value_json`),
+		key.TenantID.String(), key.TypeDefinitionID.String(), key.EntityID.String(), purgeChunk)
 }
 
 func (r *attributeValueRepository) PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) ([]string, int, error) {
-	var rows []purgedValueRow
-	query := bind(`DELETE FROM flexitype_attribute_value WHERE tenant_id = ?
-	 RETURNING data_type, value_json`)
-	if err := r.q.SelectContext(ctx, &rows, query, tenant.String()); err != nil {
-		return nil, 0, fmt.Errorf("purge tenant values: %w", err)
+	return r.purgeChunked(ctx, "purge tenant values",
+		bind(`DELETE FROM flexitype_attribute_value
+		 WHERE ctid IN (
+		   SELECT ctid FROM flexitype_attribute_value
+		    WHERE tenant_id = ?
+		    LIMIT ?)
+		 RETURNING data_type, value_json`),
+		tenant.String(), purgeChunk)
+}
+
+// purgeChunked runs a bounded delete until it removes nothing, accumulating
+// the media keys and the row count.
+func (r *attributeValueRepository) purgeChunked(ctx context.Context, what, query string, args ...any) ([]string, int, error) {
+	var keys []string
+	total := 0
+	for {
+		var rows []purgedValueRow
+		if err := r.q.SelectContext(ctx, &rows, query, args...); err != nil {
+			return nil, 0, fmt.Errorf("%s: %w", what, err)
+		}
+		if len(rows) == 0 {
+			return keys, total, nil
+		}
+		keys = append(keys, purgedMediaKeys(rows)...)
+		total += len(rows)
+		if err := ctx.Err(); err != nil {
+			return nil, 0, err
+		}
 	}
-	return purgedMediaKeys(rows), len(rows), nil
 }

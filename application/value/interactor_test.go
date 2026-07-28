@@ -619,3 +619,53 @@ func TestSetValueUsecase(t *testing.T) {
 		})
 	})
 }
+
+func TestCanonicalOrder(t *testing.T) {
+	Convey("Given items touching several entities in arbitrary order", t, func() {
+		type item struct {
+			entity string
+			tag    string
+		}
+		items := []item{
+			{"ent-b", "b1"}, {"ent-a", "a1"}, {"ent-c", "c1"}, {"ent-a", "a2"},
+		}
+
+		Convey("When the canonical write order is computed", func() {
+			order := canonicalOrder(items, func(i item) string { return i.entity })
+
+			Convey("Then entities sort so two writers take the summary rows alike", func() {
+				got := make([]string, 0, len(order))
+				for _, idx := range order {
+					got = append(got, items[idx].tag)
+				}
+				So(got, ShouldResemble, []string{"a1", "a2", "b1", "c1"})
+			})
+
+			Convey("Then the caller's order is preserved within one entity", func() {
+				// a1 before a2: a stable sort, so an error's item index and
+				// the output order stay the caller's.
+				So(order[0], ShouldEqual, 1)
+				So(order[1], ShouldEqual, 3)
+			})
+		})
+
+		Convey("When the reverse listing is ordered", func() {
+			reversed := []item{{"ent-c", "c1"}, {"ent-a", "a1"}, {"ent-b", "b1"}}
+			order := canonicalOrder(reversed, func(i item) string { return i.entity })
+
+			Convey("Then it yields the same entity sequence as the forward one", func() {
+				got := make([]string, 0, len(order))
+				for _, idx := range order {
+					got = append(got, reversed[idx].entity)
+				}
+				So(got, ShouldResemble, []string{"ent-a", "ent-b", "ent-c"})
+			})
+		})
+
+		Convey("When the list is empty", func() {
+			Convey("Then the order is empty rather than nil-panicking", func() {
+				So(canonicalOrder([]item{}, func(i item) string { return i.entity }), ShouldBeEmpty)
+			})
+		})
+	})
+}

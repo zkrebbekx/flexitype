@@ -34,6 +34,7 @@ type adminStore struct {
 	tenants  map[string]admin.Tenant
 	accounts map[ulid.ID]admin.ServiceAccount
 	hashes   map[ulid.ID]string
+	roles    map[string]admin.Role
 }
 
 func newAdminStore() *adminStore {
@@ -41,6 +42,7 @@ func newAdminStore() *adminStore {
 		tenants:  map[string]admin.Tenant{},
 		accounts: map[ulid.ID]admin.ServiceAccount{},
 		hashes:   map[ulid.ID]string{},
+		roles:    map[string]admin.Role{},
 	}
 }
 
@@ -462,6 +464,224 @@ func TestProvisioningRequiresAdminScope(t *testing.T) {
 			Convey("Then authentication answers first with 401", func() {
 				So(resp.Status, ShouldEqual, http.StatusUnauthorized)
 				So(resp.errorCode(), ShouldEqual, "UNAUTHENTICATED")
+			})
+		})
+	})
+}
+
+func (s *adminStore) SetAccountRoles(_ context.Context, id ulid.ID, roles []string, perms map[string]string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.accounts[id]
+	if !ok {
+		return domainerrors.NewNotFound("service_account", id.String())
+	}
+	a.Roles, a.FieldPermissions, a.UpdatedAt = roles, perms, now
+	s.accounts[id] = a
+	return nil
+}
+
+func (s *adminStore) UpsertRole(_ context.Context, r admin.Role) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.roles[r.TenantID+"/"+r.Name] = r
+	return nil
+}
+
+func (s *adminStore) ListRoles(_ context.Context, tenant string) ([]admin.Role, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []admin.Role{}
+	for _, r := range s.roles {
+		if r.TenantID == tenant {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (s *adminStore) DeleteRole(_ context.Context, tenant, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := tenant + "/" + name
+	if _, ok := s.roles[key]; !ok {
+		return domainerrors.NewNotFound("role", name)
+	}
+	delete(s.roles, key)
+	return nil
+}
+
+// TestRoleRoutes covers the role control plane over the same live interactor:
+// creation, listing, replacement, deletion and assignment to an account.
+func TestRoleRoutes(t *testing.T) {
+	Convey("Given a provisioning-enabled API with a tenant", t, func() {
+		h, _ := newProvisioningHarness(t, nil)
+		So(h.post("/api/v1/tenants", map[string]any{"name": "acme"}).Status,
+			ShouldEqual, http.StatusCreated)
+
+		Convey("When a role is created", func() {
+			resp := h.put("/api/v1/roles", map[string]any{
+				"tenant_name": "acme", "name": "reader",
+				"description":       "read-only",
+				"scopes":            []string{"read"},
+				"field_permissions": map[string]string{"salary": "none"},
+			})
+
+			Convey("Then it is 200 with the stored permission set", func() {
+				So(resp.Status, ShouldEqual, http.StatusOK)
+				obj := resp.object(t)
+				So(obj["name"], ShouldEqual, "reader")
+				So(obj["tenant_id"], ShouldEqual, "acme")
+				perms := obj["field_permissions"].(map[string]any)
+				So(perms["salary"], ShouldEqual, "none")
+			})
+
+			Convey("And it appears in the tenant's role list", func() {
+				list := h.get("/api/v1/roles?tenant_name=acme")
+				So(list.Status, ShouldEqual, http.StatusOK)
+				items := list.object(t)["items"].([]any)
+				So(len(items), ShouldEqual, 1)
+				So(items[0].(map[string]any)["name"], ShouldEqual, "reader")
+			})
+
+			Convey("And a second write under the same name replaces it", func() {
+				again := h.put("/api/v1/roles", map[string]any{
+					"tenant_name": "acme", "name": "reader",
+					"scopes": []string{"read", "write"},
+				})
+				So(again.Status, ShouldEqual, http.StatusOK)
+
+				list := h.get("/api/v1/roles?tenant_name=acme")
+				items := list.object(t)["items"].([]any)
+				So(len(items), ShouldEqual, 1)
+				So(items[0].(map[string]any)["field_permissions"], ShouldBeNil)
+			})
+
+			Convey("And it can be deleted", func() {
+				del := h.delete("/api/v1/roles/reader?tenant_name=acme")
+				So(del.Status, ShouldEqual, http.StatusNoContent)
+
+				list := h.get("/api/v1/roles?tenant_name=acme")
+				So(string(list.Body), ShouldContainSubstring, `"items":[]`)
+			})
+
+			Convey("And an account can be given the role", func() {
+				created := h.post("/api/v1/service-accounts", map[string]any{
+					"tenant_name": "acme", "name": "analyst", "roles": []string{"reader"},
+				})
+				So(created.Status, ShouldEqual, http.StatusCreated)
+				id := created.object(t)["account"].(map[string]any)["id"].(string)
+
+				assigned := h.put("/api/v1/service-accounts/"+id+"/roles", map[string]any{
+					"roles":             []string{"reader"},
+					"field_permissions": map[string]string{"ssn": "none"},
+				})
+				So(assigned.Status, ShouldEqual, http.StatusNoContent)
+
+				list := h.get("/api/v1/service-accounts?tenant_name=acme")
+				acct := list.object(t)["items"].([]any)[0].(map[string]any)
+				So(acct["roles"].([]any)[0], ShouldEqual, "reader")
+				So(acct["field_permissions"].(map[string]any)["ssn"], ShouldEqual, "none")
+			})
+
+			Convey("And assigning it to an unknown account is 404", func() {
+				resp := h.put("/api/v1/service-accounts/"+ulid.New().String()+"/roles",
+					map[string]any{"roles": []string{"reader"}})
+				So(resp.Status, ShouldEqual, http.StatusNotFound)
+			})
+		})
+
+		Convey("When a role is listed without a tenant", func() {
+			resp := h.get("/api/v1/roles")
+
+			Convey("Then it is 422 rather than a cross-tenant listing", func() {
+				So(resp.Status, ShouldEqual, http.StatusUnprocessableEntity)
+				So(resp.errorCode(), ShouldEqual, "VALIDATION")
+			})
+		})
+
+		Convey("When a role is deleted without a tenant", func() {
+			resp := h.delete("/api/v1/roles/reader")
+
+			Convey("Then it is 422", func() {
+				So(resp.Status, ShouldEqual, http.StatusUnprocessableEntity)
+			})
+		})
+
+		Convey("When a role that does not exist is deleted", func() {
+			resp := h.delete("/api/v1/roles/ghost?tenant_name=acme")
+
+			Convey("Then it is 404, not a silent 204", func() {
+				So(resp.Status, ShouldEqual, http.StatusNotFound)
+				So(resp.errorCode(), ShouldEqual, "NOT_FOUND")
+			})
+		})
+
+		Convey("When a field permission carries a level that does not exist", func() {
+			resp := h.put("/api/v1/roles", map[string]any{
+				"tenant_name": "acme", "name": "reader",
+				"field_permissions": map[string]string{"salary": "readonly"},
+			})
+
+			Convey("Then it is 422 rather than a silent denial", func() {
+				So(resp.Status, ShouldEqual, http.StatusUnprocessableEntity)
+				So(resp.errorCode(), ShouldEqual, "VALIDATION")
+			})
+		})
+
+		Convey("When an account names a role the tenant does not have", func() {
+			resp := h.post("/api/v1/service-accounts", map[string]any{
+				"tenant_name": "acme", "name": "analyst", "roles": []string{"ghost"},
+			})
+
+			Convey("Then it is 404 rather than a credential that grants nothing", func() {
+				So(resp.Status, ShouldEqual, http.StatusNotFound)
+			})
+		})
+
+		Convey("When the role bodies are malformed", func() {
+			Convey("Then upsert and assign are 422 VALIDATION", func() {
+				So(h.put("/api/v1/roles", `{`).Status, ShouldEqual, http.StatusUnprocessableEntity)
+				So(h.put("/api/v1/service-accounts/"+ulid.New().String()+"/roles", `{`).Status,
+					ShouldEqual, http.StatusUnprocessableEntity)
+			})
+		})
+	})
+}
+
+// TestRoleRoutesWithoutProvisioning covers the branch a deployment gives when
+// no database-backed control plane is wired: the role endpoints are absent,
+// not broken.
+func TestRoleRoutesWithoutProvisioning(t *testing.T) {
+	Convey("Given an API built without a provisioning interactor", t, func() {
+		store := memory.NewStore()
+		factory := application.NewFactory(application.FactoryConfig{
+			Transactor:      store.Transactor(),
+			NewRepositories: func() application.Repositories { return store.Repositories() },
+			ActivityLog:     store.ActivityLog(),
+		})
+		srv := httptest.NewServer(buildRouter(ServerConfig{
+			Factory: factory,
+			Logger:  logger.New(logger.Config{Level: "error"}),
+			Health:  health.NewService("flexitype", "test"),
+			// Admin deliberately left nil.
+		}))
+		t.Cleanup(srv.Close)
+		h := &deliveryHarness{t: t, srv: srv}
+
+		Convey("When any role route is called", func() {
+			Convey("Then every one is 501 FEATURE_DISABLED", func() {
+				for _, call := range []rawResponse{
+					h.get("/api/v1/roles?tenant_name=acme"),
+					h.put("/api/v1/roles", map[string]any{"tenant_name": "acme", "name": "reader"}),
+					h.delete("/api/v1/roles/reader?tenant_name=acme"),
+					h.put("/api/v1/service-accounts/"+ulid.New().String()+"/roles",
+						map[string]any{"roles": []string{"reader"}}),
+				} {
+					So(call.Status, ShouldEqual, http.StatusNotImplemented)
+					So(call.errorCode(), ShouldEqual, "FEATURE_DISABLED")
+				}
 			})
 		})
 	})

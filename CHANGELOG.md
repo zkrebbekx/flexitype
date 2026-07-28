@@ -7,6 +7,50 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Added — Roles: one permission set, many accounts
+
+Field permissions were stored per service account with no indirection. A
+deployment fronting 500 operators across 5 permission profiles needed 500
+accounts, each carrying its own copy of the per-attribute map. Restricting one
+more attribute meant hundreds of writes that no transaction spanned; the
+permission applied inconsistently while the rollout ran; and "who can read
+this attribute" could only be answered by reading every account and diffing
+maps.
+
+A **role** is a named permission set inside one tenant, owning a scope set and
+a per-attribute permission map. Accounts hold role names; nothing is copied
+onto them.
+
+- `PUT /api/v1/roles`, `GET /api/v1/roles?tenant_name=…`,
+  `DELETE /api/v1/roles/{name}?tenant_name=…`, and
+  `PUT /api/v1/service-accounts/{id}/roles`. All need the `admin` scope, and
+  all are in the OpenAPI document and the Go client
+  (`AdminService.UpsertRole`, `ListRoles`, `DeleteRole`, `AssignRoles`).
+- `POST /api/v1/service-accounts` accepts `roles` and `field_permissions`.
+  `scopes` becomes optional when a role is given: an account whose whole
+  permission set comes from its roles needs no scope of its own. An account
+  with neither a scope nor a role is refused — the credential would grant
+  nothing.
+- The merge happens at **authentication**, so a change to a role reaches every
+  account holding it as soon as the auth-cache entry expires. Scopes union;
+  field permissions take the most permissive level any role grants; the
+  account's own entry wins over every role. `write` outranks `read`, which
+  outranks `none`, and an unrecognised level ranks below `none` so a typo
+  denies.
+- An assignment naming a role the tenant does not have is a 404. A missing
+  role resolves to nothing, so a typo would otherwise be indistinguishable
+  from a role that grants nothing.
+- `PUT /service-accounts/{id}/roles` evicts the account's auth-cache entry, so
+  a removal applies at once rather than at the end of the TTL. A change to a
+  role still waits for the TTL: the accounts holding it are not known at write
+  time.
+- Migration `000026` adds `flexitype_role` and the `roles` /
+  `field_permissions` columns on `flexitype_service_account`. Both columns
+  default to empty, so an existing account behaves exactly as before.
+
+Rules and examples: [docs/design/identity.md](docs/design/identity.md#roles).
+Closes #326.
+
 ### Added — Go client: opt-in retrying, and the throttle hint it dropped
 
 `Client.do` made exactly one attempt, and `decodeError` never read

@@ -195,3 +195,15 @@ func (s *Store) Authenticate(token string) (Account, error) {
 func (s *Store) AuthenticateCtx(_ context.Context, token string) (Account, error) {
 	return s.Authenticate(token)
 }
+
+// permissionRank orders the field-permission levels. An unknown or empty
+// level ranks lowest, so a typo denies rather than grants.
+var permissionRank = map[string]int{"none": 1, "read": 2, "write": 3}
+
+// MorePermissive reports whether level a allows strictly more than b.
+//
+// Roles merge additively — holding two roles is holding what either allows —
+// so a merge takes the most permissive level each role grants. An unknown
+// level ranks below "none", which is the safe direction: a typo in a role
+// definition must not out-rank a real grant.
+func MorePermissive(a, b string) bool { return permissionRank[a] > permissionRank[b] }

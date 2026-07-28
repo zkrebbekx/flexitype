@@ -518,7 +518,26 @@ type ServiceAccount struct {
 	TenantID string   `json:"tenant_id,omitempty"`
 	Name     string   `json:"name"`
 	Scopes   []string `json:"scopes"`
-	Token    string   `json:"token,omitempty"`
+	// Roles the account holds. Its effective scopes are the union of Scopes
+	// and every role's scopes.
+	Roles []string `json:"roles,omitempty"`
+	// FieldPermissions are this account's own overrides, which win over any
+	// level a role grants. Keys are attribute internal names; values are
+	// none, read or write.
+	FieldPermissions map[string]string `json:"field_permissions,omitempty"`
+	Token            string            `json:"token,omitempty"`
+}
+
+// Role is a named permission set that accounts in the same tenant hold.
+type Role struct {
+	ID          string   `json:"id"`
+	TenantID    string   `json:"tenant_id,omitempty"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Scopes      []string `json:"scopes"`
+	// FieldPermissions maps an attribute internal name to none, read or
+	// write. An attribute that is not listed stays fully accessible.
+	FieldPermissions map[string]string `json:"field_permissions,omitempty"`
 }
 
 // ActivityEntry is one audit-log record.

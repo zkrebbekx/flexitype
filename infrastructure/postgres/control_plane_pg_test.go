@@ -1154,3 +1154,334 @@ func TestDeliveryStatsIntegration(t *testing.T) {
 		})
 	})
 }
+
+// TestRolesIntegration covers the role store and, more importantly, the
+// resolution that happens at authentication: a role's grants must reach the
+// account without being written onto it.
+func TestRolesIntegration(t *testing.T) {
+	pool, _ := controlPlaneFixture(t)
+	ctx := context.Background()
+	store := postgres.NewAdminStore(pool)
+	lookup := postgres.NewAccountLookup(pool)
+
+	Convey("Given a tenant with a reader role and a redactor role", t, func() {
+		pool.MustExec(`TRUNCATE flexitype_role, flexitype_service_account, flexitype_tenant CASCADE`)
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		So(store.CreateTenant(ctx, admin.Tenant{
+			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
+		}), ShouldBeNil)
+		So(store.CreateTenant(ctx, admin.Tenant{
+			ID: ulid.New(), Name: "other", Active: true, CreatedAt: now, UpdatedAt: now,
+		}), ShouldBeNil)
+
+		So(store.UpsertRole(ctx, admin.Role{
+			ID: ulid.New(), TenantID: "acme", Name: "reader",
+			Description: "read everything",
+			Scopes:      []serviceaccount.Scope{"values:read"},
+			FieldPermissions: map[string]string{
+				"salary": "read", "ssn": "none",
+			},
+			CreatedAt: now, UpdatedAt: now,
+		}), ShouldBeNil)
+		So(store.UpsertRole(ctx, admin.Role{
+			ID: ulid.New(), TenantID: "acme", Name: "redactor",
+			Scopes:           []serviceaccount.Scope{"values:write"},
+			FieldPermissions: map[string]string{"salary": "write"},
+			CreatedAt:        now, UpdatedAt: now,
+		}), ShouldBeNil)
+		So(store.UpsertRole(ctx, admin.Role{
+			ID: ulid.New(), TenantID: "other", Name: "reader",
+			Scopes:    []serviceaccount.Scope{"admin"},
+			CreatedAt: now, UpdatedAt: now,
+		}), ShouldBeNil)
+
+		Convey("When a tenant's roles are listed", func() {
+			roles, err := store.ListRoles(ctx, "acme")
+
+			Convey("Then only that tenant's roles return, ordered by name", func() {
+				So(err, ShouldBeNil)
+				So(roles, ShouldHaveLength, 2)
+				So(roles[0].Name, ShouldEqual, "reader")
+				So(roles[0].Description, ShouldEqual, "read everything")
+				So(roles[0].Scopes, ShouldResemble, []serviceaccount.Scope{"values:read"})
+				So(roles[0].FieldPermissions, ShouldResemble,
+					map[string]string{"salary": "read", "ssn": "none"})
+				So(roles[1].Name, ShouldEqual, "redactor")
+			})
+		})
+
+		Convey("When a role is upserted again under the same name", func() {
+			later := now.Add(time.Minute)
+			err := store.UpsertRole(ctx, admin.Role{
+				ID: ulid.New(), TenantID: "acme", Name: "reader",
+				Scopes:           []serviceaccount.Scope{"values:read", "media:read"},
+				FieldPermissions: map[string]string{"salary": "none"},
+				CreatedAt:        now, UpdatedAt: later,
+			})
+
+			Convey("Then it replaces the role rather than adding a second one", func() {
+				So(err, ShouldBeNil)
+				roles, lerr := store.ListRoles(ctx, "acme")
+				So(lerr, ShouldBeNil)
+				So(roles, ShouldHaveLength, 2)
+				So(roles[0].Scopes, ShouldResemble,
+					[]serviceaccount.Scope{"values:read", "media:read"})
+				So(roles[0].FieldPermissions, ShouldResemble,
+					map[string]string{"salary": "none"})
+			})
+		})
+
+		Convey("And an account holding both roles with one override of its own", func() {
+			acct := admin.ServiceAccount{
+				ID: ulid.New(), TenantID: "acme", Name: "analyst",
+				Scopes: []serviceaccount.Scope{"values:read"},
+				Roles:  []string{"reader", "redactor"},
+				// The account's own entry must beat both roles.
+				FieldPermissions: map[string]string{"salary": "none"},
+				Active:           true, CreatedAt: now, UpdatedAt: now,
+			}
+			So(store.CreateAccount(ctx, acct, serviceaccount.HashSecret("hunter2")), ShouldBeNil)
+			token := serviceaccount.MintToken(acct.ID.String(), "hunter2")
+
+			Convey("When the account authenticates", func() {
+				got, err := lookup.AuthenticateCtx(ctx, token)
+
+				Convey("Then the scopes are the union of its own and both roles'", func() {
+					So(err, ShouldBeNil)
+					So(got.HasScope("values:read"), ShouldBeTrue)
+					So(got.HasScope("values:write"), ShouldBeTrue)
+					So(got.HasScope("admin"), ShouldBeFalse)
+				})
+
+				Convey("Then the account's own field permission wins over both roles", func() {
+					So(err, ShouldBeNil)
+					So(got.FieldPermissions["salary"], ShouldEqual, "none")
+				})
+
+				Convey("Then a permission only one role grants still applies", func() {
+					So(err, ShouldBeNil)
+					So(got.FieldPermissions["ssn"], ShouldEqual, "none")
+				})
+			})
+
+			Convey("When the account's own override is cleared", func() {
+				So(store.SetAccountRoles(ctx, acct.ID,
+					[]string{"reader", "redactor"}, nil, now.Add(time.Minute)), ShouldBeNil)
+				got, err := lookup.AuthenticateCtx(ctx, token)
+
+				Convey("Then the most permissive role level applies", func() {
+					So(err, ShouldBeNil)
+					So(got.FieldPermissions["salary"], ShouldEqual, "write")
+				})
+			})
+
+			Convey("When a role is deleted", func() {
+				So(store.DeleteRole(ctx, "acme", "redactor"), ShouldBeNil)
+				So(store.SetAccountRoles(ctx, acct.ID,
+					[]string{"reader", "redactor"}, nil, now.Add(time.Minute)), ShouldBeNil)
+				got, err := lookup.AuthenticateCtx(ctx, token)
+
+				Convey("Then the grants it carried go away and the rest stay", func() {
+					So(err, ShouldBeNil)
+					So(got.HasScope("values:write"), ShouldBeFalse)
+					So(got.HasScope("values:read"), ShouldBeTrue)
+					So(got.FieldPermissions["salary"], ShouldEqual, "read")
+				})
+			})
+
+			Convey("When the roles are read back from the account row", func() {
+				stored, err := store.GetAccount(ctx, acct.ID)
+
+				Convey("Then the names are returned as assigned, not as resolved", func() {
+					So(err, ShouldBeNil)
+					So(stored.Roles, ShouldResemble, []string{"reader", "redactor"})
+					So(stored.FieldPermissions, ShouldResemble,
+						map[string]string{"salary": "none"})
+				})
+			})
+		})
+
+		Convey("And an account naming a role that belongs to another tenant", func() {
+			acct := admin.ServiceAccount{
+				ID: ulid.New(), TenantID: "acme", Name: "borrower",
+				Roles: []string{"reader"}, Active: true,
+				CreatedAt: now, UpdatedAt: now,
+			}
+			So(store.CreateAccount(ctx, acct, serviceaccount.HashSecret("pw")), ShouldBeNil)
+
+			Convey("When it authenticates", func() {
+				got, err := lookup.AuthenticateCtx(ctx,
+					serviceaccount.MintToken(acct.ID.String(), "pw"))
+
+				Convey("Then it resolves its own tenant's role, never the other tenant's", func() {
+					So(err, ShouldBeNil)
+					So(got.HasScope("values:read"), ShouldBeTrue)
+					So(got.HasScope("admin"), ShouldBeFalse)
+				})
+			})
+		})
+
+		Convey("When an unknown role is deleted", func() {
+			err := store.DeleteRole(ctx, "acme", "ghost")
+
+			Convey("Then a domain not-found error names the role", func() {
+				So(domainerrors.IsNotFound(err), ShouldBeTrue)
+				So(err.Error(), ShouldContainSubstring, "ghost")
+			})
+		})
+
+		Convey("When roles are set on an unknown account", func() {
+			missing := ulid.New()
+			err := store.SetAccountRoles(ctx, missing, []string{"reader"}, nil, now)
+
+			Convey("Then a domain not-found error names the account", func() {
+				So(domainerrors.IsNotFound(err), ShouldBeTrue)
+				So(err.Error(), ShouldContainSubstring, missing.String())
+			})
+		})
+	})
+}
+
+// TestRolePermissionsDecodeFailure covers what happens when a permission
+// column holds JSON that is not an attribute-to-level object — a row written
+// by hand, or by a future migration that changes the shape. The read must
+// fail loudly: a silently empty map would read as "this role restricts
+// nothing", which grants rather than denies.
+func TestRolePermissionsDecodeFailure(t *testing.T) {
+	pool, _ := controlPlaneFixture(t)
+	ctx := context.Background()
+	store := postgres.NewAdminStore(pool)
+	lookup := postgres.NewAccountLookup(pool)
+
+	Convey("Given a role whose field_permissions column holds an array", t, func() {
+		pool.MustExec(`TRUNCATE flexitype_role, flexitype_service_account, flexitype_tenant CASCADE`)
+		now := time.Now().UTC()
+		So(store.CreateTenant(ctx, admin.Tenant{
+			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
+		}), ShouldBeNil)
+		pool.MustExec(
+			`INSERT INTO flexitype_role
+			   (id, tenant_id, name, description, scopes, field_permissions, created_at, updated_at)
+			 VALUES ($1, 'acme', 'broken', '', '{}', '[1,2]'::jsonb, $2, $2)`,
+			ulid.New().String(), now)
+
+		Convey("When the tenant's roles are listed", func() {
+			_, err := store.ListRoles(ctx, "acme")
+
+			Convey("Then the read reports the bad row and names the role", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "broken")
+			})
+		})
+
+		Convey("And an account holding that role", func() {
+			acct := admin.ServiceAccount{
+				ID: ulid.New(), TenantID: "acme", Name: "holder",
+				Roles: []string{"broken"}, Active: true, CreatedAt: now, UpdatedAt: now,
+			}
+			So(store.CreateAccount(ctx, acct, serviceaccount.HashSecret("pw")), ShouldBeNil)
+
+			Convey("When it authenticates", func() {
+				_, err := lookup.AuthenticateCtx(ctx,
+					serviceaccount.MintToken(acct.ID.String(), "pw"))
+
+				Convey("Then authentication fails rather than granting an empty set", func() {
+					So(err, ShouldNotBeNil)
+					So(err.Error(), ShouldContainSubstring, "broken")
+				})
+			})
+		})
+	})
+
+	Convey("Given an account whose own field_permissions column holds an array", t, func() {
+		pool.MustExec(`TRUNCATE flexitype_role, flexitype_service_account, flexitype_tenant CASCADE`)
+		now := time.Now().UTC()
+		So(store.CreateTenant(ctx, admin.Tenant{
+			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
+		}), ShouldBeNil)
+		id := ulid.New()
+		pool.MustExec(
+			`INSERT INTO flexitype_service_account
+			   (id, tenant_id, name, secret_hash, scopes, roles, field_permissions,
+			    active, created_at, updated_at)
+			 VALUES ($1, 'acme', 'holder', 'x', '{}', '{}', '[1,2]'::jsonb, true, $2, $2)`,
+			id.String(), now)
+
+		Convey("When the account is read", func() {
+			_, err := store.GetAccount(ctx, id)
+
+			Convey("Then the read reports the bad row and names the account", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "holder")
+			})
+		})
+
+		Convey("When the tenant's accounts are listed", func() {
+			_, err := store.ListAccounts(ctx, "acme")
+
+			Convey("Then the listing fails rather than dropping the permission set", func() {
+				So(err, ShouldNotBeNil)
+			})
+		})
+	})
+}
+
+// TestRoleStoreDriverFailures checks that every role operation wraps a driver
+// failure with the operation that failed, so an operator reading a log line
+// knows which write to retry.
+func TestRoleStoreDriverFailures(t *testing.T) {
+	ctx := context.Background()
+
+	Convey("Given a closed pool", t, func() {
+		closed := openIntegrationDB(t)
+		So(closed.Close(), ShouldBeNil)
+		broken := postgres.NewAdminStore(closed)
+		lookup := postgres.NewAccountLookup(closed)
+
+		Convey("When each role operation runs", func() {
+			upsertErr := broken.UpsertRole(ctx, admin.Role{
+				ID: ulid.New(), TenantID: "acme", Name: "reader",
+			})
+			_, listErr := broken.ListRoles(ctx, "acme")
+			deleteErr := broken.DeleteRole(ctx, "acme", "reader")
+			assignErr := broken.SetAccountRoles(ctx, ulid.New(), []string{"reader"}, nil, time.Now())
+
+			Convey("Then each names its own operation", func() {
+				So(upsertErr, ShouldNotBeNil)
+				So(upsertErr.Error(), ShouldContainSubstring, "upsert role")
+				So(listErr, ShouldNotBeNil)
+				So(listErr.Error(), ShouldContainSubstring, "list roles")
+				So(deleteErr, ShouldNotBeNil)
+				So(deleteErr.Error(), ShouldContainSubstring, "delete role")
+				So(assignErr, ShouldNotBeNil)
+				So(assignErr.Error(), ShouldContainSubstring, "set account roles")
+			})
+		})
+
+		Convey("When an account read runs", func() {
+			_, listErr := broken.ListAccounts(ctx, "acme")
+			_, getErr := broken.GetAccount(ctx, ulid.New())
+			createErr := broken.CreateAccount(ctx, admin.ServiceAccount{
+				ID: ulid.New(), TenantID: "acme", Name: "bot",
+			}, "hash")
+
+			Convey("Then each names its own operation", func() {
+				So(listErr, ShouldNotBeNil)
+				So(listErr.Error(), ShouldContainSubstring, "list service accounts")
+				So(getErr, ShouldNotBeNil)
+				So(getErr.Error(), ShouldContainSubstring, "get service account")
+				So(createErr, ShouldNotBeNil)
+				So(createErr.Error(), ShouldContainSubstring, "insert service account")
+			})
+		})
+
+		Convey("When a token is authenticated", func() {
+			_, err := lookup.AuthenticateCtx(ctx, serviceaccount.MintToken(ulid.New().String(), "pw"))
+
+			Convey("Then the lookup failure surfaces rather than reading as a bad token", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "look up service account")
+			})
+		})
+	})
+}

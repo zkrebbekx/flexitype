@@ -89,9 +89,11 @@ func (s *server) setTenantActive(w http.ResponseWriter, r *http.Request) {
 }
 
 type createAccountRequest struct {
-	TenantName string   `json:"tenant_name"`
-	Name       string   `json:"name"`
-	Scopes     []string `json:"scopes"`
+	TenantName       string            `json:"tenant_name"`
+	Name             string            `json:"name"`
+	Scopes           []string          `json:"scopes"`
+	Roles            []string          `json:"roles"`
+	FieldPermissions map[string]string `json:"field_permissions"`
 }
 
 func (s *server) createServiceAccount(w http.ResponseWriter, r *http.Request) {
@@ -104,9 +106,11 @@ func (s *server) createServiceAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := s.admin.CreateAccount(r.Context(), admin.CreateAccountInput{
-		TenantName: req.TenantName,
-		Name:       req.Name,
-		Scopes:     req.Scopes,
+		TenantName:       req.TenantName,
+		Name:             req.Name,
+		Scopes:           req.Scopes,
+		Roles:            req.Roles,
+		FieldPermissions: req.FieldPermissions,
 	})
 	if err != nil {
 		writeError(w, s.log, err)
@@ -150,6 +154,95 @@ func (s *server) revokeServiceAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.admin.Revoke(r.Context(), chi.URLParam(r, "id")); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type upsertRoleRequest struct {
+	TenantName       string            `json:"tenant_name"`
+	Name             string            `json:"name"`
+	Description      string            `json:"description"`
+	Scopes           []string          `json:"scopes"`
+	FieldPermissions map[string]string `json:"field_permissions"`
+}
+
+func (s *server) upsertRole(w http.ResponseWriter, r *http.Request) {
+	if !s.adminReady(w, r) {
+		return
+	}
+	var req upsertRoleRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	role, err := s.admin.UpsertRole(r.Context(), admin.UpsertRoleInput{
+		TenantName:       req.TenantName,
+		Name:             req.Name,
+		Description:      req.Description,
+		Scopes:           req.Scopes,
+		FieldPermissions: req.FieldPermissions,
+	})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, role)
+}
+
+func (s *server) listRoles(w http.ResponseWriter, r *http.Request) {
+	if !s.adminReady(w, r) {
+		return
+	}
+	tenant := r.URL.Query().Get("tenant_name")
+	if tenant == "" {
+		writeError(w, s.log, domainerrors.NewValidation("tenant_name is required"))
+		return
+	}
+	roles, err := s.admin.ListRoles(r.Context(), tenant)
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeItems(w, roles)
+}
+
+func (s *server) deleteRole(w http.ResponseWriter, r *http.Request) {
+	if !s.adminReady(w, r) {
+		return
+	}
+	tenant := r.URL.Query().Get("tenant_name")
+	if tenant == "" {
+		writeError(w, s.log, domainerrors.NewValidation("tenant_name is required"))
+		return
+	}
+	if err := s.admin.DeleteRole(r.Context(), tenant, chi.URLParam(r, "name")); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type assignRolesRequest struct {
+	Roles            []string          `json:"roles"`
+	FieldPermissions map[string]string `json:"field_permissions"`
+}
+
+func (s *server) assignRoles(w http.ResponseWriter, r *http.Request) {
+	if !s.adminReady(w, r) {
+		return
+	}
+	var req assignRolesRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	if err := s.admin.AssignRoles(r.Context(), admin.AssignRolesInput{
+		AccountID:        chi.URLParam(r, "id"),
+		Roles:            req.Roles,
+		FieldPermissions: req.FieldPermissions,
+	}); err != nil {
 		writeError(w, s.log, err)
 		return
 	}

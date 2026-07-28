@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -83,29 +84,40 @@ func (s *adminStore) SetTenantActive(ctx context.Context, name string, active bo
 }
 
 type accountRow struct {
-	ID        ulid.ID        `db:"id"`
-	TenantID  string         `db:"tenant_id"`
-	Name      string         `db:"name"`
-	Scopes    pq.StringArray `db:"scopes"`
-	Active    bool           `db:"active"`
-	CreatedAt time.Time      `db:"created_at"`
-	UpdatedAt time.Time      `db:"updated_at"`
+	ID         ulid.ID        `db:"id"`
+	TenantID   string         `db:"tenant_id"`
+	Name       string         `db:"name"`
+	Scopes     pq.StringArray `db:"scopes"`
+	Roles      pq.StringArray `db:"roles"`
+	FieldPerms []byte         `db:"field_permissions"`
+	Active     bool           `db:"active"`
+	CreatedAt  time.Time      `db:"created_at"`
+	UpdatedAt  time.Time      `db:"updated_at"`
 }
 
-func (r accountRow) toAccount() admin.ServiceAccount {
+// toAccount reports the account as stored, not as resolved: Roles holds the
+// names, and FieldPermissions holds only this account's own overrides. The
+// role merge happens at authentication (see applyRoles). An operator reading
+// this list therefore sees what was assigned, which is what they can edit.
+func (r accountRow) toAccount() (admin.ServiceAccount, error) {
 	scopes := make([]serviceaccount.Scope, 0, len(r.Scopes))
 	for _, sc := range r.Scopes {
 		scopes = append(scopes, serviceaccount.Scope(sc))
 	}
-	return admin.ServiceAccount{
+	acct := admin.ServiceAccount{
 		ID:        r.ID,
 		TenantID:  r.TenantID,
 		Name:      r.Name,
 		Scopes:    scopes,
+		Roles:     []string(r.Roles),
 		Active:    r.Active,
 		CreatedAt: r.CreatedAt,
 		UpdatedAt: r.UpdatedAt,
 	}
+	if err := json.Unmarshal(nonEmptyJSON(r.FieldPerms), &acct.FieldPermissions); err != nil {
+		return admin.ServiceAccount{}, fmt.Errorf("decode account %q field permissions: %w", r.Name, err)
+	}
+	return acct, nil
 }
 
 func (s *adminStore) CreateAccount(ctx context.Context, a admin.ServiceAccount, secretHash string) error {
@@ -113,27 +125,154 @@ func (s *adminStore) CreateAccount(ctx context.Context, a admin.ServiceAccount, 
 	for _, sc := range a.Scopes {
 		scopes = append(scopes, string(sc))
 	}
-	_, err := s.q.ExecContext(ctx, bind(
+	perms, err := json.Marshal(nonNilPerms(a.FieldPermissions))
+	if err != nil {
+		return fmt.Errorf("encode field permissions: %w", err)
+	}
+	_, err = s.q.ExecContext(ctx, bind(
 		`INSERT INTO flexitype_service_account
-		   (id, tenant_id, name, secret_hash, scopes, active, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-		a.ID, a.TenantID, a.Name, secretHash, scopes, a.Active, a.CreatedAt, a.UpdatedAt)
+		   (id, tenant_id, name, secret_hash, scopes, roles, field_permissions,
+		    active, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		a.ID, a.TenantID, a.Name, secretHash, scopes,
+		pq.Array(nonNilRoles(a.Roles)), jsonbParam(perms),
+		a.Active, a.CreatedAt, a.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("insert service account: %w", err)
 	}
 	return nil
 }
 
+// SetAccountRoles replaces an account's roles and its own field-permission
+// overrides in one statement, so a caller never observes half a change.
+func (s *adminStore) SetAccountRoles(ctx context.Context, id ulid.ID, roles []string, perms map[string]string, now time.Time) error {
+	raw, err := json.Marshal(nonNilPerms(perms))
+	if err != nil {
+		return fmt.Errorf("encode field permissions: %w", err)
+	}
+	res, err := s.q.ExecContext(ctx, bind(
+		`UPDATE flexitype_service_account
+		    SET roles = ?, field_permissions = ?, updated_at = ?
+		  WHERE id = ?`),
+		pq.Array(nonNilRoles(roles)), jsonbParam(raw), now, id)
+	if err != nil {
+		return fmt.Errorf("set account roles: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set account roles: %w", err)
+	}
+	if n == 0 {
+		return domainerrors.NewNotFound("service_account", id.String())
+	}
+	return nil
+}
+
+// UpsertRole creates or replaces a role by (tenant, name).
+func (s *adminStore) UpsertRole(ctx context.Context, r admin.Role) error {
+	raw, err := json.Marshal(nonNilPerms(r.FieldPermissions))
+	if err != nil {
+		return fmt.Errorf("encode field permissions: %w", err)
+	}
+	scopes := make(pq.StringArray, 0, len(r.Scopes))
+	for _, sc := range r.Scopes {
+		scopes = append(scopes, string(sc))
+	}
+	_, err = s.q.ExecContext(ctx, bind(
+		`INSERT INTO flexitype_role
+		   (id, tenant_id, name, description, scopes, field_permissions, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (tenant_id, name) DO UPDATE SET
+		   description = EXCLUDED.description, scopes = EXCLUDED.scopes,
+		   field_permissions = EXCLUDED.field_permissions,
+		   updated_at = EXCLUDED.updated_at`),
+		r.ID, r.TenantID, r.Name, r.Description, scopes, jsonbParam(raw), r.CreatedAt, r.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("upsert role: %w", err)
+	}
+	return nil
+}
+
+// ListRoles returns a tenant's roles, by name.
+func (s *adminStore) ListRoles(ctx context.Context, tenant string) ([]admin.Role, error) {
+	var rows []struct {
+		ID          ulid.ID        `db:"id"`
+		TenantID    string         `db:"tenant_id"`
+		Name        string         `db:"name"`
+		Description string         `db:"description"`
+		Scopes      pq.StringArray `db:"scopes"`
+		FieldPerms  []byte         `db:"field_permissions"`
+		CreatedAt   time.Time      `db:"created_at"`
+		UpdatedAt   time.Time      `db:"updated_at"`
+	}
+	if err := s.q.SelectContext(ctx, &rows, bind(
+		`SELECT id, tenant_id, name, description, scopes, field_permissions, created_at, updated_at
+		   FROM flexitype_role WHERE tenant_id = ? ORDER BY name`), tenant); err != nil {
+		return nil, fmt.Errorf("list roles: %w", err)
+	}
+	out := make([]admin.Role, 0, len(rows))
+	for _, r := range rows {
+		role := admin.Role{
+			ID: r.ID, TenantID: r.TenantID, Name: r.Name, Description: r.Description,
+			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		}
+		for _, sc := range r.Scopes {
+			role.Scopes = append(role.Scopes, serviceaccount.Scope(sc))
+		}
+		if err := json.Unmarshal(nonEmptyJSON(r.FieldPerms), &role.FieldPermissions); err != nil {
+			return nil, fmt.Errorf("decode role %q field permissions: %w", r.Name, err)
+		}
+		out = append(out, role)
+	}
+	return out, nil
+}
+
+// DeleteRole removes a role. Accounts naming it simply resolve nothing for
+// it, which removes grants rather than leaving them pointing at a permission
+// set nobody can read.
+func (s *adminStore) DeleteRole(ctx context.Context, tenant, name string) error {
+	res, err := s.q.ExecContext(ctx, bind(
+		`DELETE FROM flexitype_role WHERE tenant_id = ? AND name = ?`), tenant, name)
+	if err != nil {
+		return fmt.Errorf("delete role: %w", err)
+	}
+	if n, aerr := res.RowsAffected(); aerr == nil && n == 0 {
+		return domainerrors.NewNotFound("role", name)
+	}
+	return nil
+}
+
+// nonNilPerms and nonNilRoles keep a nil map/slice out of the column, so a
+// cleared assignment stores an empty value rather than SQL NULL.
+func nonNilPerms(p map[string]string) map[string]string {
+	if p == nil {
+		return map[string]string{}
+	}
+	return p
+}
+
+func nonNilRoles(r []string) []string {
+	if r == nil {
+		return []string{}
+	}
+	return r
+}
+
 func (s *adminStore) ListAccounts(ctx context.Context, tenant string) ([]admin.ServiceAccount, error) {
 	var rows []accountRow
 	if err := s.q.SelectContext(ctx, &rows, bind(
-		`SELECT id, tenant_id, name, scopes, active, created_at, updated_at
+		`SELECT id, tenant_id, name, scopes, roles, field_permissions,
+		        active, created_at, updated_at
 		 FROM flexitype_service_account WHERE tenant_id = ? ORDER BY name`), tenant); err != nil {
 		return nil, fmt.Errorf("list service accounts: %w", err)
 	}
 	out := make([]admin.ServiceAccount, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, r.toAccount())
+		acct, err := r.toAccount()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, acct)
 	}
 	return out, nil
 }
@@ -141,7 +280,8 @@ func (s *adminStore) ListAccounts(ctx context.Context, tenant string) ([]admin.S
 func (s *adminStore) GetAccount(ctx context.Context, id ulid.ID) (admin.ServiceAccount, error) {
 	var row accountRow
 	err := s.q.GetContext(ctx, &row, bind(
-		`SELECT id, tenant_id, name, scopes, active, created_at, updated_at
+		`SELECT id, tenant_id, name, scopes, roles, field_permissions,
+		        active, created_at, updated_at
 		 FROM flexitype_service_account WHERE id = ?`), id)
 	if isNoRows(err) {
 		return admin.ServiceAccount{}, domainerrors.NewNotFound("service_account", id.String())
@@ -149,7 +289,7 @@ func (s *adminStore) GetAccount(ctx context.Context, id ulid.ID) (admin.ServiceA
 	if err != nil {
 		return admin.ServiceAccount{}, fmt.Errorf("get service account: %w", err)
 	}
-	return row.toAccount(), nil
+	return row.toAccount()
 }
 
 func (s *adminStore) UpdateSecret(ctx context.Context, id ulid.ID, secretHash string, now time.Time) error {
@@ -207,6 +347,8 @@ func (l *AccountLookup) AuthenticateCtx(ctx context.Context, token string) (serv
 		Scopes       pq.StringArray `db:"scopes"`
 		Active       bool           `db:"active"`
 		TenantActive bool           `db:"tenant_active"`
+		Roles        pq.StringArray `db:"roles"`
+		FieldPerms   []byte         `db:"field_permissions"`
 	}
 	// The tenant's own active flag is joined in, so deactivating a tenant
 	// actually suspends it. Consulting only the account flag meant
@@ -216,6 +358,7 @@ func (l *AccountLookup) AuthenticateCtx(ctx context.Context, token string) (serv
 	// the control plane reported the tenant as inactive.
 	err = l.q.GetContext(ctx, &row, bind(
 		`SELECT a.tenant_id, a.name, a.secret_hash, a.scopes, a.active,
+		        a.roles, a.field_permissions,
 		        COALESCE(t.active, true) AS tenant_active
 		   FROM flexitype_service_account a
 		   LEFT JOIN flexitype_tenant t ON t.name = a.tenant_id
@@ -236,6 +379,17 @@ func (l *AccountLookup) AuthenticateCtx(ctx context.Context, token string) (serv
 	for _, sc := range row.Scopes {
 		acct.Scopes = append(acct.Scopes, serviceaccount.Scope(sc))
 	}
+	if err := json.Unmarshal(nonEmptyJSON(row.FieldPerms), &acct.FieldPermissions); err != nil {
+		return serviceaccount.Account{}, fmt.Errorf("decode field permissions: %w", err)
+	}
+	// Roles are resolved here, at authentication, so a permission change to a
+	// role takes effect for every account holding it as soon as the auth
+	// cache expires — which is the whole reason the indirection exists.
+	if len(row.Roles) > 0 {
+		if err := l.applyRoles(ctx, &acct, row.Roles); err != nil {
+			return serviceaccount.Account{}, err
+		}
+	}
 	if err := serviceaccount.VerifySecret(secret, row.SecretHash); err != nil {
 		return serviceaccount.Account{}, err
 	}
@@ -246,4 +400,69 @@ func (l *AccountLookup) AuthenticateCtx(ctx context.Context, token string) (serv
 		return serviceaccount.Account{}, fmt.Errorf("tenant is deactivated")
 	}
 	return acct, nil
+}
+
+// nonEmptyJSON substitutes an empty object for a null or empty column, so a
+// row written before the column existed decodes rather than erroring.
+func nonEmptyJSON(raw []byte) []byte {
+	if len(raw) == 0 {
+		return []byte(`{}`)
+	}
+	return raw
+}
+
+// applyRoles merges the named roles into the account.
+//
+// Scopes union: a role grants, it never revokes, which is what makes roles
+// composable — holding two roles is holding what either allows.
+//
+// Field permissions take the MOST PERMISSIVE level across roles, and the
+// account's own setting wins over all of them. Most-permissive is the same
+// additive rule as scopes; the account override exists so one person can be
+// given an exception without inventing a role for them.
+func (l *AccountLookup) applyRoles(ctx context.Context, acct *serviceaccount.Account, roles []string) error {
+	var rows []struct {
+		Name       string         `db:"name"`
+		Scopes     pq.StringArray `db:"scopes"`
+		FieldPerms []byte         `db:"field_permissions"`
+	}
+	if err := l.q.SelectContext(ctx, &rows, bind(
+		`SELECT name, scopes, field_permissions
+		   FROM flexitype_role
+		  WHERE tenant_id = ? AND name = ANY(?)`),
+		acct.TenantID, pq.Array(roles)); err != nil {
+		return fmt.Errorf("resolve roles: %w", err)
+	}
+
+	held := map[serviceaccount.Scope]bool{}
+	for _, sc := range acct.Scopes {
+		held[sc] = true
+	}
+	merged := map[string]string{}
+	for _, r := range rows {
+		for _, sc := range r.Scopes {
+			if s := serviceaccount.Scope(sc); !held[s] {
+				held[s] = true
+				acct.Scopes = append(acct.Scopes, s)
+			}
+		}
+		var perms map[string]string
+		if err := json.Unmarshal(nonEmptyJSON(r.FieldPerms), &perms); err != nil {
+			return fmt.Errorf("decode role %q field permissions: %w", r.Name, err)
+		}
+		for attr, level := range perms {
+			if serviceaccount.MorePermissive(level, merged[attr]) {
+				merged[attr] = level
+			}
+		}
+	}
+	// The account's own entry wins: an exception for one person should not
+	// require inventing a role for them.
+	for attr, level := range acct.FieldPermissions {
+		merged[attr] = level
+	}
+	if len(merged) > 0 {
+		acct.FieldPermissions = merged
+	}
+	return nil
 }

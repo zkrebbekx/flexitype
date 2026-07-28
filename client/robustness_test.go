@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -341,4 +342,152 @@ func fastPolicy() RetryPolicy {
 	p.MaxDelay = time.Millisecond
 	p.Jitter = 0
 	return p
+}
+
+// Given a role write, When UpsertRole sends it, Then the request is a PUT to
+// /api/v1/roles carrying the whole permission set, because a role write
+// replaces the role rather than patching it.
+func TestUpsertRoleSendsWholeRole(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"01","name":"analyst","tenant_id":"acme",
+			"scopes":["read"],"field_permissions":{"salary":"none"}}`))
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	role, err := c.Admin().UpsertRole(context.Background(), UpsertRoleInput{
+		TenantName:       "acme",
+		Name:             "analyst",
+		Scopes:           []string{"read"},
+		FieldPermissions: map[string]string{"salary": "none"},
+	})
+	if err != nil {
+		t.Fatalf("UpsertRole: %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Fatalf("method = %s, want PUT", gotMethod)
+	}
+	if gotPath != "/api/v1/roles" {
+		t.Fatalf("path = %s, want /api/v1/roles", gotPath)
+	}
+	if gotBody["tenant_name"] != "acme" || gotBody["name"] != "analyst" {
+		t.Fatalf("body did not carry the role identity: %v", gotBody)
+	}
+	perms, ok := gotBody["field_permissions"].(map[string]any)
+	if !ok || perms["salary"] != "none" {
+		t.Fatalf("body did not carry the permission set: %v", gotBody)
+	}
+	if role.FieldPermissions["salary"] != "none" {
+		t.Fatalf("decoded role lost its permission set: %+v", role)
+	}
+}
+
+// Given a tenant name, When ListRoles reads them, Then the tenant travels as
+// the tenant_name query parameter the endpoint requires, and an empty name is
+// refused before a request is made — the server has no cross-tenant listing.
+func TestListRolesRequiresTenant(t *testing.T) {
+	var gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[{"id":"01","name":"analyst"}]}`))
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	roles, err := c.Admin().ListRoles(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("ListRoles: %v", err)
+	}
+	if gotQuery != "tenant_name=acme" {
+		t.Fatalf("query = %q, want tenant_name=acme", gotQuery)
+	}
+	if len(roles) != 1 || roles[0].Name != "analyst" {
+		t.Fatalf("roles = %+v, want one named analyst", roles)
+	}
+	if _, err := c.Admin().ListRoles(context.Background(), ""); err == nil {
+		t.Fatal("expected an empty tenant name to be refused")
+	}
+}
+
+// Given a role name, When DeleteRole removes it, Then the tenant travels in
+// the query string while the name travels in the path, and an empty tenant is
+// refused before a request is made.
+func TestDeleteRoleCarriesTenantAndName(t *testing.T) {
+	var gotMethod, gotPath, gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotQuery = r.Method, r.URL.Path, r.URL.RawQuery
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := c.Admin().DeleteRole(context.Background(), "acme", "analyst"); err != nil {
+		t.Fatalf("DeleteRole: %v", err)
+	}
+	if gotMethod != http.MethodDelete {
+		t.Fatalf("method = %s, want DELETE", gotMethod)
+	}
+	if gotPath != "/api/v1/roles/analyst" {
+		t.Fatalf("path = %s, want /api/v1/roles/analyst", gotPath)
+	}
+	if gotQuery != "tenant_name=acme" {
+		t.Fatalf("query = %q, want tenant_name=acme", gotQuery)
+	}
+	if err := c.Admin().DeleteRole(context.Background(), "", "analyst"); err == nil {
+		t.Fatal("expected an empty tenant name to be refused")
+	}
+}
+
+// Given an account id, When AssignRoles replaces its roles, Then the request
+// is a PUT to that account's roles sub-resource carrying both lists, because
+// the endpoint replaces rather than merges.
+func TestAssignRolesReplacesBothLists(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = c.Admin().AssignRoles(context.Background(), "01ACCOUNT", AssignRolesInput{
+		Roles:            []string{"analyst"},
+		FieldPermissions: map[string]string{"ssn": "none"},
+	})
+	if err != nil {
+		t.Fatalf("AssignRoles: %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Fatalf("method = %s, want PUT", gotMethod)
+	}
+	if gotPath != "/api/v1/service-accounts/01ACCOUNT/roles" {
+		t.Fatalf("path = %s, want the account's roles sub-resource", gotPath)
+	}
+	roles, ok := gotBody["roles"].([]any)
+	if !ok || len(roles) != 1 || roles[0] != "analyst" {
+		t.Fatalf("body did not carry the role list: %v", gotBody)
+	}
+	if _, ok := gotBody["field_permissions"]; !ok {
+		t.Fatal("body omitted field_permissions, so the overrides could not be cleared")
+	}
 }

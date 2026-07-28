@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
 import { useQuery } from '@tanstack/vue-query'
-import { Shapes, Boxes, ScrollText, Radio, Settings, Moon, Sun, Braces, LogOut, Menu, Github } from 'lucide-vue-next'
+import { Shapes, Boxes, ScrollText, Radio, Settings, ShieldCheck, Moon, Sun, Braces, LogOut, Menu, Github } from 'lucide-vue-next'
 import { useTheme } from '@/composables/useTheme'
 import Toasts from '@/components/ui/Toasts.vue'
 import { authRequired, isAuthenticated, setToken, signOut, bearerHeader, challenge } from '@/lib/auth'
@@ -48,6 +48,7 @@ const nav = computed(() => [
   { to: '/graphql', label: 'GraphQL', icon: Braces },
   ...(features.data.value?.event_delivery ? [{ to: '/delivery', label: 'Delivery', icon: Radio }] : []),
   ...(features.data.value?.activity === false ? [] : [{ to: '/activity', label: 'Activity', icon: ScrollText }]),
+  { to: '/roles', label: 'Roles', icon: ShieldCheck },
   { to: '/settings', label: 'Settings', icon: Settings },
 ])
 

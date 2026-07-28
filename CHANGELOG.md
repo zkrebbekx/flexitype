@@ -7,6 +7,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Added — A Roles page in the admin console
+
+Roles were API-only. The console now has `/roles`: create and replace a role,
+edit its scopes and per-attribute permissions, and see **which accounts hold
+it** — which is the fact the delete guard turns on, so it is in front of the
+operator before the 409 rather than after it.
+
+Opening an account shows what it can **actually** do: its own scopes unioned
+with its roles', and the merged per-attribute levels, resolved through the same
+`serviceaccount.Resolve` the enforcement path uses. An account naming a role
+that no longer exists is called out in red, because that principal is denied
+every attribute until it is repaired.
+
+The editor states the two rules that are otherwise only in the API's error
+messages: a role cannot grant `admin`, and a write replaces the whole role.
+
 ### Added — Computed aggregates: `sum`, `count`, `avg`, `min`, `max`
 
 A formula could not read a multi-valued attribute at all. Evaluation carried

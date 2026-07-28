@@ -762,11 +762,86 @@ export const api = {
   getFeatures: () => request<Features>('GET', '/features'),
   reindexSearch: () => request<{ reindexed: number }>('POST', '/search/reindex'),
 
+  // Provisioning — roles and service accounts (admin scope)
+  listRoles: (tenant: string) =>
+    request<{ items: Role[] }>('GET', `/roles${qs({ tenant_name: tenant })}`),
+  upsertRole: (input: RoleInput) => request<Role>('PUT', '/roles', input),
+  deleteRole: (tenant: string, name: string) =>
+    request<void>('DELETE', `/roles/${encodeURIComponent(name)}${qs({ tenant_name: tenant })}`),
+  listServiceAccounts: (tenant: string) =>
+    request<{ items: ServiceAccount[] }>('GET', `/service-accounts${qs({ tenant_name: tenant })}`),
+  effectiveAccount: (id: string) =>
+    request<EffectiveAccount>('GET', `/service-accounts/${id}/effective`),
+  assignRoles: (id: string, input: { roles: string[]; field_permissions: Record<string, FieldPermission> }) =>
+    request<void>('PUT', `/service-accounts/${id}/roles`, input),
+  listTenants: () => request<{ items: Tenant[] }>('GET', '/tenants'),
+
   // Saved views
   listSavedViews: () => request<{ items: SavedView[] }>('GET', '/saved-views'),
   createSavedView: (input: SavedViewInput) => request<SavedView>('POST', '/saved-views', input),
   updateSavedView: (id: string, input: SavedViewInput) => request<SavedView>('PATCH', `/saved-views/${id}`, input),
   deleteSavedView: (id: string) => request<void>('DELETE', `/saved-views/${id}`),
+}
+
+/** A per-attribute permission level. Unlisted attributes stay accessible. */
+export type FieldPermission = 'none' | 'read' | 'write'
+
+export const FIELD_PERMISSIONS: FieldPermission[] = ['none', 'read', 'write']
+
+/** A scope a role or account may hold. `admin` is refused on a role. */
+export type Scope = 'read' | 'write' | 'admin'
+
+export interface Role {
+  id: string
+  tenant_id?: string
+  name: string
+  description?: string
+  scopes: Scope[]
+  field_permissions?: Record<string, FieldPermission>
+  created_at?: string
+  updated_at?: string
+}
+
+export interface RoleInput {
+  tenant_name: string
+  name: string
+  description?: string
+  scopes: Scope[]
+  field_permissions: Record<string, FieldPermission>
+}
+
+export interface ServiceAccount {
+  id: string
+  tenant_id?: string
+  name: string
+  scopes: Scope[]
+  roles?: string[]
+  field_permissions?: Record<string, FieldPermission>
+  active: boolean
+}
+
+/**
+ * What a principal can ACTUALLY do: its own scopes unioned with its roles',
+ * and the merged per-attribute levels. The list endpoints report what is
+ * stored, which is what an operator edits.
+ */
+export interface EffectiveAccount {
+  id: string
+  tenant_id?: string
+  name: string
+  active: boolean
+  roles?: string[]
+  scopes: Scope[]
+  field_permissions?: Record<string, FieldPermission>
+  /** Roles the account holds that no longer exist. Non-empty is a fault:
+   *  such a principal is denied every attribute. */
+  unresolved_roles?: string[]
+}
+
+export interface Tenant {
+  name: string
+  active: boolean
+  created_at?: string
 }
 
 export interface SavedView {

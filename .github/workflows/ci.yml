@@ -84,7 +84,12 @@ jobs:
             if pg_isready -h localhost -p 6432 -U postgres > /dev/null 2>&1; then break; fi
             sleep 1
           done
-          go test -count=1 ./infrastructure/postgres/... .
+          # Serially, sharing the default schema: the per-package schema
+          # isolation is carried as a startup parameter, which a
+          # transaction-mode pooler does not proxy. That is a limit of the
+          # test harness, not of the product's SQL — which is exactly what
+          # this job exists to prove.
+          FLEXITYPE_TEST_SHARED_SCHEMA=1 go test -count=1 -p 1 ./infrastructure/postgres/... .
           docker rm -f pgbouncer
       - name: Smoke test (migrations + service boot)
         env:

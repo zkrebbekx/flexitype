@@ -72,6 +72,24 @@ func Open(t *testing.T, name string) *sqlx.DB {
 		t.Fatalf("testdb: close admin connection: %v", err)
 	}
 
+	// Schema isolation is carried as a `options=-c search_path=...` STARTUP
+	// parameter, and a transaction-mode pooler refuses startup parameters it
+	// does not proxy ("unsupported startup parameter in options: search_path").
+	//
+	// That is a limit of this harness, not of flexitype: the product's SQL is
+	// transaction-pooling safe, which is the whole point of the pooled CI job.
+	// So through a pooler the suites share the default schema and run
+	// serially (`go test -p 1`), which is what FLEXITYPE_TEST_SHARED_SCHEMA
+	// asks for.
+	if os.Getenv("FLEXITYPE_TEST_SHARED_SCHEMA") != "" {
+		pool, err := sqlx.Connect("postgres", dsn)
+		if err != nil {
+			t.Fatalf("testdb: connect: %v", err)
+		}
+		t.Cleanup(func() { _ = pool.Close() })
+		return pool
+	}
+
 	pool, err := sqlx.Connect("postgres", withSearchPath(dsn, schema))
 	if err != nil {
 		t.Fatalf("testdb: connect to schema %s: %v", schema, err)

@@ -7,6 +7,7 @@ package flexitype
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -654,8 +655,23 @@ func (s *Service) Dispatcher() *events.Dispatcher { return s.dispatcher }
 type APIConfig struct {
 	Logger *logger.Logger
 	Health *health.Service
-	// Accounts authenticates bearer tokens; nil disables auth (development).
+	// Accounts authenticates bearer tokens.
+	//
+	// NIL SERVES THE ENTIRE API TO UNAUTHENTICATED CALLERS, including the
+	// irreversible POST /admin/purge. It is a development convenience and
+	// nothing else, so it must be opted into by name with AllowAnonymous.
+	// Without that, APIHandler panics and NewAPIHandler returns an error —
+	// mirroring the standalone binary, which refuses to boot in this state.
 	Accounts serviceaccount.Authenticator
+	// AllowAnonymous opts a deployment into serving the whole API without
+	// authentication. It exists so that state cannot be reached by omission.
+	//
+	// The standalone binary has FLEXITYPE_DEV_INSECURE for the same purpose.
+	// Library mode had no equivalent: the fail-closed default was added to
+	// internal/config, which only governs the binary, so an embedder who read
+	// the release note about authentication becoming fail-closed would
+	// reasonably have assumed it applied to them.
+	AllowAnonymous bool
 	// Metrics, when set, records HTTP SLIs and serves /metrics. With the
 	// outbox on, delivery-depth gauges are registered automatically.
 	Metrics *metrics.Metrics
@@ -668,6 +684,18 @@ type APIConfig struct {
 	// TenantRateLimiter, when set, caps a tenant's aggregate request rate
 	// across all of its service accounts.
 	TenantRateLimiter *ratelimit.Limiter
+	// AuthRateLimiter, when set, throttles by client address BEFORE
+	// authentication. The other two limiters key on a resolved principal, so
+	// neither can throttle a FAILED authentication — and each of those costs
+	// a database round trip and a hash, uncached, so an unauthenticated
+	// caller could exhaust the pool and brute-force tokens unthrottled.
+	//
+	// Behind a proxy this keys on the proxy, giving a ceiling on aggregate
+	// unauthenticated traffic rather than a per-client one. It deliberately
+	// does not read X-Forwarded-For: a header is attacker-supplied, so
+	// trusting it would let one client spread its attempts across unlimited
+	// keys.
+	AuthRateLimiter *ratelimit.Limiter
 	// DisableConsole omits the admin-console SPA, for an API-only deployment.
 	// An unmatched path then returns a JSON 404 like any other API error.
 	DisableConsole bool
@@ -740,7 +768,28 @@ func (s *Service) BootstrapAdmin(ctx context.Context, tenantName, accountName st
 
 // APIHandler returns flexitype's versioned REST API as an http.Handler you
 // can mount in your own router.
+//
+// It PANICS when the configuration would serve the API to unauthenticated
+// callers without an explicit opt-in — that is a composition-time
+// misconfiguration, so it fails at startup rather than per request. Use
+// NewAPIHandler to handle it as an error instead.
 func (s *Service) APIHandler(cfg APIConfig) http.Handler {
+	h, err := s.NewAPIHandler(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
+// NewAPIHandler is APIHandler with the configuration check reported as an
+// error rather than a panic.
+func (s *Service) NewAPIHandler(cfg APIConfig) (http.Handler, error) {
+	if cfg.Accounts == nil && !cfg.AllowAnonymous {
+		return nil, errors.New(
+			"flexitype: APIConfig.Accounts is nil, which serves the whole API — including the " +
+				"irreversible POST /admin/purge — to unauthenticated callers. Set Accounts, or set " +
+				"AllowAnonymous to opt in explicitly")
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = logger.New(logger.Config{})
 	}
@@ -752,6 +801,10 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 		// exist (outbox enabled over a real pool).
 		cfg.Metrics.RegisterDeliveryCollector(postgres.NewDeliveryStats(s.pool))
 	}
+	if cfg.Accounts == nil {
+		cfg.Logger.Warn().Msg(
+			"authentication is DISABLED (APIConfig.AllowAnonymous): the whole API, including POST /admin/purge, is served to anonymous callers")
+	}
 	server := httpapi.ServerConfig{
 		Factory:     s.factory,
 		Logger:      cfg.Logger,
@@ -762,6 +815,7 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 		BlobStore:   s.blobs,
 		GraphQL:     s.graphql,
 
+		AuthRateLimiter:   cfg.AuthRateLimiter,
 		TenantRateLimiter: cfg.TenantRateLimiter,
 		DisableConsole:    cfg.DisableConsole,
 		MaxImportBytes:    cfg.MaxImportBytes,
@@ -781,7 +835,7 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 		server.Reindex = s.ReindexSearch
 	}
 	server.RecomputeComputed = s.RecomputeComputed
-	return httpapi.NewHandler(server)
+	return httpapi.NewHandler(server), nil
 }
 
 // schemaChangeRecomputer rebuilds a type's materialized computed values after

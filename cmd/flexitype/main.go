@@ -327,7 +327,17 @@ func run(log *logger.Logger) error {
 			Msg("per-tenant rate limiting enabled")
 	}
 
-	handler := svc.APIHandler(flexitype.APIConfig{
+	var authLimiter *ratelimit.Limiter
+	if cfg.AuthRateLimitRPS > 0 {
+		authLimiter = ratelimit.New(cfg.AuthRateLimitRPS, cfg.AuthRateLimitBurst)
+		log.Info().Float64("rps", cfg.AuthRateLimitRPS).Int("burst", cfg.AuthRateLimitBurst).
+			Msg("pre-authentication rate limiting enabled")
+	} else {
+		log.Warn().Msg("pre-authentication rate limiting is DISABLED (FLEXITYPE_AUTH_RATE_LIMIT_RPS=0): " +
+			"a failed credential costs a database round trip and nothing bounds it")
+	}
+
+	handler, err := svc.NewAPIHandler(flexitype.APIConfig{
 		Logger:             log,
 		Health:             healthChecker,
 		Accounts:           accounts,
@@ -335,10 +345,18 @@ func run(log *logger.Logger) error {
 		EnableProvisioning: cfg.EnableProvisioning,
 		RateLimiter:        limiter,
 		TenantRateLimiter:  tenantLimiter,
-		DisableConsole:     !cfg.EnableConsole,
-		MaxImportBytes:     cfg.MaxImportBytes,
-		MaxMediaBytes:      cfg.MaxMediaBytes,
+		AuthRateLimiter:    authLimiter,
+		// The binary has already refused to boot without an account source
+		// unless FLEXITYPE_DEV_INSECURE is set, so reaching here with no
+		// accounts is the opt-out having been taken deliberately.
+		AllowAnonymous: accounts == nil,
+		DisableConsole: !cfg.EnableConsole,
+		MaxImportBytes: cfg.MaxImportBytes,
+		MaxMediaBytes:  cfg.MaxMediaBytes,
 	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("cannot build the API handler")
+	}
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),

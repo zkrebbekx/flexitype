@@ -669,3 +669,24 @@ func TestCanonicalOrder(t *testing.T) {
 		})
 	})
 }
+
+func TestPreparedRowEntity(t *testing.T) {
+	Convey("Given a prepared CSV row", t, func() {
+		Convey("When it carries inputs", func() {
+			p := preparedRow{row: 3, inputs: []SetInput{
+				{EntityID: "e-7", AttributeDefinitionID: "a1"},
+				{EntityID: "e-7", AttributeDefinitionID: "a2"},
+			}}
+
+			Convey("Then its entity is the lock-ordering key", func() {
+				So(p.entity(), ShouldEqual, "e-7")
+			})
+		})
+
+		Convey("When it carries none", func() {
+			Convey("Then the key is empty rather than panicking", func() {
+				So(preparedRow{row: 1}.entity(), ShouldEqual, "")
+			})
+		})
+	})
+}

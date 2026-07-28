@@ -119,6 +119,12 @@ func newAPI(t *testing.T, cfg flexitype.APIConfig, opts ...flexitype.Option) *ap
 		// per request and bury the test output.
 		cfg.Logger = logger.New(logger.Config{Level: "error"})
 	}
+	if cfg.Accounts == nil {
+		// The suites that drive the API without credentials are exercising
+		// the handlers, not the trust boundary, so they take the same
+		// explicit opt-out a deployment would.
+		cfg.AllowAnonymous = true
+	}
 	svc := flexitype.NewInMemory(opts...)
 	srv := httptest.NewServer(svc.APIHandler(cfg))
 	t.Cleanup(srv.Close)

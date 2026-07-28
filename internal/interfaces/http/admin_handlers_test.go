@@ -841,3 +841,40 @@ func TestRoleSafetyRoutes(t *testing.T) {
 		})
 	})
 }
+
+// TestClientKey covers the identifier the pre-authentication limiter buckets
+// on. It is deliberately RemoteAddr and not X-Forwarded-For: a header is
+// attacker-supplied, so trusting it would let one client spread its attempts
+// across unlimited keys and defeat the limiter entirely.
+func TestClientKey(t *testing.T) {
+	Convey("Given requests from various remote addresses", t, func() {
+		Convey("When the address carries a port", func() {
+			Convey("Then the host alone is the key, so one client is one bucket", func() {
+				r := &http.Request{RemoteAddr: "203.0.113.7:54321"}
+				So(clientKey(r), ShouldEqual, "203.0.113.7")
+			})
+		})
+
+		Convey("When the address is IPv6", func() {
+			Convey("Then the host is still extracted", func() {
+				r := &http.Request{RemoteAddr: "[2001:db8::1]:443"}
+				So(clientKey(r), ShouldEqual, "2001:db8::1")
+			})
+		})
+
+		Convey("When the address carries no port", func() {
+			Convey("Then it is used whole rather than dropped, so the bucket still exists", func() {
+				r := &http.Request{RemoteAddr: "203.0.113.7"}
+				So(clientKey(r), ShouldEqual, "203.0.113.7")
+			})
+		})
+
+		Convey("When a forwarding header claims another address", func() {
+			Convey("Then it is ignored", func() {
+				r := &http.Request{RemoteAddr: "203.0.113.7:1", Header: http.Header{}}
+				r.Header.Set("X-Forwarded-For", "198.51.100.9")
+				So(clientKey(r), ShouldEqual, "203.0.113.7")
+			})
+		})
+	})
+}

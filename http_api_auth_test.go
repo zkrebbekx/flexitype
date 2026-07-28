@@ -557,3 +557,72 @@ func TestHTTPDisabledFeatures(t *testing.T) {
 		})
 	})
 }
+
+// TestFailedAuthIsRateLimited covers the throttle that failed credentials
+// escaped entirely.
+//
+// The per-account and per-tenant limiters run AFTER authenticate, which writes
+// 401 without calling next — so 200 bad tokens meant 200 credential lookups,
+// each a database round trip plus a hash, none of them cached, none of them
+// counted. An unauthenticated attacker could exhaust the connection pool with
+// a loop and brute-force tokens with nothing bounding either.
+func TestFailedAuthIsRateLimited(t *testing.T) {
+	Convey("Given an API with a pre-authentication limiter of one token", t, func() {
+		reader, _ := account("01KXREADER0000000000000000", "reader", "acme",
+			[]serviceaccount.Scope{serviceaccount.ScopeRead}, nil)
+		counting := &countingAuth{inner: serviceaccount.NewStore([]serviceaccount.Account{reader})}
+
+		a := newAPI(t, flexitype.APIConfig{
+			Accounts: counting,
+			// One token, refilled slowly: the second request in a burst is
+			// rejected, which is what makes the assertion deterministic.
+			AuthRateLimiter: ratelimit.New(0.001, 1),
+		})
+
+		Convey("When a burst of bad credentials arrives", func() {
+			statuses := map[int]int{}
+			for i := 0; i < 20; i++ {
+				statuses[a.as("ft_01KXREADER0000000000000000_wrong").get("/api/v1/type-definitions").Status]++
+			}
+
+			Convey("Then most are throttled rather than every one reaching the store", func() {
+				So(statuses[http.StatusTooManyRequests], ShouldBeGreaterThan, 15)
+				So(counting.calls, ShouldBeLessThan, 5)
+			})
+
+			Convey("Then the rejection carries the standard code and hint", func() {
+				resp := a.as("ft_01KXREADER0000000000000000_wrong").get("/api/v1/type-definitions")
+				So(resp.Status, ShouldEqual, http.StatusTooManyRequests)
+				So(resp.errorCode(), ShouldEqual, "RATE_LIMITED")
+				So(resp.Header.Get("Retry-After"), ShouldNotEqual, "")
+			})
+		})
+	})
+
+	Convey("Given an API with no pre-authentication limiter", t, func() {
+		reader, readerToken := account("01KXREADER0000000000000000", "reader", "acme",
+			[]serviceaccount.Scope{serviceaccount.ScopeRead}, nil)
+		a := newAPI(t, flexitype.APIConfig{
+			Accounts: serviceaccount.NewStore([]serviceaccount.Account{reader}),
+		})
+
+		Convey("When a valid credential is presented", func() {
+			resp := a.as(readerToken).get("/api/v1/type-definitions")
+
+			Convey("Then nothing throttles it: the limiter is opt-in", func() {
+				So(resp.Status, ShouldEqual, http.StatusOK)
+			})
+		})
+	})
+}
+
+// countingAuth counts how many credential lookups actually reach the store.
+type countingAuth struct {
+	inner serviceaccount.Authenticator
+	calls int
+}
+
+func (c *countingAuth) Authenticate(token string) (serviceaccount.Account, error) {
+	c.calls++
+	return c.inner.Authenticate(token)
+}

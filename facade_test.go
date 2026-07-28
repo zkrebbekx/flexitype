@@ -20,6 +20,7 @@ import (
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/events"
+	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 )
 
 // captureHandler is a consumer-supplied events.Handler, the seam WithHandler
@@ -366,7 +367,7 @@ func TestFacadeAPIHandlerDefaults(t *testing.T) {
 	Convey("Given an embedded service mounting its REST API", t, func() {
 		Convey("When APIConfig supplies neither a logger nor a health service", func() {
 			svc := flexitype.NewInMemory()
-			srv := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{}))
+			srv := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{AllowAnonymous: true}))
 			defer srv.Close()
 
 			Convey("Then defaults are filled in and the liveness probe serves", func() {
@@ -379,7 +380,7 @@ func TestFacadeAPIHandlerDefaults(t *testing.T) {
 
 		Convey("When provisioning is requested on an in-memory service", func() {
 			svc := flexitype.NewInMemory(flexitype.WithSearchIndex())
-			handler := svc.APIHandler(flexitype.APIConfig{EnableProvisioning: true})
+			handler := svc.APIHandler(flexitype.APIConfig{EnableProvisioning: true, AllowAnonymous: true})
 			srv := httptest.NewServer(handler)
 			defer srv.Close()
 
@@ -390,6 +391,56 @@ func TestFacadeAPIHandlerDefaults(t *testing.T) {
 				So(err, ShouldBeNil)
 				defer func() { _ = resp.Body.Close() }()
 				So(resp.StatusCode, ShouldBeLessThan, 500)
+			})
+		})
+	})
+}
+
+// TestAnonymousAPIRequiresOptIn covers the trust boundary in library mode.
+//
+// The fail-closed authentication default was added to internal/config, which
+// only governs the standalone binary. The embedding entrypoint was unchanged:
+// a nil Accounts stamped an admin principal on every request, with no
+// boot-time refusal and not even the warning the binary prints — so an
+// embedder who mounted the handler the way the embedding guide documents
+// served the whole API, including the irreversible POST /admin/purge, to
+// anonymous callers.
+func TestAnonymousAPIRequiresOptIn(t *testing.T) {
+	Convey("Given an embedder mounting the API with no account source", t, func() {
+		svc := flexitype.NewInMemory()
+
+		Convey("When the handler is built without the opt-out", func() {
+			_, err := svc.NewAPIHandler(flexitype.APIConfig{})
+
+			Convey("Then it is refused, naming what nil would have served", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "AllowAnonymous")
+				So(err.Error(), ShouldContainSubstring, "admin/purge")
+			})
+		})
+
+		Convey("When the convenience form is used without the opt-out", func() {
+			Convey("Then it panics at composition time rather than per request", func() {
+				So(func() { svc.APIHandler(flexitype.APIConfig{}) }, ShouldPanic)
+			})
+		})
+
+		Convey("When the opt-out is taken explicitly", func() {
+			h, err := svc.NewAPIHandler(flexitype.APIConfig{AllowAnonymous: true})
+
+			Convey("Then the handler is built, because the choice was stated", func() {
+				So(err, ShouldBeNil)
+				So(h, ShouldNotBeNil)
+			})
+		})
+
+		Convey("When an authenticator is supplied", func() {
+			accounts := serviceaccount.NewStore(nil)
+			h, err := svc.NewAPIHandler(flexitype.APIConfig{Accounts: accounts})
+
+			Convey("Then no opt-out is needed", func() {
+				So(err, ShouldBeNil)
+				So(h, ShouldNotBeNil)
 			})
 		})
 	})

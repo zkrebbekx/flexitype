@@ -1733,6 +1733,11 @@ paths:
     post:
       tags: [graphql]
       summary: Run a read-only GraphQL query
+      description: >
+        With FLEXITYPE_FEATURE_GRAPHQL_FEDERATION=true this endpoint is also an
+        Apollo Federation subgraph: it answers `_service { sdl }` and
+        `_entities(representations:)`, and the SDL carries
+        `@key(fields: "entityId")` on every entity type. See docs/federation.md.
       requestBody:
         required: true
         content:

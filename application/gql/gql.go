@@ -131,6 +131,8 @@ type Engine struct {
 	// onError receives the original text of an error that was masked before
 	// it reached the client, so the detail is logged rather than lost.
 	onError func(error)
+	// federation adds the subgraph contract (_service, _entities, @key).
+	federation bool
 }
 
 // versionMemo caches a tenant's persisted schema version to spare a database
@@ -179,6 +181,17 @@ func WithCacheCap(n int) EngineOption {
 // out, so the detail stays available server-side.
 func WithErrorObserver(fn func(error)) EngineOption {
 	return func(e *Engine) { e.onError = fn }
+}
+
+// WithFederation exposes the endpoint as an Apollo-Federation subgraph:
+// `_service { sdl }`, `_entities(representations:)` and `@key(fields:
+// "entityId")` on every entity type. See federation.go.
+//
+// It is off by default. A federated schema carries three fields no standalone
+// client asks for, and `_entities` is a batch read a non-federated deployment
+// has no reason to expose.
+func WithFederation() EngineOption {
+	return func(e *Engine) { e.federation = true }
 }
 
 // NewEngine builds a GraphQL engine. The zero-argument form uses the defaults
@@ -279,7 +292,7 @@ func sanitize(res *graphql.Result, onError func(error)) *graphql.Result {
 	}
 	for i, ge := range res.Errors {
 		var domainErr *domainerrors.Error
-		if errors.As(ge.OriginalError(), &domainErr) {
+		if errors.As(unwrapLocated(ge.OriginalError()), &domainErr) {
 			continue
 		}
 		if isGraphQLClientError(ge) {
@@ -291,6 +304,26 @@ func sanitize(res *graphql.Result, onError func(error)) *graphql.Result {
 		res.Errors[i].Message = "internal error"
 	}
 	return res
+}
+
+// unwrapLocated peels the located wrapper graphql-go puts around every error a
+// resolver returns.
+//
+// The executor wraps a resolver error in *gqlerrors.Error to attach the field
+// path, and that type carries its cause in an OriginalError field with no
+// Unwrap method — so errors.As stops at the wrapper. Every domain error a
+// resolver raised therefore reached the client as "internal error": a
+// not-found read as a server fault, and a validation message the caller needed
+// in order to fix its own request was replaced by nothing. Peeling the wrapper
+// first restores the same client-facing messages REST returns.
+func unwrapLocated(err error) error {
+	for {
+		var located *gqlerrors.Error
+		if !errors.As(err, &located) || located.OriginalError == nil {
+			return err
+		}
+		err = located.OriginalError
+	}
 }
 
 // isGraphQLClientError reports whether an error came from parsing or
@@ -325,7 +358,7 @@ func (e *Engine) schemaFor(ctx context.Context, inter *application.Interactors) 
 		return cached.schema, nil
 	}
 
-	schema, err := buildSchema(ctx, inter)
+	schema, err := buildSchema(ctx, inter, e.federation)
 	if err != nil {
 		return graphql.Schema{}, err
 	}
@@ -456,7 +489,7 @@ func connectionArgs(withFilter bool) graphql.FieldConfigArgument {
 
 // buildSchema reads the caller's live, readable schema and assembles a GraphQL
 // schema mirroring it, with Relay connections.
-func buildSchema(ctx context.Context, inter *application.Interactors) (graphql.Schema, error) {
+func buildSchema(ctx context.Context, inter *application.Interactors, federation bool) (graphql.Schema, error) {
 	types, err := listEntityTypes(ctx, inter)
 	if err != nil {
 		return graphql.Schema{}, err
@@ -538,6 +571,9 @@ func buildSchema(ctx context.Context, inter *application.Interactors) (graphql.S
 			Args:    connectionArgs(true),
 			Resolve: rootResolve(internal, metas),
 		}
+	}
+	if federation {
+		addFederationFields(rootFields, metas, objects)
 	}
 
 	return graphql.NewSchema(graphql.SchemaConfig{

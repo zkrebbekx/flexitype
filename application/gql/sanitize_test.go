@@ -100,3 +100,47 @@ func TestSanitize(t *testing.T) {
 		})
 	})
 }
+
+// TestSanitizeUnwrapsLocatedError covers the wrapper the executor adds.
+//
+// graphql-go wraps every error a resolver returns in *gqlerrors.Error to
+// attach the field path. That type carries its cause in an OriginalError
+// field and has no Unwrap method, so errors.As stopped at the wrapper and
+// every domain error a resolver raised reached the client as "internal
+// error": a not-found read as a server fault, and a validation message the
+// caller needed in order to fix its own request was replaced by nothing.
+func TestSanitizeUnwrapsLocatedError(t *testing.T) {
+	Convey("Given a domain error returned from a resolver", t, func() {
+		domain := domainerrors.NewValidation("too many representations: 501 exceeds the limit of 500")
+		located := gqlerrors.NewErrorWithPath(
+			domain.Error(), nil, "", nil, nil, []any{"_entities"}, domain)
+
+		res := &graphql.Result{Errors: []gqlerrors.FormattedError{gqlerrors.FormatError(located)}}
+		res.Errors[0].Path = []any{"_entities"}
+		res.Errors[0].Locations = []location.SourceLocation{{Line: 1, Column: 3}}
+
+		out := sanitize(res, nil)
+
+		Convey("Then the client-facing message survives the executor's wrapper", func() {
+			So(out.Errors[0].Message, ShouldContainSubstring, "too many representations")
+			So(out.Errors[0].Message, ShouldNotEqual, "internal error")
+		})
+	})
+
+	Convey("Given an infrastructure error returned from a resolver", t, func() {
+		infra := errors.New(`pq: column "value_txt" does not exist (42703)`)
+		located := gqlerrors.NewErrorWithPath(
+			infra.Error(), nil, "", nil, nil, []any{"product"}, infra)
+
+		res := &graphql.Result{Errors: []gqlerrors.FormattedError{gqlerrors.FormatError(located)}}
+		res.Errors[0].Path = []any{"product"}
+		res.Errors[0].Locations = []location.SourceLocation{{Line: 1, Column: 3}}
+
+		out := sanitize(res, nil)
+
+		Convey("Then unwrapping does not expose it: only a domain error passes", func() {
+			So(out.Errors[0].Message, ShouldEqual, "internal error")
+			So(out.Errors[0].Message, ShouldNotContainSubstring, "value_txt")
+		})
+	})
+}

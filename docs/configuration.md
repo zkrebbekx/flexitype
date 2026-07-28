@@ -252,6 +252,7 @@ is mounted. Only non-API paths reach the app shell.
 | `FLEXITYPE_FEATURE_SEARCH` | `true` | Enable the FQL query surface. |
 | `FLEXITYPE_FEATURE_ACTIVITY` | `true` | Enable the audit log (writes and read API). |
 | `FLEXITYPE_FEATURE_SEARCH_INDEX` | `false` | Maintain the entity search projection and unlock FQL `matches()`. |
+| `FLEXITYPE_FEATURE_GRAPHQL_FEDERATION` | `false` | Serve the GraphQL endpoint as an Apollo-Federation subgraph (`_service`, `_entities`, `@key`). See [federation.md](federation.md). |
 | `FLEXITYPE_BLOB_DIR` | _(unset)_ | Directory backing media-attribute uploads (local-disk blob store). Unset disables media uploads. |
 
 ## Event delivery (with the outbox)

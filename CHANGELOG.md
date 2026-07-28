@@ -35,6 +35,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
   same context was a no-op — so an embedded deployment with a cancellable
   startup context stranded the lease for the full TTL while the process was
   alive and able to free it.
+
 ### Fixed — Four residual one-sided fixes: the CSV multi-value marker, the redrive ramp, saved-view locking and two documents
 
 - **The multi-value CSV marker is out of band.** Any in-band sentinel drawn

@@ -7,6 +7,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Documentation — GraphQL introspection and the field ACL
+
+The GraphQL schema is built from the caller's READABLE attribute set and
+cached per `(tenant | permission profile)`, so introspection already hides an
+unreadable attribute's existence exactly as the grid, FQL and export do. That
+was not written down anywhere, and #422 reported the opposite from a grep for
+`CanRead` inside `application/gql` — the filtering happens one layer down, in
+the interactors the schema builder reads through.
+
+It is now stated in the field-permission surface table, and pinned by a test
+that introspects `__type` as a restricted principal and as an unrestricted
+one in turn.
+
 ### Fixed — Residuals, and four documents that contradicted the code
 
 - **Restoring a pre-narrowing revision was impossible** (#420). `Restore`

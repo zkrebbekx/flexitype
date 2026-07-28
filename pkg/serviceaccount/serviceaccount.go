@@ -42,6 +42,15 @@ type Account struct {
 	FieldPermissions map[string]string `json:"field_permissions,omitempty"`
 	// SecretHash is hex(SHA-256(secret)).
 	SecretHash string `json:"secret_hash"`
+	// UnresolvedRoles names roles the account holds that no longer exist.
+	//
+	// A role that resolves to nothing contributes no field permissions, and
+	// an empty permission map otherwise reads as "unrestricted" — so deleting
+	// a role would silently grant every attribute to the accounts it
+	// restricted. A principal carrying an unresolved role is therefore denied
+	// field access outright (see accessFor), which fails closed on data while
+	// leaving the credential usable so an operator can repair it.
+	UnresolvedRoles []string `json:"unresolved_roles,omitempty"`
 }
 
 // HasScope reports whether the account holds the scope (admin implies all).
@@ -90,6 +99,18 @@ type AuthenticatorCtx interface {
 // change.
 type Invalidator interface {
 	Invalidate(accountID string)
+}
+
+// TenantInvalidator drops cached authentication state for every account in
+// one tenant.
+//
+// A role edit or a tenant deactivation changes what many accounts may do at
+// once, and the cache is keyed by token, so neither can be expressed as a
+// per-account eviction. It is a separate interface, not a method added to
+// Invalidator, so an embedder's existing Invalidator keeps compiling; callers
+// type-assert for it.
+type TenantInvalidator interface {
+	InvalidateTenant(tenantID string)
 }
 
 // Store holds the configured accounts.
@@ -207,3 +228,72 @@ var permissionRank = map[string]int{"none": 1, "read": 2, "write": 3}
 // level ranks below "none", which is the safe direction: a typo in a role
 // definition must not out-rank a real grant.
 func MorePermissive(a, b string) bool { return permissionRank[a] > permissionRank[b] }
+
+// RoleGrant is one role's contribution to an account's permissions, as the
+// resolver needs it: the storage layer supplies these, and the admin API
+// builds the same shape to report what a principal can actually do.
+type RoleGrant struct {
+	Name             string
+	Scopes           []Scope
+	FieldPermissions map[string]string
+}
+
+// Resolve merges an account's roles into it and returns the effective
+// account.
+//
+// The rules, in one place so the authentication path and the
+// effective-permissions view cannot drift:
+//
+//   - Scopes UNION. A role grants; it never revokes. Holding two roles is
+//     holding what either allows.
+//   - Field permissions take the MOST PERMISSIVE level any role grants for
+//     that attribute — the same additive rule as scopes.
+//   - The account's OWN entry for an attribute wins over every role, so one
+//     person can be given an exception without inventing a role for them.
+//   - A name with no matching grant is recorded in UnresolvedRoles. It
+//     contributes nothing, and an empty permission map otherwise reads as
+//     "unrestricted", so the caller must be able to deny rather than permit.
+//
+// admin is never merged in from a role: UpsertRole refuses it, because it is
+// a cross-tenant privilege that also voids the account's own field
+// permissions, and it would be invisible in the account row. Resolve drops it
+// defensively, so a row written before that rule — or edited directly in the
+// database — cannot escalate either.
+func Resolve(base Account, names []string, grants []RoleGrant) Account {
+	byName := make(map[string]RoleGrant, len(grants))
+	for _, g := range grants {
+		byName[g.Name] = g
+	}
+
+	held := map[Scope]bool{}
+	for _, sc := range base.Scopes {
+		held[sc] = true
+	}
+	merged := map[string]string{}
+	for _, name := range names {
+		g, ok := byName[name]
+		if !ok {
+			base.UnresolvedRoles = append(base.UnresolvedRoles, name)
+			continue
+		}
+		for _, sc := range g.Scopes {
+			if sc == ScopeAdmin || held[sc] {
+				continue
+			}
+			held[sc] = true
+			base.Scopes = append(base.Scopes, sc)
+		}
+		for attr, level := range g.FieldPermissions {
+			if MorePermissive(level, merged[attr]) {
+				merged[attr] = level
+			}
+		}
+	}
+	for attr, level := range base.FieldPermissions {
+		merged[attr] = level
+	}
+	if len(merged) > 0 {
+		base.FieldPermissions = merged
+	}
+	return base
+}

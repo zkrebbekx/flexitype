@@ -248,3 +248,15 @@ func (s *server) assignRoles(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (s *server) effectiveAccount(w http.ResponseWriter, r *http.Request) {
+	if !s.adminReady(w, r) {
+		return
+	}
+	view, err := s.admin.EffectiveAccount(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}

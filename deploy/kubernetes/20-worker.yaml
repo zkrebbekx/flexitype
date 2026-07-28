@@ -65,3 +65,26 @@ spec:
       volumes:
         - name: accounts
           secret: { secretName: flexitype-accounts }
+---
+# A headless Service for the worker tier.
+#
+# The ServiceMonitor selects Services, and the only Service selected the API
+# tier alone — so no `up{...component="worker"}` series existed and nothing
+# could alert on the worker tier being absent. That tier is the only place
+# FLEXITYPE_RUN_RELAY / _DELIVERY_WORKER / _PRUNER / _SCHEDULER are true, so
+# scaling it to zero, or never applying it, was invisible: the outbox-lag
+# alert fires eventually from the API pods' database-derived gauge, but only
+# after the lag has built, and its remediation text asks a question the
+# monitoring stack could not answer.
+#
+# Headless (clusterIP: None) because nothing routes traffic here. It exists to
+# give the scrape a target.
+apiVersion: v1
+kind: Service
+metadata:
+  name: flexitype-worker
+  labels: { app.kubernetes.io/name: flexitype, app.kubernetes.io/component: worker }
+spec:
+  clusterIP: None
+  selector: { app.kubernetes.io/name: flexitype, app.kubernetes.io/component: worker }
+  ports: [{ name: http, port: 80, targetPort: http }]

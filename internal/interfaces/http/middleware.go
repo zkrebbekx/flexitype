@@ -111,10 +111,21 @@ func (s *server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 // actor, tenant and scopes onto the request context. A nil authenticator
 // disables authentication (development mode) and runs as the system actor
 // on the default tenant with admin scope.
-// accessFor derives the principal's field-level permissions. An admin (or
-// an account with no field restrictions) gets full access; otherwise the
-// declared per-attribute levels apply.
+// accessFor derives the principal's field-level permissions. An admin (or an
+// account with no field restrictions) gets full access; otherwise the declared
+// per-attribute levels apply.
+//
+// An account naming a role that no longer exists is denied every attribute.
+// A missing role contributes no permissions, and an empty map otherwise reads
+// as "unrestricted" — so deleting a role would have converted every account
+// restricted only by it into one with full field access, silently and with no
+// change to the account row. The API refuses to delete a role that accounts
+// still name (see admin.DeleteRole); this is the second line, covering a row
+// edited directly in the database and the window inside a race.
 func accessFor(account serviceaccount.Account) uow.Access {
+	if len(account.UnresolvedRoles) > 0 {
+		return uow.DenyAll()
+	}
 	if account.HasScope(serviceaccount.ScopeAdmin) || len(account.FieldPermissions) == 0 {
 		return uow.Access{Admin: true}
 	}

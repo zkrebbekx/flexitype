@@ -87,9 +87,14 @@ type Store interface {
 	SetAccountActive(ctx context.Context, id ulid.ID, active bool, now time.Time) error
 	SetAccountRoles(ctx context.Context, id ulid.ID, roles []string, perms map[string]string, now time.Time) error
 
-	UpsertRole(ctx context.Context, r Role) error
+	// UpsertRole returns the PERSISTED row. An update keeps the existing id
+	// and created_at, so the caller must be told what is stored rather than
+	// what was proposed.
+	UpsertRole(ctx context.Context, r Role) (Role, error)
 	ListRoles(ctx context.Context, tenant string) ([]Role, error)
 	DeleteRole(ctx context.Context, tenant, name string) error
+	// CountAccountsWithRole reports how many accounts still name the role.
+	CountAccountsWithRole(ctx context.Context, tenant, name string) (int, error)
 }
 
 // Interactor implements the provisioning usecases.
@@ -128,6 +133,23 @@ func (i *Interactor) invalidate(id ulid.ID) {
 	}
 }
 
+// invalidateTenant drops every cached authentication for one tenant.
+//
+// A role edit and a tenant deactivation both change what many accounts may do
+// at once, and the cache is keyed by token, so neither is expressible as a
+// per-account eviction. Without this, the change an operator most needs to
+// take effect at once — removing a grant during an incident — was the one
+// deferred by up to the cache TTL on every replica, while the API had already
+// confirmed it.
+//
+// An authenticator with no tenant index simply does not implement the
+// interface, and the change then waits for the TTL as before.
+func (i *Interactor) invalidateTenant(tenant string) {
+	if inv, ok := i.authCache.(serviceaccount.TenantInvalidator); ok && i.authCache != nil {
+		inv.InvalidateTenant(tenant)
+	}
+}
+
 // CreateTenant provisions a new tenant.
 func (i *Interactor) CreateTenant(ctx context.Context, name string) (*Tenant, error) {
 	if !namePattern.MatchString(name) {
@@ -152,14 +174,21 @@ func (i *Interactor) ListTenants(ctx context.Context) ([]Tenant, error) {
 	return i.store.ListTenants(ctx)
 }
 
-// SetTenantActive activates or deactivates a tenant. A deactivated tenant's
-// accounts stay defined but their access is governed by their own active
-// flag; deactivation is advisory metadata for the control plane.
+// SetTenantActive enables or disables a tenant.
+//
+// Deactivation is enforced at authentication (the tenant's active flag is
+// joined in), so it suspends every account under the tenant. The tenant's
+// cached authentications are dropped, or a suspension would not take effect
+// until the cache TTL expired on every replica.
 func (i *Interactor) SetTenantActive(ctx context.Context, name string, active bool) error {
 	if _, err := i.store.GetTenantByName(ctx, name); err != nil {
 		return err
 	}
-	return i.store.SetTenantActive(ctx, name, active, i.now())
+	if err := i.store.SetTenantActive(ctx, name, active, i.now()); err != nil {
+		return err
+	}
+	i.invalidateTenant(name)
+	return nil
 }
 
 // AccountWithToken pairs a created/rotated account with its one-time
@@ -334,6 +363,19 @@ func (i *Interactor) UpsertRole(ctx context.Context, in UpsertRoleInput) (*Role,
 	if err != nil {
 		return nil, err
 	}
+	// A role may not carry admin. The admin scope is a global,
+	// cross-tenant privilege AND it short-circuits the whole field ACL, so a
+	// role granting it would void the account's own field_permissions —
+	// contradicting this feature's stated precedence rule — and confer the
+	// control plane. It would also be invisible: the account row would still
+	// read scopes:["read"] with a field restriction, so a permissions review
+	// would call it safe. Grant admin directly on an account, where it shows.
+	for _, sc := range scopes {
+		if sc == serviceaccount.ScopeAdmin {
+			return nil, domainerrors.NewValidation(
+				"a role may not grant the admin scope; grant it on the account, where it is visible in the account row")
+		}
+	}
 	if err := validateFieldPermissions(in.FieldPermissions); err != nil {
 		return nil, err
 	}
@@ -352,10 +394,17 @@ func (i *Interactor) UpsertRole(ctx context.Context, in UpsertRoleInput) (*Role,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
-	if err := i.store.UpsertRole(ctx, role); err != nil {
+	// The store returns what is STORED. An update keeps the existing id and
+	// created_at, so returning the proposed struct described a row that does
+	// not exist: a provisioning script that stores the returned id as its
+	// handle, or logs it for audit, recorded a different non-existent id on
+	// every idempotent re-run.
+	stored, err := i.store.UpsertRole(ctx, role)
+	if err != nil {
 		return nil, err
 	}
-	return &role, nil
+	i.invalidateTenant(tenant.Name)
+	return &stored, nil
 }
 
 // ListRoles returns a tenant's roles.
@@ -363,13 +412,105 @@ func (i *Interactor) ListRoles(ctx context.Context, tenant string) ([]Role, erro
 	return i.store.ListRoles(ctx, tenant)
 }
 
-// DeleteRole removes a role.
+// DeleteRole removes a role that no account holds.
 //
-// Accounts holding it keep the name and simply resolve nothing for it, which
-// is the safe direction: a deleted role removes grants rather than leaving
-// accounts pointing at a permission set nobody can read.
+// It refuses while accounts still name it. Deleting a held role used to leave
+// those accounts pointing at nothing, and a permission set that resolves to
+// nothing is an EMPTY map — which read as "unrestricted" and granted every
+// attribute the role was hiding. The exposure was silent: no error, no log
+// line, and no change to the account rows, which still listed the role name,
+// so the account listing looked unchanged while the effective permission had
+// inverted. Because roles are the bulk-restriction mechanism, the blast
+// radius scaled with adoption.
+//
+// Reassign the accounts first (PUT /service-accounts/{id}/roles). To retire a
+// role's grants without touching every account, upsert it with an empty scope
+// set and the restrictions you want to keep.
 func (i *Interactor) DeleteRole(ctx context.Context, tenant, name string) error {
-	return i.store.DeleteRole(ctx, tenant, name)
+	held, err := i.store.CountAccountsWithRole(ctx, tenant, name)
+	if err != nil {
+		return err
+	}
+	if held > 0 {
+		return domainerrors.NewConflict(
+			"the role is still assigned; reassign those accounts before deleting it",
+			"role", name, "accounts", held)
+	}
+	if err := i.store.DeleteRole(ctx, tenant, name); err != nil {
+		return err
+	}
+	i.invalidateTenant(tenant)
+	return nil
+}
+
+// EffectiveAccount reports what a principal can ACTUALLY do: its scopes and
+// field permissions after its roles are merged in.
+//
+// The listing endpoints report accounts and roles as STORED, which is what an
+// operator edits — but it meant a permissions review had to fetch every role
+// an account names and union them by hand. Anyone doing that by eye would
+// have read `scopes: ["read"]` with a field restriction and called the
+// account safe, while a role it holds granted something wider.
+//
+// The merge runs through serviceaccount.Resolve, the same function
+// authentication uses, so this view cannot report one thing while the
+// enforcement path does another.
+func (i *Interactor) EffectiveAccount(ctx context.Context, rawID string) (*EffectiveAccountView, error) {
+	id, err := ulid.Parse(rawID)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	acct, err := i.store.GetAccount(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	roles, err := i.store.ListRoles(ctx, acct.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	grants := make([]serviceaccount.RoleGrant, 0, len(roles))
+	for _, r := range roles {
+		grants = append(grants, serviceaccount.RoleGrant{
+			Name: r.Name, Scopes: r.Scopes, FieldPermissions: r.FieldPermissions,
+		})
+	}
+	resolved := serviceaccount.Resolve(serviceaccount.Account{
+		ID:               acct.ID.String(),
+		Name:             acct.Name,
+		TenantID:         acct.TenantID,
+		Scopes:           acct.Scopes,
+		FieldPermissions: acct.FieldPermissions,
+	}, acct.Roles, grants)
+
+	return &EffectiveAccountView{
+		ID:               acct.ID,
+		TenantID:         acct.TenantID,
+		Name:             acct.Name,
+		Active:           acct.Active,
+		Roles:            acct.Roles,
+		Scopes:           resolved.Scopes,
+		FieldPermissions: resolved.FieldPermissions,
+		UnresolvedRoles:  resolved.UnresolvedRoles,
+	}, nil
+}
+
+// EffectiveAccountView is an account's resolved permissions.
+type EffectiveAccountView struct {
+	ID       ulid.ID `json:"id"`
+	TenantID string  `json:"tenant_id"`
+	Name     string  `json:"name"`
+	Active   bool    `json:"active"`
+	// Roles are the names the account holds, as stored.
+	Roles []string `json:"roles"`
+	// Scopes are the account's own scopes unioned with its roles'.
+	Scopes []serviceaccount.Scope `json:"scopes"`
+	// FieldPermissions are the merged per-attribute levels: the most
+	// permissive any role grants, with the account's own entry winning.
+	FieldPermissions map[string]string `json:"field_permissions,omitempty"`
+	// UnresolvedRoles names roles the account holds that no longer exist.
+	// A principal carrying one is denied every attribute, so this being
+	// non-empty is a fault to repair, not a note.
+	UnresolvedRoles []string `json:"unresolved_roles,omitempty"`
 }
 
 // AssignRolesInput sets an account's roles and its own overrides.

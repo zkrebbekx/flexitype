@@ -1211,6 +1211,24 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /service-accounts/{id}/effective:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    get:
+      tags: [provisioning]
+      summary: Report an account's resolved permissions (admin scope)
+      description: >
+        What the principal can ACTUALLY do: its own scopes unioned with its
+        roles', and the merged per-attribute permissions. The listing
+        endpoints report accounts and roles as stored, which is what an
+        operator edits; this reports what the enforcement path computes, using
+        the same resolver. `unresolved_roles` being non-empty is a fault: such
+        an account is denied every attribute.
+      responses:
+        "200":
+          description: Resolved permissions
+          content: { application/json: { schema: { $ref: "#/components/schemas/EffectiveAccount" } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /roles:
     get:
       tags: [provisioning]
@@ -1259,14 +1277,17 @@ paths:
       tags: [provisioning]
       summary: Delete a role (admin scope)
       description: >
-        An account that names the role keeps the name and resolves nothing for
-        it, so a deleted role removes grants rather than leaving accounts
-        pointing at a permission set nobody can read.
+        Refused with 409 while any account still names the role. A role that
+        resolves to nothing contributes no field permissions, and an empty
+        permission map reads as unrestricted — so deleting a held role would
+        grant every attribute it was hiding. Reassign those accounts first
+        (`PUT /service-accounts/{id}/roles`).
       parameters: [{ name: tenant_name, in: query, required: true, schema: { type: string } }]
       responses:
         "204": { description: Deleted }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
 
   /type-definitions/{id}/completeness:
@@ -2303,6 +2324,26 @@ components:
         Maps an attribute internal name to none, read or write. An attribute
         that is not listed stays fully accessible.
       additionalProperties: { type: string, enum: [none, read, write] }
+    EffectiveAccount:
+      type: object
+      description: An account's permissions after its roles are merged in.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        name: { type: string }
+        active: { type: boolean }
+        roles: { type: array, items: { type: string } }
+        scopes:
+          type: array
+          items: { type: string, enum: [read, write, admin] }
+          description: The account's own scopes unioned with its roles'.
+        field_permissions: { $ref: "#/components/schemas/FieldPermissions" }
+        unresolved_roles:
+          type: array
+          items: { type: string }
+          description: >
+            Roles the account holds that no longer exist. A principal carrying
+            one is denied every attribute, so this is a fault to repair.
     Role:
       type: object
       description: A named permission set that accounts in the same tenant hold.

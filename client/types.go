@@ -528,6 +528,23 @@ type ServiceAccount struct {
 	Token            string            `json:"token,omitempty"`
 }
 
+// EffectiveAccount is an account's permissions after its roles are merged in.
+type EffectiveAccount struct {
+	ID       string `json:"id"`
+	TenantID string `json:"tenant_id,omitempty"`
+	Name     string `json:"name"`
+	Active   bool   `json:"active"`
+	// Roles are the names the account holds, as stored.
+	Roles []string `json:"roles,omitempty"`
+	// Scopes are the account's own scopes unioned with its roles'.
+	Scopes []string `json:"scopes"`
+	// FieldPermissions are the merged per-attribute levels.
+	FieldPermissions map[string]string `json:"field_permissions,omitempty"`
+	// UnresolvedRoles names roles the account holds that no longer exist.
+	// A principal carrying one is denied every attribute.
+	UnresolvedRoles []string `json:"unresolved_roles,omitempty"`
+}
+
 // Role is a named permission set that accounts in the same tenant hold.
 type Role struct {
 	ID          string   `json:"id"`

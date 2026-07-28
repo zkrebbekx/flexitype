@@ -174,3 +174,90 @@ func TestCacheEvictsExpiredEntriesWhenLarge(t *testing.T) {
 		})
 	})
 }
+
+// TestCacheInvalidateTenant covers the eviction a role edit and a tenant
+// deactivation need.
+//
+// Roles are the product's bulk-permission mechanism and the cache is keyed by
+// token, so neither change is expressible per account. Without a tenant
+// index, removing a grant from a role during an incident stayed in force for
+// up to the TTL on every replica, while the API had already confirmed it.
+func TestCacheInvalidateTenant(t *testing.T) {
+	Convey("Given cached authentications for two tenants", t, func() {
+		inner := &tenantAuth{secret: "s1", tenantOf: map[string]string{
+			"acme-a": "acme", "acme-b": "acme", "other-a": "other",
+		}}
+		c := NewCachingAuthenticator(inner, 30*time.Second).(*cachingAuthenticator)
+
+		tokens := map[string]string{}
+		for id := range inner.tenantOf {
+			tokens[id] = MintToken(id, "s1")
+			_, err := c.AuthenticateCtx(context.Background(), tokens[id])
+			So(err, ShouldBeNil)
+		}
+		So(inner.calls, ShouldEqual, 3)
+
+		Convey("When one tenant is invalidated", func() {
+			c.InvalidateTenant("acme")
+
+			Convey("Then both of that tenant's accounts re-resolve", func() {
+				_, err := c.AuthenticateCtx(context.Background(), tokens["acme-a"])
+				So(err, ShouldBeNil)
+				_, err = c.AuthenticateCtx(context.Background(), tokens["acme-b"])
+				So(err, ShouldBeNil)
+				So(inner.calls, ShouldEqual, 5)
+			})
+
+			Convey("Then the other tenant is still served from the cache", func() {
+				_, err := c.AuthenticateCtx(context.Background(), tokens["other-a"])
+				So(err, ShouldBeNil)
+				So(inner.calls, ShouldEqual, 3)
+			})
+
+			Convey("Then the tenant index does not leak the evicted entries", func() {
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				So(c.byTenant["acme"], ShouldBeEmpty)
+				So(c.byAccount, ShouldNotContainKey, "acme-a")
+			})
+		})
+
+		Convey("When a per-account eviction runs", func() {
+			c.Invalidate("acme-a")
+
+			Convey("Then the tenant index drops that token too, so it cannot be re-evicted twice", func() {
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				So(len(c.byTenant["acme"]), ShouldEqual, 1)
+			})
+		})
+
+		Convey("When a tenant with nothing cached is invalidated", func() {
+			c.InvalidateTenant("nosuchtenant")
+
+			Convey("Then it is a no-op", func() {
+				So(len(c.cache), ShouldEqual, 3)
+			})
+		})
+	})
+}
+
+// tenantAuth resolves any token whose secret matches, to an account in the
+// tenant its id maps to.
+type tenantAuth struct {
+	secret   string
+	tenantOf map[string]string
+	calls    int
+}
+
+func (t *tenantAuth) Authenticate(token string) (Account, error) {
+	t.calls++
+	id, secret, err := SplitToken(token)
+	if err != nil {
+		return Account{}, err
+	}
+	if secret != t.secret {
+		return Account{}, errors.New("bad secret")
+	}
+	return Account{ID: id, TenantID: t.tenantOf[id]}, nil
+}

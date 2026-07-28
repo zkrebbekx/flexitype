@@ -2,9 +2,11 @@ package postgres_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1174,7 +1176,7 @@ func TestRolesIntegration(t *testing.T) {
 			ID: ulid.New(), Name: "other", Active: true, CreatedAt: now, UpdatedAt: now,
 		}), ShouldBeNil)
 
-		So(store.UpsertRole(ctx, admin.Role{
+		_, uerr := store.UpsertRole(ctx, admin.Role{
 			ID: ulid.New(), TenantID: "acme", Name: "reader",
 			Description: "read everything",
 			Scopes:      []serviceaccount.Scope{"values:read"},
@@ -1182,18 +1184,21 @@ func TestRolesIntegration(t *testing.T) {
 				"salary": "read", "ssn": "none",
 			},
 			CreatedAt: now, UpdatedAt: now,
-		}), ShouldBeNil)
-		So(store.UpsertRole(ctx, admin.Role{
+		})
+		So(uerr, ShouldBeNil)
+		_, uerr = store.UpsertRole(ctx, admin.Role{
 			ID: ulid.New(), TenantID: "acme", Name: "redactor",
 			Scopes:           []serviceaccount.Scope{"values:write"},
 			FieldPermissions: map[string]string{"salary": "write"},
 			CreatedAt:        now, UpdatedAt: now,
-		}), ShouldBeNil)
-		So(store.UpsertRole(ctx, admin.Role{
+		})
+		So(uerr, ShouldBeNil)
+		_, uerr = store.UpsertRole(ctx, admin.Role{
 			ID: ulid.New(), TenantID: "other", Name: "reader",
 			Scopes:    []serviceaccount.Scope{"admin"},
 			CreatedAt: now, UpdatedAt: now,
-		}), ShouldBeNil)
+		})
+		So(uerr, ShouldBeNil)
 
 		Convey("When a tenant's roles are listed", func() {
 			roles, err := store.ListRoles(ctx, "acme")
@@ -1212,7 +1217,7 @@ func TestRolesIntegration(t *testing.T) {
 
 		Convey("When a role is upserted again under the same name", func() {
 			later := now.Add(time.Minute)
-			err := store.UpsertRole(ctx, admin.Role{
+			_, err := store.UpsertRole(ctx, admin.Role{
 				ID: ulid.New(), TenantID: "acme", Name: "reader",
 				Scopes:           []serviceaccount.Scope{"values:read", "media:read"},
 				FieldPermissions: map[string]string{"salary": "none"},
@@ -1439,7 +1444,7 @@ func TestRoleStoreDriverFailures(t *testing.T) {
 		lookup := postgres.NewAccountLookup(closed)
 
 		Convey("When each role operation runs", func() {
-			upsertErr := broken.UpsertRole(ctx, admin.Role{
+			_, upsertErr := broken.UpsertRole(ctx, admin.Role{
 				ID: ulid.New(), TenantID: "acme", Name: "reader",
 			})
 			_, listErr := broken.ListRoles(ctx, "acme")
@@ -1484,4 +1489,176 @@ func TestRoleStoreDriverFailures(t *testing.T) {
 			})
 		})
 	})
+}
+
+// TestRoleResolutionSafety covers the two role-resolution properties that are
+// only observable against the real store.
+func TestRoleResolutionSafety(t *testing.T) {
+	pool, _ := controlPlaneFixture(t)
+	ctx := context.Background()
+	store := postgres.NewAdminStore(pool)
+	lookup := postgres.NewAccountLookup(pool)
+
+	Convey("Given an account restricted only by a role", t, func() {
+		pool.MustExec(`TRUNCATE flexitype_role, flexitype_service_account, flexitype_tenant CASCADE`)
+		now := time.Now().UTC()
+		So(store.CreateTenant(ctx, admin.Tenant{
+			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
+		}), ShouldBeNil)
+		_, err := store.UpsertRole(ctx, admin.Role{
+			ID: ulid.New(), TenantID: "acme", Name: "nosalary",
+			FieldPermissions: map[string]string{"salary": "none"},
+			CreatedAt:        now, UpdatedAt: now,
+		})
+		So(err, ShouldBeNil)
+
+		acct := admin.ServiceAccount{
+			ID: ulid.New(), TenantID: "acme", Name: "analyst",
+			Scopes: []serviceaccount.Scope{serviceaccount.ScopeRead},
+			Roles:  []string{"nosalary"}, Active: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		So(store.CreateAccount(ctx, acct, serviceaccount.HashSecret("pw")), ShouldBeNil)
+		token := serviceaccount.MintToken(acct.ID.String(), "pw")
+
+		Convey("When it authenticates", func() {
+			got, err := lookup.AuthenticateCtx(ctx, token)
+
+			Convey("Then the restriction resolves and nothing is dangling", func() {
+				So(err, ShouldBeNil)
+				So(got.FieldPermissions["salary"], ShouldEqual, "none")
+				So(got.UnresolvedRoles, ShouldBeEmpty)
+			})
+		})
+
+		Convey("When the role is deleted behind the API's back", func() {
+			// The API refuses this (DeleteRole counts holders first); a direct
+			// database edit, or a race, can still produce the state.
+			pool.MustExec(`DELETE FROM flexitype_role WHERE tenant_id = 'acme' AND name = 'nosalary'`)
+			got, err := lookup.AuthenticateCtx(ctx, token)
+
+			Convey("Then the account is marked unresolved rather than silently unrestricted", func() {
+				So(err, ShouldBeNil)
+				So(got.UnresolvedRoles, ShouldResemble, []string{"nosalary"})
+				So(got.FieldPermissions, ShouldBeEmpty)
+			})
+		})
+
+		Convey("When the role is counted before a delete", func() {
+			n, err := store.CountAccountsWithRole(ctx, "acme", "nosalary")
+
+			Convey("Then the holder is counted, so the delete can be refused", func() {
+				So(err, ShouldBeNil)
+				So(n, ShouldEqual, 1)
+			})
+		})
+
+		Convey("When an unrelated role is counted", func() {
+			n, err := store.CountAccountsWithRole(ctx, "acme", "other")
+
+			Convey("Then nothing holds it", func() {
+				So(err, ShouldBeNil)
+				So(n, ShouldEqual, 0)
+			})
+		})
+
+		Convey("When a wrong secret is presented for a known account id", func() {
+			// Roles must not be resolved before the secret verifies. Doing so
+			// spent two unbounded round trips per garbage secret instead of
+			// one, and made a known id with roles measurably slower than an
+			// unknown id — which returns after VerifyOnlyTiming with no role
+			// query at all. That difference is an account-id oracle, and the
+			// extra work is attacker-controlled.
+			counted := &countingQueryExecer{inner: pool}
+			_, err := postgres.NewAccountLookup(counted).AuthenticateCtx(ctx,
+				serviceaccount.MintToken(acct.ID.String(), "wrong"))
+
+			Convey("Then it fails without reading the role table at all", func() {
+				So(err, ShouldNotBeNil)
+				So(counted.roleQueries, ShouldEqual, 0)
+			})
+		})
+
+		Convey("When the correct secret is presented", func() {
+			counted := &countingQueryExecer{inner: pool}
+			_, err := postgres.NewAccountLookup(counted).AuthenticateCtx(ctx, token)
+
+			Convey("Then the roles are read, so the ordering did not disable resolution", func() {
+				So(err, ShouldBeNil)
+				So(counted.roleQueries, ShouldEqual, 1)
+			})
+		})
+	})
+
+	Convey("Given a role upserted twice", t, func() {
+		pool.MustExec(`TRUNCATE flexitype_role, flexitype_service_account, flexitype_tenant CASCADE`)
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		So(store.CreateTenant(ctx, admin.Tenant{
+			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
+		}), ShouldBeNil)
+		first, err := store.UpsertRole(ctx, admin.Role{
+			ID: ulid.New(), TenantID: "acme", Name: "reader",
+			Scopes: []serviceaccount.Scope{serviceaccount.ScopeRead}, CreatedAt: now, UpdatedAt: now,
+		})
+		So(err, ShouldBeNil)
+
+		Convey("When the second write proposes a different id and created_at", func() {
+			second, err := store.UpsertRole(ctx, admin.Role{
+				ID: ulid.New(), TenantID: "acme", Name: "reader",
+				Scopes:    []serviceaccount.Scope{serviceaccount.ScopeWrite},
+				CreatedAt: now.Add(time.Hour), UpdatedAt: now.Add(time.Hour),
+			})
+
+			Convey("Then the persisted id and created_at come back, not the proposed ones", func() {
+				So(err, ShouldBeNil)
+				So(second.ID, ShouldEqual, first.ID)
+				So(second.CreatedAt.Equal(first.CreatedAt), ShouldBeTrue)
+
+				listed, lerr := store.ListRoles(ctx, "acme")
+				So(lerr, ShouldBeNil)
+				So(listed, ShouldHaveLength, 1)
+				So(listed[0].ID, ShouldEqual, first.ID)
+			})
+		})
+	})
+}
+
+// countingQueryExecer counts reads of the role table, so a test can assert
+// that a code path did not touch it. Counting in the process is deterministic;
+// pg_stat_user_tables is collected asynchronously and would make the
+// assertion vacuous.
+type countingQueryExecer struct {
+	inner       *sqlx.DB
+	roleQueries int
+}
+
+func (c *countingQueryExecer) count(query string) {
+	if strings.Contains(query, "flexitype_role") {
+		c.roleQueries++
+	}
+}
+
+func (c *countingQueryExecer) GetContext(ctx context.Context, dest any, query string, args ...any) error {
+	c.count(query)
+	return c.inner.GetContext(ctx, dest, query, args...)
+}
+
+func (c *countingQueryExecer) SelectContext(ctx context.Context, dest any, query string, args ...any) error {
+	c.count(query)
+	return c.inner.SelectContext(ctx, dest, query, args...)
+}
+
+func (c *countingQueryExecer) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	c.count(query)
+	return c.inner.ExecContext(ctx, query, args...)
+}
+
+func (c *countingQueryExecer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	c.count(query)
+	return c.inner.QueryContext(ctx, query, args...)
+}
+
+func (c *countingQueryExecer) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	c.count(query)
+	return c.inner.QueryRowContext(ctx, query, args...)
 }

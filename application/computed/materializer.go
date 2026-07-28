@@ -425,20 +425,23 @@ func (m *Materializer) Recompute(ctx context.Context, typeID, entityID string) e
 	return m.recompute(ctx, typeID, entityID, true)
 }
 
-// recomputeConverging is the background-rebuild variant: it writes computed
-// values and never clears one.
+// recomputeConverging is the background-rebuild variant.
 //
-// Clearing is what makes a concurrent write destructive. A rebuild that reads
-// an entity mid-write sees half its inputs, computes an undefined result, and
-// would clear a value that is about to be correct — and it cannot tell that
-// apart from a formula that has genuinely become undefined. The write path
-// can: it runs inside the writing request with the entity's whole value set.
+// It DOES clear a value whose formula has become undefined. It used not to,
+// because a rebuild reading an entity mid-write sees half its inputs,
+// computes an undefined result, and cannot tell that apart from a formula
+// that is genuinely undefined — so clearing was destructive. The cost was
+// that after an edit introduced, say, a division by zero, the pre-edit value
+// survived indefinitely: queryable in FQL, present in exports, counted toward
+// completeness, with no formula that produces it.
 //
-// So a rebuild converges values FORWARD, and a computed value that becomes
-// undefined for an entity is cleared by that entity's next write or by the
-// tenant-wide RecomputeComputed.
+// The fingerprint check in recomputeStable is what makes clearing safe now.
+// A clear based on half-written inputs is followed by a source change, which
+// the fingerprint sees, so the entity is recomputed and the value restored.
+// A formula that is genuinely undefined leaves the sources unchanged, and the
+// clear stands.
 func (m *Materializer) recomputeConverging(ctx context.Context, typeID, entityID string) error {
-	return m.recomputeStable(ctx, typeID, entityID, false)
+	return m.recomputeStable(ctx, typeID, entityID, true)
 }
 
 // maxRecomputeAttempts bounds the re-read loop below.

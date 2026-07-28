@@ -250,16 +250,22 @@ type Result = graphql.Result
 // must already carry the tenant, actor and access (the API middleware sets
 // them); the interactors are read from it.
 func (e *Engine) Execute(ctx context.Context, query string, variables map[string]any) *Result {
+	// A pre-execution failure goes through the SAME masking and the same
+	// observer as a resolver failure. resultErr masked these without telling
+	// the observer, so the one promise its godoc makes — that it reports
+	// every error masked on its way out — did not hold for the errors raised
+	// before graphql.Do was reached, and an operator saw "internal error"
+	// with nothing anywhere naming the cause.
 	inter := application.FromContext(ctx)
 	if inter == nil {
-		return resultErr(fmt.Errorf("no interactors on context"))
+		return e.fail(fmt.Errorf("no interactors on context"))
 	}
 	if err := checkQueryCost(query); err != nil {
-		return resultErr(err)
+		return e.fail(err)
 	}
 	schema, err := e.schemaFor(ctx, inter)
 	if err != nil {
-		return resultErr(err)
+		return e.fail(err)
 	}
 	// Bound total execution: a costly query cannot run indefinitely holding a
 	// goroutine and database connections.
@@ -271,6 +277,19 @@ func (e *Engine) Execute(ctx context.Context, query string, variables map[string
 		VariableValues: variables,
 		Context:        ctx,
 	}), e.onError)
+}
+
+// fail turns a pre-execution error into a masked result, reporting the
+// original to the observer exactly as sanitize does for a resolver error.
+func (e *Engine) fail(err error) *Result {
+	res := resultErr(err)
+	// FormatError does not set Path, which is how a resolver error is told
+	// apart from a parse error; set it so these read as execution errors and
+	// are masked rather than passed through.
+	for i := range res.Errors {
+		res.Errors[i].Path = []any{"query"}
+	}
+	return sanitize(res, e.onError)
 }
 
 // sanitize replaces every non-domain error message with a generic one, and
@@ -446,11 +465,7 @@ func accessSignature(a uow.Access) string {
 // failures — a missing context, a query over the cost budget, a schema build
 // error — so it sanitizes on the same rule Execute applies to resolver errors.
 func resultErr(err error) *graphql.Result {
-	var domainErr *domainerrors.Error
-	if !errors.As(err, &domainErr) {
-		err = fmt.Errorf("internal error")
-	}
-	return &graphql.Result{Errors: []gqlerrors.FormattedError{{Message: err.Error()}}}
+	return &graphql.Result{Errors: []gqlerrors.FormattedError{gqlerrors.FormatError(err)}}
 }
 
 // ---- schema construction ----
@@ -696,7 +711,12 @@ func rootResolve(typeInternal string, metas map[string]typeMeta) graphql.FieldRe
 		connSels := selectionsFromInfo(p.Info)
 		nodeSels := nodeSelections(connSels)
 		if relationshipDepth(nodeSels, typeInternal, metas) > maxRelDepth {
-			return nil, fmt.Errorf("query exceeds max relationship depth of %d", maxRelDepth)
+			// A domain validation error, so the caller is told what is wrong
+			// with its own query. A bare error was masked to "internal
+			// error", while the federation path reported the real cause for
+			// the same condition — two answers to one question.
+			return nil, domainerrors.NewValidation(
+				fmt.Sprintf("query exceeds max relationship depth of %d", maxRelDepth))
 		}
 		filter, _ := p.Args["filter"].(string)
 		first := clampFirst(p.Args["first"])

@@ -442,3 +442,87 @@ func TestRecomputeStableRetriesOnMovingInputs(t *testing.T) {
 		})
 	})
 }
+
+// TestRebuildClearsAnUndefinedFormula covers the value a rebuild used to
+// leave behind for ever.
+//
+// The rebuild used the non-clearing variant, because a rebuild that reads an
+// entity mid-write sees half its inputs and cannot tell an undefined formula
+// apart from a half-written one. The cost was that after an edit introduced a
+// division by zero, the pre-edit value survived indefinitely — queryable in
+// FQL, present in exports, counted toward completeness, with no formula that
+// produces it. The fingerprint check makes clearing safe: a clear based on
+// half-written inputs is followed by a source change, which is detected.
+func TestRebuildClearsAnUndefinedFormula(t *testing.T) {
+	Convey("Given a computed value derived from a source", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		product, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "product", DisplayName: "Product"})
+		So(err, ShouldBeNil)
+		qty, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: product.ID.String(), InternalName: "qty",
+			DisplayName: "Qty", DataType: "integer",
+		})
+		So(err, ShouldBeNil)
+		divisor, err := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: product.ID.String(), InternalName: "divisor",
+			DisplayName: "Divisor", DataType: "integer",
+		})
+		So(err, ShouldBeNil)
+		computed, err := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: product.ID.String(), InternalName: "ratio",
+			DisplayName: "Ratio", DataType: "integer",
+			Computed: json.RawMessage(`{"kind":"formula","formula":"qty / divisor"}`),
+		})
+		So(err, ShouldBeNil)
+
+		set := func(attr string, v string) {
+			_, serr := svc.Interactors(ctx).Values().Set(ctx, appvalue.SetInput{
+				AttributeDefinitionID: attr, EntityID: "p1",
+				TypeDefinitionID: product.ID.String(), Value: json.RawMessage(v),
+			})
+			So(serr, ShouldBeNil)
+		}
+		set(qty.ID.String(), "10")
+		set(divisor.ID.String(), "2")
+
+		has := func() bool {
+			vals, verr := svc.Interactors(ctx).Values().ListByEntity(ctx, product.ID.String(), "p1")
+			So(verr, ShouldBeNil)
+			for _, v := range vals {
+				if v.AttributeDefinitionID.String() == computed.ID.String() {
+					return true
+				}
+			}
+			return false
+		}
+		So(has(), ShouldBeTrue)
+
+		Convey("When the formula becomes undefined and the schema rebuild runs", func() {
+			set(divisor.ID.String(), "0")
+
+			Convey("Then the stale value is cleared rather than left with no formula behind it", func() {
+				// The write itself clears it; the rebuild must not put it
+				// back, and must clear it if it were still there.
+				So(has(), ShouldBeFalse)
+
+				n, rerr := svc.RecomputeComputed(ctx, valueobjects.DefaultTenant)
+				So(rerr, ShouldBeNil)
+				So(n, ShouldBeGreaterThanOrEqualTo, 0)
+				So(has(), ShouldBeFalse)
+			})
+		})
+
+		Convey("When the source becomes valid again", func() {
+			set(divisor.ID.String(), "0")
+			set(divisor.ID.String(), "5")
+
+			Convey("Then the value comes back", func() {
+				So(has(), ShouldBeTrue)
+			})
+		})
+	})
+}

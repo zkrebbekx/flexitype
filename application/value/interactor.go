@@ -233,16 +233,40 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 				if terr != nil {
 					return terr
 				}
-				if !narrowing {
-					return domainerrors.NewValidation(
-						"the entity is already anchored to an unrelated type",
-						"entity", in.EntityID, "anchor", anchor.String(), "supplied", supplied.String())
+				if narrowing {
+					if _, rerr := values.ReanchorEntity(ctx, uow.TenantFromContext(ctx), entityID, supplied); rerr != nil {
+						return rerr
+					}
+					entityType = supplied
+				} else {
+					// The supplied type may instead be an ANCESTOR of the
+					// current anchor. That is not a conflict: the entity is
+					// already anchored to something more specific, so the
+					// write is satisfied where it is, and widening it would
+					// undo a narrowing another write performed.
+					//
+					// Refusing it broke restoring a pre-narrowing revision
+					// outright — Restore replays with the captured (parent)
+					// type — and the error said the entity was "anchored to
+					// an unrelated type", which was wrong on its face.
+					anchorType, aerr := typeDefs.Get(ctx, anchor)
+					if aerr != nil {
+						return aerr
+					}
+					widening, werr := apptypedef.IsAncestorOrSelf(ctx, typeDefs, anchorType, supplied)
+					if werr != nil {
+						return werr
+					}
+					if !widening {
+						return domainerrors.NewValidation(
+							"the entity is already anchored to an unrelated type",
+							"entity", in.EntityID, "anchor", anchor.String(), "supplied", supplied.String())
+					}
+					entityType = anchor
 				}
-				if _, rerr := values.ReanchorEntity(ctx, uow.TenantFromContext(ctx), entityID, supplied); rerr != nil {
-					return rerr
-				}
+			} else {
+				entityType = supplied
 			}
-			entityType = supplied
 		}
 		if !entityType.Equals(def.TypeDefinitionID()) {
 			typeDefs := i.typeDefs.WithTx(tx)

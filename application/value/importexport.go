@@ -463,7 +463,7 @@ func (i *Interactor) rowInputs(typeID string, cols []mappedColumn, keyIdx, rowNu
 		// A cell holding several values — a multi-valued attribute, or scoped
 		// variants — arrives as the JSON array the export writes. Each member
 		// becomes its own write, with its own scope.
-		if entries, ok := scopedCell(cell); ok {
+		if entries, ok := scopedCell(cell, c.dataType); ok {
 			for _, e := range entries {
 				raw, err := cellToRaw(c.dataType, e.text())
 				if err != nil {
@@ -547,12 +547,39 @@ func (e cellEntry) text() string {
 	return string(e.Value)
 }
 
-// scopedCell decodes a cell holding several values. It reports false for an
-// ordinary single-value cell, including a JSON object cell (a quantity or a
-// media reference), which is an object rather than an array.
-func scopedCell(cell string) ([]cellEntry, bool) {
+// multiValueCellKey tags the multi-value cell format, so it cannot be
+// confused with a JSON value that happens to share its shape.
+const multiValueCellKey = "values"
+
+// scopedCell decodes a cell holding several values.
+//
+// It requires the TAGGED form, {"values":[…]}. The format was a bare array of
+// {"value","locale","channel"} objects, which is a perfectly ordinary JSON
+// payload — so a json-typed column round-tripping
+// `[{"value":{"x":1}},{"value":{"y":2}}]` was read as two scoped members and
+// stored as the last one, with no error reported. A cell that is not the
+// tagged form is one value, whatever its shape.
+//
+// The untagged form is still ACCEPTED on import, so a file exported by an
+// earlier release still loads — but only for a non-json column, where it
+// cannot be confused with the data.
+func scopedCell(cell string, dt valueobjects.DataType) ([]cellEntry, bool) {
 	trimmed := strings.TrimSpace(cell)
-	if !strings.HasPrefix(trimmed, "[") {
+	if strings.HasPrefix(trimmed, "{") {
+		var tagged struct {
+			Values []cellEntry `json:"values"`
+		}
+		if err := json.Unmarshal([]byte(trimmed), &tagged); err != nil || len(tagged.Values) == 0 {
+			return nil, false
+		}
+		for _, e := range tagged.Values {
+			if len(e.Value) == 0 {
+				return nil, false
+			}
+		}
+		return tagged.Values, true
+	}
+	if dt == valueobjects.DataTypeJSON || !strings.HasPrefix(trimmed, "[") {
 		return nil, false
 	}
 	var entries []cellEntry
@@ -782,7 +809,14 @@ func exportCell(vals []*domainvalue.AttributeValue) string {
 	for _, v := range vals {
 		parts = append(parts, exportScoped(v))
 	}
-	raw, err := json.Marshal(parts)
+	// TAGGED as an object, not written as a bare array.
+	//
+	// An untagged array of {"value",…} objects is indistinguishable from a
+	// legitimate JSON payload of the same shape: exporting and re-importing
+	// `[{"value":{"x":1}},{"value":{"y":2}}]` in a json column read the cell
+	// as two scoped members and stored the last one, silently, with zero
+	// errors reported. The wrapper makes the format unambiguous.
+	raw, err := json.Marshal(map[string]any{multiValueCellKey: parts})
 	if err != nil {
 		return ""
 	}

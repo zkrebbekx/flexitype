@@ -208,7 +208,11 @@ func (r *valueRepo) EntityAnchor(_ context.Context, tenant valueobjects.TenantID
 		if snap.TenantID != tenant || snap.EntityID != entityID {
 			continue
 		}
-		if best == nil || snap.CreatedAt.Before(best.CreatedAt) {
+		// Ties broken by id, matching the SQL ordering: rows written in one
+		// batch share a timestamp, and an undefined anchor would flap
+		// between reads.
+		if best == nil || snap.CreatedAt.Before(best.CreatedAt) ||
+			(snap.CreatedAt.Equal(best.CreatedAt) && snap.ID.String() < best.ID.String()) {
 			s := snap
 			best = &s
 		}

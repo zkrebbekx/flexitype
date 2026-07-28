@@ -464,6 +464,11 @@ type SchemaTemplate struct {
 	Name        string `json:"name"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
+	// Bundle is the template's schema payload, present when a single
+	// template is fetched. Without it, Template returned exactly what
+	// Templates already lists — its godoc promised "including its bundle",
+	// which is the only reason to fetch one by name.
+	Bundle json.RawMessage `json:"bundle,omitempty"`
 }
 
 // Mutation is one staged value change inside a change-set.

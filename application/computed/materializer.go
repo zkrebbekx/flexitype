@@ -194,6 +194,12 @@ func (m *Materializer) RecomputeType(ctx context.Context, tenant valueobjects.Te
 
 	limit := 200
 	count := 0
+	// Entities written after the rebuild started are already correct: the
+	// schema change invalidated the has-computed cache, so that write's own
+	// synchronous recompute used the new definition. Skipping them is not an
+	// optimisation — recomputing one would race the newer write and could
+	// write a value derived from inputs that have since changed, undoing it.
+	startedAt := m.now()
 	for _, id := range ids {
 		has, err := m.typeHasComputed(ctx, it, id)
 		if err != nil {
@@ -209,6 +215,9 @@ func (m *Materializer) RecomputeType(ctx context.Context, tenant valueobjects.Te
 				return count, fmt.Errorf("list entities of %s: %w", id, err)
 			}
 			for _, e := range entities.Items {
+				if e.LastUpdatedAt.After(startedAt) {
+					continue
+				}
 				if err := m.Recompute(ctx, id, e.EntityID); err != nil {
 					return count, fmt.Errorf("recompute %s: %w", e.EntityID, err)
 				}

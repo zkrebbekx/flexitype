@@ -68,7 +68,16 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          for module in client cmd/flexitype infrastructure/gcppubsub; do
+          # Only modules that RESOLVE are tagged.
+          #
+          # cmd/flexitype and infrastructure/gcppubsub carry a `replace` of
+          # the core module and require the zero pseudo-version, which only a
+          # checkout can satisfy — a consumer ignores `replace` in a published
+          # module, so `go get .../cmd/flexitype@vX.Y.Z` cannot resolve. A tag
+          # there is worse than no tag: it makes the module look available.
+          # docs/api-stability.md has the two-release sequence that makes them
+          # go-gettable; this list grows when they are.
+          for module in client; do
             tag="${module}/${VERSION}"
             # An existing tag on this exact commit is the only benign
             # failure — a re-run of the same release. Anything else fails.

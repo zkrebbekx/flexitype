@@ -131,16 +131,44 @@ all, for an optional publisher it never linked. The core module now requires
 124 modules rather than 271, needs `go 1.25`, and links no
 `cloud.google.com` package.
 
-The server and adapter modules currently carry `replace` directives to the
-repository root, so they build from a checkout but are not yet
-independently `go get`-able. Making them so needs a staged release: the core
-module must first publish a version whose zip excludes those directories,
-otherwise a build that requires both the old core and a nested module sees the
-same package path in two modules. Until then, build them from source or take
-the container image.
+The server and adapter modules carry `replace` directives to the repository
+root, so they build from a checkout but are **not `go get`-able**. Build them
+from source or take the container image.
 
-`go.work` wires all five together for local development, so a change to the
-library is picked up everywhere without a `replace` in a published manifest.
+`go.work` wires all five together for local development. It is not a
+substitute for the `replace`: both modules require the core at the zero
+pseudo-version, and the module graph is loaded before workspace substitution
+applies, so removing the `replace` breaks the build inside the workspace too.
+(Measured, not assumed — `go build` then fails with
+`invalid version: unknown revision 000000000000`.)
+
+**The release workflow does not tag them.** A published module's `replace` is
+ignored by consumers, so tagging one produces a version `go get` cannot
+resolve — worse than no tag, because the module looks available. Only
+`client`, which has no first-party `replace`, is tagged. A test pins that
+correspondence (`TestReleaseTagsOnlyResolvableModules`).
+
+### Making them go-gettable
+
+It takes two releases, because `cmd/flexitype` requires
+`infrastructure/gcppubsub`, which has never been published — there is no real
+version to name until one exists.
+
+1. **Release N.** Cut the core tag as normal. The core module's zip already
+   excludes `cmd/flexitype/`, `infrastructure/gcppubsub/` and `client/`,
+   because each contains a `go.mod` — verified by building the zip with
+   `golang.org/x/mod/zip`, the library the toolchain uses: **0 files** from
+   each of those directories. So the "same package path in two modules"
+   hazard is already gone.
+2. **After the proxy has release N**, in one commit:
+   - `infrastructure/gcppubsub/go.mod`: require the core at `vN`, drop the
+     `replace`.
+   - `cmd/flexitype/go.mod`: require the core and the adapter at `vN`, drop
+     both `replace` directives.
+   - Add each module to the release workflow's tag loop and to
+     `releaseTagged` in the test above — they change together by design.
+3. **Release N+1** tags all four modules. From then on
+   `go get github.com/zkrebbekx/flexitype/cmd/flexitype@vN+1` resolves.
 
 ## Storage schema
 

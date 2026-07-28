@@ -7,6 +7,32 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — The release no longer tags modules `go get` cannot resolve
+
+`cmd/flexitype` and `infrastructure/gcppubsub` carry a `replace` of the core
+module and require it at the zero pseudo-version. A published module's
+`replace` is **ignored by consumers**, so the `cmd/flexitype/vX.Y.Z` and
+`infrastructure/gcppubsub/vX.Y.Z` tags the release workflow cut could never
+be resolved by `go get` — worse than no tag, because the module looks
+available. The workflow now tags only `client`, which has no first-party
+`replace`, and a test holds the workflow's loop and that rule together.
+
+Two things were measured rather than assumed while doing this:
+
+- **The core module's zip already excludes the nested directories.** Built
+  with `golang.org/x/mod/zip` — the library the toolchain uses — it contains
+  **0 files** from `cmd/flexitype/`, `infrastructure/gcppubsub/` and
+  `client/`, because each holds a `go.mod`. The "same package path in two
+  modules" hazard `docs/api-stability.md` warned about is therefore already
+  gone, which is the part of the staged release that needed proving.
+- **`go.work` is not a substitute for the `replace`.** Removing it breaks the
+  build inside the workspace too (`invalid version: unknown revision
+  000000000000`): the module graph loads before workspace substitution
+  applies, so a require naming an unresolvable version fails first.
+
+`docs/api-stability.md` now carries the exact two-release sequence that makes
+both modules go-gettable, and why it takes two.
+
 ### Added — A Roles page in the admin console
 
 Roles were API-only. The console now has `/roles`: create and replace a role,

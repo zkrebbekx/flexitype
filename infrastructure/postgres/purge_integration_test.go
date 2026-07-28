@@ -243,3 +243,59 @@ func TestPurgeTakesEntityOrderIntegration(t *testing.T) {
 		})
 	})
 }
+
+// TestPurgeReportsAStallIntegration proves a purge that cannot delete its
+// rows reports that, rather than answering success.
+//
+// Completion used to be decided by an empty chunk. A chunk can come back
+// empty while rows still match — a row skipped by the delete, or a writer
+// that committed after the chunk's snapshot — so an empty chunk was not
+// evidence that the predicate was empty, and erasure is the operation least
+// able to tolerate a false success. A trigger that suppresses the delete
+// reproduces the state deterministically.
+func TestPurgeReportsAStallIntegration(t *testing.T) {
+	pool := openIntegrationDB(t)
+	defer func() { _ = pool.Close() }()
+	ctx := context.Background()
+
+	if err := postgres.Migrate(ctx, db.NewTransactor(pool)); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	typeID := valueobjects.NewTypeDefinitionID()
+	attrID := ulid.New().String()
+	repo := postgres.NewAttributeValueRepository(pool)
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	Convey("Given a table whose deletes are suppressed", t, func() {
+		pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_entity_summary,
+			flexitype_attribute_definition, flexitype_type_definition CASCADE`)
+		seedSummarySchema(t, pool, typeID.String(), attrID)
+		insertLiveValue(t, pool, typeID.String(), attrID, "eX", 1, base)
+
+		pool.MustExec(`CREATE OR REPLACE FUNCTION flexitype_test_block_delete() RETURNS trigger
+			LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$`)
+		pool.MustExec(`CREATE TRIGGER flexitype_test_block_delete
+			BEFORE DELETE ON flexitype_attribute_value
+			FOR EACH ROW EXECUTE FUNCTION flexitype_test_block_delete()`)
+		Reset(func() {
+			pool.MustExec(`DROP TRIGGER IF EXISTS flexitype_test_block_delete ON flexitype_attribute_value`)
+			pool.MustExec(`DROP FUNCTION IF EXISTS flexitype_test_block_delete()`)
+		})
+
+		Convey("When the entity is purged", func() {
+			_, n, err := repo.PurgeEntity(ctx, domainvalue.EntityKey{
+				TenantID:         valueobjects.DefaultTenant,
+				TypeDefinitionID: typeID,
+				EntityID:         valueobjects.EntityID("eX"),
+			})
+
+			Convey("Then it reports the stall instead of a success receipt", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "still match")
+				So(n, ShouldEqual, 0)
+				So(countValues(t, pool), ShouldEqual, 1)
+			})
+		})
+	})
+}

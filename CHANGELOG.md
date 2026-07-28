@@ -7,6 +7,69 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — Roles: a delete no longer hands out the attributes it was hiding
+
+Six defects in the role feature, five of them ways a permission change did the
+opposite of what the operator intended.
+
+- **Deleting a role failed OPEN** (#399). A role that resolves to nothing
+  contributes no field permissions, and an empty permission map read as
+  "unrestricted" — so retiring a role, or renaming it by create-then-delete,
+  converted every account restricted *only* by that role into one with full
+  field access. There was no error, no log line and no change to the account
+  rows, which still listed the role name, so the listing looked unchanged
+  while the effective permission had inverted. Two fixes: `DELETE
+  /api/v1/roles/{name}` is refused with **409** while any account still names
+  the role, and a principal carrying a role that does not resolve is now
+  **denied every attribute** rather than granted every one — covering a row
+  edited directly in the database.
+- **A role could grant `admin`** (#401), which is a cross-tenant privilege
+  that also short-circuits the whole field ACL, so it voided the account's own
+  `field_permissions` and conferred the control plane — while the account row
+  still read `scopes: ["read"]` with a restriction. `admin` is now refused in
+  a role's scope set, and dropped at resolution if a stored row carries it.
+- **A role edit never evicted the auth cache** (#404), so the change that most
+  needs immediate effect — removing a grant during an incident — was deferred
+  by up to `FLEXITYPE_AUTH_CACHE_TTL` on every replica, with the API having
+  already confirmed it. A role write or delete now evicts every cached
+  authentication for the tenant. **Tenant deactivation does too**, which it
+  never did (#418): a suspended tenant kept working for the TTL.
+- **`PUT /api/v1/roles` returned a fabricated id and `created_at`** when it
+  updated an existing role (#408) — the upsert deliberately preserves both, so
+  the response described a row that did not exist and an idempotent
+  provisioning script recorded a different non-existent id on every re-run.
+  The persisted values are returned.
+- **Roles were resolved before the credential was verified** (#409), so a
+  garbage secret for a known account id cost two unbounded database round
+  trips instead of one, and a known id with roles answered measurably slower
+  than an unknown one — an account-id oracle with attacker-controlled work
+  amplification. The secret is verified first.
+
+### Added — An effective-permissions view
+
+`GET /api/v1/service-accounts/{id}/effective` (admin scope; `AdminService.EffectiveAccount`
+in the Go client) reports what a principal can **actually** do: its own scopes
+unioned with its roles', the merged per-attribute permissions, and any
+`unresolved_roles`. The list endpoints report what is stored, which is what an
+operator edits; answering "is this account safe" previously meant fetching
+every role it names and unioning by hand.
+
+The merge now lives in one function, `serviceaccount.Resolve`, which both
+authentication and this view call, so the report cannot say one thing while
+enforcement does another.
+
+### Changed — Role storage and deployment manifests
+
+- Migration `000027` drops `idx_flexitype_role_tenant`, which duplicated the
+  index behind `UNIQUE (tenant_id, name)` byte for byte (#409), and adds a GIN
+  index on `flexitype_service_account.roles` for the containment test the
+  delete guard runs.
+- `deploy/kubernetes/20-worker.yaml` gains a headless Service (#409). The
+  ServiceMonitor selects Services and only the API tier had one, so no
+  `up{...component="worker"}` series existed — the worker tier being scaled to
+  zero or never applied was invisible to monitoring, while the outbox-lag
+  alert's remediation text asked operators to check exactly that.
+
 ### Added — GraphQL: an opt-in Apollo Federation subgraph
 
 The GraphQL endpoint was a standalone schema with no `_service`, no

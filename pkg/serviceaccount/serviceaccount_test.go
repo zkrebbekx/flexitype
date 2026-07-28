@@ -66,3 +66,95 @@ func TestServiceAccounts(t *testing.T) {
 		})
 	})
 }
+
+// TestResolveMergeRules pins the role merge that both authentication and the
+// effective-permissions view run through.
+func TestResolveMergeRules(t *testing.T) {
+	Convey("Given an account holding two roles", t, func() {
+		base := Account{
+			ID: "a1", TenantID: "acme",
+			Scopes:           []Scope{ScopeRead},
+			FieldPermissions: map[string]string{"salary": "none"},
+		}
+		grants := []RoleGrant{
+			{Name: "reader", Scopes: []Scope{ScopeRead},
+				FieldPermissions: map[string]string{"salary": "read", "ssn": "none"}},
+			{Name: "editor", Scopes: []Scope{ScopeWrite},
+				FieldPermissions: map[string]string{"salary": "write"}},
+		}
+
+		Convey("When the roles are merged in", func() {
+			got := Resolve(base, []string{"reader", "editor"}, grants)
+
+			Convey("Then the scopes are the union of its own and both roles'", func() {
+				So(got.HasScope(ScopeRead), ShouldBeTrue)
+				So(got.HasScope(ScopeWrite), ShouldBeTrue)
+			})
+
+			Convey("Then the account's own entry beats every role", func() {
+				So(got.FieldPermissions["salary"], ShouldEqual, "none")
+			})
+
+			Convey("Then a permission only one role grants still applies", func() {
+				So(got.FieldPermissions["ssn"], ShouldEqual, "none")
+			})
+
+			Convey("Then nothing is unresolved", func() {
+				So(got.UnresolvedRoles, ShouldBeEmpty)
+			})
+		})
+	})
+
+	Convey("Given a role whose stored row carries the admin scope", t, func() {
+		// UpsertRole refuses admin, so this row can only come from a direct
+		// database edit or from before that rule. Dropping it here means the
+		// escalation cannot be reached either way.
+		base := Account{ID: "a1", TenantID: "acme", Scopes: []Scope{ScopeRead},
+			FieldPermissions: map[string]string{"salary": "none"}}
+		grants := []RoleGrant{{Name: "ops", Scopes: []Scope{ScopeAdmin, ScopeWrite}}}
+
+		Convey("When it is merged in", func() {
+			got := Resolve(base, []string{"ops"}, grants)
+
+			Convey("Then admin is not conferred, so the field ACL is not voided", func() {
+				So(got.HasScope(ScopeWrite), ShouldBeTrue)
+				held := false
+				for _, sc := range got.Scopes {
+					if sc == ScopeAdmin {
+						held = true
+					}
+				}
+				So(held, ShouldBeFalse)
+				So(got.FieldPermissions["salary"], ShouldEqual, "none")
+			})
+		})
+	})
+
+	Convey("Given an account naming a role that no longer exists", t, func() {
+		base := Account{ID: "a1", TenantID: "acme", Scopes: []Scope{ScopeRead}}
+
+		Convey("When it is resolved", func() {
+			got := Resolve(base, []string{"ghost"}, nil)
+
+			Convey("Then the name is reported unresolved rather than ignored", func() {
+				So(got.UnresolvedRoles, ShouldResemble, []string{"ghost"})
+				So(got.FieldPermissions, ShouldBeEmpty)
+			})
+		})
+	})
+
+	Convey("Given an account with a role that grants only a scope", t, func() {
+		base := Account{ID: "a1", TenantID: "acme"}
+		grants := []RoleGrant{{Name: "reader", Scopes: []Scope{ScopeRead}}}
+
+		Convey("When it is resolved", func() {
+			got := Resolve(base, []string{"reader"}, grants)
+
+			Convey("Then it stays unrestricted: no policy source means no restriction", func() {
+				So(got.HasScope(ScopeRead), ShouldBeTrue)
+				So(got.FieldPermissions, ShouldBeEmpty)
+				So(got.UnresolvedRoles, ShouldBeEmpty)
+			})
+		})
+	})
+}

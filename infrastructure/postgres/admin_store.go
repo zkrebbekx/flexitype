@@ -168,29 +168,52 @@ func (s *adminStore) SetAccountRoles(ctx context.Context, id ulid.ID, roles []st
 	return nil
 }
 
-// UpsertRole creates or replaces a role by (tenant, name).
-func (s *adminStore) UpsertRole(ctx context.Context, r admin.Role) error {
+// UpsertRole creates or replaces a role by (tenant, name) and returns the
+// PERSISTED row.
+//
+// An update keeps the existing id and created_at — they are deliberately not
+// in the SET list — so RETURNING is the only way the caller learns what is
+// stored rather than what it proposed.
+func (s *adminStore) UpsertRole(ctx context.Context, r admin.Role) (admin.Role, error) {
 	raw, err := json.Marshal(nonNilPerms(r.FieldPermissions))
 	if err != nil {
-		return fmt.Errorf("encode field permissions: %w", err)
+		return admin.Role{}, fmt.Errorf("encode field permissions: %w", err)
 	}
 	scopes := make(pq.StringArray, 0, len(r.Scopes))
 	for _, sc := range r.Scopes {
 		scopes = append(scopes, string(sc))
 	}
-	_, err = s.q.ExecContext(ctx, bind(
+	var out struct {
+		ID        ulid.ID   `db:"id"`
+		CreatedAt time.Time `db:"created_at"`
+	}
+	err = s.q.GetContext(ctx, &out, bind(
 		`INSERT INTO flexitype_role
 		   (id, tenant_id, name, description, scopes, field_permissions, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (tenant_id, name) DO UPDATE SET
 		   description = EXCLUDED.description, scopes = EXCLUDED.scopes,
 		   field_permissions = EXCLUDED.field_permissions,
-		   updated_at = EXCLUDED.updated_at`),
+		   updated_at = EXCLUDED.updated_at
+		 RETURNING id, created_at`),
 		r.ID, r.TenantID, r.Name, r.Description, scopes, jsonbParam(raw), r.CreatedAt, r.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("upsert role: %w", err)
+		return admin.Role{}, fmt.Errorf("upsert role: %w", err)
 	}
-	return nil
+	r.ID, r.CreatedAt = out.ID, out.CreatedAt
+	return r, nil
+}
+
+// CountAccountsWithRole reports how many of the tenant's accounts name the
+// role, so a delete that would strand them can be refused.
+func (s *adminStore) CountAccountsWithRole(ctx context.Context, tenant, name string) (int, error) {
+	var n int
+	if err := s.q.GetContext(ctx, &n, bind(
+		`SELECT COUNT(*) FROM flexitype_service_account
+		  WHERE tenant_id = ? AND ? = ANY(roles)`), tenant, name); err != nil {
+		return 0, fmt.Errorf("count accounts with role: %w", err)
+	}
+	return n, nil
 }
 
 // ListRoles returns a tenant's roles, by name.
@@ -370,6 +393,18 @@ func (l *AccountLookup) AuthenticateCtx(ctx context.Context, token string) (serv
 		return serviceaccount.Account{}, fmt.Errorf("look up service account: %w", err)
 	}
 
+	// Verify the secret BEFORE assembling any authorization state. Resolving
+	// roles first meant an attacker who knew an account id — they appear in
+	// provisioning responses, activity logs and the console — spent two
+	// unbounded database round trips per garbage secret instead of one, and a
+	// known id with roles answered measurably slower than an unknown id,
+	// which returns after VerifyOnlyTiming with no role query at all. That
+	// timing difference is an account-id oracle and the extra work is
+	// attacker-controlled.
+	if err := serviceaccount.VerifySecret(secret, row.SecretHash); err != nil {
+		return serviceaccount.Account{}, err
+	}
+
 	acct := serviceaccount.Account{
 		ID:         id,
 		Name:       row.Name,
@@ -390,9 +425,6 @@ func (l *AccountLookup) AuthenticateCtx(ctx context.Context, token string) (serv
 			return serviceaccount.Account{}, err
 		}
 	}
-	if err := serviceaccount.VerifySecret(secret, row.SecretHash); err != nil {
-		return serviceaccount.Account{}, err
-	}
 	if !row.Active {
 		return serviceaccount.Account{}, fmt.Errorf("service account is revoked")
 	}
@@ -411,15 +443,10 @@ func nonEmptyJSON(raw []byte) []byte {
 	return raw
 }
 
-// applyRoles merges the named roles into the account.
+// applyRoles resolves the named roles and merges them into the account.
 //
-// Scopes union: a role grants, it never revokes, which is what makes roles
-// composable — holding two roles is holding what either allows.
-//
-// Field permissions take the MOST PERMISSIVE level across roles, and the
-// account's own setting wins over all of them. Most-permissive is the same
-// additive rule as scopes; the account override exists so one person can be
-// given an exception without inventing a role for them.
+// The merge rules live in serviceaccount.Resolve, so this path and the
+// effective-permissions view cannot drift apart.
 func (l *AccountLookup) applyRoles(ctx context.Context, acct *serviceaccount.Account, roles []string) error {
 	var rows []struct {
 		Name       string         `db:"name"`
@@ -434,35 +461,17 @@ func (l *AccountLookup) applyRoles(ctx context.Context, acct *serviceaccount.Acc
 		return fmt.Errorf("resolve roles: %w", err)
 	}
 
-	held := map[serviceaccount.Scope]bool{}
-	for _, sc := range acct.Scopes {
-		held[sc] = true
-	}
-	merged := map[string]string{}
+	grants := make([]serviceaccount.RoleGrant, 0, len(rows))
 	for _, r := range rows {
+		g := serviceaccount.RoleGrant{Name: r.Name}
 		for _, sc := range r.Scopes {
-			if s := serviceaccount.Scope(sc); !held[s] {
-				held[s] = true
-				acct.Scopes = append(acct.Scopes, s)
-			}
+			g.Scopes = append(g.Scopes, serviceaccount.Scope(sc))
 		}
-		var perms map[string]string
-		if err := json.Unmarshal(nonEmptyJSON(r.FieldPerms), &perms); err != nil {
+		if err := json.Unmarshal(nonEmptyJSON(r.FieldPerms), &g.FieldPermissions); err != nil {
 			return fmt.Errorf("decode role %q field permissions: %w", r.Name, err)
 		}
-		for attr, level := range perms {
-			if serviceaccount.MorePermissive(level, merged[attr]) {
-				merged[attr] = level
-			}
-		}
+		grants = append(grants, g)
 	}
-	// The account's own entry wins: an exception for one person should not
-	// require inventing a role for them.
-	for attr, level := range acct.FieldPermissions {
-		merged[attr] = level
-	}
-	if len(merged) > 0 {
-		acct.FieldPermissions = merged
-	}
+	*acct = serviceaccount.Resolve(*acct, roles, grants)
 	return nil
 }

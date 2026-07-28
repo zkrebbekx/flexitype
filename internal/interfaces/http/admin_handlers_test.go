@@ -14,6 +14,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/admin"
+	"github.com/zkrebbekx/flexitype/application/uow"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/infrastructure/memory"
 	"github.com/zkrebbekx/flexitype/pkg/health"
@@ -481,11 +482,16 @@ func (s *adminStore) SetAccountRoles(_ context.Context, id ulid.ID, roles []stri
 	return nil
 }
 
-func (s *adminStore) UpsertRole(_ context.Context, r admin.Role) error {
+func (s *adminStore) UpsertRole(_ context.Context, r admin.Role) (admin.Role, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.roles[r.TenantID+"/"+r.Name] = r
-	return nil
+	key := r.TenantID + "/" + r.Name
+	// Mirror the SQL upsert: an update keeps the existing id and created_at.
+	if prev, ok := s.roles[key]; ok {
+		r.ID, r.CreatedAt = prev.ID, prev.CreatedAt
+	}
+	s.roles[key] = r
+	return r, nil
 }
 
 func (s *adminStore) ListRoles(_ context.Context, tenant string) ([]admin.Role, error) {
@@ -682,6 +688,155 @@ func TestRoleRoutesWithoutProvisioning(t *testing.T) {
 					So(call.Status, ShouldEqual, http.StatusNotImplemented)
 					So(call.errorCode(), ShouldEqual, "FEATURE_DISABLED")
 				}
+			})
+		})
+	})
+}
+
+func (s *adminStore) CountAccountsWithRole(_ context.Context, tenant, name string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, a := range s.accounts {
+		if a.TenantID != tenant {
+			continue
+		}
+		for _, held := range a.Roles {
+			if held == name {
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+// TestAccessForFailsClosedOnUnresolvedRole covers the fail-open path a role
+// deletion used to open.
+//
+// A role that resolves to nothing contributes no field permissions, and an
+// empty permission map otherwise reads as "unrestricted" — so an account
+// restricted only by a deleted role read every attribute that role was
+// hiding, with no error, no log line and no change to the account row.
+func TestAccessForFailsClosedOnUnresolvedRole(t *testing.T) {
+	Convey("Given a principal whose role no longer exists", t, func() {
+		acct := serviceaccount.Account{
+			ID: "a1", TenantID: "acme",
+			Scopes:          []serviceaccount.Scope{serviceaccount.ScopeRead},
+			UnresolvedRoles: []string{"nosalary"},
+		}
+
+		Convey("When its field access is derived", func() {
+			access := accessFor(acct)
+
+			Convey("Then it is denied every attribute rather than granted every one", func() {
+				So(access.Admin, ShouldBeFalse)
+				So(access.Default, ShouldEqual, uow.PermNone)
+				So(access.CanRead("salary"), ShouldBeFalse)
+				So(access.CanWrite("salary"), ShouldBeFalse)
+			})
+		})
+	})
+
+	Convey("Given a principal with a resolved restriction", t, func() {
+		acct := serviceaccount.Account{
+			ID: "a1", TenantID: "acme",
+			Scopes:           []serviceaccount.Scope{serviceaccount.ScopeRead},
+			FieldPermissions: map[string]string{"salary": "none"},
+		}
+
+		Convey("When its field access is derived", func() {
+			access := accessFor(acct)
+
+			Convey("Then only the named attribute is restricted", func() {
+				So(access.CanRead("salary"), ShouldBeFalse)
+				So(access.CanRead("name"), ShouldBeTrue)
+			})
+		})
+	})
+
+	Convey("Given a principal with no policy at all", t, func() {
+		acct := serviceaccount.Account{
+			ID: "a1", TenantID: "acme",
+			Scopes: []serviceaccount.Scope{serviceaccount.ScopeRead},
+		}
+
+		Convey("When its field access is derived", func() {
+			access := accessFor(acct)
+
+			Convey("Then it stays unrestricted: no policy source means no restriction", func() {
+				So(access.Admin, ShouldBeTrue)
+			})
+		})
+	})
+}
+
+// TestRoleSafetyRoutes covers the API-level guards on the role control plane.
+func TestRoleSafetyRoutes(t *testing.T) {
+	Convey("Given a provisioning-enabled API with a tenant", t, func() {
+		h, _ := newProvisioningHarness(t, nil)
+		So(h.post("/api/v1/tenants", map[string]any{"name": "acme"}).Status,
+			ShouldEqual, http.StatusCreated)
+
+		Convey("When a role asks for the admin scope", func() {
+			resp := h.put("/api/v1/roles", map[string]any{
+				"tenant_name": "acme", "name": "ops", "scopes": []string{"admin"},
+			})
+
+			Convey("Then it is 422: admin must be granted where the account row shows it", func() {
+				So(resp.Status, ShouldEqual, http.StatusUnprocessableEntity)
+				So(resp.errorCode(), ShouldEqual, "VALIDATION")
+			})
+		})
+
+		Convey("And a role held by an account", func() {
+			So(h.put("/api/v1/roles", map[string]any{
+				"tenant_name": "acme", "name": "reader", "scopes": []string{"read"},
+				"field_permissions": map[string]string{"salary": "none"},
+			}).Status, ShouldEqual, http.StatusOK)
+			created := h.post("/api/v1/service-accounts", map[string]any{
+				"tenant_name": "acme", "name": "analyst", "roles": []string{"reader"},
+			})
+			So(created.Status, ShouldEqual, http.StatusCreated)
+			id := created.object(t)["account"].(map[string]any)["id"].(string)
+
+			Convey("When the role is deleted", func() {
+				resp := h.delete("/api/v1/roles/reader?tenant_name=acme")
+
+				Convey("Then it is 409, naming how many accounts still hold it", func() {
+					So(resp.Status, ShouldEqual, http.StatusConflict)
+					So(resp.errorCode(), ShouldEqual, "CONFLICT")
+					So(string(resp.Body), ShouldContainSubstring, "still assigned")
+				})
+			})
+
+			Convey("When the account's effective permissions are read", func() {
+				resp := h.get("/api/v1/service-accounts/" + id + "/effective")
+
+				Convey("Then the role's grants are resolved into scopes and field permissions", func() {
+					So(resp.Status, ShouldEqual, http.StatusOK)
+					obj := resp.object(t)
+					So(obj["roles"].([]any)[0], ShouldEqual, "reader")
+					So(obj["scopes"].([]any), ShouldContain, "read")
+					So(obj["field_permissions"].(map[string]any)["salary"], ShouldEqual, "none")
+				})
+			})
+
+			Convey("When the account is reassigned and the role is then deleted", func() {
+				So(h.put("/api/v1/service-accounts/"+id+"/roles",
+					map[string]any{"roles": []string{}}).Status, ShouldEqual, http.StatusNoContent)
+				resp := h.delete("/api/v1/roles/reader?tenant_name=acme")
+
+				Convey("Then the delete succeeds", func() {
+					So(resp.Status, ShouldEqual, http.StatusNoContent)
+				})
+			})
+		})
+
+		Convey("When the effective permissions of an unknown account are read", func() {
+			resp := h.get("/api/v1/service-accounts/" + ulid.New().String() + "/effective")
+
+			Convey("Then it is 404", func() {
+				So(resp.Status, ShouldEqual, http.StatusNotFound)
 			})
 		})
 	})

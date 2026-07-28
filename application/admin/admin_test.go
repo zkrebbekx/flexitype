@@ -109,9 +109,14 @@ func (f *fakeStore) SetAccountRoles(_ context.Context, id ulid.ID, roles []strin
 	return nil
 }
 
-func (f *fakeStore) UpsertRole(_ context.Context, r admin.Role) error {
-	f.roles[r.TenantID+"/"+r.Name] = r
-	return nil
+func (f *fakeStore) UpsertRole(_ context.Context, r admin.Role) (admin.Role, error) {
+	key := r.TenantID + "/" + r.Name
+	// Mirror the SQL upsert: an update keeps the existing id and created_at.
+	if prev, ok := f.roles[key]; ok {
+		r.ID, r.CreatedAt = prev.ID, prev.CreatedAt
+	}
+	f.roles[key] = r
+	return r, nil
 }
 
 func (f *fakeStore) ListRoles(_ context.Context, tenant string) ([]admin.Role, error) {
@@ -451,6 +456,142 @@ func TestFieldPermissionRanking(t *testing.T) {
 			Convey("Then the real level wins, so an unlisted role adds nothing", func() {
 				So(serviceaccount.MorePermissive("read", ""), ShouldBeTrue)
 				So(serviceaccount.MorePermissive("", "read"), ShouldBeFalse)
+			})
+		})
+	})
+}
+
+func (f *fakeStore) CountAccountsWithRole(_ context.Context, tenant, name string) (int, error) {
+	n := 0
+	for _, a := range f.accounts {
+		if a.TenantID != tenant {
+			continue
+		}
+		for _, held := range a.Roles {
+			if held == name {
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+// fakeInvalidator records the evictions the interactor asks for.
+type fakeInvalidator struct {
+	accounts []string
+	tenants  []string
+}
+
+func (f *fakeInvalidator) Invalidate(accountID string)      { f.accounts = append(f.accounts, accountID) }
+func (f *fakeInvalidator) InvalidateTenant(tenantID string) { f.tenants = append(f.tenants, tenantID) }
+
+func TestRoleSafety(t *testing.T) {
+	Convey("Given an admin interactor with a tenant and an auth cache", t, func() {
+		store := newFakeStore()
+		cache := &fakeInvalidator{}
+		it := admin.NewInteractor(store, admin.WithAuthCache(cache))
+		ctx := context.Background()
+		_, err := it.CreateTenant(ctx, "acme")
+		So(err, ShouldBeNil)
+
+		Convey("When a role tries to grant the admin scope", func() {
+			_, err := it.UpsertRole(ctx, admin.UpsertRoleInput{
+				TenantName: "acme", Name: "ops", Scopes: []string{"admin"},
+			})
+
+			Convey("Then it is refused: admin would void the account's own field permissions", func() {
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
+				So(err.Error(), ShouldContainSubstring, "may not grant the admin scope")
+			})
+		})
+
+		Convey("And an existing role", func() {
+			created, err := it.UpsertRole(ctx, admin.UpsertRoleInput{
+				TenantName: "acme", Name: "reader", Scopes: []string{"read"},
+				FieldPermissions: map[string]string{"salary": "none"},
+			})
+			So(err, ShouldBeNil)
+
+			Convey("When it is upserted again", func() {
+				again, err := it.UpsertRole(ctx, admin.UpsertRoleInput{
+					TenantName: "acme", Name: "reader", Scopes: []string{"read", "write"},
+				})
+
+				Convey("Then the response describes the stored row, not a fresh one", func() {
+					So(err, ShouldBeNil)
+					So(again.ID, ShouldEqual, created.ID)
+					So(again.CreatedAt, ShouldEqual, created.CreatedAt)
+				})
+			})
+
+			Convey("When a role is written", func() {
+				Convey("Then the tenant's cached authentications are dropped", func() {
+					So(cache.tenants, ShouldContain, "acme")
+				})
+			})
+
+			Convey("And an account holding it", func() {
+				out, err := it.CreateAccount(ctx, admin.CreateAccountInput{
+					TenantName: "acme", Name: "analyst", Roles: []string{"reader"},
+				})
+				So(err, ShouldBeNil)
+
+				Convey("When the role is deleted", func() {
+					err := it.DeleteRole(ctx, "acme", "reader")
+
+					Convey("Then it is refused: the account would gain unrestricted access", func() {
+						So(domainerrors.IsConflict(err), ShouldBeTrue)
+						So(err.Error(), ShouldContainSubstring, "still assigned")
+					})
+
+					Convey("Then the role survives, so the restriction stays in force", func() {
+						roles, lerr := it.ListRoles(ctx, "acme")
+						So(lerr, ShouldBeNil)
+						So(roles, ShouldHaveLength, 1)
+					})
+				})
+
+				Convey("When the account is reassigned first and the role is then deleted", func() {
+					So(it.AssignRoles(ctx, admin.AssignRolesInput{
+						AccountID: out.Account.ID.String(),
+					}), ShouldBeNil)
+					err := it.DeleteRole(ctx, "acme", "reader")
+
+					Convey("Then the delete succeeds and evicts the tenant's cache", func() {
+						So(err, ShouldBeNil)
+						So(cache.tenants, ShouldContain, "acme")
+					})
+				})
+
+				Convey("When the account's effective permissions are read", func() {
+					view, err := it.EffectiveAccount(ctx, out.Account.ID.String())
+
+					Convey("Then the role's grants are resolved, not just named", func() {
+						So(err, ShouldBeNil)
+						So(view.Roles, ShouldResemble, []string{"reader"})
+						So(view.Scopes, ShouldContain, serviceaccount.ScopeRead)
+						So(view.FieldPermissions["salary"], ShouldEqual, "none")
+						So(view.UnresolvedRoles, ShouldBeEmpty)
+					})
+				})
+			})
+		})
+
+		Convey("When a tenant is deactivated", func() {
+			cache.tenants = nil
+			err := it.SetTenantActive(ctx, "acme", false)
+
+			Convey("Then its cached authentications are dropped, so the suspension is immediate", func() {
+				So(err, ShouldBeNil)
+				So(cache.tenants, ShouldResemble, []string{"acme"})
+			})
+		})
+
+		Convey("When an account's effective permissions are read with a bad id", func() {
+			_, err := it.EffectiveAccount(ctx, "not-a-ulid")
+
+			Convey("Then it is a validation error", func() {
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
 			})
 		})
 	})

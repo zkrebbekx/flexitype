@@ -65,7 +65,7 @@ Nothing is written onto the accounts.
 
 | Part | Rule |
 |---|---|
-| Scopes | The union of the account's own scopes and every role's scopes. A role grants; it never revokes. |
+| Scopes | The union of the account's own scopes and every role's scopes. A role grants; it never revokes. **A role may not grant `admin`.** |
 | Field permissions | The **most permissive** level any role grants for that attribute. |
 | Account override | The account's own entry for an attribute wins over every role. |
 
@@ -89,15 +89,37 @@ role list, which is the record an auditor reads.
   exactly like a role that grants nothing.
 - Roles are per tenant. An account resolves only its own tenant's roles, even
   when another tenant has a role of the same name.
+- **A role may not carry the `admin` scope.** `admin` is a global,
+  cross-tenant privilege *and* it short-circuits the whole field ACL, so a
+  role granting it would void the account's own `field_permissions` —
+  contradicting the precedence rule above — and confer the control plane. It
+  would also be invisible: the account row would still read `scopes:
+  ["read"]` with a field restriction, so a permissions review would call it
+  safe. Grant `admin` directly on an account, where it shows. A role row
+  carrying `admin` from a direct database edit is dropped at resolution.
+- **Deleting a role that accounts still hold is refused** (409). A role that
+  resolves to nothing contributes no field permissions, and an empty
+  permission map reads as "unrestricted" — so deleting a held role would hand
+  every account it restricted the attributes it was hiding, silently, with no
+  change to the account rows. Reassign those accounts first
+  (`PUT /service-accounts/{id}/roles`). To retire a role's grants without
+  touching every account, upsert it with an empty scope set and the
+  restrictions you want to keep.
+- **A principal naming a role that does not exist is denied every
+  attribute.** The API refuses the delete that would create that state; this
+  is the second line, covering a row edited directly in the database. Read
+  `unresolved_roles` on the effective-permissions view to find such an
+  account.
 - A role write **replaces** the whole role. A partial update would make "what
   does this role allow" a question about history rather than about the current
   record.
 - Deleting a role removes its grants. An account that names it keeps the name
   and resolves nothing for it, which is the safe direction.
-- `PUT /service-accounts/{id}/roles` evicts the account's auth-cache entry, so
-  a removal takes effect at once rather than at the end of the cache TTL. A
-  change to a *role* still waits for the TTL, because the accounts holding it
-  are not known at write time.
+- **Every permission change evicts the auth cache.**
+  `PUT /service-accounts/{id}/roles` drops that account's entries; a role
+  write or delete, and a tenant deactivation, drop every entry for the
+  tenant. A change an operator makes during an incident applies at once
+  rather than at the end of the cache TTL on every replica.
 
 ### Endpoints
 
@@ -109,6 +131,7 @@ All need the `admin` scope.
 | `GET` | `/api/v1/roles?tenant_name=…` | List a tenant's roles |
 | `DELETE` | `/api/v1/roles/{name}?tenant_name=…` | Delete a role |
 | `PUT` | `/api/v1/service-accounts/{id}/roles` | Replace an account's roles and overrides |
+| `GET` | `/api/v1/service-accounts/{id}/effective` | Report an account's resolved permissions |
 
 `POST /api/v1/service-accounts` also accepts `roles` and `field_permissions`.
 
@@ -128,12 +151,20 @@ curl -X POST $BASE/api/v1/service-accounts -H "Authorization: Bearer $ADMIN" \
   -d '{"tenant_name":"acme","name":"jamie","roles":["analyst"]}'
 ```
 
-To answer "who can read `salary`", read the roles and the accounts that carry
-an override:
+To answer "what can this account actually do", read its effective
+permissions — its own scopes unioned with its roles', and the merged
+per-attribute levels:
 
 ```bash
-curl "$BASE/api/v1/roles?tenant_name=acme" -H "Authorization: Bearer $ADMIN"
-curl "$BASE/api/v1/service-accounts?tenant_name=acme" -H "Authorization: Bearer $ADMIN"
+curl "$BASE/api/v1/service-accounts/$ID/effective" -H "Authorization: Bearer $ADMIN"
 ```
 
-Both list endpoints report what was assigned, not what was resolved.
+```json
+{ "name": "jamie", "roles": ["analyst"], "scopes": ["read"],
+  "field_permissions": {"salary": "none"}, "unresolved_roles": [] }
+```
+
+The list endpoints report what was **assigned**, which is what you edit; this
+reports what the enforcement path **computes**, through the same resolver. A
+non-empty `unresolved_roles` is a fault, not a note: that principal is denied
+every attribute until the role is restored or the account reassigned.

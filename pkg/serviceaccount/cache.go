@@ -25,6 +25,11 @@ type cachingAuthenticator struct {
 	// TTL — while RotateSecret's documentation promised it stopped
 	// immediately.
 	byAccount map[string]map[string]struct{}
+	// byTenant indexes cached tokens by the tenant they resolve to, so a role
+	// edit or a tenant deactivation can evict every affected entry. Neither is
+	// expressible per account: a role change alters what many accounts may do
+	// at once, and the cache is keyed by token.
+	byTenant map[string]map[string]struct{}
 }
 
 type cacheEntry struct {
@@ -44,6 +49,7 @@ func NewCachingAuthenticator(auth Authenticator, ttl time.Duration) Authenticato
 		now:       time.Now,
 		cache:     map[string]cacheEntry{},
 		byAccount: map[string]map[string]struct{}{},
+		byTenant:  map[string]map[string]struct{}{},
 	}
 }
 
@@ -95,6 +101,13 @@ func (c *cachingAuthenticator) AuthenticateCtx(ctx context.Context, token string
 		c.byAccount[account.ID] = map[string]struct{}{}
 	}
 	c.byAccount[account.ID][token] = struct{}{}
+	if c.byTenant == nil {
+		c.byTenant = map[string]map[string]struct{}{}
+	}
+	if c.byTenant[account.TenantID] == nil {
+		c.byTenant[account.TenantID] = map[string]struct{}{}
+	}
+	c.byTenant[account.TenantID][token] = struct{}{}
 	c.mu.Unlock()
 	return account, nil
 }
@@ -109,9 +122,25 @@ func (c *cachingAuthenticator) Invalidate(accountID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for token := range c.byAccount[accountID] {
-		delete(c.cache, token)
+		c.forget(token)
 	}
 	delete(c.byAccount, accountID)
+}
+
+// InvalidateTenant drops every cached token for one tenant, so a role edit or
+// a tenant deactivation takes effect at once.
+//
+// Roles are the product's bulk-permission mechanism, so the change that most
+// needs to apply immediately — removing a grant from a role during an
+// incident — was the one silently deferred by up to the TTL on every replica,
+// with the API having already confirmed it.
+func (c *cachingAuthenticator) InvalidateTenant(tenantID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for token := range c.byTenant[tenantID] {
+		c.forget(token)
+	}
+	delete(c.byTenant, tenantID)
 }
 
 // forget removes one token from both maps. The caller holds the lock.
@@ -125,6 +154,12 @@ func (c *cachingAuthenticator) forget(token string) {
 		delete(tokens, token)
 		if len(tokens) == 0 {
 			delete(c.byAccount, entry.account.ID)
+		}
+	}
+	if tokens := c.byTenant[entry.account.TenantID]; tokens != nil {
+		delete(tokens, token)
+		if len(tokens) == 0 {
+			delete(c.byTenant, entry.account.TenantID)
 		}
 	}
 }

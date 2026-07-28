@@ -63,7 +63,7 @@ hostname. Never set it in a deployment reachable by anything but you.
 | `FLEXITYPE_DEV_INSECURE` | `false` | Run with authentication disabled, and permit an unencrypted database connection to a non-loopback host. Local development only. |
 | `FLEXITYPE_REQUIRE_AUTH` | `true` | Refuse to boot unless an account source (file or provisioning) is configured. `FLEXITYPE_DEV_INSECURE` overrides it. |
 | `FLEXITYPE_BOOTSTRAP_ADMIN` | `false` | On startup, if no accounts exist, seed a `default` tenant and `bootstrap-admin` admin account. Its token is printed to **stdout once** (never to the structured log) — capture it. |
-| `FLEXITYPE_AUTH_CACHE_TTL` | `30s` | How long a database-backed auth result is cached. Rotation and revocation evict the account's entries immediately, so this bounds only a change made directly in the database. |
+| `FLEXITYPE_AUTH_CACHE_TTL` | `30s` | How long a successful authentication is cached. Rotation, revocation, a role write or delete, and a tenant deactivation all evict the affected entries immediately, so this bounds only a change made directly in the database. |
 
 Deactivating a tenant (`PATCH /api/v1/tenants/{name}` with `{"active": false}`)
 suspends **every service account under it**, in one action. Authentication joins

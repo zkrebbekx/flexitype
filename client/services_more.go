@@ -756,6 +756,21 @@ func (s *AdminService) RevokeServiceAccount(ctx context.Context, id string) erro
 	return s.c.do(ctx, http.MethodDelete, "/service-accounts/"+id, nil, nil, nil)
 }
 
+// EffectiveAccount reports what an account can actually do: its own scopes
+// unioned with its roles', and the merged per-attribute permissions.
+//
+// ListServiceAccounts and ListRoles report what is STORED, which is what you
+// edit. This reports what the enforcement path computes. A non-empty
+// UnresolvedRoles is a fault: such an account is denied every attribute.
+func (s *AdminService) EffectiveAccount(ctx context.Context, id string) (*EffectiveAccount, error) {
+	var out EffectiveAccount
+	if err := s.c.do(ctx, http.MethodGet,
+		"/service-accounts/"+url.PathEscape(id)+"/effective", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // UpsertRoleInput creates or replaces a role. The write replaces the whole
 // role rather than patching it, so the stored record is the full grant.
 type UpsertRoleInput struct {
@@ -784,8 +799,13 @@ func (s *AdminService) ListRoles(ctx context.Context, tenant string) ([]Role, er
 	return items[Role](ctx, s.c, "/roles", url.Values{"tenant_name": {tenant}})
 }
 
-// DeleteRole removes a role. An account that names it resolves nothing for
-// it, so the grant goes away with the role.
+// DeleteRole removes a role.
+//
+// It is refused with ErrorCodeConflict while any account still names the
+// role: a role that resolves to nothing grants no field permissions, and an
+// empty permission map reads as unrestricted, so deleting a held role would
+// hand out every attribute it was hiding. Reassign those accounts first with
+// AssignRoles.
 func (s *AdminService) DeleteRole(ctx context.Context, tenant, name string) error {
 	if tenant == "" {
 		return fmt.Errorf("flexitype: DeleteRole requires a tenant name")

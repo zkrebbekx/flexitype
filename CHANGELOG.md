@@ -7,6 +7,52 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — Write-path correctness
+
+Four places where a write did something other than what the API described.
+
+- **A failed compare-and-swap left the data written** (#415). `Publish`
+  applied the mutations and only then performed the version-guarded `Update`.
+  Once that call could fail, any concurrent touch of the set — a reviewer
+  rejecting it, a second publish, the scheduler tick — committed the values and
+  left the record saying something else. Through `PublishDue` it compounded:
+  the set stayed `approved` with `publish_at` in the past, so every tick
+  re-applied the same mutations over whatever had been written in between, and
+  a **rejected** set could have its contents applied on a timer. The claim is
+  now taken **first** (new `publishing` state, version bumped), the mutations
+  applied second, the claim finalised third. A constraint failure hands the
+  claim back; a set left `publishing` means a publish began and did not finish,
+  and the scheduler does not pick it up.
+- **Context-key rules and the tenant-local day were ignored on the write
+  path** (#403). `EffectiveSchema` and `Completeness` evaluated rules with the
+  caller's context values and the tenant-local day; `checkDependencies`
+  evaluated the same rules with neither, and a condition naming a
+  `ContextKey` short-circuits to "no match" when the key is absent. So a write
+  was accepted that the API had just reported as forbidden — the worst
+  combination for a validation feature, because it looks configured and
+  tested. The write path now uses the same resolver and the same clock, and
+  the context-free `ResolveEffective`/`MatchesAny` are **removed**, so the
+  paths cannot drift again.
+- **The computed rebuild gated on wall clocks** (#407). It compared the
+  entity's `last_updated_at` — stamped when a write *began* — against the
+  rebuilding process's own clock, on a different machine. A write that began
+  before the rebuild started and committed after it listed the entity was
+  invisible to the check, so the rebuild wrote a computed value from
+  pre-write inputs and left it stale until that entity was written again.
+  Clock skew widened the window. The rebuild now compares a **fingerprint of
+  the source values** before and after it writes, and recomputes if they
+  moved: no synchronised time, and no assumption about which replica ran.
+- **Formulas silently collapsed multi-valued and scoped sources** (#421).
+  Evaluation carries one number per source name, so a multi-valued source
+  became whichever member came back last and a scoped value was skipped.
+  Adding a member changed the answer with nothing to explain it, while the
+  computed attribute stayed populated, queryable and counted toward
+  completeness. Such a formula is now **refused at write time**, in both
+  directions: a formula cannot read a multi-valued, localizable or scopable
+  attribute, and an attribute a formula reads cannot become one. An aggregate
+  over many members is a different feature, and is refused rather than
+  approximated — the same call this project made for rollups.
+
 ### Fixed — The deployment trust boundary
 
 Three ways a deployment served more than its operator believed.

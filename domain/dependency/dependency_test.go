@@ -136,7 +136,7 @@ func TestDependencyAggregate(t *testing.T) {
 			sourceValues := map[valueobjects.AttributeDefinitionID][]valueobjects.Value{
 				category.ID(): {valueobjects.NewEnumValue("bike")},
 			}
-			schema, err := ResolveEffective(subcategory, []*Dependency{dep}, sourceValues, now)
+			schema, err := ResolveEffectiveWithContext(subcategory, []*Dependency{dep}, sourceValues, nil, now)
 			So(err, ShouldBeNil)
 
 			Convey("Then the subcategory narrows to bike subcategories", func() {
@@ -152,7 +152,7 @@ func TestDependencyAggregate(t *testing.T) {
 			sourceValues := map[valueobjects.AttributeDefinitionID][]valueobjects.Value{
 				category.ID(): {valueobjects.NewEnumValue("car")},
 			}
-			schema, err := ResolveEffective(subcategory, []*Dependency{dep}, sourceValues, now)
+			schema, err := ResolveEffectiveWithContext(subcategory, []*Dependency{dep}, sourceValues, nil, now)
 			So(err, ShouldBeNil)
 
 			Convey("Then the dependency does not restrict the subcategory", func() {
@@ -175,7 +175,7 @@ func TestDependencyAggregate(t *testing.T) {
 			sourceValues := map[valueobjects.AttributeDefinitionID][]valueobjects.Value{
 				category.ID(): {valueobjects.NewEnumValue("bike")},
 			}
-			schema, err := ResolveEffective(subcategory, []*Dependency{dep, dep2}, sourceValues, now)
+			schema, err := ResolveEffectiveWithContext(subcategory, []*Dependency{dep, dep2}, sourceValues, nil, now)
 			So(err, ShouldBeNil)
 
 			Convey("Then nothing is allowed rather than everything", func() {
@@ -210,7 +210,7 @@ func TestDependencyAggregate(t *testing.T) {
 			sourceValues := map[valueobjects.AttributeDefinitionID][]valueobjects.Value{
 				category.ID(): {valueobjects.NewEnumValue("bike")},
 			}
-			schema, err := ResolveEffective(subcategory, []*Dependency{dep3}, sourceValues, now)
+			schema, err := ResolveEffectiveWithContext(subcategory, []*Dependency{dep3}, sourceValues, nil, now)
 			So(err, ShouldBeNil)
 
 			Convey("Then an absent value violates the dependency", func() {

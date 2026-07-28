@@ -68,3 +68,74 @@ func TestPublishFailureObserver(t *testing.T) {
 type emptyStore struct{ Store }
 
 func (emptyStore) DueForPublish(context.Context, time.Time) ([]ChangeSet, error) { return nil, nil }
+
+// claimStore records the sequence of states a publish writes, so the ordering
+// between the compare-and-swap and the mutations is observable.
+type claimStore struct {
+	cs      ChangeSet
+	states  []State
+	failAt  int
+	updates int
+}
+
+func (s *claimStore) Create(context.Context, ChangeSet) error { return nil }
+
+func (s *claimStore) Get(_ context.Context, _ valueobjects.TenantID, _ ulid.ID) (ChangeSet, error) {
+	return s.cs, nil
+}
+
+func (s *claimStore) List(context.Context, valueobjects.TenantID) ([]ChangeSet, error) {
+	return []ChangeSet{s.cs}, nil
+}
+
+func (s *claimStore) Update(_ context.Context, cs ChangeSet) error {
+	s.updates++
+	if s.failAt == s.updates {
+		return errors.New("the change-set was modified by someone else")
+	}
+	s.states = append(s.states, cs.State)
+	cs.Version++
+	s.cs = cs
+	return nil
+}
+
+func (s *claimStore) DueForPublish(context.Context, time.Time) ([]ChangeSet, error) { return nil, nil }
+
+// TestPublishTakesTheClaimFirst pins the ordering that the optimistic-locking
+// fix inverted.
+//
+// Publish applied the mutations and only then compare-and-swapped the record.
+// Once that call could fail, a concurrent touch of the set left the data
+// committed and the record saying something else — and through PublishDue the
+// set stayed approved with publish_at in the past, so every tick re-applied
+// the same mutations over whatever had been written in between.
+func TestPublishTakesTheClaimFirst(t *testing.T) {
+	Convey("Given an approved change-set", t, func() {
+		base := ChangeSet{
+			ID: ulid.New(), TenantID: valueobjects.DefaultTenant,
+			State: StateApproved, Version: 1,
+		}
+
+		Convey("When the FIRST compare-and-swap fails", func() {
+			store := &claimStore{cs: base, failAt: 1}
+			i := &Interactor{store: store, now: time.Now}
+			err := i.publish(context.Background(), &base)
+
+			Convey("Then it stops before the mutations, so nothing is applied", func() {
+				So(err, ShouldNotBeNil)
+				So(store.states, ShouldBeEmpty)
+			})
+		})
+
+		Convey("When the publish runs with no mutations to apply", func() {
+			store := &claimStore{cs: base}
+			i := &Interactor{store: store, now: time.Now}
+			err := i.publish(context.Background(), &base)
+
+			Convey("Then it claims first and finalises second", func() {
+				So(err, ShouldBeNil)
+				So(store.states, ShouldResemble, []State{StatePublishing, StatePublished})
+			})
+		})
+	})
+}

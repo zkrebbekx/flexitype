@@ -133,3 +133,73 @@ func TestCSVRoundTrip(t *testing.T) {
 		})
 	})
 }
+
+// TestImportOrdersEntitiesCanonically covers the lock ordering the CSV write
+// paths now apply.
+//
+// A file's rows arrive in whatever order it has, so two imports over the same
+// entities took the entity-summary rows in opposite order. The ordering is
+// applied inside the unit of work, and the row number an error reports is
+// still the file's — this pins both.
+func TestImportOrdersEntitiesCanonically(t *testing.T) {
+	Convey("Given a type with one attribute", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		product, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "product", DisplayName: "Product"})
+		So(err, ShouldBeNil)
+		_, err = it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: product.ID.String(), InternalName: "title",
+			DisplayName: "Title", DataType: "string",
+		})
+		So(err, ShouldBeNil)
+
+		Convey("When rows arrive in reverse entity order", func() {
+			report, ierr := svc.Interactors(ctx).Values().Import(ctx, appvalue.ImportInput{
+				TypeDefinitionID: product.ID.String(),
+				KeyColumn:        "entity_id",
+				Mapping:          map[string]string{"title": "title"},
+				Columns:          []string{"entity_id", "title"},
+				Rows: [][]string{
+					{"p-c", "third"}, {"p-a", "first"}, {"p-b", "second"},
+				},
+			})
+
+			Convey("Then every row is written, whatever the file order", func() {
+				So(ierr, ShouldBeNil)
+				So(report.Errors, ShouldBeEmpty)
+				So(report.RowsWritten, ShouldEqual, 3)
+
+				for entity, want := range map[string]string{
+					"p-a": "first", "p-b": "second", "p-c": "third",
+				} {
+					vals, verr := svc.Interactors(ctx).Values().ListByEntity(
+						ctx, product.ID.String(), entity)
+					So(verr, ShouldBeNil)
+					So(vals, ShouldHaveLength, 1)
+					So(vals[0].Value.Text(), ShouldEqual, want)
+				}
+			})
+		})
+
+		Convey("When one row in the middle is invalid", func() {
+			report, ierr := svc.Interactors(ctx).Values().Import(ctx, appvalue.ImportInput{
+				TypeDefinitionID: product.ID.String(),
+				KeyColumn:        "entity_id",
+				Mapping:          map[string]string{"title": "title"},
+				Columns:          []string{"entity_id", "title"},
+				Rows: [][]string{
+					{"p-z", "ok"}, {"", "missing key"}, {"p-y", "ok"},
+				},
+			})
+
+			Convey("Then the error names the FILE's row, not the sorted position", func() {
+				So(ierr, ShouldBeNil)
+				So(report.Errors, ShouldNotBeEmpty)
+				So(report.Errors[0].Row, ShouldEqual, 2)
+			})
+		})
+	})
+}

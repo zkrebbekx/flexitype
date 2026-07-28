@@ -54,16 +54,16 @@ func TestMatchesAny(t *testing.T) {
 		now := time.Now().UTC()
 
 		Convey("When the entity holds only the matching value", func() {
-			ok, err := dep.MatchesAny([]valueobjects.Value{valueobjects.NewStringValue("asbestos")}, now)
+			ok, err := dep.MatchesAnyWithContext([]valueobjects.Value{valueobjects.NewStringValue("asbestos")}, nil, now)
 			So(err, ShouldBeNil)
 			So(ok, ShouldBeTrue)
 		})
 
 		Convey("When the matching value is not the last one written", func() {
-			ok, err := dep.MatchesAny([]valueobjects.Value{
+			ok, err := dep.MatchesAnyWithContext([]valueobjects.Value{
 				valueobjects.NewStringValue("asbestos"),
 				valueobjects.NewStringValue("electrical"),
-			}, now)
+			}, nil, now)
 
 			Convey("Then it still matches", func() {
 				So(err, ShouldBeNil)
@@ -72,17 +72,17 @@ func TestMatchesAny(t *testing.T) {
 		})
 
 		Convey("When no member matches", func() {
-			ok, err := dep.MatchesAny([]valueobjects.Value{
+			ok, err := dep.MatchesAnyWithContext([]valueobjects.Value{
 				valueobjects.NewStringValue("electrical"),
 				valueobjects.NewStringValue("gas"),
-			}, now)
+			}, nil, now)
 			So(err, ShouldBeNil)
 			So(ok, ShouldBeFalse)
 		})
 
 		Convey("When the entity holds no value for the source", func() {
 			Convey("Then it is evaluated once against the zero value, as before", func() {
-				ok, err := dep.MatchesAny(nil, now)
+				ok, err := dep.MatchesAnyWithContext(nil, nil, now)
 				So(err, ShouldBeNil)
 				So(ok, ShouldBeFalse)
 			})
@@ -113,9 +113,9 @@ func TestRequiredConflictResolution(t *testing.T) {
 		}
 
 		Convey("When both match, in either order", func() {
-			forward, err := ResolveEffective(target, []*Dependency{demand, relax}, match, now)
+			forward, err := ResolveEffectiveWithContext(target, []*Dependency{demand, relax}, match, nil, now)
 			So(err, ShouldBeNil)
-			reverse, err := ResolveEffective(target, []*Dependency{relax, demand}, match, now)
+			reverse, err := ResolveEffectiveWithContext(target, []*Dependency{relax, demand}, match, nil, now)
 			So(err, ShouldBeNil)
 
 			Convey("Then the result is required, and does not depend on the order", func() {
@@ -128,7 +128,7 @@ func TestRequiredConflictResolution(t *testing.T) {
 			only := map[valueobjects.AttributeDefinitionID][]valueobjects.Value{
 				indoor.ID(): {valueobjects.NewStringValue("yes")},
 			}
-			schema, err := ResolveEffective(target, []*Dependency{demand, relax}, only, now)
+			schema, err := ResolveEffectiveWithContext(target, []*Dependency{demand, relax}, only, nil, now)
 
 			Convey("Then it is not required", func() {
 				So(err, ShouldBeNil)
@@ -146,14 +146,14 @@ func TestRequiredConflictResolution(t *testing.T) {
 			Convey("Then a matched rule can still relax it", func() {
 				// A single override replaces the attribute's own flag; only
 				// CONFLICTING overrides resolve to required.
-				schema, err := ResolveEffective(own, []*Dependency{relaxOwn}, only, now)
+				schema, err := ResolveEffectiveWithContext(own, []*Dependency{relaxOwn}, only, nil, now)
 				So(err, ShouldBeNil)
 				So(schema.Required, ShouldBeFalse)
 			})
 
 			Convey("Then no matched rule leaves the definition's flag alone", func() {
-				schema, err := ResolveEffective(own, []*Dependency{relaxOwn},
-					map[valueobjects.AttributeDefinitionID][]valueobjects.Value{}, now)
+				schema, err := ResolveEffectiveWithContext(own, []*Dependency{relaxOwn},
+					map[valueobjects.AttributeDefinitionID][]valueobjects.Value{}, nil, now)
 				So(err, ShouldBeNil)
 				So(schema.Required, ShouldBeTrue)
 			})

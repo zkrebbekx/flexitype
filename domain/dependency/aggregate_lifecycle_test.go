@@ -237,16 +237,16 @@ func TestDependencyLifecycle(t *testing.T) {
 			})
 
 			Convey("And an archived dependency no longer contributes to the effective schema", func() {
-				schema, err := ResolveEffective(subcategory, []*Dependency{dep},
-					map[valueobjects.AttributeDefinitionID][]valueobjects.Value{category.ID(): {bike}}, later)
+				schema, err := ResolveEffectiveWithContext(subcategory, []*Dependency{dep},
+					map[valueobjects.AttributeDefinitionID][]valueobjects.Value{category.ID(): {bike}}, nil, later)
 				So(err, ShouldBeNil)
 				So(schema.Restricted, ShouldBeFalse)
 			})
 		})
 
 		Convey("When a dependency aimed at another attribute is resolved", func() {
-			schema, err := ResolveEffective(other, []*Dependency{dep},
-				map[valueobjects.AttributeDefinitionID][]valueobjects.Value{category.ID(): {bike}}, now)
+			schema, err := ResolveEffectiveWithContext(other, []*Dependency{dep},
+				map[valueobjects.AttributeDefinitionID][]valueobjects.Value{category.ID(): {bike}}, nil, now)
 
 			Convey("Then it is skipped rather than misapplied", func() {
 				So(err, ShouldBeNil)
@@ -264,8 +264,8 @@ func TestDependencyLifecycle(t *testing.T) {
 			// Corrupt the compiled pattern the way a bad stored rule would.
 			broken.conditions[0].Pattern = "("
 
-			_, err = ResolveEffective(subcategory, []*Dependency{broken},
-				map[valueobjects.AttributeDefinitionID][]valueobjects.Value{category.ID(): {bike}}, now)
+			_, err = ResolveEffectiveWithContext(subcategory, []*Dependency{broken},
+				map[valueobjects.AttributeDefinitionID][]valueobjects.Value{category.ID(): {bike}}, nil, now)
 
 			Convey("Then resolution fails rather than silently ignoring the rule", func() {
 				So(err, ShouldNotBeNil)
@@ -375,8 +375,8 @@ func TestEffectiveSchemaChecks(t *testing.T) {
 				Effect:     Effect{Constraints: attribute.Constraints{attribute.MaxLength{N: 5}}}}, now)
 			So(err, ShouldBeNil)
 
-			schema, err := ResolveEffective(note, []*Dependency{first, second},
-				map[valueobjects.AttributeDefinitionID][]valueobjects.Value{flag.ID(): {on}}, now)
+			schema, err := ResolveEffectiveWithContext(note, []*Dependency{first, second},
+				map[valueobjects.AttributeDefinitionID][]valueobjects.Value{flag.ID(): {on}}, nil, now)
 			So(err, ShouldBeNil)
 
 			Convey("Then both bounds apply at once", func() {

@@ -108,3 +108,160 @@ func TestDeadLetterRecoveryPostgres(t *testing.T) {
 		})
 	})
 }
+
+// TestDeadLetterRetentionIntegration covers the bound that stops a dead
+// delivery pinning its envelope for ever.
+func TestDeadLetterRetentionIntegration(t *testing.T) {
+	pool := testdb.Open(t, "postgres_deadletter")
+	ctx := context.Background()
+	if err := postgres.Migrate(ctx, db.NewTransactor(pool)); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	Convey("Given an old dead delivery pinning an expired envelope", t, func() {
+		pool.MustExec(`TRUNCATE flexitype_webhook_delivery, flexitype_webhook_subscription,
+			flexitype_event_outbox CASCADE`)
+		tenant := valueobjects.DefaultTenant
+		old := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+		subID := ulid.New()
+		pool.MustExec(`INSERT INTO flexitype_webhook_subscription
+			(id, tenant_id, name, url, secret, previous_secret, event_types, active, created_at, updated_at)
+			VALUES ($1,$2,'sub','https://example.test','s','', '{}', true, $3, $3)`,
+			subID, tenant.String(), old)
+		envID := ulid.New()
+		pool.MustExec(`INSERT INTO flexitype_event_outbox
+			(id, tenant_id, event_type, aggregate_type, aggregate_id, payload,
+			 occurred_at, recorded_at, dispatched_at, feed_seq)
+			VALUES ($1,$2,'flexitype.value.updated','value','v1','{}'::jsonb,$3,$3,$3,1)`,
+			envID, tenant.String(), old)
+		deadID := ulid.New()
+		pool.MustExec(`INSERT INTO flexitype_webhook_delivery
+			(id, subscription_id, envelope_id, tenant_id, event_type, feed_seq, status, attempts,
+			 next_attempt_at, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,'flexitype.value.updated',1,'dead',25,$5,$5,$5)`,
+			deadID, subID, envID, tenant.String(), old)
+
+		count := func(q string, args ...any) int {
+			var n int
+			So(pool.Get(&n, q, args...), ShouldBeNil)
+			return n
+		}
+		store := postgres.NewFeedStore(pool)
+
+		Convey("When the dead-letter cutoff has not been reached", func() {
+			removed, err := store.PruneDeadLetters(ctx, time.Now().UTC().Add(-365*24*time.Hour))
+
+			Convey("Then it survives, so it can still be redriven", func() {
+				So(err, ShouldBeNil)
+				So(removed, ShouldEqual, 0)
+				So(count(`SELECT count(*) FROM flexitype_webhook_delivery WHERE id = $1`, deadID),
+					ShouldEqual, 1)
+			})
+		})
+
+		Convey("When the dead letter is past its retention", func() {
+			removed, err := store.PruneDeadLetters(ctx, time.Now().UTC().Add(-30*24*time.Hour))
+			So(err, ShouldBeNil)
+
+			Convey("Then it is removed", func() {
+				So(removed, ShouldEqual, 1)
+				So(count(`SELECT count(*) FROM flexitype_webhook_delivery WHERE id = $1`, deadID),
+					ShouldEqual, 0)
+			})
+
+			Convey("Then its envelope becomes prunable, so retention bounds the outbox again", func() {
+				n, perr := store.Prune(ctx, time.Now().UTC())
+				So(perr, ShouldBeNil)
+				So(n, ShouldEqual, 1)
+				So(count(`SELECT count(*) FROM flexitype_event_outbox WHERE id = $1`, envID),
+					ShouldEqual, 0)
+			})
+		})
+
+		Convey("When a delivery is dead but recent", func() {
+			pool.MustExec(`UPDATE flexitype_webhook_delivery SET updated_at = now() WHERE id = $1`, deadID)
+			removed, err := store.PruneDeadLetters(ctx, time.Now().UTC().Add(-30*24*time.Hour))
+
+			Convey("Then it is kept: the clock starts when the row went dead", func() {
+				So(err, ShouldBeNil)
+				So(removed, ShouldEqual, 0)
+			})
+		})
+	})
+}
+
+// TestRedeliverRampsTheBacklogIntegration covers the two shapes the bulk
+// redrive shared with the pruner before it was bounded: one unbounded
+// statement, and every revived delivery due at the same instant.
+func TestRedeliverRampsTheBacklogIntegration(t *testing.T) {
+	pool := testdb.Open(t, "postgres_redrive")
+	ctx := context.Background()
+	if err := postgres.Migrate(ctx, db.NewTransactor(pool)); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	Convey("Given a backlog of dead deliveries larger than one batch", t, func() {
+		pool.MustExec(`TRUNCATE flexitype_webhook_delivery, flexitype_webhook_subscription,
+			flexitype_event_outbox CASCADE`)
+		tenant := valueobjects.DefaultTenant
+		now := time.Now().UTC()
+
+		subID := ulid.New()
+		pool.MustExec(`INSERT INTO flexitype_webhook_subscription
+			(id, tenant_id, name, url, secret, previous_secret, event_types, active, created_at, updated_at)
+			VALUES ($1,$2,'sub','https://example.test','s','', '{}', true, $3, $3)`,
+			subID, tenant.String(), now)
+		envID := ulid.New()
+		pool.MustExec(`INSERT INTO flexitype_event_outbox
+			(id, tenant_id, event_type, aggregate_type, aggregate_id, payload,
+			 occurred_at, recorded_at, dispatched_at, feed_seq)
+			VALUES ($1,$2,'flexitype.value.updated','value','v1','{}'::jsonb,$3,$3,$3,1)`,
+			envID, tenant.String(), now)
+
+		// 600 rows: past the 500-row redrive batch, so the loop is exercised.
+		const rows = 600
+		pool.MustExec(`
+			INSERT INTO flexitype_webhook_delivery
+			  (id, subscription_id, envelope_id, tenant_id, event_type, feed_seq, status, attempts,
+			   next_attempt_at, created_at, updated_at)
+			SELECT lpad(g::text, 26, '0'), $1, $2, $3, 'flexitype.value.updated', 1, 'dead', 25, $4, $4, $4
+			  FROM generate_series(1, $5) g`,
+			subID, envID, tenant.String(), now, rows)
+
+		Convey("When they are redriven in bulk", func() {
+			moved, err := postgres.NewDeliveryStore(pool).RedeliverMatching(ctx,
+				appwebhook.DeliveryFilter{TenantID: tenant}, now)
+
+			Convey("Then every one moves, across batches", func() {
+				So(err, ShouldBeNil)
+				So(moved, ShouldEqual, rows)
+				var pending int
+				So(pool.Get(&pending,
+					`SELECT count(*) FROM flexitype_webhook_delivery WHERE status = 'pending'`), ShouldBeNil)
+				So(pending, ShouldEqual, rows)
+			})
+
+			Convey("Then they are spread over a ramp rather than all due at once", func() {
+				var distinct int
+				So(pool.Get(&distinct,
+					`SELECT count(DISTINCT next_attempt_at) FROM flexitype_webhook_delivery`), ShouldBeNil)
+				So(distinct, ShouldBeGreaterThan, 1)
+
+				var spread float64
+				So(pool.Get(&spread,
+					`SELECT EXTRACT(EPOCH FROM (max(next_attempt_at) - min(next_attempt_at)))
+					   FROM flexitype_webhook_delivery`), ShouldBeNil)
+				So(spread, ShouldBeGreaterThan, 60) // spread across minutes, not one instant
+			})
+
+			Convey("Then none is scheduled before the redrive itself", func() {
+				var early int
+				So(pool.Get(&early,
+					`SELECT count(*) FROM flexitype_webhook_delivery WHERE next_attempt_at < $1`,
+					now), ShouldBeNil)
+				So(early, ShouldEqual, 0)
+			})
+		})
+	})
+}

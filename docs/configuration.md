@@ -263,6 +263,7 @@ is mounted. Only non-API paths reach the app shell.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `FLEXITYPE_OUTBOX` | `false` | Enable the transactional outbox, webhook subscriptions and the events feed. |
+| `FLEXITYPE_DEAD_LETTER_RETENTION` | `720h` (30d) | How long a **dead** delivery is kept before it stops pinning its envelope. The envelope prune keeps anything a dead delivery references, which is what makes a dead letter redrivable — so without this bound one decommissioned endpoint pinned its envelopes for ever and `FLEXITYPE_EVENT_RETENTION` stopped bounding the outbox or the feed. Far longer than the event retention on purpose. |
 | `FLEXITYPE_EVENT_RETENTION` | `168h` (7d) | How long expanded events stay readable in the feed before pruning. |
 | `FLEXITYPE_WEBHOOK_URL` | _(unset)_ | Bootstrap webhook endpoint. With the outbox on, it is upserted as a managed subscription; otherwise it registers a direct hook. |
 | `FLEXITYPE_WEBHOOK_SECRET` | _(unset)_ | HMAC secret for the bootstrap webhook. |

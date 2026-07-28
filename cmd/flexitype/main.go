@@ -195,6 +195,9 @@ func run(log *logger.Logger) error {
 			// guard, and replacing it here would remove that guard.
 			opts = append(opts, flexitype.WithWebhookTimeout(cfg.WorkerHTTPTimeout))
 		}
+		if cfg.DeadLetterRetention > 0 {
+			opts = append(opts, flexitype.WithDeadLetterRetention(cfg.DeadLetterRetention))
+		}
 		if cfg.EventRetention > 0 {
 			opts = append(opts, flexitype.WithEventRetention(cfg.EventRetention))
 		}

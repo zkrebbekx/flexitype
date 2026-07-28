@@ -7,6 +7,33 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — Event retention and the bulk redrive
+
+- **Dead deliveries pinned their envelopes for ever** (#405). The envelope
+  prune keeps anything a `dead` delivery references — correct, since the dead
+  letter is the evidence an operator needs in order to redrive it — but
+  nothing else ever deleted a dead row. One decommissioned webhook endpoint
+  therefore held its envelopes indefinitely, so `FLEXITYPE_EVENT_RETENTION`
+  stopped bounding the outbox (described in migration 000025 as "the largest
+  table in an event-heavy deployment") or the events feed, and the hourly
+  prune scanned a table that could never shrink. Nothing surfaced it: the
+  deployment looked healthy until the table did. Dead letters now have their
+  own bound — `FLEXITYPE_DEAD_LETTER_RETENTION` /
+  `flexitype.WithDeadLetterRetention`, default **30 days**, far longer than
+  the event retention so a dead letter outlives the events it references. They
+  are pruned before the envelopes in the same pass, so an expired one frees
+  its envelope immediately.
+- **The bulk redrive was one unbounded UPDATE, all due at the same instant**
+  (#406) — the two shapes the same release had just fixed in the pruner. After
+  a day-long outage, `POST /api/v1/webhook-deliveries/redeliver-dead` opened
+  one transaction that locked and rewrote every dead row, blocking the
+  worker's `FOR UPDATE SKIP LOCKED` claims and the delivery-stats scrape for
+  its duration; it then handed the worker the entire backlog with an identical
+  `next_attempt_at`, pointed at the endpoint that had just come back. It now
+  redrives in bounded batches and spreads `next_attempt_at` across a
+  five-minute ramp, so the recovered consumer sees the backlog as a rate
+  rather than a spike.
+
 ### Fixed — Write-path correctness
 
 Four places where a write did something other than what the API described.

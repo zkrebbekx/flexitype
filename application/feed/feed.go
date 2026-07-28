@@ -47,6 +47,17 @@ type Store interface {
 	// Prune deletes expanded envelopes recorded before the cutoff whose
 	// deliveries have all settled. Returns rows removed.
 	Prune(ctx context.Context, cutoff time.Time) (int, error)
+
+	// PruneDeadLetters deletes DEAD delivery rows older than the cutoff, so
+	// their envelopes become prunable. Returns rows removed.
+	//
+	// The envelope prune deliberately keeps anything a dead delivery still
+	// references — the evidence an operator needs in order to redrive it —
+	// but nothing else ever deleted a dead row, so a single decommissioned
+	// endpoint pinned its envelopes for ever and FLEXITYPE_EVENT_RETENTION
+	// stopped bounding the outbox or the feed at all. The bound has to exist
+	// somewhere; it exists here, well past the attempt window.
+	PruneDeadLetters(ctx context.Context, cutoff time.Time) (int, error)
 }
 
 // CursorStore persists named consumer cursors.
@@ -182,24 +193,44 @@ func (i *Interactor) CommitCursor(ctx context.Context, consumer string, position
 	return i.cursors.Commit(ctx, uow.TenantFromContext(ctx), consumer, position, expected, i.now())
 }
 
+// DefaultDeadLetterRetention bounds how long a dead delivery is kept.
+//
+// It is far longer than the event retention (7 days by default) because a
+// dead letter is the record of a delivery that never succeeded: it must
+// outlive the events it references long enough for an operator to notice and
+// redrive. It is a bound, not a policy against redriving — 30 days is well
+// past any attempt window.
+const DefaultDeadLetterRetention = 30 * 24 * time.Hour
+
 // Pruner deletes events past retention on an interval.
 type Pruner struct {
-	store     Store
-	retention time.Duration
-	interval  time.Duration
-	onError   func(error)
-	now       func() time.Time
+	store          Store
+	retention      time.Duration
+	deadLetterKeep time.Duration
+	interval       time.Duration
+	onError        func(error)
+	now            func() time.Time
 }
 
 // NewPruner builds a retention pruner (interval defaults to hourly).
 func NewPruner(store Store, retention time.Duration, onError func(error)) *Pruner {
 	return &Pruner{
-		store:     store,
-		retention: retention,
-		interval:  time.Hour,
-		onError:   onError,
-		now:       uow.UTCNow,
+		store:          store,
+		retention:      retention,
+		deadLetterKeep: DefaultDeadLetterRetention,
+		interval:       time.Hour,
+		onError:        onError,
+		now:            uow.UTCNow,
 	}
+}
+
+// WithDeadLetterRetention overrides how long a dead delivery is kept before
+// it stops pinning its envelope. Non-positive values are ignored.
+func (p *Pruner) WithDeadLetterRetention(d time.Duration) *Pruner {
+	if d > 0 {
+		p.deadLetterKeep = d
+	}
+	return p
 }
 
 // Run prunes until ctx ends.
@@ -207,6 +238,11 @@ func (p *Pruner) Run(ctx context.Context) {
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 	for {
+		// Dead letters first: removing an expired one makes its envelope
+		// eligible in the same pass, rather than an hour later.
+		if _, err := p.store.PruneDeadLetters(ctx, p.now().Add(-p.deadLetterKeep)); err != nil && p.onError != nil {
+			p.onError(err)
+		}
 		if _, err := p.store.Prune(ctx, p.now().Add(-p.retention)); err != nil && p.onError != nil {
 			p.onError(err)
 		}

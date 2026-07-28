@@ -84,6 +84,47 @@ plausible number rather than an error.
 `pkg/formula` gains `Members`, `EvalWithMembers`, `EvalRatWithMembers` and
 `NumericRefs`. The existing `Eval` and `EvalRat` are unchanged.
 
+### Fixed — A purge deletes every matching row, in the canonical order, and keeps blobs another entity still uses
+
+A right-to-erasure purge could return a success receipt with the data still
+present. The chunk key was the `ctid`, and a `ctid` is not stable across an
+`UPDATE`: when a concurrent transaction updated a matching row and committed,
+Postgres re-checked the qualification against the new tuple version, whose
+`ctid` was not in the chunk's set, so the row was skipped. A chunk that
+removed nothing was read as "done". Measured — one row, one concurrent
+committed `UPDATE` — the purge reported 0 rows deleted and left the row in
+place.
+
+Three changes close it:
+
+- **The chunk key is the primary key.** An `id` survives an `UPDATE`.
+- **The chunk is ordered by `entity_id, id` and locked `FOR UPDATE` in an
+  ordered CTE.** Every value write refreshes a shared entity-summary row, so
+  a purge that took rows in physical order deadlocked against a
+  canonical-order batch write. An `ORDER BY` alone was not enough: it decides
+  only *which* rows a chunk takes, and the `DELETE` still locked them in its
+  own scan order (measured — still deadlocking after the `ORDER BY`). The
+  `LockRows` node sits above the `Sort`, so the CTE takes the row locks in
+  entity order. `application/value/lockorder.go` now states that a `DELETE`
+  is a writer under the same rule.
+- **Completion is decided by a count, not by an empty chunk.** A run of
+  chunks that remove nothing while rows still match is reported as an error.
+  Erasure is the operation least able to tolerate a false success.
+
+Two related media fixes ship with it:
+
+- **Erasure counts references before deleting a blob.** Adoption is the
+  sanctioned way to reuse an object key, so a shared key is the expected
+  shape. The erasure GC deleted unconditionally while the ordinary write path
+  counted references, so purging one entity destroyed a different entity's
+  live document and left it a media value whose bytes 404. Keys kept for
+  another value are listed on the purge report as `retained_blob_keys`.
+- **The owner of an object key is decided deterministically.** The owning
+  value decides which attribute's field ACL governs adoption and download.
+  `ORDER BY created_at` left a tie to physical row order, and two values
+  written in one batch share a timestamp. The `id` now breaks the tie, in
+  both backends.
+
 ### Fixed — The release no longer tags modules `go get` cannot resolve
 
 `cmd/flexitype` and `infrastructure/gcppubsub` carry a `replace` of the core

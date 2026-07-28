@@ -643,7 +643,7 @@ func (r *attributeValueRepository) MediaValueForKey(ctx context.Context, tenant 
 		`SELECT `+valueColumnList+`
 		   FROM flexitype_attribute_value
 		  WHERE tenant_id = ? AND data_type = ? AND value_json->>'object_key' = ?
-		  ORDER BY created_at
+		  ORDER BY created_at, id
 		  LIMIT 1`),
 		tenant.String(), valueobjects.DataTypeMedia.String(), objectKey); err != nil {
 		return domainvalue.Snapshot{}, false, fmt.Errorf("media value for key: %w", err)
@@ -819,45 +819,96 @@ func purgedMediaKeys(rows []purgedValueRow) []string {
 // still atomic.
 const purgeChunk = 5000
 
+// purgeStallLimit bounds the consecutive empty chunks tolerated while rows
+// still match, so a purge racing a continuous writer terminates.
+const purgeStallLimit = 3
+
 func (r *attributeValueRepository) PurgeEntity(ctx context.Context, key domainvalue.EntityKey) ([]string, int, error) {
 	// DELETE ... RETURNING removes every row (archived included) and hands back
 	// the media metadata so the interactor can GC the blobs.
-	return r.purgeChunked(ctx, "purge entity values",
-		bind(`DELETE FROM flexitype_attribute_value
-		 WHERE ctid IN (
-		   SELECT ctid FROM flexitype_attribute_value
-		    WHERE tenant_id = ? AND type_definition_id = ? AND entity_id = ?
-		    LIMIT ?)
-		 RETURNING data_type, value_json`),
-		key.TenantID.String(), key.TypeDefinitionID.String(), key.EntityID.String(), purgeChunk)
+	const where = `tenant_id = ? AND type_definition_id = ? AND entity_id = ?`
+	return r.purgeChunked(ctx, "purge entity values", where,
+		key.TenantID.String(), key.TypeDefinitionID.String(), key.EntityID.String())
 }
 
 func (r *attributeValueRepository) PurgeTenant(ctx context.Context, tenant valueobjects.TenantID) ([]string, int, error) {
-	return r.purgeChunked(ctx, "purge tenant values",
-		bind(`DELETE FROM flexitype_attribute_value
-		 WHERE ctid IN (
-		   SELECT ctid FROM flexitype_attribute_value
-		    WHERE tenant_id = ?
-		    LIMIT ?)
-		 RETURNING data_type, value_json`),
-		tenant.String(), purgeChunk)
+	return r.purgeChunked(ctx, "purge tenant values", `tenant_id = ?`, tenant.String())
 }
 
-// purgeChunked runs a bounded delete until it removes nothing, accumulating
-// the media keys and the row count.
-func (r *attributeValueRepository) purgeChunked(ctx context.Context, what, query string, args ...any) ([]string, int, error) {
+// purgeChunked deletes every row matching the predicate, in bounded chunks,
+// and confirms the predicate is empty before reporting success.
+//
+// The chunk key is the PRIMARY KEY, not the ctid. A ctid is not stable across
+// an UPDATE: Postgres re-checks the qualification against the new tuple
+// version under EvalPlanQual, and that version's ctid is not in the hashed
+// set, so a row updated by a committed concurrent transaction was silently
+// SKIPPED. Measured on Postgres 16 — three rows, one concurrent committed
+// UPDATE — the ctid form deleted 0 and left all three, while the same
+// interleaving against a direct predicate deleted all three. An id survives
+// an UPDATE, which is why the dead-letter pruner in the same wave was already
+// correct.
+//
+// ORDER BY entity_id, id is the canonical write order (see
+// application/value/lockorder.go). Every value write refreshes a shared
+// entity-summary row, so a purge that took those rows in an arbitrary order
+// deadlocked against a batch write that took them in entity order — 4 rounds
+// out of 4. The purge is a writer like any other and follows the same rule.
+//
+// FOR UPDATE inside the CTE is what makes the ordering effective. An ORDER BY
+// in a plain `id IN (subquery)` decides only WHICH rows the chunk takes: the
+// DELETE joins them back and locks them in its own scan order, so the
+// deadlock survived the ORDER BY alone (measured — still 1 round in 3). The
+// LockRows node sits above the Sort, so the CTE takes the row locks in
+// entity order, and the DELETE then touches rows this transaction already
+// holds.
+//
+// The final COUNT is what makes a zero-row chunk trustworthy. Reporting
+// success on an empty chunk is how a purge came to return a receipt with the
+// data still present, and erasure is the one operation where a false success
+// is a compliance failure rather than a bug.
+func (r *attributeValueRepository) purgeChunked(ctx context.Context, what, where string, args ...any) ([]string, int, error) {
+	del := bind(`WITH victim AS (
+	   SELECT id FROM flexitype_attribute_value
+	    WHERE ` + where + `
+	    ORDER BY entity_id, id
+	    LIMIT ?
+	    FOR UPDATE
+	 )
+	 DELETE FROM flexitype_attribute_value v
+	  USING victim
+	  WHERE v.id = victim.id
+	  RETURNING v.data_type, v.value_json`)
+	count := bind(`SELECT count(*) FROM flexitype_attribute_value WHERE ` + where)
+
 	var keys []string
-	total := 0
+	total, stalled := 0, 0
 	for {
 		var rows []purgedValueRow
-		if err := r.q.SelectContext(ctx, &rows, query, args...); err != nil {
+		if err := r.q.SelectContext(ctx, &rows, del, append(append([]any{}, args...), purgeChunk)...); err != nil {
 			return nil, 0, fmt.Errorf("%s: %w", what, err)
-		}
-		if len(rows) == 0 {
-			return keys, total, nil
 		}
 		keys = append(keys, purgedMediaKeys(rows)...)
 		total += len(rows)
+		if len(rows) > 0 {
+			stalled = 0
+		} else {
+			var left int
+			if err := r.q.GetContext(ctx, &left, count, args...); err != nil {
+				return nil, 0, fmt.Errorf("%s: confirm empty: %w", what, err)
+			}
+			if left == 0 {
+				return keys, total, nil
+			}
+			// Rows match but the chunk removed none. A writer that committed
+			// after the chunk's snapshot explains one round, and the next
+			// chunk takes those rows. A run of them means the purge cannot
+			// make progress, and a purge that cannot make progress must
+			// report that rather than answer success.
+			stalled++
+			if stalled >= purgeStallLimit {
+				return nil, 0, fmt.Errorf("%s: %d rows still match after %d chunks removed none", what, left, stalled)
+			}
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, 0, err
 		}

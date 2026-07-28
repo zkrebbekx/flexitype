@@ -118,6 +118,10 @@ type PurgeReport struct {
 	SearchDocsPurged  int    `json:"search_docs_purged"`
 	// MediaBlobsPurged counts blobs storage confirmed deleted (post-commit).
 	MediaBlobsPurged int `json:"media_blobs_purged"`
+	// RetainedBlobKeys lists object keys another LIVE value still references,
+	// so they were deliberately NOT deleted. A right-to-erasure caller has to
+	// be told which bytes survive and why.
+	RetainedBlobKeys []string `json:"retained_blob_keys,omitempty"`
 	// MediaBlobsFailed counts blobs whose deletion failed; UnpurgedBlobKeys
 	// lists their still-orphaned object keys for operator reconciliation.
 	// RecordsRedacted counts the event-log and activity-log records whose
@@ -339,6 +343,18 @@ func (i *Interactor) PurgeTenant(ctx context.Context) (*PurgeReport, error) {
 // the still-orphaned keys (UnpurgedBlobKeys) so an operator can reconcile them.
 // Post-commit hooks run inside Commit, so these counts are set before the
 // erasure call returns. Each failure is also surfaced to the cleanup observer.
+//
+// A key another LIVE value still references is not deleted. Adoption is the
+// sanctioned way to reuse an object key, so a key shared between entities is
+// the expected shape — and deleting unconditionally meant purging one entity
+// destroyed a different entity's document, leaving that entity a live media
+// value whose bytes 404. The ordinary write path has always counted
+// references; this path did not, and the adoption work that made sharing
+// normal arrived in the same round.
+//
+// A retained key is reported in RetainedBlobKeys rather than silently
+// skipped: for a right-to-erasure caller, "these bytes survive because
+// another entity still points at them" is a fact they have to be told.
 func (i *Interactor) gcErasedBlobs(tx db.Transactor, keys []string, report *PurgeReport) {
 	if i.blobs == nil || len(keys) == 0 {
 		return
@@ -347,6 +363,19 @@ func (i *Interactor) gcErasedBlobs(tx db.Transactor, keys []string, report *Purg
 	tx.OnPostCommit(func(ctx context.Context) error {
 		for _, key := range keys {
 			if key == "" {
+				continue
+			}
+			// The purged rows are gone by now, so any remaining reference is
+			// another value's. zeroValueID excludes nothing.
+			refs, cerr := i.values.MediaKeyRefCount(ctx, key, valueobjects.AttributeValueID{})
+			if cerr != nil {
+				report.MediaBlobsFailed++
+				report.UnpurgedBlobKeys = append(report.UnpurgedBlobKeys, key)
+				i.observeCleanup(fmt.Errorf("count media references for %s: %w", key, cerr))
+				continue
+			}
+			if refs > 0 {
+				report.RetainedBlobKeys = append(report.RetainedBlobKeys, key)
 				continue
 			}
 			if err := i.blobs.Delete(ctx, key); err != nil {

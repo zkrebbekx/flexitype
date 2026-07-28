@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -204,11 +205,22 @@ func isConcurrentCreate(err error) bool {
 // Migration-lease timings. The lease is refreshed between statements, so the
 // TTL only has to outlast one statement; leaseTTL is generous because a
 // CREATE INDEX CONCURRENTLY over a large table is one statement.
+// leaseWait MUST exceed leaseTTL. A runner that dies holding the lease leaves
+// a row with a live expires_at that nobody renews, and the only way another
+// runner recovers is by outlasting it. With a shorter wait, every replica
+// booting inside that window gave up before the lease could expire — inside a
+// container startup path, so the orchestrator restarted it and it repeated,
+// and a whole generation could not boot.
 const (
 	leaseTTL      = 15 * time.Minute
-	leaseWait     = 10 * time.Minute
+	leaseWait     = leaseTTL + 2*time.Minute
 	leasePoll     = 250 * time.Millisecond
 	leaseRenewGap = time.Minute
+	// leaseReleaseTimeout bounds the write that frees the lease. It runs on a
+	// context detached from the caller's, because releasing on a cancelled
+	// startup context was a no-op and stranded the lease for the full TTL
+	// even though the process was alive.
+	leaseReleaseTimeout = 10 * time.Second
 )
 
 // migrateLease is a mutual exclusion held in a TABLE ROW rather than in
@@ -247,7 +259,11 @@ func acquireMigrationLease(ctx context.Context, q db.QueryExecer) (*migrateLease
 			return l, nil
 		}
 		if l.now().After(deadline) {
-			return nil, fmt.Errorf("acquire migration lease: another runner has held it for more than %s", leaseWait)
+			holder, expires := l.currentHolder(ctx)
+			return nil, fmt.Errorf(
+				"acquire migration lease: %q has held it for more than %s (expires_at %s); "+
+					"if that runner is gone, the lease frees itself at that time",
+				holder, leaseWait, expires)
 		}
 		select {
 		case <-ctx.Done():
@@ -308,10 +324,32 @@ func (l *migrateLease) renew(ctx context.Context) error {
 }
 
 // release frees the lease. A failure here is not fatal: the lease expires.
+//
+// It runs on a DETACHED context. The commonest reason Migrate returns is that
+// the caller's context ended, and releasing on that same context was a no-op
+// — so an embedded deployment with a cancellable startup context stranded the
+// lease for the full TTL while the process was alive and able to free it.
 func (l *migrateLease) release(ctx context.Context) {
-	_, _ = l.q.ExecContext(ctx,
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaseReleaseTimeout)
+	defer cancel()
+	_, _ = l.q.ExecContext(rctx,
 		`UPDATE flexitype_schema_lock SET holder = '', expires_at = now()
 		  WHERE id = 1 AND holder = $1`, l.holder)
+}
+
+// currentHolder reads who holds the lease and when it expires, for the error
+// a waiting runner reports. An operator needs the blocker named: without it
+// the failure said only that someone else had the lease.
+func (l *migrateLease) currentHolder(ctx context.Context) (holder, expires string) {
+	var row struct {
+		Holder    string    `db:"holder"`
+		ExpiresAt time.Time `db:"expires_at"`
+	}
+	if err := l.q.GetContext(ctx, &row,
+		`SELECT holder, expires_at FROM flexitype_schema_lock WHERE id = 1`); err != nil {
+		return "unknown", "unknown"
+	}
+	return row.Holder, row.ExpiresAt.UTC().Format(time.RFC3339)
 }
 
 // leaseHolderID names the runner in the lock row, so an operator inspecting a
@@ -446,6 +484,22 @@ func applyInTransaction(ctx context.Context, q db.QueryExecer, m migration) (err
 // file must be idempotent, and the runner replays the whole file if it is
 // interrupted.
 func applyOutsideTransaction(ctx context.Context, q db.QueryExecer, m migration, lease *migrateLease) error {
+	// Reap invalid indexes this file builds, BEFORE replaying it.
+	//
+	// A failed CREATE INDEX CONCURRENTLY leaves an INVALID index behind. The
+	// name then exists, so `IF NOT EXISTS` skips the rebuild for ever, and a
+	// file that also drops the index it replaces — migration 000028 — removed
+	// the working index and left only the invalid one. Every read that index
+	// served then sequentially scanned the table, permanently, with the
+	// schema version reading as current and no error at any point. The
+	// trigger is an ordinary pod lifecycle event during a deploy: an
+	// OOMKill, an eviction or a lock timeout part-way through the build.
+	//
+	// Dropping an invalid index is safe precisely because it is invalid: no
+	// query can use it, and the CREATE that follows rebuilds it.
+	if err := reapInvalidIndexes(ctx, q, m); err != nil {
+		return err
+	}
 	for _, stmt := range splitStatements(m.body) {
 		if statementIsEmpty(stmt) {
 			continue
@@ -462,6 +516,45 @@ func applyOutsideTransaction(ctx context.Context, q db.QueryExecer, m migration,
 		}
 	}
 	return recordMigration(ctx, q, m.version)
+}
+
+// concurrentIndexNames matches the index name in a CREATE INDEX CONCURRENTLY
+// statement, with or without IF NOT EXISTS and with or without UNIQUE.
+var concurrentIndexNames = regexp.MustCompile(
+	`(?is)CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z_][a-zA-Z0-9_$]*)`)
+
+// reapInvalidIndexes drops any INVALID index whose name this migration
+// creates concurrently, so the replay rebuilds it rather than skipping it.
+//
+// It covers every no-transaction migration rather than the one that exposed
+// the hazard (000018, 000021 and 000025 build indexes concurrently too), and
+// it is a no-op in the ordinary case: the catalogue query matches nothing.
+func reapInvalidIndexes(ctx context.Context, q db.QueryExecer, m migration) error {
+	for _, match := range concurrentIndexNames.FindAllStringSubmatch(m.body, -1) {
+		name := match[1]
+		var invalid bool
+		if err := q.GetContext(ctx, &invalid,
+			`SELECT EXISTS (
+			   SELECT 1 FROM pg_index i
+			     JOIN pg_class c ON c.oid = i.indexrelid
+			     JOIN pg_namespace n ON n.oid = c.relnamespace
+			    WHERE c.relname = $1
+			      AND n.nspname = current_schema()
+			      AND NOT i.indisvalid)`, name); err != nil {
+			return fmt.Errorf("check index %s for migration %s: %w", name, m.name, err)
+		}
+		if !invalid {
+			continue
+		}
+		// Quoted with %q semantics via pq.QuoteIdentifier: the name comes
+		// from the embedded migration files, but the query is built by
+		// concatenation, so it is quoted rather than trusted.
+		if _, err := q.ExecContext(ctx,
+			`DROP INDEX CONCURRENTLY IF EXISTS `+pq.QuoteIdentifier(name)); err != nil {
+			return fmt.Errorf("reap invalid index %s for migration %s: %w", name, m.name, err)
+		}
+	}
+	return nil
 }
 
 // recordMigration marks a version applied.

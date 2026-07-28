@@ -368,12 +368,18 @@ paths:
     patch:
       tags: [saved-views]
       summary: Update a saved view
+      description: >
+        Sparse: an omitted field keeps its stored value. Send the `version`
+        you read to make the write a compare-and-swap — a view edited by
+        someone else in the meantime answers 409 instead of overwriting their
+        edit. Omitting `version` keeps last-write-wins.
       requestBody:
         required: true
-        content: { application/json: { schema: { $ref: "#/components/schemas/SavedViewInput" } } }
+        content: { application/json: { schema: { $ref: "#/components/schemas/SavedViewPatch" } } }
       responses:
         "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/SavedView" } } } }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
     delete:
       tags: [saved-views]
       summary: Delete a saved view
@@ -2378,6 +2384,23 @@ components:
         query: { type: string }
         columns: { type: array, items: { type: string } }
         sort: { type: string }
+    SavedViewPatch:
+      type: object
+      description: >
+        Sparse update. Every field is optional; an omitted one keeps its
+        stored value.
+      properties:
+        name: { type: string }
+        root_type: { type: string, description: Root type internal name }
+        query: { type: string }
+        columns: { type: array, items: { type: string } }
+        sort: { type: string }
+        version:
+          type: integer
+          description: >
+            The version the caller read. Supply it to compare-and-swap: a
+            stale write answers 409 rather than discarding the other edit.
+            Omit it for last-write-wins.
     SavedView:
       allOf:
         - $ref: "#/components/schemas/SavedViewInput"

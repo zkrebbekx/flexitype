@@ -306,6 +306,10 @@ type SavedView struct {
 	Sort      string    `json:"sort,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Version increments on every write. Send it back in SavedViewPatch to
+	// compare-and-swap, so a concurrent edit answers 409 instead of being
+	// silently overwritten.
+	Version int `json:"version"`
 }
 
 // MatchRule is a per-type duplicate-detection rule.

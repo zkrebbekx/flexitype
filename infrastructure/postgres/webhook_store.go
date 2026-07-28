@@ -383,10 +383,22 @@ func (s *deliveryStore) List(ctx context.Context, filter webhook.DeliveryFilter,
 // slice of the delivery table — blocking the worker's FOR UPDATE SKIP LOCKED
 // claims and the delivery-stats scrape for its duration.
 //
-// The ramp matters as much. Setting one next_attempt_at on every revived row
-// hands the worker the whole backlog at once, pointed at the endpoint that has
-// just come back — a good way to knock it over again and produce a second
-// outage. Spreading the schedule turns the backlog into a rate.
+// The ramp is PER SUBSCRIPTION, not per delivery.
+//
+// A per-row random offset was head-of-line blocking, not smoothing. ClaimDue
+// takes a subscription's single lowest-feed_seq pending row, and only if that
+// row is due, so the head's offset gates everything behind it: measured over
+// 20 revived rows for one subscription, the head drew +4m26s and NOTHING was
+// claimable for four and a half minutes even though 19 later deliveries were
+// already due. The operator sees a redrive that reported success move zero
+// deliveries.
+//
+// That same serialization — lowest feed_seq, one inflight at a time — is
+// already the per-endpoint rate limit, so the spike the ramp was written to
+// prevent could not occur. What a ramp can still do is stop MANY recovered
+// subscriptions firing in the same instant, so the offset is derived from the
+// subscription id: deterministic, identical for every row of one
+// subscription, and spread across the window between subscriptions.
 const (
 	redeliverBatch = 500
 	redeliverRamp  = 5 * time.Minute
@@ -409,13 +421,17 @@ func (s *deliveryStore) RedeliverMatching(ctx context.Context, filter webhook.De
 
 	total := 0
 	for {
-		// next_attempt_at is spread across the ramp with random(), so the
-		// recovered endpoint sees a rate rather than a spike.
-		batchArgs := append([]any{now, redeliverRamp.String(), now}, args...)
+		// One offset per SUBSCRIPTION, from a hash of its id: every row of a
+		// subscription becomes due at the same instant, so the lowest
+		// feed_seq is due first and the backlog drains, while different
+		// subscriptions still spread across the window.
+		batchArgs := append([]any{now, int(redeliverRamp.Seconds()), now}, args...)
 		batchArgs = append(batchArgs, redeliverBatch)
 		res, err := s.q.ExecContext(ctx, bind(`UPDATE flexitype_webhook_delivery
 		 SET status = 'pending', attempts = 0,
-		     next_attempt_at = ?::timestamptz + random() * ?::interval,
+		     next_attempt_at = ?::timestamptz +
+		       (((('x' || substr(md5(subscription_id::text), 1, 8))::bit(32)::bigint & 2147483647)
+		         % ?::int) * interval '1 second'),
 		     lease_expires_at = NULL, updated_at = ?
 		 WHERE id IN (
 		     SELECT id FROM flexitype_webhook_delivery

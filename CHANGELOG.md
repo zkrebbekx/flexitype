@@ -36,6 +36,41 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
   startup context stranded the lease for the full TTL while the process was
   alive and able to free it.
 
+### Fixed — Four residual one-sided fixes: the CSV multi-value marker, the redrive ramp, saved-view locking and two documents
+
+- **The multi-value CSV marker is out of band.** Any in-band sentinel drawn
+  from the JSON grammar can be forged by a JSON payload: the format was a bare
+  array of `{"value",…}` objects, and retagging it as `{"values":[…]}` moved
+  WHICH documents collide rather than whether they can — the tagged shape is
+  exactly what an export of a `json` column looks like, so re-importing this
+  tool's own output read one document as two members, wrote both to a
+  single-valued attribute, kept the last, and reported one row written with
+  zero errors. A cell is now marked with a `#flexitype-values:` prefix, which
+  no JSON document can begin with, so a multi-valued `json` column round-trips
+  too. Both legacy forms are still accepted on import for non-`json` columns.
+- **The redrive ramp is per subscription.** `ClaimDue` takes a subscription's
+  single lowest-`feed_seq` pending row, and only if that row is due, so a
+  per-row random offset was head-of-line blocking rather than smoothing:
+  measured over 20 revived rows, the head drew +4m26s and nothing was
+  claimable for four and a half minutes while 19 later deliveries were
+  already due. The offset is now derived from the subscription id — identical
+  for every row of one subscription, spread across the window between
+  subscriptions.
+- **Saved-view optimistic locking is reachable from a client.** `PATCH`
+  accepts an optional `version`: send the one you read and a view someone else
+  edited answers 409 instead of being overwritten. `Patch` re-read the view
+  microseconds before writing it, so two users editing the same view both
+  passed their own check and the second silently discarded the first. Omitting
+  `version` keeps last-write-wins. The field is in the OpenAPI document and in
+  the Go client (`SavedViewPatch.Version`, `SavedView.Version`).
+- **Two documents now describe the code.** `docs/design/identity.md` no longer
+  carries the pre-fix bullet calling a deleted role "the safe direction" — the
+  belief the fail-open guard exists to refuse — and both it and
+  `docs/configuration.md` state that auth-cache eviction is PER PROCESS: a
+  multi-replica deployment converges over `FLEXITYPE_AUTH_CACHE_TTL`, so
+  during an incident the TTL, not the API response, is when a revocation is in
+  force everywhere.
+
 ### Fixed — Five one-sided guards: DSN quoting, the pre-auth limiter, the GraphQL schema key, the effective-permissions view and the time zone
 
 - **The TLS guard parses the connection string with libpq's grammar.** The

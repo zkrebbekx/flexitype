@@ -18,8 +18,17 @@ import (
 // TestRecomputeComputedRecovery covers the recovery path for #211's in-UoW
 // projection maintenance: a computed value left unmaterialized (as a
 // mid-post-commit crash would) is rebuilt by the tenant-wide recompute.
+//
+// This test used to assert the value was ABSENT until the recompute ran.
+// That is no longer true and is no longer a race worth pinning: since #293,
+// adding a computed attribute to a populated type schedules a rebuild, so the
+// value converges on its own shortly afterwards. Asserting absence would be
+// asserting that a scheduled goroutine has not run yet, which passes or fails
+// on timing. What still matters — and is asserted below — is that the
+// tenant-wide recompute rebuilds the value correctly, because that is the
+// operator's recovery lever after a crash.
 func TestRecomputeComputedRecovery(t *testing.T) {
-	Convey("Given values written before a computed attribute exists — so its value is unmaterialized", t, func() {
+	Convey("Given values written before a computed attribute exists", t, func() {
 		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
 		svc := flexitype.NewInMemory()
 		it := svc.Interactors(ctx)
@@ -67,11 +76,6 @@ func TestRecomputeComputedRecovery(t *testing.T) {
 			}
 			return 0, false
 		}
-
-		Convey("The computed value is initially absent", func() {
-			_, ok := marginOf()
-			So(ok, ShouldBeFalse)
-		})
 
 		Convey("RecomputeComputed rebuilds it for the tenant", func() {
 			n, err := svc.RecomputeComputed(ctx, valueobjects.DefaultTenant)

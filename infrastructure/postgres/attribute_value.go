@@ -526,7 +526,19 @@ func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valu
 	// case scans the — still small, one-row-per-entity — summary and sorts,
 	// which remains far cheaper than aggregating the value table.
 	typePred, typeArg := typeDefPredicate(ids)
+	// A full sweep pages on the IMMUTABLE key. last_updated_at is rewritten
+	// by the summary trigger on every value write, so an entity the sweep has
+	// not reached yet, written mid-sweep, jumps ahead of the newest-first
+	// cursor and can never satisfy the "strictly older" predicate again — it
+	// is skipped, silently. entity_id never changes, and it is the trailing
+	// column of the table's primary key, so this ordering is an index scan
+	// too.
 	entityKeyset := []db.KeysetColumn{{Expr: "last_updated_at", Desc: true, Cast: "::timestamptz"}, {Expr: "entity_id"}}
+	orderBy := "last_updated_at DESC, entity_id"
+	if page.Stable {
+		entityKeyset = []db.KeysetColumn{{Expr: "entity_id"}}
+		orderBy = "entity_id"
+	}
 	where := []string{"tenant_id = ?", typePred}
 	args := []any{tenant.String(), typeArg}
 	where, args = keysetWhere(where, args, entityKeyset, page.Cursor)
@@ -535,7 +547,7 @@ func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valu
 		`SELECT entity_id, type_definition_id, value_count, last_updated_at
 		 FROM flexitype_entity_summary
 		 WHERE `+strings.Join(where, " AND ")+`
-		 ORDER BY last_updated_at DESC, entity_id
+		 ORDER BY `+orderBy+`
 		 LIMIT ?`),
 		args...,
 	)

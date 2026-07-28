@@ -210,7 +210,10 @@ func (i *Indexer) Reindex(ctx context.Context, tenant valueobjects.TenantID) (in
 
 	count := 0
 	for _, t := range types {
-		page := db.Page{Limit: 200}
+		// A reindex is a full sweep: page on the immutable key so an entity
+		// written mid-sweep cannot jump ahead of the cursor and be left out
+		// of the index — which is the one thing a reindex exists to prevent.
+		page := db.Page{Limit: 200, Stable: true}
 		for {
 			entities, _, err := repos.ValueReader.ListEntities(ctx, tenant,
 				[]valueobjects.TypeDefinitionID{t.ID()}, page)
@@ -230,8 +233,7 @@ func (i *Indexer) Reindex(ctx context.Context, tenant valueobjects.TenantID) (in
 			if len(entities) <= page.Limit {
 				break
 			}
-			last := entities[len(entities)-1]
-			page.Cursor = db.EncodeKeyset(db.KeysetTime(last.LastUpdatedAt), last.EntityID.String())
+			page.Cursor = db.EncodeKeyset(entities[len(entities)-1].EntityID.String())
 		}
 	}
 	return count, nil

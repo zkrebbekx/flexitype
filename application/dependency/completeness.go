@@ -211,7 +211,10 @@ func (i *Interactor) TypeCompleteness(ctx context.Context, rawTypeID string) (*T
 	var sum float64
 	// Ask for the total once so Count reflects the full population even though
 	// only the first maxCompletenessScan entities are scored.
-	page := db.Page{Limit: 200, WantTotal: true}
+	// A completeness sweep scores a population, so it pages on the immutable
+	// key: newest-first meant an entity written mid-sweep was scored zero
+	// times and the score was computed over a set that never existed.
+	page := db.Page{Limit: 200, WantTotal: true, Stable: true}
 	first := true
 	for {
 		summaries, total, err := i.values.ListEntities(ctx, t.TenantID(), []valueobjects.TypeDefinitionID{typeID}, page)
@@ -260,7 +263,7 @@ func (i *Interactor) TypeCompleteness(ctx context.Context, rawTypeID string) (*T
 			break
 		}
 		last := summaries[len(summaries)-1]
-		page.Cursor = db.EncodeKeyset(db.KeysetTime(last.LastUpdatedAt), last.EntityID.String())
+		page.Cursor = db.EncodeKeyset(last.EntityID.String())
 	}
 	out.Scored = len(out.Entities)
 	if out.Scored > 0 {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/zkrebbekx/flexitype/application/appctx"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
@@ -406,6 +407,13 @@ func (i *Interactor) resolveMapping(ctx context.Context, in ImportInput) ([]mapp
 		m.column = column
 		cols = append(cols, m)
 	}
+	if len(cols) == 0 {
+		// An import with nothing mapped used to walk every row, write no
+		// value, and report them all as written — a silent no-op dressed as a
+		// successful load.
+		return nil, 0, domainerrors.NewValidation(
+			"no columns are mapped to attributes, so the import would write nothing")
+	}
 	return cols, keyIdx, nil
 }
 
@@ -434,6 +442,27 @@ func (i *Interactor) rowInputs(typeID string, cols []mappedColumn, keyIdx, rowNu
 			// reject it too), not a silent skip.
 			if c.required {
 				errs = append(errs, ImportError{Row: rowNum, Column: c.column, Attribute: c.attrName, Reason: "value is required"})
+			}
+			continue
+		}
+		// A cell holding several values — a multi-valued attribute, or scoped
+		// variants — arrives as the JSON array the export writes. Each member
+		// becomes its own write, with its own scope.
+		if entries, ok := scopedCell(cell); ok {
+			for _, e := range entries {
+				raw, err := cellToRaw(c.dataType, e.text())
+				if err != nil {
+					errs = append(errs, ImportError{Row: rowNum, Column: c.column, Attribute: c.attrName, Reason: err.Error()})
+					continue
+				}
+				inputs = append(inputs, SetInput{
+					AttributeDefinitionID: c.attrID,
+					EntityID:              entityID,
+					TypeDefinitionID:      typeID,
+					Locale:                e.Locale,
+					Channel:               e.Channel,
+					Value:                 raw,
+				})
 			}
 			continue
 		}
@@ -486,6 +515,43 @@ func importErrorFrom(row int, err error) ImportError {
 
 // cellToRaw renders a CSV cell as the raw JSON scalar ParseValue expects for
 // the attribute's data type, inverting Value.String().
+// cellEntry is one member of a multi-value cell: a value plus its scope.
+type cellEntry struct {
+	Value   json.RawMessage `json:"value"`
+	Locale  string          `json:"locale,omitempty"`
+	Channel string          `json:"channel,omitempty"`
+}
+
+// text renders the member as the cell text cellToRaw decodes. A JSON string
+// is unquoted, so a plain value reads the way it would in its own cell.
+func (e cellEntry) text() string {
+	var plain string
+	if err := json.Unmarshal(e.Value, &plain); err == nil {
+		return plain
+	}
+	return string(e.Value)
+}
+
+// scopedCell decodes a cell holding several values. It reports false for an
+// ordinary single-value cell, including a JSON object cell (a quantity or a
+// media reference), which is an object rather than an array.
+func scopedCell(cell string) ([]cellEntry, bool) {
+	trimmed := strings.TrimSpace(cell)
+	if !strings.HasPrefix(trimmed, "[") {
+		return nil, false
+	}
+	var entries []cellEntry
+	if err := json.Unmarshal([]byte(trimmed), &entries); err != nil {
+		return nil, false
+	}
+	for _, e := range entries {
+		if len(e.Value) == 0 {
+			return nil, false
+		}
+	}
+	return entries, len(entries) > 0
+}
+
 func cellToRaw(dt valueobjects.DataType, cell string) (json.RawMessage, error) {
 	switch dt {
 	case valueobjects.DataTypeBool:
@@ -506,9 +572,13 @@ func cellToRaw(dt valueobjects.DataType, cell string) (json.RawMessage, error) {
 			return nil, domainerrors.NewValidation("expected a number", "got", cell)
 		}
 		return json.Marshal(f)
-	case valueobjects.DataTypeJSON, valueobjects.DataTypeMedia:
+	case valueobjects.DataTypeJSON, valueobjects.DataTypeMedia, valueobjects.DataTypeQuantity:
+		// A quantity used to fall through to the default arm and arrive as
+		// the quoted string "10 kg", which the quantity decoder rejects. The
+		// export now writes the JSON object the values API accepts, and this
+		// arm reads it back.
 		if !json.Valid([]byte(cell)) {
-			return nil, domainerrors.NewValidation("expected a JSON document")
+			return nil, domainerrors.NewValidation("expected a JSON document", "got", cell)
 		}
 		return json.RawMessage(cell), nil
 	default:
@@ -539,8 +609,19 @@ type ExportOutput struct {
 }
 
 // Export renders a type's entities as tabular data. The first column is the
-// entity id; the rest are the chosen attributes rendered via Value.String,
-// so the output re-imports through Import unchanged.
+// entity id; the rest are the chosen attributes.
+//
+// The output re-imports through Import unchanged, which is why a cell is not
+// simply Value.String: that is a DISPLAY rendering, and it wrote a quantity
+// as "10 kg" and a media value as a bare object key, neither of which the
+// importer can decode. A quantity, media or JSON cell carries the same JSON
+// the values API accepts.
+//
+// An attribute holding several values for one entity — multi-valued, or
+// localized/channel-scoped variants — is one JSON array cell, each member
+// carrying its own scope. It used to be one cell assigned per
+// (entity, attribute), so the last row written won and the rest were dropped
+// with no error.
 func (i *Interactor) Export(ctx context.Context, in ExportInput) (*ExportOutput, error) {
 	typeID, err := valueobjects.ParseTypeDefinitionID(in.TypeDefinitionID)
 	if err != nil {
@@ -632,15 +713,21 @@ func (i *Interactor) Export(ctx context.Context, in ExportInput) (*ExportOutput,
 		}
 		ids = append(ids, id)
 	}
-	byEntity := make(map[string]map[valueobjects.AttributeDefinitionID]string, len(entityIDs))
+	// Collect EVERY value per (entity, attribute), not one.
+	//
+	// The cell used to be assigned rather than accumulated, so a multi-valued
+	// attribute kept whichever row came last and every locale/channel variant
+	// overwrote the others. The export silently dropped data while its doc
+	// promised the output re-imports unchanged.
+	byEntity := make(map[string]map[valueobjects.AttributeDefinitionID][]*domainvalue.AttributeValue, len(entityIDs))
 	if err := i.forEachValueBatched(ctx, tenant, ids, func(av *domainvalue.AttributeValue) {
 		eid := av.EntityID().String()
 		cells := byEntity[eid]
 		if cells == nil {
-			cells = map[valueobjects.AttributeDefinitionID]string{}
+			cells = map[valueobjects.AttributeDefinitionID][]*domainvalue.AttributeValue{}
 			byEntity[eid] = cells
 		}
-		cells[av.AttributeDefinitionID()] = av.Value().String()
+		cells[av.AttributeDefinitionID()] = append(cells[av.AttributeDefinitionID()], av)
 	}); err != nil {
 		return nil, err
 	}
@@ -649,11 +736,80 @@ func (i *Interactor) Export(ctx context.Context, in ExportInput) (*ExportOutput,
 		row := make([]string, 0, len(cols)+1)
 		row = append(row, eid)
 		for _, c := range cols {
-			row = append(row, byAttr[c.id])
+			row = append(row, exportCell(byAttr[c.id]))
 		}
 		out.Rows = append(out.Rows, row)
 	}
 	return out, nil
+}
+
+// exportCell renders one (entity, attribute) cell so that importing it back
+// reproduces what was exported.
+//
+// Value.String is a DISPLAY rendering: it writes a quantity as "10 kg" and a
+// media value as a bare object key, neither of which the importer can decode —
+// "10 kg" reaches the default arm as a quoted string the quantity decoder
+// rejects, and a bare key fails the media arm's JSON check. A cell now carries
+// the same JSON shape the values API accepts.
+//
+// Several values for one attribute — a multi-valued attribute, or scoped
+// variants — become a JSON array, so nothing is dropped.
+func exportCell(vals []*domainvalue.AttributeValue) string {
+	switch len(vals) {
+	case 0:
+		return ""
+	case 1:
+		if vals[0].Scope().IsZero() {
+			return exportScalar(vals[0].Value())
+		}
+	}
+	parts := make([]json.RawMessage, 0, len(vals))
+	for _, v := range vals {
+		parts = append(parts, exportScoped(v))
+	}
+	raw, err := json.Marshal(parts)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// exportScalar renders one unscoped value as the JSON the importer accepts.
+func exportScalar(v valueobjects.Value) string {
+	switch v.DataType() {
+	case valueobjects.DataTypeQuantity, valueobjects.DataTypeMedia, valueobjects.DataTypeJSON:
+		raw, err := v.MarshalJSON()
+		if err != nil {
+			return v.String()
+		}
+		return string(raw)
+	default:
+		// Everything else round-trips through its plain text form, which is
+		// what a person expects to see in a spreadsheet.
+		return v.String()
+	}
+}
+
+// exportScoped renders one value with its scope, for a cell holding several.
+func exportScoped(av *domainvalue.AttributeValue) json.RawMessage {
+	entry := map[string]any{}
+	raw, err := av.Value().MarshalJSON()
+	if err != nil {
+		entry["value"] = av.Value().String()
+	} else {
+		entry["value"] = json.RawMessage(raw)
+	}
+	if l := av.Scope().Locale; l != "" {
+		entry["locale"] = l
+	}
+	if c := av.Scope().Channel; c != "" {
+		entry["channel"] = c
+	}
+	out, err := json.Marshal(entry)
+	if err != nil {
+		return json.RawMessage(`null`)
+	}
+	return out
 }
 
 // exportEntityIDs returns the entity ids to export: the explicit set when
@@ -671,7 +827,10 @@ func (i *Interactor) exportEntityIDs(
 		return explicit, nil
 	}
 	var ids []string
-	page := db.Page{Limit: 500}
+	// An export is a full sweep, so it pages on the immutable key: ordering
+	// newest-first meant an entity written mid-export jumped ahead of the
+	// cursor and was left out of the file, silently.
+	page := db.Page{Limit: 500, Stable: true}
 	for {
 		summaries, _, err := i.reads.ListEntities(ctx, tenant, []valueobjects.TypeDefinitionID{typeID}, page)
 		if err != nil {
@@ -683,8 +842,7 @@ func (i *Interactor) exportEntityIDs(
 		if len(ids) >= maxExportRows || len(summaries) <= page.Limit {
 			break
 		}
-		last := summaries[len(summaries)-1]
-		page.Cursor = db.EncodeKeyset(db.KeysetTime(last.LastUpdatedAt), last.EntityID.String())
+		page.Cursor = db.EncodeKeyset(summaries[len(summaries)-1].EntityID.String())
 	}
 	if len(ids) > maxExportRows {
 		ids = ids[:maxExportRows]

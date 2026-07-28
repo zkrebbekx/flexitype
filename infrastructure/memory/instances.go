@@ -235,7 +235,7 @@ func (r *valueRepo) ReanchorEntity(_ context.Context, tenant valueobjects.Tenant
 	return moved, nil
 }
 
-func (r *valueRepo) MediaValueForKey(_ context.Context, tenant valueobjects.TenantID, objectKey string) (valueobjects.Value, bool, error) {
+func (r *valueRepo) MediaValueForKey(_ context.Context, tenant valueobjects.TenantID, objectKey string) (domainvalue.Snapshot, bool, error) {
 	r.s.mu.RLock()
 	defer r.s.mu.RUnlock()
 	var best *domainvalue.Snapshot
@@ -250,9 +250,9 @@ func (r *valueRepo) MediaValueForKey(_ context.Context, tenant valueobjects.Tena
 		}
 	}
 	if best == nil {
-		return valueobjects.Value{}, false, nil
+		return domainvalue.Snapshot{}, false, nil
 	}
-	return best.Value, true, nil
+	return *best, true, nil
 }
 
 func (r *valueRepo) MediaKeyRefCount(_ context.Context, objectKey string, exclude valueobjects.AttributeValueID) (int, error) {
@@ -260,6 +260,9 @@ func (r *valueRepo) MediaKeyRefCount(_ context.Context, objectKey string, exclud
 	defer r.s.mu.RUnlock()
 	n := 0
 	for _, snap := range r.s.values {
+		if snap.ArchivedAt != nil {
+			continue
+		}
 		if snap.Value.DataType() == valueobjects.DataTypeMedia &&
 			snap.Value.Media().ObjectKey == objectKey && !snap.ID.Equals(exclude) {
 			n++

@@ -235,7 +235,7 @@ func TestRevisionStoreDirect(t *testing.T) {
 		}
 
 		Convey("When the entity's revisions are listed", func() {
-			got, err := store.List(ctx, tenantA, typeID, "e1")
+			got, err := store.List(ctx, tenantA, "e1")
 			So(err, ShouldBeNil)
 
 			Convey("Then they come back newest-first by sequence, scoped to the tenant", func() {
@@ -255,7 +255,7 @@ func TestRevisionStoreDirect(t *testing.T) {
 		})
 
 		Convey("When asking for the revision as of an instant between r2 and r3", func() {
-			got, err := store.AsOf(ctx, tenantA, typeID, "e1", t0.Add(90*time.Minute))
+			got, err := store.AsOf(ctx, tenantA, "e1", t0.Add(90*time.Minute))
 			So(err, ShouldBeNil)
 
 			Convey("Then the latest revision at or before that instant wins", func() {
@@ -264,7 +264,7 @@ func TestRevisionStoreDirect(t *testing.T) {
 		})
 
 		Convey("When asking as of the exact instant a revision was created", func() {
-			got, err := store.AsOf(ctx, tenantA, typeID, "e1", t0.Add(2*time.Hour))
+			got, err := store.AsOf(ctx, tenantA, "e1", t0.Add(2*time.Hour))
 			So(err, ShouldBeNil)
 
 			Convey("Then that revision is included — the bound is inclusive", func() {
@@ -273,7 +273,7 @@ func TestRevisionStoreDirect(t *testing.T) {
 		})
 
 		Convey("When asking as of an instant before the first revision", func() {
-			_, err := store.AsOf(ctx, tenantA, typeID, "e1", t0.Add(-time.Second))
+			_, err := store.AsOf(ctx, tenantA, "e1", t0.Add(-time.Second))
 
 			Convey("Then a typed not-found is returned rather than an empty revision", func() {
 				So(domainerrors.IsNotFound(err), ShouldBeTrue)
@@ -281,9 +281,9 @@ func TestRevisionStoreDirect(t *testing.T) {
 		})
 
 		Convey("When the highest sequence is requested", func() {
-			seq, err := store.LastSeq(ctx, tenantA, typeID, "e1")
+			seq, err := store.LastSeq(ctx, tenantA, "e1")
 			So(err, ShouldBeNil)
-			missing, err := store.LastSeq(ctx, tenantA, typeID, "never-existed")
+			missing, err := store.LastSeq(ctx, tenantA, "never-existed")
 			So(err, ShouldBeNil)
 
 			Convey("Then it is the newest revision's sequence, and 0 for an unknown entity", func() {
@@ -293,17 +293,17 @@ func TestRevisionStoreDirect(t *testing.T) {
 		})
 
 		Convey("When one entity's revisions are purged", func() {
-			n, err := store.PurgeEntity(ctx, tenantA, typeID, "e1")
+			n, err := store.PurgeEntity(ctx, tenantA, "e1")
 			So(err, ShouldBeNil)
 
 			Convey("Then exactly that entity's rows are removed; siblings and other tenants remain", func() {
 				So(n, ShouldEqual, 3)
 
-				gone, err := store.List(ctx, tenantA, typeID, "e1")
+				gone, err := store.List(ctx, tenantA, "e1")
 				So(err, ShouldBeNil)
 				So(gone, ShouldBeEmpty)
 
-				kept, err := store.List(ctx, tenantA, typeID, "e2")
+				kept, err := store.List(ctx, tenantA, "e2")
 				So(err, ShouldBeNil)
 				So(kept, ShouldHaveLength, 1)
 
@@ -331,12 +331,12 @@ func TestRevisionStoreDirect(t *testing.T) {
 
 		Convey("When bound to a handle that is not a transaction", func() {
 			bound := store.WithTx(&plainTx{})
-			n, err := bound.PurgeEntity(ctx, tenantA, typeID, "e1")
+			n, err := bound.PurgeEntity(ctx, tenantA, "e1")
 			So(err, ShouldBeNil)
 
 			Convey("Then it is the plain store: the purge happens with no rollback hook to register", func() {
 				So(n, ShouldEqual, 3)
-				got, err := store.List(ctx, tenantA, typeID, "e1")
+				got, err := store.List(ctx, tenantA, "e1")
 				So(err, ShouldBeNil)
 				So(got, ShouldBeEmpty)
 			})

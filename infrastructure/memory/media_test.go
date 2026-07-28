@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -12,6 +13,7 @@ import (
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
+	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/blob"
 )
@@ -119,6 +121,77 @@ func TestMediaAttribute(t *testing.T) {
 			Convey("Then its media blob is garbage-collected", func() {
 				_, _, err := store.Open(ctx, key)
 				So(err, ShouldNotBeNil)
+			})
+		})
+	})
+}
+
+// TestMediaBlobGCCollectsSharedKey covers the leak the reference count left.
+//
+// The count included ARCHIVED rows, excluding only the value being archived.
+// With N references sharing a key, each archival saw the other N-1 and
+// declined — so once every reference was archived the bytes stayed in object
+// storage with nothing live pointing at them. A "delete my file" request
+// through the soft-delete path left the file. Adoption is now the sanctioned
+// way to reuse a key, so shared keys are the expected shape.
+func TestMediaBlobGCCollectsSharedKey(t *testing.T) {
+	Convey("Given two live values sharing one object key", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		blobs := blob.NewMemoryStore()
+		svc := flexitype.NewInMemory(flexitype.WithBlobStore(blobs))
+		it := svc.Interactors(ctx)
+
+		doc, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "doc", DisplayName: "Doc"})
+		So(err, ShouldBeNil)
+		mk := func(name string) string {
+			a, e := it.Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: doc.ID.String(), InternalName: name,
+				DisplayName: name, DataType: "media",
+			})
+			So(e, ShouldBeNil)
+			return a.ID.String()
+		}
+		primary := mk("primary")
+		copyAttr := mk("copy")
+
+		snap, err := it.Values().UploadMedia(ctx, doc.ID.String(), "d1", primary,
+			strings.NewReader("shared bytes"), "file.txt")
+		So(err, ShouldBeNil)
+		key := snap.Value.Media().ObjectKey
+
+		adopted, err := it.Values().Set(ctx, appvalue.SetInput{
+			AttributeDefinitionID: copyAttr, EntityID: "d1",
+			TypeDefinitionID: doc.ID.String(),
+			Value:            json.RawMessage(`{"object_key":"` + key + `","mime":"text/plain","size":1}`),
+		})
+		So(err, ShouldBeNil)
+
+		present := func() bool {
+			rc, _, err := blobs.Open(ctx, key)
+			if err != nil {
+				return false
+			}
+			_ = rc.Close()
+			return true
+		}
+		So(present(), ShouldBeTrue)
+
+		Convey("When the first reference is archived", func() {
+			_, rerr := it.Values().Remove(ctx, snap.ID.String())
+			So(rerr, ShouldBeNil)
+
+			Convey("Then the bytes stay: another live value still points at them", func() {
+				So(present(), ShouldBeTrue)
+			})
+
+			Convey("And when the second is archived too", func() {
+				_, rerr := svc.Interactors(ctx).Values().Remove(ctx, adopted.ID.String())
+				So(rerr, ShouldBeNil)
+
+				Convey("Then the bytes are collected rather than orphaned", func() {
+					So(present(), ShouldBeFalse)
+				})
 			})
 		})
 	})

@@ -155,3 +155,85 @@ func TestEntityAnchorInvariantPostgres(t *testing.T) {
 		})
 	})
 }
+
+// TestRevisionsSurviveNarrowingPostgres covers the erasure hole the anchor
+// invariant left behind.
+//
+// Narrowing moves an entity's VALUE rows onto the subtype. Revision rows were
+// keyed on (tenant, type, entity, seq), so they stayed under the old anchor:
+// invisible to a read under the new one, and missed by PurgeEntity — which
+// purges under the new anchor and reported `revisions_purged: 0` and success
+// while a complete snapshot of the entity's values, personal data included,
+// stayed readable through Revisions().Get.
+func TestRevisionsSurviveNarrowingPostgres(t *testing.T) {
+	pool := openTestDB(t)
+	svc := flexitype.New(pool)
+	if err := svc.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	Convey("Given an entity anchored to a parent type with a captured revision", t, func() {
+		truncateAll(t, pool)
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		ia := svc.Interactors(ctx)
+
+		parent, err := ia.TypeDefinitions().Create(ctx, apptypedef.CreateInput{
+			InternalName: "person", DisplayName: "Person",
+		})
+		So(err, ShouldBeNil)
+		child, err := ia.TypeDefinitions().Create(ctx, apptypedef.CreateInput{
+			InternalName: "employee", DisplayName: "Employee", ExtendsID: parent.ID.String(),
+		})
+		So(err, ShouldBeNil)
+		personName, err := ia.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: parent.ID.String(), InternalName: "person_name",
+			DisplayName: "Name", DataType: "string",
+		})
+		So(err, ShouldBeNil)
+		badge, err := ia.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: child.ID.String(), InternalName: "badge",
+			DisplayName: "Badge", DataType: "string",
+		})
+		So(err, ShouldBeNil)
+
+		// Anchor to the parent by writing the inherited attribute with no type.
+		raw, _ := json.Marshal("Alice Smith")
+		_, err = ia.Values().Set(ctx, appvalue.SetInput{
+			AttributeDefinitionID: personName.ID.String(), EntityID: "e1", Value: raw,
+		})
+		So(err, ShouldBeNil)
+		_, err = svc.Interactors(ctx).Revisions().Create(ctx, parent.ID.String(), "e1", "before narrowing")
+		So(err, ShouldBeNil)
+
+		// Narrow: name the subtype on the next write.
+		raw, _ = json.Marshal("A-1")
+		_, err = svc.Interactors(ctx).Values().Set(ctx, appvalue.SetInput{
+			AttributeDefinitionID: badge.ID.String(), EntityID: "e1",
+			TypeDefinitionID: child.ID.String(), Value: raw,
+		})
+		So(err, ShouldBeNil)
+
+		Convey("When the entity's revisions are listed under the new anchor", func() {
+			revs, err := svc.Interactors(ctx).Revisions().List(ctx, child.ID.String(), "e1")
+
+			Convey("Then the pre-narrowing revision is still part of the history", func() {
+				So(err, ShouldBeNil)
+				So(len(revs), ShouldBeGreaterThanOrEqualTo, 1)
+			})
+		})
+
+		Convey("When the entity is purged under the new anchor", func() {
+			report, err := svc.Interactors(ctx).Erasure().PurgeEntity(ctx, child.ID.String(), "e1")
+
+			Convey("Then the pre-narrowing revision is counted and removed", func() {
+				So(err, ShouldBeNil)
+				So(report.RevisionsPurged, ShouldBeGreaterThan, 0)
+
+				var left int
+				So(pool.Get(&left,
+					`SELECT count(*) FROM flexitype_entity_revision WHERE entity_id = 'e1'`), ShouldBeNil)
+				So(left, ShouldEqual, 0)
+			})
+		})
+	})
+}

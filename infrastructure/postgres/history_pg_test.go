@@ -180,7 +180,7 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 		}
 
 		Convey("When the state is asked for an instant between two revisions", func() {
-			got, err := store.AsOf(ctx, "default", "type-1", "entity-1", base.Add(90*time.Minute))
+			got, err := store.AsOf(ctx, "default", "entity-1", base.Add(90*time.Minute))
 
 			Convey("Then the latest revision at or before that instant is returned", func() {
 				So(err, ShouldBeNil)
@@ -190,7 +190,7 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 		})
 
 		Convey("When the state is asked for exactly a revision's timestamp", func() {
-			got, err := store.AsOf(ctx, "default", "type-1", "entity-1", second.CreatedAt)
+			got, err := store.AsOf(ctx, "default", "entity-1", second.CreatedAt)
 
 			Convey("Then that revision is included — the bound is inclusive", func() {
 				So(err, ShouldBeNil)
@@ -199,7 +199,7 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 		})
 
 		Convey("When the state is asked for an instant after every revision", func() {
-			got, err := store.AsOf(ctx, "default", "type-1", "entity-1", time.Now().UTC())
+			got, err := store.AsOf(ctx, "default", "entity-1", time.Now().UTC())
 
 			Convey("Then the newest revision is returned", func() {
 				So(err, ShouldBeNil)
@@ -209,7 +209,7 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 		})
 
 		Convey("When the state is asked for an instant before the first revision", func() {
-			_, err := store.AsOf(ctx, "default", "type-1", "entity-1", base.Add(-time.Hour))
+			_, err := store.AsOf(ctx, "default", "entity-1", base.Add(-time.Hour))
 
 			Convey("Then a not-found error names the instant asked for", func() {
 				So(domainerrors.IsNotFound(err), ShouldBeTrue)
@@ -218,7 +218,7 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 		})
 
 		Convey("When another tenant asks for the same entity", func() {
-			_, err := store.AsOf(ctx, "other", "type-1", "entity-1", time.Now().UTC())
+			_, err := store.AsOf(ctx, "other", "entity-1", time.Now().UTC())
 
 			Convey("Then the tenant predicate keeps the history private", func() {
 				So(domainerrors.IsNotFound(err), ShouldBeTrue)
@@ -226,16 +226,16 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 		})
 
 		Convey("When one entity's revisions are purged", func() {
-			n, err := store.PurgeEntity(ctx, "default", "type-1", "entity-1")
+			n, err := store.PurgeEntity(ctx, "default", "entity-1")
 
 			Convey("Then exactly that entity's revisions are removed", func() {
 				So(err, ShouldBeNil)
 				So(n, ShouldEqual, 3)
 
-				_, asOfErr := store.AsOf(ctx, "default", "type-1", "entity-1", time.Now().UTC())
+				_, asOfErr := store.AsOf(ctx, "default", "entity-1", time.Now().UTC())
 				So(domainerrors.IsNotFound(asOfErr), ShouldBeTrue)
 
-				survivors, listErr := store.List(ctx, "default", "type-1", "entity-2")
+				survivors, listErr := store.List(ctx, "default", "entity-2")
 				So(listErr, ShouldBeNil)
 				So(survivors, ShouldHaveLength, 1)
 			})
@@ -248,7 +248,7 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 				So(err, ShouldBeNil)
 				So(n, ShouldEqual, 4)
 
-				remaining, listErr := store.List(ctx, "other", "type-1", "entity-9")
+				remaining, listErr := store.List(ctx, "other", "entity-9")
 				So(listErr, ShouldBeNil)
 				So(remaining, ShouldHaveLength, 1)
 			})
@@ -256,7 +256,7 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 
 		Convey("When a purge runs inside a transaction that rolls back", func() {
 			err := transactor.InTransaction(ctx, func(tx db.Transactor) error {
-				n, purgeErr := store.WithTx(tx).PurgeEntity(ctx, "default", "type-1", "entity-1")
+				n, purgeErr := store.WithTx(tx).PurgeEntity(ctx, "default", "entity-1")
 				So(purgeErr, ShouldBeNil)
 				So(n, ShouldEqual, 3)
 				return errNotDurable
@@ -264,14 +264,14 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 
 			Convey("Then the revisions survive with the aborted unit of work", func() {
 				So(err, ShouldEqual, errNotDurable)
-				got, asOfErr := store.AsOf(ctx, "default", "type-1", "entity-1", time.Now().UTC())
+				got, asOfErr := store.AsOf(ctx, "default", "entity-1", time.Now().UTC())
 				So(asOfErr, ShouldBeNil)
 				So(got.Seq, ShouldEqual, 3)
 			})
 		})
 
 		Convey("When the highest sequence is asked for", func() {
-			seq, err := store.LastSeq(ctx, "default", "type-1", "entity-1")
+			seq, err := store.LastSeq(ctx, "default", "entity-1")
 
 			Convey("Then it reports the newest revision's sequence", func() {
 				So(err, ShouldBeNil)
@@ -280,7 +280,7 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 		})
 
 		Convey("When the highest sequence is asked for an entity with no history", func() {
-			seq, err := store.LastSeq(ctx, "default", "type-1", "never-seen")
+			seq, err := store.LastSeq(ctx, "default", "never-seen")
 
 			Convey("Then it reports zero rather than failing", func() {
 				So(err, ShouldBeNil)
@@ -295,8 +295,8 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 		broken := postgres.NewRevisionStore(closed)
 
 		Convey("When the as-of and purge paths run", func() {
-			_, asOfErr := broken.AsOf(ctx, "default", "type-1", "entity-1", time.Now())
-			_, purgeEntityErr := broken.PurgeEntity(ctx, "default", "type-1", "entity-1")
+			_, asOfErr := broken.AsOf(ctx, "default", "entity-1", time.Now())
+			_, purgeEntityErr := broken.PurgeEntity(ctx, "default", "entity-1")
 			_, purgeTenantErr := broken.PurgeTenant(ctx, "default")
 
 			Convey("Then each wraps the driver failure with its own operation", func() {

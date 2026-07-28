@@ -25,6 +25,14 @@ type Mutation struct {
 	Locale                string          `json:"locale,omitempty"`
 	Channel               string          `json:"channel,omitempty"`
 	Value                 json.RawMessage `json:"value,omitempty"`
+	// Redacted marks a mutation whose value was masked by the field ACL on
+	// read. The skeleton is still reported, so a reviewer sees that the
+	// change exists; the value is not.
+	Redacted bool `json:"redacted,omitempty"`
+	// Erased marks a mutation whose value was PERMANENTLY removed by a
+	// right-to-erasure purge. Redacted is a per-caller view; this is a
+	// property of the stored record.
+	Erased bool `json:"erased,omitempty"`
 }
 
 // The supported mutation kinds.

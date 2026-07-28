@@ -9,6 +9,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
+	appchangeset "github.com/zkrebbekx/flexitype/application/changeset"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
@@ -103,6 +104,90 @@ func TestErasureRedactsResidualsPostgres(t *testing.T) {
 
 			Convey("Then the schema history survives: a tenant purge erases data, not definitions", func() {
 				So(count("flexitype_activity_log", "after_state", "full_name"), ShouldBeGreaterThan, 0)
+			})
+		})
+	})
+}
+
+// TestChangeSetResidualErasurePostgres covers the change-set copy against the
+// real JSONB rewrite: a draft or rejected set is never pruned, so a purged
+// value stayed readable there indefinitely.
+func TestChangeSetResidualErasurePostgres(t *testing.T) {
+	pool := openTestDB(t)
+	svc := flexitype.New(pool)
+	if err := svc.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	Convey("Given two entities' values staged in one draft change-set", t, func() {
+		truncateAll(t, pool)
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		it := svc.Interactors(ctx)
+
+		person, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "person", DisplayName: "Person"})
+		So(err, ShouldBeNil)
+		email, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: person.ID.String(), InternalName: "email",
+			DisplayName: "Email", DataType: "string",
+		})
+		So(err, ShouldBeNil)
+		for _, e := range []string{"p1", "p2"} {
+			_, serr := svc.Interactors(ctx).Values().Set(ctx, appvalue.SetInput{
+				AttributeDefinitionID: email.ID.String(), EntityID: e,
+				TypeDefinitionID: person.ID.String(),
+				Value:            json.RawMessage(`"` + e + `@example.com"`),
+			})
+			So(serr, ShouldBeNil)
+		}
+
+		cs, err := svc.Interactors(ctx).ChangeSets().Create(ctx,
+			appchangeset.CreateInput{Name: "draft"})
+		So(err, ShouldBeNil)
+		for _, e := range []string{"p1", "p2"} {
+			_, aerr := svc.Interactors(ctx).ChangeSets().AddMutation(ctx, cs.ID.String(), appvalue.Mutation{
+				Kind: appvalue.MutationSet, AttributeDefinitionID: email.ID.String(),
+				EntityID: e, TypeDefinitionID: person.ID.String(),
+				Value: json.RawMessage(`"` + e + `@example.com"`),
+			})
+			So(aerr, ShouldBeNil)
+		}
+
+		Convey("When one entity is erased", func() {
+			_, err := svc.Interactors(ctx).Erasure().PurgeEntity(ctx, person.ID.String(), "p1")
+			So(err, ShouldBeNil)
+			got, gerr := svc.Interactors(ctx).ChangeSets().Get(ctx, cs.ID.String())
+			So(gerr, ShouldBeNil)
+
+			Convey("Then only that entity's staged value is redacted", func() {
+				So(got.Mutations, ShouldHaveLength, 2)
+				So(got.Mutations[0].EntityID, ShouldEqual, "p1")
+				So(got.Mutations[0].Value, ShouldBeNil)
+				So(got.Mutations[0].Erased, ShouldBeTrue)
+				So(string(got.Mutations[1].Value), ShouldEqual, `"p2@example.com"`)
+			})
+
+			Convey("Then the mutation order is preserved", func() {
+				So(got.Mutations[1].EntityID, ShouldEqual, "p2")
+			})
+
+			Convey("Then the raw JSONB no longer contains the erased address", func() {
+				var raw string
+				So(pool.Get(&raw, `SELECT mutations::text FROM flexitype_changeset`), ShouldBeNil)
+				So(raw, ShouldNotContainSubstring, "p1@example.com")
+				So(raw, ShouldContainSubstring, "p2@example.com")
+			})
+		})
+
+		Convey("When the whole tenant is erased", func() {
+			_, err := svc.Interactors(ctx).Erasure().PurgeTenant(ctx)
+			So(err, ShouldBeNil)
+
+			Convey("Then every staged value is redacted and no address survives", func() {
+				var raw string
+				So(pool.Get(&raw, `SELECT mutations::text FROM flexitype_changeset`), ShouldBeNil)
+				So(raw, ShouldNotContainSubstring, "@example.com")
+				So(raw, ShouldContainSubstring, "erased")
 			})
 		})
 	})

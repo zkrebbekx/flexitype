@@ -776,7 +776,19 @@ func (i *Interactor) Remove(ctx context.Context, rawID string) (*domainvalue.Sna
 
 // adoptMediaValue resolves a caller-supplied media reference to the value the
 // tenant already stores for that object key. It rejects a key the tenant does
-// not own, and discards the caller's metadata in favour of the stored copy.
+// not own OR the caller may not read, and discards the caller's metadata in
+// favour of the stored copy.
+//
+// The READ CHECK is what stops a laundering attack. Ownership alone was a
+// tenant check, while the download check granted the bytes if ANY referencing
+// attribute was readable — so a principal restricted from `passport_scan`
+// needed only write access to some other media attribute: adopt the
+// restricted key into `avatar`, then download it. Object keys are not secret;
+// the code's own comments note they leak into value payloads, exports and
+// revision snapshots, so nothing had to be guessed.
+//
+// The bytes belong to the attribute that first referenced them, and that
+// attribute governs both adoption and download.
 func (i *Interactor) adoptMediaValue(ctx context.Context, values domainvalue.Repository, raw json.RawMessage) (valueobjects.Value, error) {
 	declared, err := valueobjects.ParseValue(valueobjects.DataTypeMedia, raw)
 	if err != nil {
@@ -786,6 +798,9 @@ func (i *Interactor) adoptMediaValue(ctx context.Context, values domainvalue.Rep
 	if key == "" {
 		return valueobjects.Value{}, domainerrors.NewValidation("media value requires an object key")
 	}
+	unknownKey := domainerrors.NewValidation(
+		"unknown media object key; upload the file through the media endpoint", "object_key", key)
+
 	stored, ok, err := values.MediaValueForKey(ctx, uow.TenantFromContext(ctx), key)
 	if err != nil {
 		return valueobjects.Value{}, err
@@ -793,10 +808,18 @@ func (i *Interactor) adoptMediaValue(ctx context.Context, values domainvalue.Rep
 	if !ok {
 		// The same message whether the key belongs to another tenant or to
 		// nobody, so ownership is not probeable from the error.
-		return valueobjects.Value{}, domainerrors.NewValidation(
-			"unknown media object key; upload the file through the media endpoint", "object_key", key)
+		return valueobjects.Value{}, unknownKey
 	}
-	return stored, nil
+	readable, err := fieldacl.New(i.attrs).CanRead(ctx, stored.AttributeDefinitionID)
+	if err != nil {
+		return valueobjects.Value{}, err
+	}
+	if !readable {
+		// Same error as an unknown key: a caller that may not read the owning
+		// attribute learns nothing about whether the key exists.
+		return valueobjects.Value{}, unknownKey
+	}
+	return stored.Value, nil
 }
 
 // gcMediaAfterCommit schedules the blob backing an archived or overwritten
@@ -866,16 +889,24 @@ func (i *Interactor) Get(ctx context.Context, rawID string) (*domainvalue.Snapsh
 // the key — object keys are shared-namespace ULIDs that leak into value
 // payloads, exports and revision snapshots, so serving one without an
 // ownership check is a cross-tenant file read (IDOR). And the caller must be
-// able to read at least one attribute that references it, so the field ACL
-// that redacts a media value on Get and ListByEntity also governs the bytes
-// behind it. A caller who obtains a key for an attribute it may not read gets
-// the same NotFound as for a key that does not exist.
+// able to read the OWNING attribute: the one whose value first referenced the
+// key.
+//
+// Owning, not "any referencing attribute". Granting the download when any
+// attribute referencing the key was readable meant a key could be laundered
+// into readability by adopting it into a writable attribute. Adoption now
+// requires read access on the owning attribute, which closes the way in; this
+// closes the way out, so a row written before that rule cannot be used
+// either.
+//
+// A caller who obtains a key for an attribute it may not read gets the same
+// NotFound as for a key that does not exist.
 func (i *Interactor) MediaKeyReadable(ctx context.Context, objectKey string) (bool, error) {
-	attrs, err := i.values.MediaKeyAttributes(ctx, uow.TenantFromContext(ctx), objectKey)
-	if err != nil {
+	owner, ok, err := i.values.MediaValueForKey(ctx, uow.TenantFromContext(ctx), objectKey)
+	if err != nil || !ok {
 		return false, err
 	}
-	return fieldacl.New(i.attrs).AnyReadable(ctx, attrs)
+	return fieldacl.New(i.attrs).CanRead(ctx, owner.AttributeDefinitionID)
 }
 
 // ListByEntity loads every live value of one entity — the hydration hot

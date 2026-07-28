@@ -67,6 +67,20 @@ type Revision struct {
 }
 
 // Store persists entity revisions, scoped by tenant.
+// Store persists revisions.
+//
+// Every entity-scoped method is keyed on (tenant, entity) and NOT on the type.
+// An entity has exactly one anchor type at a time, but that anchor can NARROW
+// — writing an inherited attribute anchors to the declaring parent, and naming
+// the subtype afterwards moves the entity down. The value rows move with it;
+// revision rows, keyed on the type, did not. That orphaned the history: a
+// pre-narrowing revision became invisible to List and AsOf under the new
+// anchor, and PurgeEntity — which purges under the new anchor — reported
+// success while leaving a full snapshot of the entity's values, personal data
+// included, readable through Revisions().Get.
+//
+// Keying on the entity removes the class rather than the instance: no type
+// change can separate an entity from its own history.
 type Store interface {
 	// WithTx binds the store to a transaction so an erasure's revision purge
 	// joins the value write's atomic unit of work — a rollback then also
@@ -76,11 +90,11 @@ type Store interface {
 
 	Create(ctx context.Context, r Revision) error
 	Get(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) (Revision, error)
-	List(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) ([]Revision, error)
+	List(ctx context.Context, tenant valueobjects.TenantID, entityID string) ([]Revision, error)
 	// AsOf returns the latest revision at or before the instant, or NotFound.
-	AsOf(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string, at time.Time) (Revision, error)
+	AsOf(ctx context.Context, tenant valueobjects.TenantID, entityID string, at time.Time) (Revision, error)
 	// LastSeq returns the highest revision sequence for an entity, or 0.
-	LastSeq(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error)
+	LastSeq(ctx context.Context, tenant valueobjects.TenantID, entityID string) (int, error)
 
 	// LockEntitySeq serializes sequence allocation for one entity against
 	// concurrent snapshots, until the caller's transaction ends.
@@ -92,11 +106,11 @@ type Store interface {
 	// differ between replicas and between runs. That is the worst property for
 	// a recovery primitive, because it is the operation an operator reaches for
 	// when they already have a problem.
-	LockEntitySeq(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) error
+	LockEntitySeq(ctx context.Context, tenant valueobjects.TenantID, entityID string) error
 
 	// PurgeEntity HARD-deletes every revision of one entity — the
 	// right-to-erasure primitive — and returns the number of rows removed.
-	PurgeEntity(ctx context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error)
+	PurgeEntity(ctx context.Context, tenant valueobjects.TenantID, entityID string) (int, error)
 
 	// PurgeTenant HARD-deletes every revision of a tenant, returning the row
 	// count.
@@ -169,10 +183,10 @@ func (i *Interactor) Create(ctx context.Context, rawTypeID, entityID, label stri
 	var rev Revision
 	err = i.unit.Execute(ctx, func(tx db.Transactor, _ *uow.Collector) error {
 		store := i.store.WithTx(tx)
-		if err := store.LockEntitySeq(ctx, tenant, rawTypeID, entityID); err != nil {
+		if err := store.LockEntitySeq(ctx, tenant, entityID); err != nil {
 			return err
 		}
-		last, err := store.LastSeq(ctx, tenant, rawTypeID, entityID)
+		last, err := store.LastSeq(ctx, tenant, entityID)
 		if err != nil {
 			return err
 		}
@@ -195,9 +209,19 @@ func (i *Interactor) Create(ctx context.Context, rawTypeID, entityID, label stri
 }
 
 // List returns an entity's revisions, newest first, without value payloads.
+//
+// The type in the path is VALIDATED but is not the lookup key: an entity's
+// history is keyed on the entity, so it survives the anchor narrowing that
+// used to orphan it. Validating the type keeps the route honest — a bogus or
+// cross-tenant type answers with an error rather than another type's
+// history — while the read still returns everything that belongs to the
+// entity.
 func (i *Interactor) List(ctx context.Context, rawTypeID, entityID string) ([]Revision, error) {
-	tenant := uow.TenantFromContext(ctx)
-	revs, err := i.store.List(ctx, tenant, rawTypeID, entityID)
+	_, tenant, err := i.resolveEntity(ctx, rawTypeID, entityID)
+	if err != nil {
+		return nil, err
+	}
+	revs, err := i.store.List(ctx, tenant, entityID)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +261,12 @@ func (i *Interactor) get(ctx context.Context, rawRevisionID string) (*Revision, 
 // AsOf returns the entity's state at an instant: the latest revision at or
 // before the timestamp, with the field ACL applied.
 func (i *Interactor) AsOf(ctx context.Context, rawTypeID, entityID string, at time.Time) (*Revision, error) {
-	rev, err := i.store.AsOf(ctx, uow.TenantFromContext(ctx), rawTypeID, entityID, at)
+	// As in List: the type is validated, the entity is the key.
+	_, tenant, err := i.resolveEntity(ctx, rawTypeID, entityID)
+	if err != nil {
+		return nil, err
+	}
+	rev, err := i.store.AsOf(ctx, tenant, entityID, at)
 	if err != nil {
 		return nil, err
 	}

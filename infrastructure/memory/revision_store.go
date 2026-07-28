@@ -47,11 +47,11 @@ type txRevisionStore struct {
 	tx db.Transactor
 }
 
-func (s *txRevisionStore) PurgeEntity(_ context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error) {
+func (s *txRevisionStore) PurgeEntity(_ context.Context, tenant valueobjects.TenantID, entityID string) (int, error) {
 	s.mu.Lock()
 	var removed []revision.Revision
 	for id, r := range s.revs {
-		if r.TenantID == tenant && r.TypeDefinitionID == typeDefID && r.EntityID == entityID {
+		if r.TenantID == tenant && r.EntityID == entityID {
 			removed = append(removed, r)
 			delete(s.revs, id)
 		}
@@ -109,10 +109,10 @@ func (s *revisionStore) Get(_ context.Context, tenant valueobjects.TenantID, id 
 }
 
 // forEntity returns an entity's revisions sorted newest first (highest seq).
-func (s *revisionStore) forEntity(tenant valueobjects.TenantID, typeDefID, entityID string) []revision.Revision {
+func (s *revisionStore) forEntity(tenant valueobjects.TenantID, entityID string) []revision.Revision {
 	var out []revision.Revision
 	for _, r := range s.revs {
-		if r.TenantID == tenant && r.TypeDefinitionID == typeDefID && r.EntityID == entityID {
+		if r.TenantID == tenant && r.EntityID == entityID {
 			out = append(out, r)
 		}
 	}
@@ -120,21 +120,21 @@ func (s *revisionStore) forEntity(tenant valueobjects.TenantID, typeDefID, entit
 	return out
 }
 
-func (s *revisionStore) List(_ context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) ([]revision.Revision, error) {
+func (s *revisionStore) List(_ context.Context, tenant valueobjects.TenantID, entityID string) ([]revision.Revision, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := s.forEntity(tenant, typeDefID, entityID)
+	out := s.forEntity(tenant, entityID)
 	if out == nil {
 		out = []revision.Revision{}
 	}
 	return out, nil
 }
 
-func (s *revisionStore) AsOf(_ context.Context, tenant valueobjects.TenantID, typeDefID, entityID string, at time.Time) (revision.Revision, error) {
+func (s *revisionStore) AsOf(_ context.Context, tenant valueobjects.TenantID, entityID string, at time.Time) (revision.Revision, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	// forEntity is newest-first; the first revision at or before `at` wins.
-	for _, r := range s.forEntity(tenant, typeDefID, entityID) {
+	for _, r := range s.forEntity(tenant, entityID) {
 		if !r.CreatedAt.After(at) {
 			return r, nil
 		}
@@ -142,12 +142,12 @@ func (s *revisionStore) AsOf(_ context.Context, tenant valueobjects.TenantID, ty
 	return revision.Revision{}, domainerrors.NewNotFound("entity_revision", "as-of "+at.Format(time.RFC3339))
 }
 
-func (s *revisionStore) PurgeEntity(_ context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error) {
+func (s *revisionStore) PurgeEntity(_ context.Context, tenant valueobjects.TenantID, entityID string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	count := 0
 	for id, r := range s.revs {
-		if r.TenantID == tenant && r.TypeDefinitionID == typeDefID && r.EntityID == entityID {
+		if r.TenantID == tenant && r.EntityID == entityID {
 			delete(s.revs, id)
 			count++
 		}
@@ -171,14 +171,14 @@ func (s *revisionStore) PurgeTenant(_ context.Context, tenant valueobjects.Tenan
 // LockEntitySeq is a no-op for the in-memory backend: it holds one store
 // mutex, so sequence allocation and the insert that follows it cannot
 // interleave with another writer's.
-func (s *revisionStore) LockEntitySeq(context.Context, valueobjects.TenantID, string, string) error {
+func (s *revisionStore) LockEntitySeq(context.Context, valueobjects.TenantID, string) error {
 	return nil
 }
 
-func (s *revisionStore) LastSeq(_ context.Context, tenant valueobjects.TenantID, typeDefID, entityID string) (int, error) {
+func (s *revisionStore) LastSeq(_ context.Context, tenant valueobjects.TenantID, entityID string) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	revs := s.forEntity(tenant, typeDefID, entityID)
+	revs := s.forEntity(tenant, entityID)
 	if len(revs) == 0 {
 		return 0, nil
 	}

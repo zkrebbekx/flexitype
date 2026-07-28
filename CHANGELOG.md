@@ -47,6 +47,47 @@ session lock appears to work.
 
 `docs/upgrades.md` and `docs/configuration.md` stated opposite contracts; both
 now describe the lease. Closes #400.
+### Fixed — Erasure and field-ACL residue
+
+Five surfaces where a value survived an operation that reported success, or
+was readable by a principal every other surface hides it from.
+
+- **Media object keys could be laundered past the field ACL** (#411).
+  Adoption authorized a media write on tenant ownership of the key alone,
+  while the download check granted the bytes if *any* attribute referencing
+  the key was readable. A principal restricted from `passport_scan` needed
+  only write access to some other media attribute: adopt the restricted key
+  into `avatar`, then download it. Object keys are not secret — they leak into
+  value payloads, exports and revision snapshots — so nothing had to be
+  guessed. The bytes now belong to the attribute that first referenced them,
+  and **that attribute governs both adoption and download**. A caller who may
+  not read it gets the same error as for a key that does not exist.
+- **Narrowing an entity's anchor orphaned its revisions** (#413). Value rows
+  moved to the subtype; revision rows, keyed on the type, did not. A
+  pre-narrowing revision became invisible under the new anchor, and
+  `PurgeEntity` — which purges under the new anchor — reported
+  `revisions_purged: 0` and success while a complete snapshot of the entity's
+  values, personal data included, stayed readable through `Revisions().Get`.
+  **Revisions are now keyed on (tenant, entity)**, so no type change can
+  separate an entity from its own history. Migration `000028` adds the
+  matching index. The type in the route is still validated, so a bogus type
+  answers with an error rather than another type's history.
+- **Change-set mutations had no field ACL** (#418). A mutation embeds the
+  value verbatim, so a principal with `salary: none` read the salary from
+  another user's staged pay review. `Get` and `List` now mask the value and
+  keep the skeleton, as the feed and activity log do; `AddMutation` enforces
+  write access, because staging a write is writing, only later.
+- **Erasure left values in change-set mutations** (#418). The residual
+  erasers covered the outbox and the activity log; `flexitype_changeset.mutations`
+  is JSONB embedding the value, and a draft or rejected set is never pruned,
+  so the copy was indefinite. A change-set eraser is registered in both
+  backends. The mutation skeleton survives — deleting it would silently change
+  what the set does when published.
+- **Reference-counted blob GC never collected a shared key** (#418). The count
+  included archived rows, so with N references each archival saw the other
+  N-1 and declined: once every reference was archived the bytes stayed in
+  object storage with nothing live pointing at them, and a "delete my file"
+  request through the soft-delete path left the file. Only live rows count.
 
 ### Fixed — Roles: a delete no longer hands out the attributes it was hiding
 

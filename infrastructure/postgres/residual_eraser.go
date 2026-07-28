@@ -129,3 +129,63 @@ func (e *activityEraser) exec(ctx context.Context, tx db.Tx, query string, args 
 func redactedState() any {
 	return jsonbParam([]byte(`{"` + erasure.RedactedMarker + `":true}`))
 }
+
+// changeSetEraser redacts an erased entity's values from staged change-set
+// mutations.
+//
+// flexitype_changeset.mutations is JSONB embedding the value verbatim, and a
+// draft or rejected set is never pruned — so a purged value stayed readable
+// there indefinitely, while the report said the erasure had succeeded. That
+// is the same class as the event log and the activity log, on a table the
+// first pass did not enumerate.
+//
+// The mutation SKELETON survives: kind, attribute, entity and scope stay, so
+// the set still reports what it contains and a reviewer sees that a change
+// exists. Only the value is replaced. Deleting the mutation would silently
+// change what the set does when published.
+type changeSetEraser struct{}
+
+// NewChangeSetEraser builds the change-set residual eraser.
+func NewChangeSetEraser() erasure.ResidualEraser { return &changeSetEraser{} }
+
+func (e *changeSetEraser) Name() string { return "change-sets" }
+
+// redactMutations rewrites the mutations array, dropping `value` and marking
+// the entry, for every element matching the entity predicate.
+const redactMutations = `(
+    SELECT COALESCE(jsonb_agg(
+             CASE WHEN %s
+                  THEN (m - 'value') || jsonb_build_object('erased', to_jsonb(true))
+                  ELSE m END
+             ORDER BY ord), '[]'::jsonb)
+      FROM jsonb_array_elements(mutations) WITH ORDINALITY AS t(m, ord))`
+
+func (e *changeSetEraser) RedactEntity(ctx context.Context, tx db.Tx, tenant valueobjects.TenantID, entityID string) (int, error) {
+	return e.exec(ctx, tx,
+		`UPDATE flexitype_changeset
+		    SET mutations = `+fmt.Sprintf(redactMutations, `m->>'entity_id' = ?`)+`
+		  WHERE tenant_id = ?
+		    AND mutations @> jsonb_build_array(jsonb_build_object('entity_id', to_jsonb(?::text)))`,
+		entityID, tenant.String(), entityID)
+}
+
+func (e *changeSetEraser) RedactTenant(ctx context.Context, tx db.Tx, tenant valueobjects.TenantID) (int, error) {
+	return e.exec(ctx, tx,
+		`UPDATE flexitype_changeset
+		    SET mutations = `+fmt.Sprintf(redactMutations, `m->>'entity_id' IS NOT NULL`)+`
+		  WHERE tenant_id = ? AND jsonb_array_length(mutations) > 0`,
+		tenant.String())
+}
+
+func (e *changeSetEraser) exec(ctx context.Context, tx db.Tx, query string, args ...any) (int, error) {
+	q := txExecer(tx)
+	res, err := q.ExecContext(ctx, bind(query), args...)
+	if err != nil {
+		return 0, fmt.Errorf("redact change-set mutations: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("redact change-set mutations: %w", err)
+	}
+	return int(n), nil
+}

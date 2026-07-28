@@ -429,6 +429,7 @@ The permission set applies to every surface that returns an attribute value:
 | --- | --- |
 | `GET /api/v1/values`, `ListByEntity`, `Get` by id | the value is omitted; a `Get` by id returns `404` |
 | Grid, facets, CSV export, FQL | the attribute is unknown — it cannot be selected, bucketed or filtered |
+| GraphQL, including **introspection** | the attribute is not a field on the type: the schema is built from the caller's readable set and cached per permission profile, so its name is not disclosed either |
 | Revisions (`Get`, `AsOf`, `Diff`) | the value is omitted from the snapshot and from the diff |
 | Activity log | the audit entry survives; its `before`/`after` values are `null` and the entry carries `"redacted": true` |
 | Events feed | the envelope and its sequence survive; the payload's value fields are `null` and it carries `"redacted": true` |

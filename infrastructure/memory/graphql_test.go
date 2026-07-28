@@ -203,3 +203,91 @@ func TestGraphQLReadAPI(t *testing.T) {
 		})
 	})
 }
+
+// TestGraphQLIntrospectionRespectsTheFieldACL covers the metadata leak the
+// other read surfaces are written to avoid.
+//
+// dropUnreadable and the FQL binder both answer "attribute not in the type
+// schema" for an unreadable attribute — wording chosen so the response cannot
+// distinguish "restricted" from "does not exist". Attribute names are
+// frequently disclosive on their own: the existence of termination_date or
+// investigation_notes on a type says something even with every value
+// redacted.
+func TestGraphQLIntrospectionRespectsTheFieldACL(t *testing.T) {
+	Convey("Given a type with a restricted attribute", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		employee, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "employee", DisplayName: "Employee"})
+		So(err, ShouldBeNil)
+		for _, name := range []string{"name", "salary"} {
+			_, aerr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: employee.ID.String(), InternalName: name,
+				DisplayName: name, DataType: "string",
+			})
+			So(aerr, ShouldBeNil)
+		}
+
+		eng := svc.GraphQLEngine()
+		exec := func(c context.Context, query string) *gql.Result {
+			return eng.Execute(application.WithInteractors(c, svc.Interactors(c)), query, nil)
+		}
+		restricted := uow.WithAccess(ctx, uow.Access{
+			Attr: map[string]uow.Perm{"salary": uow.PermNone},
+		})
+
+		introspect := func(c context.Context) []string {
+			res := exec(c, `{ __type(name: "Employee") { fields { name } } }`)
+			So(res.Errors, ShouldBeEmpty)
+			typ, ok := gqlData(res.Data)["__type"].(map[string]interface{})
+			So(ok, ShouldBeTrue)
+			var names []string
+			for _, f := range typ["fields"].([]interface{}) {
+				names = append(names, f.(map[string]interface{})["name"].(string))
+			}
+			return names
+		}
+
+		Convey("When an unrestricted caller introspects the type", func() {
+			names := introspect(ctx)
+
+			Convey("Then every attribute is a field", func() {
+				So(names, ShouldContain, "name")
+				So(names, ShouldContain, "salary")
+			})
+		})
+
+		Convey("When the restricted caller introspects it", func() {
+			names := introspect(restricted)
+
+			Convey("Then the unreadable attribute is not even named", func() {
+				So(names, ShouldContain, "name")
+				So(names, ShouldNotContain, "salary")
+			})
+		})
+
+		Convey("When the restricted caller selects the hidden field", func() {
+			res := exec(restricted, `{ employee { edges { node { salary } } } }`)
+
+			Convey("Then it is unknown to that caller's schema", func() {
+				So(res.Errors, ShouldNotBeEmpty)
+			})
+		})
+
+		Convey("When the two callers query in turn", func() {
+			// The schema cache is keyed on (tenant | access signature), so
+			// one profile's schema is never served to another.
+			openNames := introspect(ctx)
+			hiddenNames := introspect(restricted)
+			openAgain := introspect(ctx)
+
+			Convey("Then each gets its own schema, cached independently", func() {
+				So(openNames, ShouldContain, "salary")
+				So(hiddenNames, ShouldNotContain, "salary")
+				So(openAgain, ShouldContain, "salary")
+			})
+		})
+	})
+}

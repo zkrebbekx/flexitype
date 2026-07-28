@@ -133,7 +133,7 @@ type Interactor struct {
 	// interface so the publish path can be driven directly in a test — the
 	// stranded-claim defect lives in what publish does AFTER this call fails.
 	values mutationApplier
-	now              func() time.Time
+	now    func() time.Time
 }
 
 // mutationApplier is the one thing publish needs from the value interactor.

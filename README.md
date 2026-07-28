@@ -152,6 +152,12 @@ No backend; data resets on reload.
   (draft → in-review → approved → published), preview the result against live
   data without touching it, require a distinct approver, and publish now or on
   a schedule. `/api/v1/changesets`
+  A publish claims the set (state `publishing`) before it applies the
+  mutations. If the publish never finishes — a client timeout, a pod eviction
+  — the claim goes stale after 15 minutes, and the set becomes publishable
+  again: the scheduler retries it, and so does an explicit publish. The
+  mutations are declarative, so a retry reaches the same state whether or not
+  the stranded publish committed its values.
 - **Field-level access control**: per-attribute read/write permissions on a
   service account gate the write path, value reads, effective-attributes and
   the FQL binder — an unreadable attribute is invisible rather than leaked.

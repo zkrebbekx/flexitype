@@ -87,6 +87,37 @@ type Store interface {
 	DueForPublish(ctx context.Context, now time.Time) ([]ChangeSet, error)
 }
 
+// ClaimReclaimer reports change-sets stranded in the publishing state, so the
+// scheduler can retry them. A store that does not implement it keeps working:
+// a stranded set is then recovered by publishing it again through the API,
+// which is allowed once the claim is stale.
+//
+// It is a separate interface rather than a Store method so an embedder's own
+// store still satisfies Store (see docs/api-stability.md).
+type ClaimReclaimer interface {
+	// StalePublishing returns publishing change-sets last updated at or
+	// before the cutoff, across all tenants.
+	StalePublishing(ctx context.Context, before time.Time) ([]ChangeSet, error)
+}
+
+// PublishClaimTTL bounds how long a publish claim is honoured. A publish
+// claims the set (state publishing) before it applies the mutations, so a
+// request that ends mid-publish — a client timeout, a load-balancer idle
+// timeout, a pod eviction — could leave the claim behind. Once the claim is
+// this old, the set is publishable again: the scheduler reclaims it, and so
+// does an explicit publish.
+//
+// The bound is generous because it is an upper bound on one publish. A set
+// still being published must never be reclaimed under the transaction that
+// holds it.
+const PublishClaimTTL = 15 * time.Minute
+
+// releaseTimeout bounds the write that hands a claim back. It runs on a
+// context detached from the caller, because the release used the caller's
+// context and a cancelled request therefore failed to release: the set was
+// stranded in publishing with no API able to move it.
+const releaseTimeout = 10 * time.Second
+
 // Interactor implements the change-management usecases.
 type Interactor struct {
 	// attrs resolves attribute definitions for the field ACL. A change-set
@@ -98,8 +129,16 @@ type Interactor struct {
 	// wires no observer.
 	onPublishFailure func(cs ChangeSet, err error)
 	store            Store
-	values           *appvalue.Interactor
-	now              func() time.Time
+	// values applies a published set's mutations. It is held as a narrow
+	// interface so the publish path can be driven directly in a test — the
+	// stranded-claim defect lives in what publish does AFTER this call fails.
+	values mutationApplier
+	now    func() time.Time
+}
+
+// mutationApplier is the one thing publish needs from the value interactor.
+type mutationApplier interface {
+	ApplyMutations(ctx context.Context, muts []appvalue.Mutation) error
 }
 
 // NewInteractor wires the change-set usecases.
@@ -211,7 +250,14 @@ func (i *Interactor) Reject(ctx context.Context, rawID string) (*ChangeSet, erro
 			return domainerrors.NewValidation("a published change-set cannot be rejected")
 		}
 		if cs.State == StatePublishing {
-			return domainerrors.NewValidation("a publishing change-set cannot be rejected")
+			// Rejecting stays refused even for a stale claim. A stranded
+			// publish may have committed its values before it failed, and
+			// rejecting would then report untouched data for a set whose
+			// changes are live. The honest exit is to publish it again, which
+			// re-applies the mutations and reaches a state that matches the
+			// data; the message says when that becomes possible.
+			return domainerrors.NewValidation("a publishing change-set cannot be rejected; publish it again once the claim goes stale",
+				"reclaimable_after", cs.UpdatedAt.Add(PublishClaimTTL).UTC().Format(time.RFC3339))
 		}
 		cs.State = StateRejected
 		return nil
@@ -251,6 +297,17 @@ func (i *Interactor) publish(ctx context.Context, cs *ChangeSet) error {
 		if cs.RequireApproval {
 			return domainerrors.NewValidation("change-set must be approved before publishing", "state", string(cs.State))
 		}
+	case StatePublishing:
+		// A live claim belongs to the publish that holds it. A stale one is
+		// reclaimed: the mutations are declarative, so re-applying them
+		// reaches the same state whether or not the stranded publish
+		// committed its values.
+		if i.now().Sub(cs.UpdatedAt) < PublishClaimTTL {
+			return domainerrors.NewValidation(
+				"the change-set is publishing; it can be published again once the claim goes stale",
+				"state", string(cs.State),
+				"reclaimable_after", cs.UpdatedAt.Add(PublishClaimTTL).UTC().Format(time.RFC3339))
+		}
 	default:
 		return domainerrors.NewValidation("change-set cannot be published", "state", string(cs.State))
 	}
@@ -271,10 +328,22 @@ func (i *Interactor) publish(ctx context.Context, cs *ChangeSet) error {
 		// the set is publishable again once the cause is fixed; the state is
 		// ours to release, because nobody else can transition out of
 		// publishing.
+		//
+		// The release runs on a DETACHED context. The commonest reason a
+		// publish fails is that the caller's context ended, and releasing on
+		// that same context failed too — which is exactly how a set came to
+		// be stranded in publishing.
 		release := claimed
 		release.State = cs.State
+		if release.State == StatePublishing {
+			// This publish reclaimed a stale claim. Releasing back into
+			// publishing would keep the set unpublishable for another TTL.
+			release.State = StateApproved
+		}
 		release.UpdatedAt = i.now()
-		if rerr := i.store.Update(ctx, release); rerr == nil {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+		defer cancel()
+		if rerr := i.store.Update(rctx, release); rerr == nil {
 			*cs = release
 			cs.Version++
 		}
@@ -383,9 +452,19 @@ func (i *Interactor) assertWritable(ctx context.Context, m appvalue.Mutation) er
 // context so events and activity attribute correctly. Returns how many
 // published.
 func (i *Interactor) PublishDue(ctx context.Context) (int, error) {
-	due, err := i.store.DueForPublish(ctx, i.now())
+	now := i.now()
+	due, err := i.store.DueForPublish(ctx, now)
 	if err != nil {
 		return 0, err
+	}
+	// Reclaim sets stranded by a publish that never finished. Without this,
+	// the only exit from publishing was a manual UPDATE against the table.
+	if r, ok := i.store.(ClaimReclaimer); ok {
+		stale, serr := r.StalePublishing(ctx, now.Add(-PublishClaimTTL))
+		if serr != nil {
+			return 0, serr
+		}
+		due = append(due, stale...)
 	}
 	published := 0
 	for idx := range due {

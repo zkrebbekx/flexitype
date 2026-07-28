@@ -8,6 +8,7 @@ import (
 
 	. "github.com/smartystreets/goconvey/convey"
 
+	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
@@ -101,6 +102,26 @@ func (s *claimStore) Update(_ context.Context, cs ChangeSet) error {
 
 func (s *claimStore) DueForPublish(context.Context, time.Time) ([]ChangeSet, error) { return nil, nil }
 
+// StalePublishing serves the reclaim path (changeset.ClaimReclaimer).
+func (s *claimStore) StalePublishing(_ context.Context, before time.Time) ([]ChangeSet, error) {
+	if s.cs.State != StatePublishing || s.cs.UpdatedAt.After(before) {
+		return nil, nil
+	}
+	return []ChangeSet{s.cs}, nil
+}
+
+// applier drives the one call publish makes into the value interactor. err is
+// returned as-is; ctxErr records whether the context it was handed was alive.
+type applier struct {
+	err   error
+	calls int
+}
+
+func (a *applier) ApplyMutations(context.Context, []appvalue.Mutation) error {
+	a.calls++
+	return a.err
+}
+
 // TestPublishTakesTheClaimFirst pins the ordering that the optimistic-locking
 // fix inverted.
 //
@@ -118,7 +139,7 @@ func TestPublishTakesTheClaimFirst(t *testing.T) {
 
 		Convey("When the FIRST compare-and-swap fails", func() {
 			store := &claimStore{cs: base, failAt: 1}
-			i := &Interactor{store: store, now: time.Now}
+			i := &Interactor{store: store, values: &applier{}, now: time.Now}
 			err := i.publish(context.Background(), &base)
 
 			Convey("Then it stops before the mutations, so nothing is applied", func() {
@@ -129,7 +150,7 @@ func TestPublishTakesTheClaimFirst(t *testing.T) {
 
 		Convey("When the publish runs with no mutations to apply", func() {
 			store := &claimStore{cs: base}
-			i := &Interactor{store: store, now: time.Now}
+			i := &Interactor{store: store, values: &applier{}, now: time.Now}
 			err := i.publish(context.Background(), &base)
 
 			Convey("Then it claims first and finalises second", func() {

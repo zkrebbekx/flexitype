@@ -144,6 +144,20 @@ func (s *changesetStore) DueForPublish(ctx context.Context, now time.Time) ([]ch
 	return toChangeSets(rows)
 }
 
+// StalePublishing returns change-sets whose publish claim is older than the
+// cutoff, so the scheduler can retry a publish that never finished. See
+// changeset.ClaimReclaimer.
+func (s *changesetStore) StalePublishing(ctx context.Context, before time.Time) ([]changeset.ChangeSet, error) {
+	var rows []changesetRow
+	if err := s.q.SelectContext(ctx, &rows, bind(
+		`SELECT `+changesetColumns+` FROM flexitype_changeset
+		 WHERE state = 'publishing' AND updated_at <= ?
+		 ORDER BY updated_at`), before); err != nil {
+		return nil, fmt.Errorf("list stale publishing change-sets: %w", err)
+	}
+	return toChangeSets(rows)
+}
+
 func toChangeSets(rows []changesetRow) ([]changeset.ChangeSet, error) {
 	out := make([]changeset.ChangeSet, 0, len(rows))
 	for _, r := range rows {

@@ -7,6 +7,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — The release workflow's nested-module tag probe
+
+`gh api` writes its 404 body to **stdout**, so capturing the "does this tag
+exist" probe with `|| true` put `{"message":"Not Found",…}` into the variable
+that holds an existing tag's sha. Every FIRST-TIME nested-module tag therefore
+failed as a conflict against a sha that was really an error message, and the
+step is deliberately ordered before the release — so v1.3.0 built its binaries
+and then stopped, with no GitHub release and no `client/v1.3.0` tag. Both were
+completed by hand.
+
+The probe now branches on the exit status and keeps the body out of the
+variable, and `release_modules_test.go` pins that shape alongside the module
+list it already holds.
+
 ## [1.3.0] — 2026-07-28
 
 Twenty defects an independent reviewer raised against the 1.2 line, closed in

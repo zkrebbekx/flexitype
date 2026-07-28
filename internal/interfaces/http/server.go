@@ -3,6 +3,8 @@ package http
 import (
 	"context"
 	"net/http"
+	"path"
+	"sort"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -323,7 +325,7 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 		// admin console SPA.
 		spa := spaHandler(cfg.Logger)
 		notFound = func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/api/") {
+			if isAPIPath(r.URL.Path) {
 				notFoundJSON(w, r)
 				return
 			}
@@ -331,7 +333,21 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 		}
 	}
 	r.NotFound(notFound)
-	r.MethodNotAllowed(notFound)
+	// A KNOWN route reached with an unsupported method answers 405 with an
+	// Allow header, not 404. Registering the not-found handler for both put
+	// "this endpoint does not exist" and "this endpoint does not take that
+	// verb" behind the same status — which is the endpoint-absent /
+	// endpoint-present ambiguity the JSON-404 change set out to remove.
+	allowed := allowedMethods(r)
+	r.MethodNotAllowed(func(w http.ResponseWriter, req *http.Request) {
+		if methods := allowed.forPath(req.URL.Path); methods != "" {
+			w.Header().Set("Allow", methods)
+		}
+		var body errorBody
+		body.Error.Code = "NOT_FOUND"
+		body.Error.Message = "the method is not allowed for this route"
+		writeJSON(w, http.StatusMethodNotAllowed, body)
+	})
 
 	return r
 }
@@ -357,4 +373,81 @@ func orDefault(v, fallback int64) int64 {
 		return v
 	}
 	return fallback
+}
+
+// isAPIPath reports whether a path addresses the API namespace, normalising
+// the forms a naive base-URL join produces.
+//
+// The test was a raw HasPrefix("/api/"), so `/api`, `//api/v1/...` and
+// `/API/v1/...` all fell through to the console and answered 200 with the app
+// shell — and `//api/...` is exactly what joining a base URL ending in "/"
+// with a path beginning with "/" produces. A client that checks the status
+// before parsing then reported an HTML parse error instead of the real cause.
+func isAPIPath(p string) bool {
+	clean := path.Clean("/" + strings.TrimLeft(p, "/"))
+	lower := strings.ToLower(clean)
+	return lower == "/api" || strings.HasPrefix(lower, "/api/")
+}
+
+// methodTable maps a route pattern to the methods registered for it.
+//
+// chi answers 405 with no Allow header and does not expose the allowed set,
+// so the table is built once by walking the routes at construction time.
+type methodTable map[string][]string
+
+// allowedMethods walks a router and records the methods each pattern serves.
+func allowedMethods(r chi.Routes) methodTable {
+	out := methodTable{}
+	_ = chi.Walk(r, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		route = strings.TrimSuffix(route, "/*")
+		if route == "" {
+			route = "/"
+		}
+		for _, have := range out[route] {
+			if have == method {
+				return nil
+			}
+		}
+		out[route] = append(out[route], method)
+		return nil
+	})
+	return out
+}
+
+// forPath returns the Allow header value for a request path, or "" when no
+// pattern matches. A path segment matches a {param} placeholder.
+func (t methodTable) forPath(p string) string {
+	want := splitPath(p)
+	for route, methods := range t {
+		if !patternMatches(splitPath(route), want) {
+			continue
+		}
+		sorted := append([]string(nil), methods...)
+		sort.Strings(sorted)
+		return strings.Join(sorted, ", ")
+	}
+	return ""
+}
+
+func splitPath(p string) []string {
+	trimmed := strings.Trim(path.Clean("/"+strings.TrimLeft(p, "/")), "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
+}
+
+func patternMatches(pattern, actual []string) bool {
+	if len(pattern) != len(actual) {
+		return false
+	}
+	for i, seg := range pattern {
+		if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
+			continue
+		}
+		if seg != actual[i] {
+			return false
+		}
+	}
+	return true
 }

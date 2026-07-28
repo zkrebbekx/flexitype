@@ -116,8 +116,12 @@ type UpdateInput struct {
 	URL        *string
 	EventTypes *[]string
 	Active     *bool
-	// RotateSecret installs a new secret; the previous one stays
-	// signing-valid until the next rotation.
+	// RotateSecret installs a new secret. It is a HARD CUTOVER: the previous
+	// secret stops signing immediately, so update the receiver first, then
+	// rotate. An earlier design kept a grace window and this comment
+	// outlived it by eleven lines — an embedder who read the field would
+	// rotate first and update receivers afterwards, which is exactly the
+	// outage the grace window had existed to prevent.
 	RotateSecret *string
 }
 

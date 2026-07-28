@@ -7,6 +7,59 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — Residuals, and four documents that contradicted the code
+
+- **Restoring a pre-narrowing revision was impossible** (#420). `Restore`
+  replays with the captured (parent) type; the write path saw
+  `supplied != anchor`, tested "is the supplied type a descendant" and
+  refused with "the entity is already anchored to an unrelated type" — of the
+  entity's own **parent**. A supplied ANCESTOR is now satisfied where the
+  entity already is: the write lands under the existing, narrower anchor and
+  nothing moves back to the parent. An unrelated type is still refused.
+- **CSV round-trip corrupted JSON arrays of `{"value": …}` objects** (#420).
+  The multi-value cell format was an untagged JSON array, indistinguishable
+  from a legitimate payload, so exporting and re-importing
+  `[{"value":{"x":1}},{"value":{"y":2}}]` in a json column stored `{"y":2}`
+  with zero errors reported. The format is tagged — `{"values":[…]}` — and the
+  untagged form is still accepted on import for non-json columns, so an older
+  export still loads.
+- **A computed value whose formula became undefined was never cleared**
+  (#420). The rebuild used the non-clearing variant, so after an edit
+  introduced a division by zero the pre-edit value survived indefinitely:
+  queryable in FQL, present in exports, counted toward completeness, with no
+  formula that produces it. The rebuild clears it now — the source
+  fingerprint added alongside makes that safe, because a clear from
+  half-written inputs is followed by a source change the fingerprint sees.
+- **A known route with an unsupported method answered 404** (#420), putting
+  "endpoint absent" and "endpoint present, wrong verb" behind one status —
+  the ambiguity the JSON-404 change existed to remove. It answers **405 with
+  an `Allow` header**, built by walking the router.
+- **`/api`, `//api/…` and `/API/…` answered 200 with the app shell** (#420).
+  The prefix test ran on the raw path, and `//api/…` is exactly what naive
+  base-URL joining produces. The path is normalised and case-folded first.
+- **A GraphQL failure raised before execution was masked without telling the
+  error observer** (#420), whose godoc promises it reports every error masked
+  on its way out — so an operator saw "internal error" with nothing naming the
+  cause. Pre-execution failures go through the same sanitizer and the same
+  observer. The relationship-depth error is a validation error, so it reads
+  the same as it does on the federation path.
+- **`Schema().Template` dropped the bundle its godoc promises** (#420), making
+  it identical to `Templates()`. The server always sent it; the client type
+  had no field for it.
+- **`EntityAnchor` had no tiebreaker** (#420). Rows written in one batch share
+  a `created_at`, so `ORDER BY created_at LIMIT 1` left the anchor undefined
+  and an entity could flap between anchors, rewriting every row on each write.
+  Both backends break the tie on id.
+
+Four documents asserted the opposite of the code, and now do not: the webhook
+`RotateSecret` godoc promised a grace window removed eleven lines above it (it
+is a hard cutover — update receivers first); `Service.Dispatcher()` warned that
+registration is unsynchronised, which the copy-on-write change made false; the
+rate-limit ceilings are documented as **per process**, which matters in the
+release that added `FLEXITYPE_RUN_*` so operators run several replicas; and
+`FLEXITYPE_REQUIRE_AUTH` (fixed earlier in this release) no longer disables
+authentication.
+
 ### Fixed — Schema-change guards that read the stored data wrongly
 
 - **`multi_valued → single` was refused for legal scoped data** (#420). The

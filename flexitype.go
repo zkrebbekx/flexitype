@@ -661,10 +661,12 @@ func (s *Service) Factory() application.Factory { return s.factory }
 func (s *Service) GraphQLEngine() *gql.Engine { return s.graphql }
 
 // Dispatcher exposes the event dispatcher, for inspection and for
-// registering hooks before the service starts serving.
+// registering hooks.
 //
-// Register during composition, not while traffic flows: Register mutates
-// the handler slice that Dispatch reads, and neither is synchronised.
+// Late registration is safe: the dispatcher copies its handler slice on
+// write under an RWMutex, so a Register concurrent with a Dispatch cannot
+// race. (This comment previously said the opposite, and had done since
+// before the copy-on-write change.)
 func (s *Service) Dispatcher() *events.Dispatcher { return s.dispatcher }
 
 // APIConfig configures the mountable REST API for embedded deployments.

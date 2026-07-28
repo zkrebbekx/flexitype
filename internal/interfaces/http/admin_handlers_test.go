@@ -878,3 +878,78 @@ func TestClientKey(t *testing.T) {
 		})
 	})
 }
+
+// TestRoutingResiduals covers two ways the API namespace leaked into the SPA
+// or hid behind the wrong status.
+func TestRoutingResiduals(t *testing.T) {
+	Convey("Given the allowed-method table built from the router", t, func() {
+		table := methodTable{
+			"/api/v1/tenants":        {"GET", "POST"},
+			"/api/v1/tenants/{name}": {"PATCH"},
+		}
+
+		Convey("When a concrete path matches a pattern", func() {
+			Convey("Then the methods come back sorted, for the Allow header", func() {
+				So(table.forPath("/api/v1/tenants"), ShouldEqual, "GET, POST")
+				So(table.forPath("/api/v1/tenants/acme"), ShouldEqual, "PATCH")
+			})
+		})
+
+		Convey("When nothing matches", func() {
+			Convey("Then no Allow header is offered rather than a wrong one", func() {
+				So(table.forPath("/api/v1/nope"), ShouldEqual, "")
+				So(table.forPath("/api/v1/tenants/acme/extra"), ShouldEqual, "")
+			})
+		})
+	})
+
+	Convey("Given the API-namespace test", t, func() {
+		Convey("When a path addresses the API in any of the forms a client produces", func() {
+			Convey("Then it is recognised, so the answer is JSON and not the app shell", func() {
+				// `//api/...` is exactly what joining a base URL ending in "/"
+				// with a path beginning with "/" produces.
+				So(isAPIPath("/api/v1/type-definitions"), ShouldBeTrue)
+				So(isAPIPath("//api/v1/type-definitions"), ShouldBeTrue)
+				So(isAPIPath("/API/v1/type-definitions"), ShouldBeTrue)
+				So(isAPIPath("/api"), ShouldBeTrue)
+				So(isAPIPath("/api/"), ShouldBeTrue)
+			})
+		})
+
+		Convey("When a path is the console's", func() {
+			Convey("Then it is not the API", func() {
+				So(isAPIPath("/"), ShouldBeFalse)
+				So(isAPIPath("/types"), ShouldBeFalse)
+				So(isAPIPath("/apiary"), ShouldBeFalse)
+			})
+		})
+	})
+}
+
+// TestMethodNotAllowedAnswers405 covers the ambiguity the shared handler left:
+// "this endpoint does not exist" and "this endpoint does not take that verb"
+// answered with the same status, which is what the JSON-404 change set out to
+// remove.
+func TestMethodNotAllowedAnswers405(t *testing.T) {
+	Convey("Given a provisioning-enabled API", t, func() {
+		h, _ := newProvisioningHarness(t, nil)
+
+		Convey("When a known route is called with an unsupported method", func() {
+			resp := h.delete("/api/v1/tenants")
+
+			Convey("Then it is 405 with an Allow header naming the real methods", func() {
+				So(resp.Status, ShouldEqual, http.StatusMethodNotAllowed)
+				So(resp.Header.Get("Allow"), ShouldContainSubstring, "GET")
+				So(resp.Header.Get("Allow"), ShouldContainSubstring, "POST")
+			})
+		})
+
+		Convey("When an unknown route is called", func() {
+			resp := h.get("/api/v1/nosuchthing")
+
+			Convey("Then it is still 404, so the two cases stay distinguishable", func() {
+				So(resp.Status, ShouldEqual, http.StatusNotFound)
+			})
+		})
+	})
+}

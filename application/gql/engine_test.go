@@ -71,8 +71,11 @@ func TestEngineSubscriberContract(t *testing.T) {
 
 func TestResultErr(t *testing.T) {
 	Convey("Given an engine-level failure that must not reach resolution", t, func() {
+		var observed []error
+		e := NewEngine(WithErrorObserver(func(err error) { observed = append(observed, err) }))
+
 		Convey("When an infrastructure error is turned into a GraphQL result", func() {
-			res := resultErr(errors.New("pq: relation \"flexitype_attribute_value\" does not exist"))
+			res := e.fail(errors.New("pq: relation \"flexitype_attribute_value\" does not exist"))
 
 			Convey("Then the detail is masked, as it is on the REST surface", func() {
 				So(res.Errors, ShouldHaveLength, 1)
@@ -80,14 +83,24 @@ func TestResultErr(t *testing.T) {
 				So(res.Errors[0].Message, ShouldNotContainSubstring, "flexitype_attribute_value")
 				So(res.Data, ShouldBeNil)
 			})
+
+			Convey("Then the observer is told, so the detail is not simply lost", func() {
+				// A pre-execution failure was masked WITHOUT notifying the
+				// observer, though its godoc promises it reports every error
+				// masked on its way out — so an operator saw "internal error"
+				// with nothing naming the cause.
+				So(observed, ShouldHaveLength, 1)
+				So(observed[0].Error(), ShouldContainSubstring, "flexitype_attribute_value")
+			})
 		})
 
 		Convey("When a domain error is turned into a GraphQL result", func() {
-			res := resultErr(domainerrors.NewValidation("query exceeds the cost budget"))
+			res := e.fail(domainerrors.NewValidation("query exceeds the cost budget"))
 
-			Convey("Then its client-facing message survives", func() {
+			Convey("Then its client-facing message survives and nothing is reported", func() {
 				So(res.Errors, ShouldHaveLength, 1)
 				So(res.Errors[0].Message, ShouldEqual, "query exceeds the cost budget")
+				So(observed, ShouldBeEmpty)
 			})
 		})
 	})

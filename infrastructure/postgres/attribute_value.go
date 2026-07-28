@@ -595,9 +595,13 @@ func typeDefPredicate(ids []string) (string, any) {
 func (r *attributeValueRepository) EntityAnchor(ctx context.Context, tenant valueobjects.TenantID, entityID valueobjects.EntityID) (valueobjects.TypeDefinitionID, bool, error) {
 	var raw []string
 	if err := r.q.SelectContext(ctx, &raw, bind(
+		// id breaks the tie. Ordering on created_at alone left the anchor
+		// undefined for rows written in one batch, which share a timestamp —
+		// so the same entity could resolve to different anchors on different
+		// reads and each write would rewrite every row to "correct" it.
 		`SELECT type_definition_id FROM flexitype_attribute_value
 		  WHERE tenant_id = ? AND entity_id = ?
-		  ORDER BY created_at
+		  ORDER BY created_at, id
 		  LIMIT 1`),
 		tenant.String(), entityID.String()); err != nil {
 		return valueobjects.TypeDefinitionID{}, false, fmt.Errorf("entity anchor: %w", err)

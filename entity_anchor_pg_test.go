@@ -107,10 +107,39 @@ func TestEntityAnchorInvariantPostgres(t *testing.T) {
 				So(vals, ShouldHaveLength, 2)
 			})
 
-			Convey("Then a write naming the parent is refused: it would widen the anchor", func() {
-				// Narrowing moves the entity to a subtype; widening would put
-				// values outside the subtype's schema back under the parent.
-				err := set(name.ID.String(), parent.ID.String(), "Widget")
+			Convey("Then a write naming the parent is satisfied where the entity already is", func() {
+				// The supplied type is an ANCESTOR of the current anchor, so
+				// the entity is already anchored to something more specific
+				// and the write belongs to that type's inherited schema. It
+				// is accepted WITHOUT widening: nothing moves back to the
+				// parent.
+				//
+				// Refusing it broke restoring a pre-narrowing revision
+				// outright — Restore replays with the captured parent type —
+				// and the error called the parent "an unrelated type", which
+				// it is not.
+				So(set(name.ID.String(), parent.ID.String(), "Widget"), ShouldBeNil)
+
+				underChild, err := svc.Interactors(ctx).Values().ListByEntity(ctx, child.ID.String(), "e1")
+				So(err, ShouldBeNil)
+				So(underChild, ShouldHaveLength, 2)
+
+				underParent, err := svc.Interactors(ctx).Values().ListByEntity(ctx, parent.ID.String(), "e1")
+				So(err, ShouldBeNil)
+				So(underParent, ShouldBeEmpty)
+			})
+
+			Convey("Then a write naming an unrelated type is still refused", func() {
+				other, oerr := svc.Interactors(ctx).TypeDefinitions().Create(ctx,
+					apptypedef.CreateInput{InternalName: "unrelated", DisplayName: "Unrelated"})
+				So(oerr, ShouldBeNil)
+				otherAttr, aerr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+					TypeDefinitionID: other.ID.String(), InternalName: "other_name",
+					DisplayName: "Other", DataType: "string",
+				})
+				So(aerr, ShouldBeNil)
+
+				err := set(otherAttr.ID.String(), other.ID.String(), "Nope")
 				So(err, ShouldNotBeNil)
 				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeValidation)
 				So(err.Error(), ShouldContainSubstring, "unrelated type")

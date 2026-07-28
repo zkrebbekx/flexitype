@@ -286,12 +286,19 @@ that ceiling off.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `FLEXITYPE_RATE_LIMIT_RPS` | `50` | Sustained requests per second per **service account**. |
+| `FLEXITYPE_RATE_LIMIT_RPS` | `50` | Sustained requests per second per **service account**, **per API process** — see the note below. |
 | `FLEXITYPE_RATE_LIMIT_BURST` | `200` | Token-bucket ceiling for short bursts, per account. |
-| `FLEXITYPE_TENANT_RATE_LIMIT_RPS` | `500` | Sustained requests per second per **tenant**, across all of its accounts. |
+| `FLEXITYPE_TENANT_RATE_LIMIT_RPS` | `500` | Sustained requests per second per **tenant**, across all of its accounts, **per API process**. |
 | `FLEXITYPE_AUTH_RATE_LIMIT_RPS` | `20` | Requests per **client address** before authentication; `0` disables. The per-account and per-tenant ceilings key on a resolved principal, so neither can throttle a failed credential — and each of those costs a database round trip and a hash, uncached. Behind a proxy this keys on the proxy, giving a ceiling on aggregate unauthenticated traffic rather than a per-client one: `X-Forwarded-For` is deliberately not read, because a header is attacker-supplied and trusting it would let one client spread its attempts across unlimited keys. |
 | `FLEXITYPE_AUTH_RATE_LIMIT_BURST` | `40` | Pre-authentication token-bucket ceiling. |
 | `FLEXITYPE_TENANT_RATE_LIMIT_BURST` | `2000` | Token-bucket ceiling for short bursts, per tenant. |
+
+> **The ceilings are per process.** Every bucket lives in a process-local map,
+> so a tier of N API replicas admits up to N times the configured rate. That is
+> not a caveat added late: `FLEXITYPE_RUN_*` exists so operators run several
+> replicas, and the numbers above have to be read as per-replica. Divide by the
+> replica count for a fleet-wide ceiling, or put a shared limiter at the edge.
+
 
 The per-account limiter alone cannot bound a tenant: a tenant that creates more
 service accounts multiplies its effective rate by the account count, because the

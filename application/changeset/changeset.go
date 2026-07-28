@@ -24,11 +24,26 @@ type State string
 
 // The change-set lifecycle states.
 const (
-	StateDraft     State = "draft"
-	StateInReview  State = "in_review"
-	StateApproved  State = "approved"
-	StatePublished State = "published"
-	StateRejected  State = "rejected"
+	StateDraft    State = "draft"
+	StateInReview State = "in_review"
+	StateApproved State = "approved"
+	// StatePublishing is held while the mutations are being applied.
+	//
+	// It exists so the claim can be taken BEFORE the side effects. Publish
+	// used to apply the mutations and only then compare-and-swap the record:
+	// once optimistic locking made that second call able to fail, any
+	// concurrent touch of the set — a reviewer rejecting it, a second
+	// publish, the scheduler tick — left the data committed and the record
+	// saying something else. Through PublishDue it compounded: the set stayed
+	// approved with publish_at in the past, so every tick re-applied the same
+	// mutations over whatever had been written in between.
+	//
+	// A set left in this state means a publish began and did not finish. The
+	// scheduler does not pick it up (it selects approved), so it is visible
+	// and inert rather than silently repeating.
+	StatePublishing State = "publishing"
+	StatePublished  State = "published"
+	StateRejected   State = "rejected"
 )
 
 // ChangeSet is a named, reviewable batch of value mutations.
@@ -195,14 +210,22 @@ func (i *Interactor) Reject(ctx context.Context, rawID string) (*ChangeSet, erro
 		if cs.State == StatePublished {
 			return domainerrors.NewValidation("a published change-set cannot be rejected")
 		}
+		if cs.State == StatePublishing {
+			return domainerrors.NewValidation("a publishing change-set cannot be rejected")
+		}
 		cs.State = StateRejected
 		return nil
 	})
 }
 
 // Publish applies every mutation atomically and marks the set published. It
-// requires approval when the set demands it; a constraint failure rolls the
-// whole batch back and the set stays as it was.
+// requires approval when the set demands it.
+//
+// The set is CLAIMED first (state publishing, version bumped), then the
+// mutations are applied, then the claim is finalised. A constraint failure
+// rolls the whole batch back and the claim is handed back, so the set is
+// publishable again once the cause is fixed. A concurrent edit loses the race
+// while the data is still untouched, rather than after it has been written.
 func (i *Interactor) Publish(ctx context.Context, rawID string) (*ChangeSet, error) {
 	id, err := ulid.Parse(rawID)
 	if err != nil {
@@ -231,14 +254,46 @@ func (i *Interactor) publish(ctx context.Context, cs *ChangeSet) error {
 	default:
 		return domainerrors.NewValidation("change-set cannot be published", "state", string(cs.State))
 	}
-	if err := i.values.ApplyMutations(ctx, cs.Mutations); err != nil {
-		return err // atomic: nothing applied, the set is unchanged
+	// CLAIM FIRST. The compare-and-swap runs before the mutations, so a
+	// concurrent edit loses the race while the data is still untouched.
+	// Applying first meant a failed swap left the values written and the
+	// record disagreeing with them.
+	claimed := *cs
+	claimed.State = StatePublishing
+	claimed.UpdatedAt = i.now()
+	if err := i.store.Update(ctx, claimed); err != nil {
+		return err
 	}
+	claimed.Version++ // the store bumped it on success
+
+	if err := i.values.ApplyMutations(ctx, claimed.Mutations); err != nil {
+		// The batch is atomic, so nothing was written. Hand the claim back so
+		// the set is publishable again once the cause is fixed; the state is
+		// ours to release, because nobody else can transition out of
+		// publishing.
+		release := claimed
+		release.State = cs.State
+		release.UpdatedAt = i.now()
+		if rerr := i.store.Update(ctx, release); rerr == nil {
+			*cs = release
+			cs.Version++
+		}
+		return err
+	}
+
 	now := i.now()
-	cs.State = StatePublished
-	cs.PublishedAt = &now
-	cs.UpdatedAt = now
-	return i.store.Update(ctx, *cs)
+	claimed.State = StatePublished
+	claimed.PublishedAt = &now
+	claimed.UpdatedAt = now
+	if err := i.store.Update(ctx, claimed); err != nil {
+		// The data is committed and the record cannot be advanced. Leaving it
+		// in publishing is the honest outcome: the scheduler will not re-run
+		// it, and the state names what happened.
+		return err
+	}
+	claimed.Version++
+	*cs = claimed
+	return nil
 }
 
 // Get returns one change-set.

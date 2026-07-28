@@ -207,6 +207,9 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 			if cerr := checkFormulaCycle(in.InternalName, refs, deps); cerr != nil {
 				return cerr
 			}
+			if serr := assertFormulaSourcesAreScalar(ctx, attrs, hierarchy, refs); serr != nil {
+				return serr
+			}
 		}
 
 		for _, link := range hierarchy {
@@ -336,6 +339,13 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 		if serr := i.assertStructuralChangeIsSafe(ctx, i.values.WithTx(tx), before, in, computed); serr != nil {
 			return serr
 		}
+		// The reverse of the formula-source guard: an attribute a formula
+		// reads cannot BECOME multi-valued, localizable or scopable, or that
+		// formula would start collapsing members and skipping scoped values
+		// with no write to the formula itself.
+		if serr := i.assertNoFormulaReadsScopedSource(ctx, typeDefs, attrs, before, in); serr != nil {
+			return serr
+		}
 
 		// A computed formula must not introduce a dependency cycle with the
 		// type's other computed attributes — enforced on update as well as
@@ -377,6 +387,9 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			deps, derr := i.computedDeps(ctx, attrs, hierarchy)
 			if derr != nil {
 				return derr
+			}
+			if serr := assertFormulaSourcesAreScalar(ctx, attrs, hierarchy, refs); serr != nil {
+				return serr
 			}
 			if cerr := checkFormulaCycle(attr.InternalName(), refs, deps); cerr != nil {
 				return cerr
@@ -739,6 +752,103 @@ func (i *Interactor) computedDeps(ctx context.Context, attrs domainattribute.Rep
 		}
 	}
 	return deps, nil
+}
+
+// assertNoFormulaReadsScopedSource refuses making an attribute multi-valued,
+// localizable or scopable while a formula reads it.
+//
+// Without it the guard on the formula side is one-way: the formula is written
+// against a scalar source and stays valid on paper, while the source becomes
+// something evaluation cannot represent. The failure would then appear on an
+// attribute nobody edited.
+func (i *Interactor) assertNoFormulaReadsScopedSource(
+	ctx context.Context, typeDefs domaintypedef.Repository, attrs domainattribute.Repository,
+	before domainattribute.Snapshot, in UpdateInput,
+) error {
+	gaining := (!before.MultiValued && in.MultiValued) ||
+		(!before.Localizable && in.Localizable) ||
+		(!before.Scopable && in.Scopable)
+	if !gaining {
+		return nil
+	}
+	td, err := typeDefs.Get(ctx, before.TypeDefinitionID)
+	if err != nil {
+		return err
+	}
+	hierarchy, err := apptypedef.Chain(ctx, typeDefs, td)
+	if err != nil {
+		return err
+	}
+	descendants, err := apptypedef.Descendants(ctx, typeDefs, td)
+	if err != nil {
+		return err
+	}
+	hierarchy = appendUnseenTypes(hierarchy, descendants)
+	deps, err := i.computedDeps(ctx, attrs, hierarchy)
+	if err != nil {
+		return err
+	}
+	for name, refs := range deps {
+		for _, ref := range refs {
+			if ref != before.InternalName {
+				continue
+			}
+			return domainerrors.NewConflict(
+				"cannot make the attribute multi-valued, localizable or scopable: a computed formula reads it, "+
+					"and evaluation carries one base-scope value per name",
+				"attribute", before.InternalName, "formula", name)
+		}
+	}
+	return nil
+}
+
+// assertFormulaSourcesAreScalar refuses a formula that reads a multi-valued,
+// localizable or scopable attribute.
+//
+// Evaluation carries ONE number per source name, so a multi-valued source
+// collapsed to whichever member the repository returned last, and a scoped
+// value was skipped entirely. Adding or removing a member changed the answer
+// with no other change to the schema or the formula, and nothing signalled
+// it: the computed attribute was populated, queryable in FQL and counted
+// toward completeness, so the number looked plausible and tracked nothing.
+//
+// Refusing is the loud option, and the same one this wave chose for rollups:
+// an aggregate over many members is a different feature (sum, count) rather
+// than an accident of row order. It is enforced at write time, so a formula
+// that cannot be evaluated meaningfully cannot be stored.
+func assertFormulaSourcesAreScalar(ctx context.Context, attrs domainattribute.Repository,
+	hierarchy []*domaintypedef.TypeDefinition, refs []string) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	wanted := make(map[string]bool, len(refs))
+	for _, r := range refs {
+		wanted[r] = true
+	}
+	for _, link := range hierarchy {
+		list, err := domainattribute.ListAllForType(ctx, attrs, link.ID())
+		if err != nil {
+			return err
+		}
+		for _, a := range list {
+			if !wanted[a.InternalName()] {
+				continue
+			}
+			switch {
+			case a.MultiValued():
+				return domainerrors.NewValidation(
+					"a formula cannot read a multi-valued attribute: evaluation carries one value per name, "+
+						"so it would silently use an arbitrary member",
+					"attribute", a.InternalName())
+			case a.Localizable() || a.Scopable():
+				return domainerrors.NewValidation(
+					"a formula cannot read a localizable or scopable attribute: evaluation reads the base "+
+						"scope only, so the scoped values would be ignored",
+					"attribute", a.InternalName())
+			}
+		}
+	}
+	return nil
 }
 
 // decodeComputed parses the optional computed-attribute spec.

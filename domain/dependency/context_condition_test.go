@@ -89,10 +89,14 @@ func TestMatchesAnyWithContext(t *testing.T) {
 				So(ok, ShouldBeFalse)
 			})
 
-			Convey("Then the plain MatchesAny agrees, so old callers are unchanged", func() {
-				ok, merr := d.MatchesAny([]valueobjects.Value{
+			Convey("Then passing no context facts is the same as having none", func() {
+				// There is no context-free variant any more: one existed, the
+				// write validator called it, and a condition naming a context
+				// key silently never matched there while both read paths
+				// reported the restriction.
+				ok, merr := d.MatchesAnyWithContext([]valueobjects.Value{
 					valueobjects.NewStringValue("enterprise"),
-				}, now)
+				}, nil, now)
 				So(merr, ShouldBeNil)
 				So(ok, ShouldBeFalse)
 			})

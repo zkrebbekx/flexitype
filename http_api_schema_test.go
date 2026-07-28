@@ -7,6 +7,7 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 
 	"github.com/zkrebbekx/flexitype"
+	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
 // TestHTTPSchemaRoutes covers the schema bundle round trip, the curated
@@ -1246,6 +1247,95 @@ func TestHTTPOperationalRoutes(t *testing.T) {
 				So(resp.Header.Get("Referrer-Policy"), ShouldEqual, "no-referrer")
 				So(resp.Header.Get("Content-Security-Policy"), ShouldContainSubstring, "frame-ancestors 'none'")
 				So(resp.Header.Get("X-Request-Id"), ShouldNotBeEmpty)
+			})
+		})
+	})
+}
+
+// TestChangeSetLifecycleOverHTTP drives the change-set endpoints end to end,
+// including the states a publish can leave behind.
+func TestChangeSetLifecycleOverHTTP(t *testing.T) {
+	Convey("Given a type with one attribute", t, func() {
+		a := newAPI(t, flexitype.APIConfig{})
+		typeID := a.mustCreateType("product", "Product")
+		attrID := a.mustCreateAttr(typeID, "name", "string", nil)
+
+		Convey("When a change-set is created, staged, approved and published", func() {
+			created := a.post("/api/v1/changesets", map[string]any{"name": "rename"})
+			So(created.Status, ShouldEqual, http.StatusCreated)
+			id := created.object(t)["id"].(string)
+
+			staged := a.post("/api/v1/changesets/"+id+"/mutations", map[string]any{
+				"kind": "set", "attribute_definition_id": attrID,
+				"entity_id": "p1", "type_definition_id": typeID, "value": "after",
+			})
+			So(staged.Status, ShouldEqual, http.StatusOK)
+
+			So(a.post("/api/v1/changesets/"+id+"/submit", nil).Status, ShouldEqual, http.StatusOK)
+			So(a.post("/api/v1/changesets/"+id+"/approve", nil).Status, ShouldEqual, http.StatusOK)
+			published := a.post("/api/v1/changesets/"+id+"/publish", nil)
+
+			Convey("Then the set reports published and the value is written", func() {
+				So(published.Status, ShouldEqual, http.StatusOK)
+				So(published.object(t)["state"], ShouldEqual, "published")
+
+				vals := a.get("/api/v1/entities/" + typeID + "/p1/values")
+				So(vals.Status, ShouldEqual, http.StatusOK)
+				So(len(vals.items(t)), ShouldEqual, 1)
+			})
+
+			Convey("Then it appears in the listing", func() {
+				list := a.get("/api/v1/changesets")
+				So(list.Status, ShouldEqual, http.StatusOK)
+				So(len(list.items(t)), ShouldEqual, 1)
+			})
+
+			Convey("Then publishing it again is refused", func() {
+				again := a.post("/api/v1/changesets/"+id+"/publish", nil)
+				So(again.Status, ShouldEqual, http.StatusUnprocessableEntity)
+			})
+
+			Convey("Then rejecting a published set is refused", func() {
+				rejected := a.post("/api/v1/changesets/"+id+"/reject", nil)
+				So(rejected.Status, ShouldEqual, http.StatusUnprocessableEntity)
+			})
+		})
+
+		Convey("When a draft with no mutations is submitted", func() {
+			created := a.post("/api/v1/changesets", map[string]any{"name": "empty"})
+			id := created.object(t)["id"].(string)
+			resp := a.post("/api/v1/changesets/"+id+"/submit", nil)
+
+			Convey("Then it is refused", func() {
+				So(resp.Status, ShouldEqual, http.StatusUnprocessableEntity)
+			})
+		})
+
+		Convey("When an unknown change-set is read", func() {
+			resp := a.get("/api/v1/changesets/" + ulid.New().String())
+
+			Convey("Then it is 404", func() {
+				So(resp.Status, ShouldEqual, http.StatusNotFound)
+			})
+		})
+
+		Convey("When a malformed id is used", func() {
+			Convey("Then every route reports a validation error", func() {
+				So(a.get("/api/v1/changesets/not-a-ulid").Status, ShouldEqual, http.StatusUnprocessableEntity)
+				So(a.post("/api/v1/changesets/not-a-ulid/submit", nil).Status,
+					ShouldEqual, http.StatusUnprocessableEntity)
+				So(a.post("/api/v1/changesets/not-a-ulid/publish", nil).Status,
+					ShouldEqual, http.StatusUnprocessableEntity)
+			})
+		})
+
+		Convey("When a mutation body is malformed", func() {
+			created := a.post("/api/v1/changesets", map[string]any{"name": "bad"})
+			id := created.object(t)["id"].(string)
+			resp := a.post("/api/v1/changesets/"+id+"/mutations", `{`)
+
+			Convey("Then it is 422", func() {
+				So(resp.Status, ShouldEqual, http.StatusUnprocessableEntity)
 			})
 		})
 	})

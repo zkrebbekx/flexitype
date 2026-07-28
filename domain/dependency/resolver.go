@@ -21,24 +21,22 @@ type EffectiveSchema struct {
 	Restricted bool
 }
 
-// ResolveEffective computes the effective schema for a target attribute.
+// ResolveEffectiveWithContext computes the effective schema for a target
+// attribute.
+//
 // deps are the dependencies targeting it; sourceValues maps each source
 // attribute ID to ALL of the entity's current values for it (absent = the zero
 // value). A condition matches when any of them satisfies it — see
-// Dependency.MatchesAny.
-// Matched allowed-value sets intersect; constraints accumulate.
-func ResolveEffective(
-	target *attribute.Definition,
-	deps []*Dependency,
-	sourceValues map[valueobjects.AttributeDefinitionID][]valueobjects.Value,
-	now time.Time,
-) (EffectiveSchema, error) {
-	return ResolveEffectiveWithContext(target, deps, sourceValues, nil, now)
-}
-
-// ResolveEffectiveWithContext is ResolveEffective with the caller's own facts
-// available to conditions that name one, so a rule can depend on a field that
-// lives in the host's tables rather than in flexitype.
+// Dependency.MatchesAnyWithContext. Matched allowed-value sets intersect;
+// constraints accumulate.
+//
+// ctxValues are the caller's own facts, so a rule can depend on a field that
+// lives in the host's tables rather than in flexitype. There is deliberately
+// NO context-free variant: one existed, the write validator called it, and a
+// condition naming a context key silently never matched there while both read
+// paths reported the restriction. Pass nil to mean "no context facts" — that
+// is a decision the caller states rather than one a convenience wrapper makes
+// for it.
 func ResolveEffectiveWithContext(
 	target *attribute.Definition,
 	deps []*Dependency,

@@ -2451,7 +2451,15 @@ components:
         id: { type: string }
         tenant_id: { type: string }
         name: { type: string }
-        state: { type: string, enum: [draft, in_review, approved, published, rejected] }
+        state:
+          type: string
+          enum: [draft, in_review, approved, publishing, published, rejected]
+          description: >
+            `publishing` is held while the mutations are being applied. The
+            claim is taken before the side effects, so a concurrent edit loses
+            the race while the data is still untouched. A set left in this
+            state means a publish began and did not finish: the scheduler does
+            not pick it up, so it is visible and inert rather than repeating.
         require_approval: { type: boolean }
         author: { type: string }
         approver: { type: string }

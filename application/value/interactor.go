@@ -621,7 +621,19 @@ func (i *Interactor) checkDependencies(
 		sourceValues[av.AttributeDefinitionID()] = append(sourceValues[av.AttributeDefinitionID()], av.Value())
 	}
 
-	schema, err := domaindependency.ResolveEffective(def, targeting, sourceValues, i.now())
+	// The SAME resolver the read paths use, with the caller's context values
+	// and the tenant-local day.
+	//
+	// This path used to call the context-free form: ctxValues was nil, so a
+	// condition naming a ContextKey short-circuited to "no match" and the rule
+	// never applied — while EffectiveSchema and Completeness, which do pass
+	// them, reported the restriction. A write was accepted that the API had
+	// just described as forbidden, which is the worst combination for a
+	// validation feature: it looks configured and tested. The clock was UTC
+	// here and tenant-local there, so a `today` rule near midnight disagreed
+	// with itself for several hours a day.
+	schema, err := domaindependency.ResolveEffectiveWithContext(
+		def, targeting, sourceValues, uow.ContextValuesFromContext(ctx), uow.LocalNow(ctx))
 	if err != nil {
 		return fmt.Errorf("resolve effective schema: %w", err)
 	}

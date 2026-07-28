@@ -185,8 +185,9 @@ func (d *Dependency) Archive(now time.Time) ([]events.Event, error) {
 	}}, nil
 }
 
-// MatchesAny reports whether ANY of an entity's values for the source
-// attribute satisfies every condition.
+// MatchesAnyWithContext reports whether ANY of an entity's values for the
+// source attribute satisfies every condition, with the caller's own facts
+// available to conditions that name one.
 //
 // A multi-valued source used to collapse to one arbitrary member, and a
 // localizable or scopable one to whichever variant was written last, because
@@ -201,12 +202,6 @@ func (d *Dependency) Archive(now time.Time) ([]events.Event, error) {
 //
 // An attribute with no values is evaluated once against the zero value, so
 // conditions that test absence behave as before.
-func (d *Dependency) MatchesAny(sources []valueobjects.Value, now time.Time) (bool, error) {
-	return d.MatchesAnyWithContext(sources, nil, now)
-}
-
-// MatchesAnyWithContext is MatchesAny with the caller's own facts available
-// to conditions that name one.
 //
 // An embedder's entities keep their primary fields in host tables — a
 // customer's tier, an order's channel — and no condition could reference

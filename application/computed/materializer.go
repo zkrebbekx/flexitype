@@ -20,11 +20,14 @@ package computed
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -194,12 +197,6 @@ func (m *Materializer) RecomputeType(ctx context.Context, tenant valueobjects.Te
 
 	limit := 200
 	count := 0
-	// Entities written after the rebuild started are already correct: the
-	// schema change invalidated the has-computed cache, so that write's own
-	// synchronous recompute used the new definition. Skipping them is not an
-	// optimisation — recomputing one would race the newer write and could
-	// write a value derived from inputs that have since changed, undoing it.
-	startedAt := m.now()
 	for _, id := range ids {
 		has, err := m.typeHasComputed(ctx, it, id)
 		if err != nil {
@@ -215,16 +212,6 @@ func (m *Materializer) RecomputeType(ctx context.Context, tenant valueobjects.Te
 				return count, fmt.Errorf("list entities of %s: %w", id, err)
 			}
 			for _, e := range entities.Items {
-				// Skip on >= rather than >. An entity written at the same
-				// instant the rebuild started is in the same race, and the
-				// comparison boundary is not something to be clever about:
-				// skipping an entity that was already correct costs nothing,
-				// because the write path recomputed it synchronously against
-				// the new definition. Recomputing one that is being written
-				// can clear a value from half-written inputs.
-				if !e.LastUpdatedAt.Before(startedAt) {
-					continue
-				}
 				if err := m.recomputeConverging(ctx, id, e.EntityID); err != nil {
 					return count, fmt.Errorf("recompute %s: %w", e.EntityID, err)
 				}
@@ -451,7 +438,83 @@ func (m *Materializer) Recompute(ctx context.Context, typeID, entityID string) e
 // undefined for an entity is cleared by that entity's next write or by the
 // tenant-wide RecomputeComputed.
 func (m *Materializer) recomputeConverging(ctx context.Context, typeID, entityID string) error {
-	return m.recompute(ctx, typeID, entityID, false)
+	return m.recomputeStable(ctx, typeID, entityID, false)
+}
+
+// maxRecomputeAttempts bounds the re-read loop below.
+const maxRecomputeAttempts = 3
+
+// recomputeStable recomputes and then CONFIRMS that the inputs it read did not
+// change while it was writing; if they did, it recomputes again.
+//
+// The rebuild used to decide whether to touch an entity by comparing two wall
+// clocks taken on different machines: the entity's last_updated_at (stamped
+// from the writing request's clock when the write BEGAN) against the
+// rebuilding process's own. Nothing serialised them, so a write that began
+// before the rebuild started and committed after it listed the entity was
+// invisible to the check — the rebuild then read the pre-write inputs under
+// READ COMMITTED and wrote a computed value derived from them, leaving the
+// source new and the computed value stale. Replica clock skew widened the
+// window, and the rebuild runs on a different replica from the writes by
+// design.
+//
+// A fingerprint of the source values is compared instead of a clock. It needs
+// no serialisation and no synchronised time: if the inputs moved, the answer
+// is recomputed from the ones that are there now. Bounded, because a
+// continuously-written entity would otherwise spin — and that entity is being
+// recomputed synchronously by its own writes anyway.
+func (m *Materializer) recomputeStable(ctx context.Context, typeID, entityID string, allowClear bool) error {
+	for attempt := 0; attempt < maxRecomputeAttempts; attempt++ {
+		before, err := m.sourceFingerprint(ctx, typeID, entityID)
+		if err != nil {
+			return err
+		}
+		if err := m.recompute(ctx, typeID, entityID, allowClear); err != nil {
+			return err
+		}
+		after, err := m.sourceFingerprint(ctx, typeID, entityID)
+		if err != nil {
+			return err
+		}
+		if after == before {
+			return nil
+		}
+	}
+	return nil
+}
+
+// sourceFingerprint summarises an entity's NON-computed base-scope values, so
+// a change to any formula input is visible without a clock.
+//
+// Computed values are excluded deliberately: the recompute writes those, and
+// including them would make every pass look like a concurrent change.
+func (m *Materializer) sourceFingerprint(ctx context.Context, typeID, entityID string) (string, error) {
+	it := m.factory.New(ctx)
+	attrs, err := it.TypeDefinitions().EffectiveAttributes(ctx, typeID)
+	if err != nil {
+		return "", fmt.Errorf("load effective attributes: %w", err)
+	}
+	isComputed := make(map[string]bool, len(attrs))
+	for _, a := range attrs {
+		if a.Attribute.Computed != nil {
+			isComputed[a.Attribute.ID.String()] = true
+		}
+	}
+	values, err := it.Values().ListByEntity(ctx, typeID, entityID)
+	if err != nil {
+		return "", fmt.Errorf("load entity values: %w", err)
+	}
+	parts := make([]string, 0, len(values))
+	for _, v := range values {
+		if isComputed[v.AttributeDefinitionID.String()] {
+			continue
+		}
+		parts = append(parts, v.AttributeDefinitionID.String()+"\x1f"+v.Locale+"\x1f"+
+			v.Channel+"\x1f"+v.Value.String()+"\x1f"+v.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	}
+	sort.Strings(parts)
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1e")))
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, allowClear bool) error {

@@ -164,3 +164,178 @@ func TestTenantTimeZone(t *testing.T) {
 		})
 	})
 }
+
+// TestContextConditionsBindOnTheWritePath covers the gap between what the API
+// reported and what it enforced.
+//
+// EffectiveSchema and Completeness evaluate rules with the caller's context
+// values and the tenant-local day; checkDependencies evaluated the same rules
+// with neither, and a condition naming a ContextKey short-circuits to "no
+// match" when the key is absent. So a write was accepted that the API had just
+// described as forbidden — the worst combination for a validation feature,
+// because it looks configured and tested.
+func TestContextConditionsBindOnTheWritePath(t *testing.T) {
+	Convey("Given a rule restricting channel when the host says the workflow is locked", t, func() {
+		base := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		ia := svc.Interactors(base)
+
+		order, err := ia.TypeDefinitions().Create(base, apptypedef.CreateInput{
+			InternalName: "order", DisplayName: "Order",
+		})
+		So(err, ShouldBeNil)
+		attr := func(name string) string {
+			a, aerr := svc.Interactors(base).Attributes().Create(base, appattribute.CreateInput{
+				TypeDefinitionID: order.ID.String(), InternalName: name,
+				DisplayName: name, DataType: "string",
+			})
+			So(aerr, ShouldBeNil)
+			return a.ID.String()
+		}
+		note := attr("note")
+		channel := attr("channel")
+
+		_, err = svc.Interactors(base).Dependencies().Create(base, appdependency.CreateInput{
+			SourceAttributeID: note,
+			TargetAttributeID: channel,
+			Conditions: json.RawMessage(`[{"kind":"equals","context_key":"workflow_state",` +
+				`"value":{"type":"string","value":"locked"}}]`),
+			Effect: json.RawMessage(`{"allowed_values":[{"type":"string","value":"web"}]}`),
+		})
+		So(err, ShouldBeNil)
+
+		locked := uow.WithContextValues(base, map[string]valueobjects.Value{
+			"workflow_state": valueobjects.NewStringValue("locked"),
+		})
+
+		Convey("When the effective schema is read with that context", func() {
+			eff, eerr := svc.Interactors(locked).Dependencies().EffectiveSchema(locked, channel, "o1")
+
+			Convey("Then it reports the restriction", func() {
+				So(eerr, ShouldBeNil)
+				So(eff.Restricted, ShouldBeTrue)
+			})
+		})
+
+		Convey("When a disallowed value is written with the same context", func() {
+			raw, _ := json.Marshal("phone")
+			_, werr := svc.Interactors(locked).Values().Set(locked, appvalue.SetInput{
+				AttributeDefinitionID: channel, EntityID: "o1",
+				TypeDefinitionID: order.ID.String(), Value: raw,
+			})
+
+			Convey("Then the write is refused, as the effective schema said it would be", func() {
+				So(werr, ShouldNotBeNil)
+			})
+		})
+
+		Convey("When an allowed value is written with that context", func() {
+			raw, _ := json.Marshal("web")
+			_, werr := svc.Interactors(locked).Values().Set(locked, appvalue.SetInput{
+				AttributeDefinitionID: channel, EntityID: "o2",
+				TypeDefinitionID: order.ID.String(), Value: raw,
+			})
+
+			Convey("Then it is accepted", func() {
+				So(werr, ShouldBeNil)
+			})
+		})
+
+		Convey("When the same value is written WITHOUT the context", func() {
+			raw, _ := json.Marshal("phone")
+			_, werr := svc.Interactors(base).Values().Set(base, appvalue.SetInput{
+				AttributeDefinitionID: channel, EntityID: "o3",
+				TypeDefinitionID: order.ID.String(), Value: raw,
+			})
+
+			Convey("Then the rule does not apply, because its key is absent", func() {
+				So(werr, ShouldBeNil)
+			})
+		})
+	})
+}
+
+// TestCompletenessUsesContextValues covers the third consumer of a
+// context-keyed rule: the score has to agree with the effective schema and
+// with the write path, or a required field is counted for one caller and not
+// another with no visible reason.
+func TestCompletenessUsesContextValues(t *testing.T) {
+	Convey("Given a PO number required only for enterprise callers", t, func() {
+		base := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		ia := svc.Interactors(base)
+
+		order, err := ia.TypeDefinitions().Create(base, apptypedef.CreateInput{
+			InternalName: "order", DisplayName: "Order",
+		})
+		So(err, ShouldBeNil)
+		attr := func(name string) string {
+			a, aerr := svc.Interactors(base).Attributes().Create(base, appattribute.CreateInput{
+				TypeDefinitionID: order.ID.String(), InternalName: name,
+				DisplayName: name, DataType: "string",
+			})
+			So(aerr, ShouldBeNil)
+			return a.ID.String()
+		}
+		note := attr("note")
+		poNumber := attr("po_number")
+
+		_, err = svc.Interactors(base).Dependencies().Create(base, appdependency.CreateInput{
+			SourceAttributeID: note,
+			TargetAttributeID: poNumber,
+			Conditions: json.RawMessage(`[{"kind":"equals","context_key":"customer_tier",` +
+				`"value":{"type":"string","value":"enterprise"}}]`),
+			Effect: json.RawMessage(`{"required":true}`),
+		})
+		So(err, ShouldBeNil)
+
+		raw, _ := json.Marshal("first order")
+		_, err = svc.Interactors(base).Values().Set(base, appvalue.SetInput{
+			AttributeDefinitionID: note, EntityID: "o1",
+			TypeDefinitionID: order.ID.String(), Value: raw,
+		})
+		So(err, ShouldBeNil)
+
+		enterprise := uow.WithContextValues(base, map[string]valueobjects.Value{
+			"customer_tier": valueobjects.NewStringValue("enterprise"),
+		})
+
+		Convey("When completeness is scored for an enterprise caller", func() {
+			score, serr := svc.Interactors(enterprise).Dependencies().Completeness(
+				enterprise, order.ID.String(), "o1")
+
+			Convey("Then the conditionally-required field counts as missing", func() {
+				So(serr, ShouldBeNil)
+				names := make([]string, 0, len(score.Missing))
+				for _, m := range score.Missing {
+					names = append(names, m.InternalName)
+				}
+				So(names, ShouldContain, "po_number")
+			})
+		})
+
+		Convey("When completeness is scored without the context", func() {
+			score, serr := svc.Interactors(base).Dependencies().Completeness(
+				base, order.ID.String(), "o1")
+
+			Convey("Then it is not required, matching what the write path enforces", func() {
+				So(serr, ShouldBeNil)
+				names := make([]string, 0, len(score.Missing))
+				for _, m := range score.Missing {
+					names = append(names, m.InternalName)
+				}
+				So(names, ShouldNotContain, "po_number")
+			})
+		})
+
+		Convey("When the type's aggregate completeness is scored", func() {
+			out, serr := svc.Interactors(enterprise).Dependencies().TypeCompleteness(
+				enterprise, order.ID.String())
+
+			Convey("Then the same rule applies across the type", func() {
+				So(serr, ShouldBeNil)
+				So(len(out.Entities), ShouldBeGreaterThan, 0)
+			})
+		})
+	})
+}

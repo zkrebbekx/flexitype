@@ -6,11 +6,11 @@ import (
 
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
+	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
-	"github.com/zkrebbekx/flexitype/pkg/db"
 )
 
 // maxFacetEntities bounds how many entities a facet computation scans.
@@ -235,7 +235,11 @@ func (i *Interactor) effectiveAttrIndex(ctx context.Context, t *domaintypedef.Ty
 	nameByID := map[valueobjects.AttributeDefinitionID]string{}
 	idByName := map[string]valueobjects.AttributeDefinitionID{}
 	for _, link := range chain {
-		attrs, _, err := i.attrs.ListByTypeDefinition(ctx, link.ID(), db.Page{Limit: 500})
+		// ListAllForType rather than a fixed page: this was the seventh call
+		// site, left on a 500-row page while six were converted — and the cap
+		// was raised to 1000 at the same time, which only widened the window
+		// in which this one truncated a type's schema silently.
+		attrs, err := domainattribute.ListAllForType(ctx, i.attrs, link.ID())
 		if err != nil {
 			return nil, nil, err
 		}

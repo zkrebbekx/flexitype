@@ -57,7 +57,16 @@ func (i *Interactor) assertStructuralChangeIsSafe(
 	losingLocale := before.Localizable && !in.Localizable
 	losingChannel := before.Scopable && !in.Scopable
 	gainingComputed := before.Computed == nil && computed != nil
-	if !losingMulti && !gainingUnique && !losingLocale && !losingChannel && !gainingComputed {
+	// The unit family is structural too, and it was not guarded at all.
+	// Stored quantities keep a magnitude in the OLD family's base unit, so
+	// flipping mass -> length made every stored value read in the new
+	// family's base (2000 g read as 2000 m), and the stored display unit is
+	// not a member of the new family — so those rows could never be rewritten
+	// through the API either.
+	changingFamily := before.UnitFamilyID != "" && in.UnitFamilyID != "" &&
+		before.UnitFamilyID != in.UnitFamilyID
+	if !losingMulti && !gainingUnique && !losingLocale && !losingChannel &&
+		!gainingComputed && !changingFamily {
 		return nil
 	}
 
@@ -87,6 +96,13 @@ func (i *Interactor) assertStructuralChangeIsSafe(
 			"cannot turn off localizable/scopable: stored values carry a locale or channel; "+
 				"remove the scoped values first",
 			"attribute", before.InternalName, "scoped_values", shape.ScopedValues)
+	case changingFamily && shape.LiveValues > 0:
+		return domainerrors.NewConflict(
+			"cannot change the unit family: stored quantities hold a magnitude in the current family's "+
+				"base unit, so they would read as the new family's base and could not be rewritten; "+
+				"remove the values first",
+			"attribute", before.InternalName, "values", shape.LiveValues,
+			"from", before.UnitFamilyID, "to", in.UnitFamilyID)
 	case gainingComputed && shape.LiveValues > 0:
 		// The next recompute would overwrite or clear whatever a person
 		// wrote there.
@@ -475,6 +491,15 @@ func (i *Interactor) transition(ctx context.Context, rawID string, action activi
 		case activity.ActionArchived:
 			evts, err = attr.Archive(i.now())
 		default:
+			// Restoring re-introduces the name into the hierarchy, so the
+			// same uniqueness sweep Create runs has to run here. Create's
+			// guard uses GetByInternalName, which EXCLUDES archived rows —
+			// so archiving `release_code` on subtype A and creating it on
+			// sibling B both succeeded, and restoring A's left two live
+			// attributes with one name, resolved by list order.
+			if uerr := i.assertNameFreeInHierarchy(ctx, tx, attr); uerr != nil {
+				return uerr
+			}
 			evts, err = attr.Restore(i.now())
 		}
 		if err != nil {
@@ -499,6 +524,43 @@ func (i *Interactor) transition(ctx context.Context, rawID string, action activi
 		return nil, err
 	}
 	return &snap, nil
+}
+
+// assertNameFreeInHierarchy refuses a restore whose internal name is already
+// live on another type in the same hierarchy.
+func (i *Interactor) assertNameFreeInHierarchy(ctx context.Context, tx db.Transactor, attr *domainattribute.Definition) error {
+	typeDefs := i.typeDefs.WithTx(tx)
+	attrs := i.attrs.WithTx(tx)
+	td, err := typeDefs.Get(ctx, attr.TypeDefinitionID())
+	if err != nil {
+		return err
+	}
+	root, err := apptypedef.Root(ctx, typeDefs, td)
+	if err != nil {
+		return err
+	}
+	hierarchy, err := apptypedef.Chain(ctx, typeDefs, td)
+	if err != nil {
+		return err
+	}
+	descendants, err := apptypedef.Descendants(ctx, typeDefs, root)
+	if err != nil {
+		return err
+	}
+	hierarchy = appendUnseenTypes(hierarchy, descendants)
+	for _, link := range hierarchy {
+		existing, gerr := attrs.GetByInternalName(ctx, link.ID(), attr.InternalName())
+		if gerr != nil && !domainerrors.IsNotFound(gerr) {
+			return fmt.Errorf("check internal name: %w", gerr)
+		}
+		if gerr == nil && !existing.ID().Equals(attr.ID()) {
+			return domainerrors.NewConflict(
+				"another live attribute in this hierarchy already uses this internal name; "+
+					"rename or archive it before restoring",
+				"internal_name", attr.InternalName(), "type_definition_id", link.ID().String())
+		}
+	}
+	return nil
 }
 
 // ValidateValue dry-runs a raw JSON value against a saved attribute

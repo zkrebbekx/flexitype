@@ -276,8 +276,20 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			if terr != nil {
 				return terr
 			}
-			if entityTypeDef.IsArchived() {
-				return domainerrors.NewArchived("type_definition", entityType.String())
+			// The WHOLE chain, not just the anchor. Checking only the
+			// anchor's own flag meant archiving a PARENT left writes under
+			// its live subtypes succeeding — while the FQL binder skips an
+			// archived type anywhere in the chain, so the data was then
+			// unqueryable. That is the original failure mode, reached by
+			// archiving the parent instead of the leaf.
+			chain, cerr := apptypedef.Chain(ctx, typeDefs, entityTypeDef)
+			if cerr != nil {
+				return cerr
+			}
+			for _, link := range chain {
+				if link.IsArchived() {
+					return domainerrors.NewArchived("type_definition", link.ID().String())
+				}
 			}
 		}
 

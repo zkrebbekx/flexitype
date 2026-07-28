@@ -734,14 +734,22 @@ func topLevelPage(ctx context.Context, inter *application.Interactors, typeInter
 		if terr != nil {
 			return nil, nil, db.PageInfo{}, terr
 		}
-		out, lerr := inter.Values().ListEntities(ctx, td.ID.String(), true, pa)
+		// The stable listing: a connection pages over many requests, and the
+		// newest-first order keys on last_updated_at, which every write
+		// moves — so an entity written mid-page jumped the cursor and was
+		// skipped.
+		out, lerr := inter.Values().ListEntitiesStable(ctx, td.ID.String(), true, pa)
 		if lerr != nil {
 			return nil, nil, db.PageInfo{}, lerr
 		}
 		ids = make([]string, 0, len(out.Items))
 		for _, e := range out.Items {
 			ids = append(ids, e.EntityID)
-			cursorByID[e.EntityID] = db.EncodeKeyset(db.KeysetTime(e.LastUpdatedAt), e.EntityID)
+			// The cursor must encode the SAME key the listing orders on, or
+			// the next page compares an entity id against a timestamp and
+			// matches everything. The stable listing orders on the entity id
+			// alone.
+			cursorByID[e.EntityID] = db.EncodeKeyset(e.EntityID)
 		}
 		return ids, cursorByID, out.PageInfo, nil
 	}

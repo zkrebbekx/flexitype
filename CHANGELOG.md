@@ -7,6 +7,49 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — Schema-change guards that read the stored data wrongly
+
+- **`multi_valued → single` was refused for legal scoped data** (#420). The
+  guard grouped by entity alone, so a localizable attribute holding one value
+  per locale read as "more than one value" — and the only way through the
+  migration was deleting real data the new schema expresses perfectly. It
+  groups by `(entity, locale, channel)` in both backends.
+- **The unit family was structural but unguarded** (#420). Flipping
+  `mass → length` with stored data succeeded, after which every stored base
+  magnitude read in the new family's base unit (2000 g as 2000 m) and the
+  stored display unit was not a member of the new family — so those rows could
+  never be rewritten through the API either. It is refused while values exist.
+- **The in-memory backend counted every non-text value as a duplicate**
+  (#420). It keyed on `Value.Text()`, which is `""` for integer, float, bool,
+  date, json, media and quantity, so a `unique false → true` flip was refused
+  for three distinct integers — while Postgres allowed it. The backends
+  disagreed on both the data and the semantics; the in-memory one now keys on
+  the value's own rendering and counts distinct entities, as Postgres does.
+- **Restoring an archived attribute re-introduced a sibling name collision**
+  (#420). `Restore` ran no uniqueness re-check, and `Create`'s guard uses
+  `GetByInternalName`, which excludes archived rows — so archiving
+  `release_code` on one subtype, creating it on a sibling and restoring the
+  first left two live attributes with one name, resolved by list order.
+  Restore runs the same hierarchy sweep Create does.
+- **Archiving a parent type did not stop writes under live subtypes** (#420).
+  The guard checked only the anchor's own flag while the FQL binder skips an
+  archived type anywhere in the chain, so writes succeeded and were then
+  unqueryable — the original failure mode, reached by archiving the parent
+  instead of the leaf. The write path walks the chain.
+- **`one_of` quantity members in a dependency effect were never rebased**
+  (#418). The effect loop rebased `min_value` and `max_value` but had no
+  `one_of` arm, so a caller's base magnitude was compared against an
+  unconverted member and the **exact allowed quantity** was refused, with the
+  error blaming the writer for a rule the schema author wrote.
+- **Facets resolved a type's schema through a fixed 500-row page** (#418) —
+  the seventh call site, left behind when six were converted and the cap
+  raised to 1000, which only widened the window in which it truncated.
+- **The facet/grid sweep and the GraphQL connection paged on a mutable sort
+  column** (#418). An entity written mid-sweep jumped ahead of the cursor and
+  was omitted from the facet counts, which then disagreed with the grid beside
+  them. Both use the stable listing; the GraphQL cursor now encodes the key
+  that listing orders on, which is what makes the next page correct.
+
 ### Fixed — Go client: three methods returned silently wrong data
 
 Six defects (#419), three of them silent-wrong-answer bugs on methods added to

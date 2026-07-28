@@ -185,7 +185,12 @@ func TestStress(t *testing.T) {
 	// and rebuild the projection in one grouped INSERT afterwards — the same
 	// trade-off as dropping the trigram GIN indexes above.
 	if _, err := pool.Exec(
-		"ALTER TABLE flexitype_attribute_value DISABLE TRIGGER flexitype_entity_summary_maintain"); err != nil {
+		// Migration 000022 replaced the one row-level trigger with three
+		// statement-level ones, and this harness still named the old one — so
+		// it has failed at startup ever since, which is why no measured
+		// numbers were ever published. ALL disables every user trigger on the
+		// table, which is what the seed wants and does not go stale again.
+		"ALTER TABLE flexitype_attribute_value DISABLE TRIGGER USER"); err != nil {
 		t.Fatalf("disable entity-summary trigger: %v", err)
 	}
 
@@ -202,7 +207,7 @@ func TestStress(t *testing.T) {
 	// Re-enable the trigger (so post-seed CRUD scenarios keep the projection in
 	// sync) and backfill the summary once over the freshly loaded values.
 	if _, err := pool.Exec(
-		"ALTER TABLE flexitype_attribute_value ENABLE TRIGGER flexitype_entity_summary_maintain"); err != nil {
+		"ALTER TABLE flexitype_attribute_value ENABLE TRIGGER USER"); err != nil {
 		t.Fatalf("enable entity-summary trigger: %v", err)
 	}
 	t.Log("seed: backfilling flexitype_entity_summary...")

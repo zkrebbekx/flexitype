@@ -115,6 +115,47 @@ These switches let one image serve as both an API tier and a worker tier.
 | `FLEXITYPE_ENABLE_CONSOLE` | `true` | Serve the embedded admin console. With `false`, the SPA is not mounted and an unmatched path returns a JSON 404. |
 | `FLEXITYPE_MAX_IMPORT_BYTES` | `16777216` (16 MiB) | Maximum size of a CSV import upload. A larger body is refused before it is read. |
 | `FLEXITYPE_MAX_MEDIA_BYTES` | `33554432` (32 MiB) | Maximum size of a media upload. |
+## Connection poolers
+
+flexitype supports **transaction-mode** pooling (PgBouncer, pgcat, RDS Proxy)
+and, obviously, session mode.
+
+That is a contract, not an accident, and CI holds it: the Postgres suites run
+once through a direct connection and once through PgBouncer in transaction
+mode. What the contract requires of the code:
+
+- every advisory lock is **transaction-scoped** (`pg_advisory_xact_lock`), so
+  no lock outlives the transaction that took it. A session-scoped lock would
+  be released onto a connection another client then borrows.
+- no `LISTEN`/`NOTIFY`, no session-level `SET`, no temporary tables, no
+  prepared statements held across transactions.
+
+**Set your driver up for it.** `lib/pq` uses the extended query protocol,
+which needs `binary_parameters=yes` in the DSN — or PgBouncer 1.21+ with
+prepared-statement support — otherwise a pooled connection reports
+"prepared statement does not exist" under load.
+
+Statement-mode pooling is **not** supported: it forbids multi-statement
+transactions, and every write here is one.
+
+## Database driver
+
+The module requires `github.com/lib/pq v1.12.3`, but the code uses a narrow,
+long-stable slice of it:
+
+| API | Used by |
+|---|---|
+| `pq.Array`, `pq.StringArray` | relationship and query stores |
+| `pq.Error` (code inspection) | constraint-violation mapping |
+| `pq.CopyIn` | the stress harness only |
+
+That matters because a host monorepo commonly `replace`s `lib/pq` with a fork
+patched for pooler behaviour, and **a `replace` wins over minimal version
+selection** — so the build succeeds against whatever the host pinned, without
+warning. Any fork providing the three APIs above works;
+`TestDriverAPISurface` compiles against exactly them, so a fork that drops one
+fails the build here rather than at runtime in the host.
+
 | `FLEXITYPE_RELAY_INTERVAL` | library default | How often the outbox relay looks for undispatched envelopes. |
 | `FLEXITYPE_RELAY_BATCH_SIZE` | library default | Envelopes claimed per relay pass. |
 | `FLEXITYPE_RELAY_LEASE_TTL` | library default | How long a relay's claim on a batch survives before another relay may reclaim it. |

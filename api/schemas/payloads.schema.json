@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zkrebbekx/flexitype/api/schemas/payloads.schema.json",
+  "title": "flexitype event payloads",
+  "description": "Payload shapes by event type. These existed only as Go structs, so a consumer in another language had to transcribe them by hand and got no signal when one changed. TestEventSchemasMatchPayloads validates real emitted payloads against these definitions, so a Go-side change that is not reflected here fails the build.",
+  "$defs": {
+    "value": {
+      "title": "flexitype.attribute_value.set | .updated | .removed",
+      "type": "object",
+      "required": [
+        "attribute_value_id",
+        "tenant_id",
+        "attribute_definition_id",
+        "entity_id",
+        "occurred_at"
+      ],
+      "properties": {
+        "attribute_value_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "type_definition_id": {
+          "type": "string"
+        },
+        "attribute_definition_id": {
+          "type": "string"
+        },
+        "entity_id": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "object",
+          "description": "Locale and channel of a scoped value; absent for a base value.",
+          "properties": {
+            "locale": {
+              "type": "string"
+            },
+            "channel": {
+              "type": "string"
+            }
+          }
+        },
+        "value": {
+          "description": "The stored value, in the same JSON shape the values API accepts."
+        },
+        "definition_version": {
+          "type": "integer"
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "erased": {
+          "type": "boolean",
+          "description": "Present and true when a right-to-erasure purge redacted this payload. The routing identifiers survive; the value does not."
+        }
+      }
+    },
+    "type_definition": {
+      "title": "flexitype.type_definition.created | .updated | .archived | .restored",
+      "type": "object",
+      "required": [
+        "type_definition_id",
+        "tenant_id",
+        "internal_name",
+        "occurred_at"
+      ],
+      "properties": {
+        "type_definition_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "internal_name": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "extends_id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "attribute_definition": {
+      "title": "flexitype.attribute_definition.created | .updated | .archived | .restored",
+      "type": "object",
+      "required": [
+        "attribute_definition_id",
+        "tenant_id",
+        "type_definition_id"
+      ],
+      "properties": {
+        "attribute_definition_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "type_definition_id": {
+          "type": "string"
+        },
+        "internal_name": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "data_type": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "integer"
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "relationship": {
+      "title": "flexitype.relationship.linked | .unlinked",
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "relationship_definition_id": {
+          "type": "string"
+        },
+        "parent_entity_id": {
+          "type": "string"
+        },
+        "child_entity_id": {
+          "type": "string"
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

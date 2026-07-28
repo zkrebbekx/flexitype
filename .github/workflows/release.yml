@@ -11,6 +11,13 @@ on:
 permissions:
   contents: write
   packages: write
+  # id-token lets cosign sign keylessly against Sigstore: the signature is
+  # bound to this workflow's OIDC identity, so there is no private key to
+  # store, rotate or leak. Release artifacts previously shipped with
+  # checksums only, which prove integrity against corruption and nothing
+  # about origin — anyone can publish a file and its correct checksum.
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -79,6 +86,38 @@ jobs:
               -f "sha=${SHA}"
             echo "tagged ${tag}"
           done
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/flexitype-sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign the artifacts
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Keyless: the signature is bound to this workflow's OIDC identity,
+          # so there is no key to store or rotate. Verify with:
+          #   cosign verify-blob --bundle <file>.cosign.bundle \
+          #     --certificate-identity-regexp '^https://github.com/zkrebbekx/flexitype/' \
+          #     --certificate-oidc-issuer https://token.actions.githubusercontent.com <file>
+          for f in dist/*; do
+            case "$f" in *.cosign.bundle) continue;; esac
+            cosign sign-blob --yes --bundle "${f}.cosign.bundle" "$f"
+          done
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: "dist/flexitype_*"
 
       - name: Create release
         env:

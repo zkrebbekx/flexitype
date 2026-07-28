@@ -32,4 +32,16 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /flexitype /flexitype
 EXPOSE 8080
 USER nonroot:nonroot
+
+# The image serves /readyz and /healthz and declared no HEALTHCHECK, so an
+# orchestrator that reads image metadata (Docker, Swarm, Compose) had nothing
+# to check and treated a process that was up but not serving as healthy.
+#
+# /readyz rather than /healthz: readiness is what "can this instance take
+# traffic" means — it reports the database as well as the process.
+#
+# The binary is the only executable in a distroless image, so the check calls
+# it: `flexitype healthcheck` exits non-zero when /readyz does not answer 200.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3     CMD ["/flexitype", "healthcheck"]
+
 ENTRYPOINT ["/flexitype"]

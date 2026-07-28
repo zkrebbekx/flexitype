@@ -248,7 +248,12 @@ func (r *valueRepo) MediaValueForKey(_ context.Context, tenant valueobjects.Tena
 			snap.Value.Media().ObjectKey != objectKey {
 			continue
 		}
-		if best == nil || snap.CreatedAt.Before(best.CreatedAt) {
+		// Ties broken by id, matching the SQL ordering. This row decides
+		// which attribute OWNS the object key, and ownership governs both
+		// adoption and download authorization — so an undefined winner would
+		// make the field ACL that applies depend on iteration order.
+		if best == nil || snap.CreatedAt.Before(best.CreatedAt) ||
+			(snap.CreatedAt.Equal(best.CreatedAt) && snap.ID.String() < best.ID.String()) {
 			s := snap
 			best = &s
 		}

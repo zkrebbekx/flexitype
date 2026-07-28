@@ -51,7 +51,11 @@ jobs:
         env:
           # Enables the Postgres-backed integration tests (they skip when unset).
           FLEXITYPE_TEST_DSN: postgres://postgres:postgres@localhost:5432/flexitype?sslmode=disable
-        run: go test -race -timeout 180s ./...
+        # The timeout is a HANG detector, not a performance budget: it has to
+        # exceed the slowest package on the slowest runner, and the root suite
+        # runs the whole API and every Postgres integration case under -race
+        # while the other packages share one database.
+        run: go test -race -timeout 300s ./...
       - name: Client module (build, vet, test)
         run: |
           cd client && go build ./... && go vet ./... && go test -race ./...

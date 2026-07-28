@@ -30,6 +30,15 @@ import "sort"
 // entity: SetBatch, ApplyMutations (change-set publish), and the CSV import
 // paths. ApplySnapshot needs none — a snapshot restores one entity, so it
 // touches one summary row.
+//
+// A DELETE is a writer under the same rule. The rule first covered only the
+// paths in this package, so the entity and tenant purges deleted in physical
+// order and deadlocked against an ordered batch write. They now take their
+// rows in the same order, in the storage adapter rather than here: the chunk
+// is chosen by an ordered CTE that locks the rows FOR UPDATE, because an
+// ORDER BY alone decides only WHICH rows a chunk takes, not the order the
+// DELETE locks them in. See purgeChunked in
+// infrastructure/postgres/attribute_value.go.
 
 // canonicalOrder returns the indices of items sorted by entity id, with ties
 // broken by the original position so the caller's order is preserved within

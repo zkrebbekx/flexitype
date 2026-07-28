@@ -218,3 +218,84 @@ func TestPurgeTenant(t *testing.T) {
 		})
 	})
 }
+
+// TestPurgeEntityKeepsAdoptedBlob proves an erasure does not delete bytes a
+// different entity still references.
+//
+// Adoption is the sanctioned way to reuse an object key, so a key shared
+// between entities is the expected shape. The erasure GC deleted
+// unconditionally while the ordinary write path counted references, so
+// purging one entity destroyed another entity's live document and left that
+// entity a media value whose bytes 404.
+func TestPurgeEntityKeepsAdoptedBlob(t *testing.T) {
+	Convey("Given e1 owns a media blob and e2 adopted the same object key", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		store := blob.NewMemoryStore()
+		svc := flexitype.NewInMemory(flexitype.WithBlobStore(store))
+		it := svc.Interactors(ctx)
+
+		product, err := it.TypeDefinitions().Create(ctx, apptypedef.CreateInput{InternalName: "product", DisplayName: "Product"})
+		So(err, ShouldBeNil)
+		typeID := product.ID.String()
+
+		photo, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: typeID, InternalName: "photo", DisplayName: "Photo", DataType: "media",
+		})
+		So(err, ShouldBeNil)
+		avatar, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: typeID, InternalName: "avatar", DisplayName: "Avatar", DataType: "media",
+		})
+		So(err, ShouldBeNil)
+
+		png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte("x"), 50)...)
+		snap, err := it.Values().UploadMedia(ctx, typeID, "e1", photo.ID.String(), bytes.NewReader(png), "logo.png")
+		So(err, ShouldBeNil)
+		key := snap.Value.Media().ObjectKey
+
+		// The declared metadata is discarded in favour of the stored copy; only
+		// the object key selects the value being adopted.
+		_, err = it.Values().Set(ctx, appvalue.SetInput{
+			AttributeDefinitionID: avatar.ID.String(), EntityID: "e2",
+			Value: json.RawMessage(`{"object_key":"` + key + `","mime":"image/png","size":58}`),
+		})
+		So(err, ShouldBeNil)
+
+		Convey("When e1 is purged", func() {
+			report, err := it.Erasure().PurgeEntity(ctx, typeID, "e1")
+			So(err, ShouldBeNil)
+
+			Convey("Then the blob survives and the report names it as retained", func() {
+				So(report.MediaBlobsPurged, ShouldEqual, 0)
+				So(report.RetainedBlobKeys, ShouldResemble, []string{key})
+				rc, _, oerr := store.Open(ctx, key)
+				So(oerr, ShouldBeNil)
+				_ = rc.Close()
+			})
+
+			Convey("Then e2 still holds a media value whose bytes are present", func() {
+				vals, lerr := it.Values().ListByEntity(ctx, typeID, "e2")
+				So(lerr, ShouldBeNil)
+				So(len(vals), ShouldEqual, 1)
+				So(vals[0].Value.Media().ObjectKey, ShouldEqual, key)
+				rc, _, oerr := store.Open(ctx, vals[0].Value.Media().ObjectKey)
+				So(oerr, ShouldBeNil)
+				_ = rc.Close()
+			})
+		})
+
+		Convey("When e2 is purged first, the owning entity keeps its bytes", func() {
+			report, err := it.Erasure().PurgeEntity(ctx, typeID, "e2")
+			So(err, ShouldBeNil)
+
+			Convey("Then the blob survives for e1", func() {
+				So(report.MediaBlobsPurged, ShouldEqual, 0)
+				rc, oerr := func() (interface{ Close() error }, error) {
+					rc, _, oerr := store.Open(ctx, key)
+					return rc, oerr
+				}()
+				So(oerr, ShouldBeNil)
+				_ = rc.Close()
+			})
+		})
+	})
+}

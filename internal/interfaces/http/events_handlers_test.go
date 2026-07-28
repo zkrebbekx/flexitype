@@ -134,6 +134,26 @@ type deliveryStore struct {
 	redelivered []string
 }
 
+// RedeliverMatching backs the bulk-redrive endpoint: every dead delivery
+// matching the filter returns to pending.
+func (d *deliveryStore) RedeliverMatching(_ context.Context, filter appwebhook.DeliveryFilter, _ time.Time) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := 0
+	for i := range d.items {
+		if d.items[i].Status != appwebhook.StatusDead {
+			continue
+		}
+		if filter.SubscriptionID != (ulid.ID{}) && d.items[i].SubscriptionID != filter.SubscriptionID {
+			continue
+		}
+		d.items[i].Status = appwebhook.StatusPending
+		d.items[i].Attempts = 0
+		n++
+	}
+	return n, nil
+}
+
 func (d *deliveryStore) ClaimDue(context.Context, int, time.Duration, time.Time) ([]appwebhook.ClaimedDelivery, error) {
 	return nil, nil
 }

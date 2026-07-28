@@ -52,6 +52,25 @@ func (s *deliveryLog) List(_ context.Context, filter DeliveryFilter, page db.Pag
 	return out, total, nil
 }
 
+// RedeliverMatching mirrors the bulk redrive: every dead delivery matching
+// the filter returns to pending.
+func (s *deliveryLog) RedeliverMatching(_ context.Context, filter DeliveryFilter, _ time.Time) (int, error) {
+	n := 0
+	for i := range s.rows {
+		d := &s.rows[i]
+		if d.TenantID != filter.TenantID.String() || d.Status != StatusDead {
+			continue
+		}
+		if !filter.SubscriptionID.IsZero() && d.SubscriptionID != filter.SubscriptionID {
+			continue
+		}
+		d.Status = StatusPending
+		d.Attempts = 0
+		n++
+	}
+	return n, nil
+}
+
 func (s *deliveryLog) Redeliver(_ context.Context, tenant valueobjects.TenantID, id ulid.ID, _ time.Time) error {
 	if s.redeliverErr != nil {
 		return s.redeliverErr
@@ -368,6 +387,68 @@ func TestRedeliver(t *testing.T) {
 			Convey("Then the failure is surfaced", func() {
 				So(err, ShouldNotBeNil)
 				So(err.Error(), ShouldContainSubstring, "boom")
+			})
+		})
+	})
+}
+
+// TestRedeliverDead covers the bulk redrive.
+//
+// Recovery was one API call per dead delivery. After an endpoint outage the
+// dead letters number in the thousands, so the only recovery path was a
+// script an operator writes while the incident is still open.
+func TestRedeliverDead(t *testing.T) {
+	Convey("Given dead and delivered deliveries across two subscriptions", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		subA, subB := ulid.New(), ulid.New()
+		store := &deliveryLog{rows: []Delivery{
+			{ID: ulid.New(), TenantID: valueobjects.DefaultTenant.String(), SubscriptionID: subA, Status: StatusDead, Attempts: 25},
+			{ID: ulid.New(), TenantID: valueobjects.DefaultTenant.String(), SubscriptionID: subA, Status: StatusDead, Attempts: 25},
+			{ID: ulid.New(), TenantID: valueobjects.DefaultTenant.String(), SubscriptionID: subB, Status: StatusDead, Attempts: 25},
+			{ID: ulid.New(), TenantID: valueobjects.DefaultTenant.String(), SubscriptionID: subA, Status: StatusDelivered},
+			{ID: ulid.New(), TenantID: "other", SubscriptionID: subA, Status: StatusDead},
+		}}
+		unit := uow.New(&fakeTransactor{}, events.NewDispatcher(), &recordedActivity{})
+		i := NewInteractor(unit, newFakeSubscriptionStore(), store, URLPolicy{AllowPrivate: true})
+
+		Convey("When every dead delivery of the tenant is redriven", func() {
+			n, err := i.RedeliverDead(ctx, "")
+
+			Convey("Then all three move, and only those three", func() {
+				So(err, ShouldBeNil)
+				So(n, ShouldEqual, 3)
+			})
+
+			Convey("Then the attempt budget is reset, so recovery is not one failure from dead again", func() {
+				So(err, ShouldBeNil)
+				for _, d := range store.rows {
+					if d.Status == StatusPending {
+						So(d.Attempts, ShouldEqual, 0)
+					}
+				}
+			})
+
+			Convey("Then another tenant's dead delivery is untouched", func() {
+				So(err, ShouldBeNil)
+				So(store.rows[4].Status, ShouldEqual, StatusDead)
+			})
+		})
+
+		Convey("When one subscription is named", func() {
+			n, err := i.RedeliverDead(ctx, subB.String())
+
+			Convey("Then only its dead deliveries move", func() {
+				So(err, ShouldBeNil)
+				So(n, ShouldEqual, 1)
+			})
+		})
+
+		Convey("When the subscription id is malformed", func() {
+			_, err := i.RedeliverDead(ctx, "not-an-id")
+
+			Convey("Then it is a validation error rather than a whole-tenant redrive", func() {
+				So(err, ShouldNotBeNil)
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
 			})
 		})
 	})

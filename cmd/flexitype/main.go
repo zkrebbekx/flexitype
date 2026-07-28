@@ -122,12 +122,38 @@ func run(log *logger.Logger) error {
 		log.Info().Msg("activity history disabled")
 	}
 	if cfg.EnableOutbox {
-		opts = append(opts, flexitype.WithOutbox(outbox.WithErrorObserver(func(err error) {
+		relayOpts := []outbox.RelayOption{outbox.WithErrorObserver(func(err error) {
 			log.Error().Err(err).Msg("outbox relay error")
-		})))
-		opts = append(opts, flexitype.WithDeliveryWorker(webhook.WithWorkerErrorObserver(func(err error) {
+		})}
+		if cfg.RelayInterval > 0 {
+			relayOpts = append(relayOpts, outbox.WithInterval(cfg.RelayInterval))
+		}
+		if cfg.RelayBatchSize > 0 {
+			relayOpts = append(relayOpts, outbox.WithBatchSize(cfg.RelayBatchSize))
+		}
+		if cfg.RelayLeaseTTL > 0 {
+			relayOpts = append(relayOpts, outbox.WithLeaseTTL(cfg.RelayLeaseTTL))
+		}
+		opts = append(opts, flexitype.WithOutbox(relayOpts...))
+
+		workerOpts := []webhook.WorkerOption{webhook.WithWorkerErrorObserver(func(err error) {
 			log.Error().Err(err).Msg("webhook delivery worker error")
-		})))
+		})}
+		if cfg.WorkerInterval > 0 {
+			workerOpts = append(workerOpts, webhook.WithWorkerInterval(cfg.WorkerInterval))
+		}
+		if cfg.WorkerConcurrency > 0 {
+			workerOpts = append(workerOpts, webhook.WithWorkerConcurrency(cfg.WorkerConcurrency))
+		}
+		if cfg.WorkerMaxAttempts > 0 {
+			workerOpts = append(workerOpts, webhook.WithMaxAttempts(cfg.WorkerMaxAttempts))
+		}
+		opts = append(opts, flexitype.WithDeliveryWorker(workerOpts...))
+		if cfg.WorkerHTTPTimeout > 0 {
+			// A duration, not a client: the delivery client is the SSRF
+			// guard, and replacing it here would remove that guard.
+			opts = append(opts, flexitype.WithWebhookTimeout(cfg.WorkerHTTPTimeout))
+		}
 		if cfg.EventRetention > 0 {
 			opts = append(opts, flexitype.WithEventRetention(cfg.EventRetention))
 		}

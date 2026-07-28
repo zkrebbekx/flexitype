@@ -50,6 +50,20 @@ type Config struct {
 	// MaxMediaBytes caps a media upload; 0 uses the server default (32 MiB).
 	MaxMediaBytes int64
 
+	// Delivery-machinery tuning. The options existed in code and none of
+	// them was reachable from a deployment, so the one interaction that
+	// actually needs correcting — a lease shorter than the time a batch
+	// takes to drain — could not be corrected without rebuilding.
+	//
+	// Each 0 keeps the library default.
+	RelayInterval     time.Duration
+	RelayBatchSize    int
+	RelayLeaseTTL     time.Duration
+	WorkerInterval    time.Duration
+	WorkerConcurrency int
+	WorkerMaxAttempts int
+	WorkerHTTPTimeout time.Duration
+
 	// RunRelay, RunDeliveryWorker, RunPruner and RunScheduler select which
 	// background loops THIS process runs. All default to true, so a
 	// single-process deployment is unchanged; set them per replica set to
@@ -150,6 +164,13 @@ func Load() (Config, error) {
 		EnableConsole:        e.bool("FLEXITYPE_ENABLE_CONSOLE", true),
 		MaxImportBytes:       int64(e.int("FLEXITYPE_MAX_IMPORT_BYTES", 0)),
 		MaxMediaBytes:        int64(e.int("FLEXITYPE_MAX_MEDIA_BYTES", 0)),
+		RelayInterval:        e.duration("FLEXITYPE_RELAY_INTERVAL", 0),
+		RelayBatchSize:       e.int("FLEXITYPE_RELAY_BATCH_SIZE", 0),
+		RelayLeaseTTL:        e.duration("FLEXITYPE_RELAY_LEASE_TTL", 0),
+		WorkerInterval:       e.duration("FLEXITYPE_WORKER_INTERVAL", 0),
+		WorkerConcurrency:    e.int("FLEXITYPE_WORKER_CONCURRENCY", 0),
+		WorkerMaxAttempts:    e.int("FLEXITYPE_WORKER_MAX_ATTEMPTS", 0),
+		WorkerHTTPTimeout:    e.duration("FLEXITYPE_WORKER_HTTP_TIMEOUT", 0),
 		RunRelay:             e.bool("FLEXITYPE_RUN_RELAY", true),
 		RunDeliveryWorker:    e.bool("FLEXITYPE_RUN_DELIVERY_WORKER", true),
 		RunPruner:            e.bool("FLEXITYPE_RUN_PRUNER", true),

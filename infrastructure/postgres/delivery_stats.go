@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/deliverystats"
@@ -25,6 +27,18 @@ func (s *deliveryStats) Snapshot(ctx context.Context) (deliverystats.Depth, erro
 	if err := s.q.GetContext(ctx, &depth.OutboxPending,
 		`SELECT count(*) FROM flexitype_event_outbox WHERE dispatched_at IS NULL`); err != nil {
 		return depth, fmt.Errorf("count pending outbox: %w", err)
+	}
+
+	// The age of the oldest undispatched envelope — the expansion lag the
+	// design document promised and no metric reported.
+	var oldestSeconds sql.NullFloat64
+	if err := s.q.GetContext(ctx, &oldestSeconds,
+		`SELECT EXTRACT(EPOCH FROM (now() - min(recorded_at)))
+		   FROM flexitype_event_outbox WHERE dispatched_at IS NULL`); err != nil {
+		return depth, fmt.Errorf("oldest pending envelope: %w", err)
+	}
+	if oldestSeconds.Valid && oldestSeconds.Float64 > 0 {
+		depth.OldestPendingAge = time.Duration(oldestSeconds.Float64 * float64(time.Second))
 	}
 
 	var rows []struct {

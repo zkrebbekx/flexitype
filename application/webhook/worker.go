@@ -46,8 +46,13 @@ func WithWorkerConcurrency(n int) WorkerOption {
 	return func(w *Worker) { w.concurrency = n }
 }
 
-// WithMaxAttempts sets the dead-letter cap (default 25 ≈ 3 days of
-// backoff).
+// WithMaxAttempts sets the dead-letter cap.
+//
+// The default of 25 gives a retry window of about 5 hours, not the 3 days
+// this comment used to claim: the backoff is 1s, 4s, 16s, 64s, 256s and then
+// capped at 15 minutes, so 25 attempts is 5m45s + 19x15m. Sizing a window for
+// an overnight outage means raising the cap or the ceiling, and the arithmetic
+// is stated here so the next person does not have to rediscover it.
 func WithMaxAttempts(n int) WorkerOption {
 	return func(w *Worker) { w.maxAttempts = n }
 }

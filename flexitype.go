@@ -69,6 +69,7 @@ type options struct {
 	workerOpts          []webhook.WorkerOption
 	retention           time.Duration
 	webhookAllowPrivate bool
+	webhookTimeout      time.Duration
 	searchIndex         bool
 	failClosedACL       bool
 	blobs               blob.Store
@@ -183,6 +184,15 @@ func WithDeliveryWorker(opts ...webhook.WorkerOption) Option {
 	return func(o *options) { o.workerOpts = opts }
 }
 
+// WithWebhookTimeout bounds one webhook delivery attempt (default 10s).
+//
+// It is a duration rather than an *http.Client on purpose: the delivery
+// client is the SSRF guard, and supplying a client would replace that guard
+// without saying so.
+func WithWebhookTimeout(d time.Duration) Option {
+	return func(o *options) { o.webhookTimeout = d }
+}
+
 // WithEventRetention sets how long expanded events stay readable in the
 // feed before pruning (default 7 days). Only meaningful with WithOutbox.
 func WithEventRetention(d time.Duration) Option {
@@ -269,9 +279,18 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	if o.outbox {
 		store := postgres.NewOutboxStore(transactor)
 		policy := webhook.URLPolicy{AllowPrivate: o.webhookAllowPrivate}
+		// The delivery client is built here, not supplied, because it is the
+		// SSRF guard: safedial refuses private and link-local destinations
+		// unless the deployment opted in by name. A caller-supplied
+		// http.Client would replace that guard silently, so the tunable is
+		// the TIMEOUT rather than the client.
+		timeout := o.webhookTimeout
+		if timeout <= 0 {
+			timeout = 10 * time.Second
+		}
 		workerOpts := append([]webhook.WorkerOption{
 			webhook.WithHTTPClient(safedial.NewClient(safedial.Options{
-				AllowPrivate: o.webhookAllowPrivate, Timeout: 10 * time.Second,
+				AllowPrivate: o.webhookAllowPrivate, Timeout: timeout,
 			})),
 		}, o.workerOpts...)
 		worker = webhook.NewWorker(postgres.NewDeliveryStore(pool), workerOpts...)

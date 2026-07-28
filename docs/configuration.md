@@ -115,6 +115,25 @@ These switches let one image serve as both an API tier and a worker tier.
 | `FLEXITYPE_ENABLE_CONSOLE` | `true` | Serve the embedded admin console. With `false`, the SPA is not mounted and an unmatched path returns a JSON 404. |
 | `FLEXITYPE_MAX_IMPORT_BYTES` | `16777216` (16 MiB) | Maximum size of a CSV import upload. A larger body is refused before it is read. |
 | `FLEXITYPE_MAX_MEDIA_BYTES` | `33554432` (32 MiB) | Maximum size of a media upload. |
+| `FLEXITYPE_RELAY_INTERVAL` | library default | How often the outbox relay looks for undispatched envelopes. |
+| `FLEXITYPE_RELAY_BATCH_SIZE` | library default | Envelopes claimed per relay pass. |
+| `FLEXITYPE_RELAY_LEASE_TTL` | library default | How long a relay's claim on a batch survives before another relay may reclaim it. |
+| `FLEXITYPE_WORKER_INTERVAL` | library default | How often the delivery worker looks for due deliveries. |
+| `FLEXITYPE_WORKER_CONCURRENCY` | library default | Deliveries attempted in parallel. |
+| `FLEXITYPE_WORKER_MAX_ATTEMPTS` | `25` | Attempts before a delivery goes to the dead-letter queue. |
+| `FLEXITYPE_WORKER_HTTP_TIMEOUT` | `10s` | Timeout for one webhook delivery attempt. |
+
+**Set the lease longer than a batch takes to drain.** A relay claims a batch,
+then the worker delivers it; if the lease expires first, another relay
+reclaims envelopes that are still being worked. The worst case is roughly
+`batch_size / worker_concurrency x worker_http_timeout`, so the defaults
+(batch 32, concurrency 4, timeout 10s) can take about 80 seconds against a
+60-second lease. Raise `FLEXITYPE_RELAY_LEASE_TTL`, lower the batch, or raise
+concurrency — the point is that this is now adjustable without rebuilding.
+
+The delivery-attempt timeout is a duration rather than a client on purpose:
+the delivery HTTP client is the SSRF guard that refuses private destinations,
+and replacing it would remove that guard.
 
 `GET /api/v1/features` reports both ceilings as `max_import_bytes` and
 `max_media_bytes`, so a client chunks a bulk load against the deployment's

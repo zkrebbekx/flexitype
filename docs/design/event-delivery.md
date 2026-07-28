@@ -161,7 +161,22 @@ Every flexitype replica runs delivery workers that:
 3. record the outcome in a second short tx: success → `delivered`;
    failure → `pending` with `attempts+1`, `next_attempt_at = now() +
    backoff(attempts)` (exponential, jittered, capped — e.g. 1s, 4s, 16s,
-   … 15m), until `max_attempts` (default 25 ≈ 3 days) → `dead`.
+   … 15m), until `max_attempts` (default 25) → `dead`.
+
+   **That is about 5 hours, not 3 days** — this line used to claim 3 days,
+   which is wrong by roughly 15x. The backoff is capped at 15 minutes, so 25
+   attempts is 5m45s + 19x15m. Size the window with
+   `FLEXITYPE_WORKER_MAX_ATTEMPTS`: an outage longer than the window sends the
+   deliveries to the dead-letter queue, where they wait for a redrive rather
+   than being lost.
+
+   Dead deliveries hold their envelope past the retention cutoff, so a dead
+   letter is not deleted on a timer while it is still waiting to be redriven.
+   `POST /api/v1/webhook-deliveries/redeliver-dead` returns every dead
+   delivery to pending in one call, optionally narrowed by
+   `?subscription_id=`; it resets the attempt count, so an endpoint that was
+   down for a day does not exhaust its budget again on the first failure
+   after recovery.
 
 Crash between (2) and (3) leaves an `inflight` row whose lease expires; a
 reaper returns it to `pending`. That is the at-least-once window —

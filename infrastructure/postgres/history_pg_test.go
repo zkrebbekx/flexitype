@@ -323,6 +323,14 @@ func TestMigrateDownIntegration(t *testing.T) {
 	}
 	ctx := context.Background()
 
+	// This test pins its own schema through a connection parameter, which a
+	// transaction-mode pooler does not proxy. That is the harness, not the
+	// migrations: the pooled CI job proves the product's SQL, and this test
+	// proves the DOWN migrations, which need a throwaway schema to run in.
+	if os.Getenv("FLEXITYPE_TEST_SHARED_SCHEMA") != "" {
+		t.Skip("down-migration test needs a private schema, which a transaction pooler cannot pin")
+	}
+
 	const schema = "flexitype_migrate_down_test"
 	pool, err := sqlx.Connect("postgres", dsn)
 	if err != nil {

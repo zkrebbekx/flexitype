@@ -168,7 +168,10 @@ once through a direct connection and once through PgBouncer in transaction
 mode. What the contract requires of the code:
 
 - every advisory lock is **transaction-scoped** (`pg_advisory_xact_lock`), so
-  no lock outlives the transaction that took it. A session-scoped lock would
+  no lock outlives the transaction that took it. The migration runner, which
+  spans several transactions and statements that run outside any transaction,
+  holds a **lease row** rather than a lock for the same reason. A
+  session-scoped lock would
   be released onto a connection another client then borrows.
 - no `LISTEN`/`NOTIFY`, no session-level `SET`, no temporary tables, no
   prepared statements held across transactions.

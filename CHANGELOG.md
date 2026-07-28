@@ -7,6 +7,47 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — Concurrent migrations through a transaction-mode pooler
+
+The migration runner took a **session-scoped** advisory lock and held it
+across the per-migration transactions. `docs/configuration.md` states as a
+supported contract that no lock outlives the transaction that took it, and
+names this exact hazard.
+
+Measured through PgBouncer in transaction mode with a contended pool, six
+concurrent `Migrate()` calls against an empty database — the rolling-deploy
+shape — produced **five failures** on raw DDL collisions (`relation
+"flexitype_type_definition" already exists`, and unique violations on a
+catalogue index), because the lock was taken on one pooled backend while the
+transactions it was meant to protect ran on others. One run then left the lock
+held on an idle backend, where every subsequent migration blocked forever with
+no diagnostic and no application-level recovery.
+
+Mutual exclusion no longer lives in session state:
+
+- A **lease row** (`flexitype_schema_lock`) replaces the session lock. It is
+  visible to every backend, refreshed between statements, and **expires**, so
+  a runner that dies frees it instead of stranding it. A runner that loses its
+  lease stops rather than applying DDL alongside the new holder.
+- Each transactional migration **claims its version row before the DDL, in the
+  same transaction**. A second runner's insert blocks on the primary key until
+  the first commits, then finds the version taken and skips — so the runners
+  serialize on the database, for exactly as long as an apply takes, with no
+  session state at all.
+- `CREATE TABLE IF NOT EXISTS` is not atomic against a concurrent identical
+  statement: both sessions pass the existence check and the loser fails on a
+  catalogue index. That is what broke *before* any lock could be taken, since
+  it is the step that creates the table the lock lives in. Concurrent creation
+  is now treated as success.
+
+CI runs the concurrent case on a contended pool (`DEFAULT_POOL_SIZE=2`, six
+runners). The existing PgBouncer leg could not catch this: it is serial and
+the pool is idle, so consecutive statements land on the same backend and a
+session lock appears to work.
+
+`docs/upgrades.md` and `docs/configuration.md` stated opposite contracts; both
+now describe the lease. Closes #400.
+
 ### Fixed — Roles: a delete no longer hands out the attributes it was hiding
 
 Six defects in the role feature, five of them ways a permission change did the

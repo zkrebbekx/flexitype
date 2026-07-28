@@ -7,6 +7,45 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — Aggregates: reserved words, non-numeric sources, integer precision and a guard that skipped half its rule
+
+Five defects introduced with the aggregate feature, all of which produced a
+plausible number rather than an error.
+
+- **The five aggregate names are no longer reserved words.** `count`, `sum`,
+  `min`, `max` and `avg` are aggregates only when a `(` follows them, so an
+  attribute named `count` still reads bare in `count * 2`. A stored formula is
+  rehydrated without re-validation, so such a formula survived in the database
+  and then failed twice: the materializer skipped it silently and froze the
+  last value, and the validation sweep — which walks every computed attribute
+  in the hierarchy — failed the create or update of UNRELATED attributes with
+  an "invalid formula" the caller never wrote. The sweep now skips a stored
+  formula it cannot parse, and the materializer reports it through the
+  background-error observer instead of swallowing it.
+- **`count()` folds members, not numbers.** The numeric inputs hold only the
+  values the coercion handles, so `count(tags)` over multi-valued strings
+  answered **0** for every entity while the attribute held values — queryable
+  in FQL, exported and counted toward completeness. `sum`, `avg`, `min` and
+  `max` do fold numbers, so a non-numeric source for those is now refused at
+  definition time rather than materializing nothing.
+- **An `integer` target is evaluated exactly.** The exact evaluator was wired
+  for `decimal` only, so `sum{9007199254740993, 1}` materialized
+  `9007199254740992` — wrong by two, with no error and no clear. A genuine
+  overflow still clears the value.
+- **The structural guard evaluates its two halves independently.** Setting
+  `multi_valued` and `localizable` in one request passed the guard entirely,
+  because the `continue` that relaxes the multi-valued rule for an aggregate
+  reader short-circuited the localizable/scopable refusal too. The
+  materializer then folded only the base-scope members: a subtotal presented
+  as the total.
+- **The reverse guard runs on create.** Writing `total = line_total * 2`
+  before `line_total` exists is accepted, so creating `line_total` afterwards
+  as multi-valued, localizable or scopable used to skip the guard and leave
+  the formula permanently undefined.
+
+`pkg/formula` gains `Members`, `EvalWithMembers`, `EvalRatWithMembers` and
+`NumericRefs`. The existing `Eval` and `EvalRat` are unchanged.
+
 ### Fixed — The release no longer tags modules `go get` cannot resolve
 
 `cmd/flexitype` and `infrastructure/gcppubsub` carry a `replace` of the core

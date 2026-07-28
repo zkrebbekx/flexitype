@@ -72,6 +72,26 @@ type Materializer struct {
 	// FQL and visible in the console, so the correction appeared to have been
 	// applied while the data still reflected the old formula.
 	onSchemaChange func(tenant valueobjects.TenantID, typeID string)
+
+	// onFormulaError, when set, reports a stored formula the evaluator cannot
+	// parse. Such a formula is skipped, and skipping it silently is how a
+	// computed value came to freeze at its last result while tracking
+	// nothing: no error, no clear, and a number that still looks current in
+	// FQL, the console and exports. Nil-safe.
+	onFormulaError func(err error)
+}
+
+// OnFormulaError registers the callback invoked when a stored formula cannot
+// be parsed. The facade wires it to the background-error observer.
+func (m *Materializer) OnFormulaError(fn func(err error)) { m.onFormulaError = fn }
+
+// reportFormulaError surfaces an unparseable stored formula. It names the
+// attribute and the formula, because the operator has to find it to fix it.
+func (m *Materializer) reportFormulaError(attr, src string, err error) {
+	if m.onFormulaError == nil {
+		return
+	}
+	m.onFormulaError(fmt.Errorf("computed attribute %s has an unparseable formula %q: %w", attr, src, err))
 }
 
 // OnSchemaChange registers the callback invoked when a schema change may have
@@ -562,6 +582,11 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 	// equality in FQL and appeared verbatim in exports. Choosing `decimal` is
 	// how a schema author asks for exactness.
 	exact := formula.RatInputs{}
+	// members counts every value a name holds, whatever its data type. Inputs
+	// holds only the values that coerce to a number, so count() over a name
+	// whose members are strings, dates or media saw an empty list and
+	// answered 0 for every entity.
+	members := formula.Members{}
 	computedValueID := map[string]string{} // attr id -> value id
 	nameByID := map[string]string{}
 	for _, a := range attrs {
@@ -572,6 +597,7 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 			continue
 		}
 		if name := nameByID[v.AttributeDefinitionID.String()]; name != "" {
+			members[name]++
 			if f, ok := toFloat(v.Value); ok {
 				inputs[name] = append(inputs[name], f)
 			}
@@ -608,15 +634,28 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 
 		expr, err := formula.Parse(c.Computed.Formula)
 		if err != nil {
-			continue // a malformed formula shouldn't have persisted; skip defensively
+			// Skip it — one bad formula must not stop the others — but say
+			// so. A silent skip left the last materialized value in place,
+			// tracking nothing.
+			m.reportFormulaError(c.InternalName, c.Computed.Formula, err)
+			continue
 		}
 		var raw json.RawMessage
 		var representable bool
-		if c.DataType == valueobjects.DataTypeDecimal {
-			r, ok := expr.EvalRat(exact)
+		switch c.DataType {
+		case valueobjects.DataTypeDecimal:
+			r, ok := expr.EvalRatWithMembers(exact, members)
 			raw, representable = decimalForRat(r, ok)
-		} else {
-			result, ok := expr.Eval(inputs)
+		case valueobjects.DataTypeInteger:
+			// Integers take the exact path too. Evaluating them in float64
+			// narrowed every operand — sum{9007199254740993, 1} materialized
+			// 9007199254740992, wrong by two, with no error and no clear —
+			// while toRat already had an exact integer arm. A genuine
+			// overflow still clears the value.
+			r, ok := expr.EvalRatWithMembers(exact, members)
+			raw, representable = integerForRat(r, ok)
+		default:
+			result, ok := expr.EvalWithMembers(inputs, members)
 			raw, representable = numberForType(c.DataType, result, ok)
 		}
 		if !representable {
@@ -739,6 +778,36 @@ func decimalForRat(r *big.Rat, ok bool) (json.RawMessage, bool) {
 		text = strings.TrimSuffix(text, ".")
 	}
 	b, err := json.Marshal(text)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// integerForRat rounds an exact result to int64, half away from zero, and
+// reports representable=false outside int64 range so the caller clears the
+// value rather than writing a wrong one. It mirrors numberForType's integer
+// arm, without the float64 narrowing that arm cannot avoid.
+func integerForRat(r *big.Rat, ok bool) (json.RawMessage, bool) {
+	if !ok || r == nil {
+		return nil, false
+	}
+	num, denom := r.Num(), r.Denom()
+	q, rem := new(big.Int).QuoRem(num, denom, new(big.Int))
+	// Round half away from zero: 2*|rem| >= denom rounds the magnitude up.
+	twice := new(big.Int).Abs(rem)
+	twice.Lsh(twice, 1)
+	if twice.Cmp(denom) >= 0 {
+		if r.Sign() < 0 {
+			q.Sub(q, big.NewInt(1))
+		} else {
+			q.Add(q, big.NewInt(1))
+		}
+	}
+	if !q.IsInt64() {
+		return nil, false
+	}
+	b, err := json.Marshal(q.Int64())
 	if err != nil {
 		return nil, false
 	}

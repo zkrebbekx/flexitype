@@ -26,9 +26,10 @@ import (
 
 // Expr is a parsed, ready-to-evaluate formula.
 type Expr struct {
-	root       node
-	refs       []string
-	scalarRefs []string
+	root        node
+	refs        []string
+	scalarRefs  []string
+	numericRefs []string
 }
 
 // Inputs is an entity's values by attribute internal name: EVERY value for
@@ -37,6 +38,18 @@ type Inputs map[string][]float64
 
 // RatInputs is Inputs in exact rational arithmetic, for decimal targets.
 type RatInputs map[string][]*big.Rat
+
+// Members is how many values each name holds, WHATEVER their data type.
+//
+// Inputs holds only the values that coerce to a number, so count() over a
+// name whose members are strings, dates or media saw an empty list and
+// answered 0 — a plausible number for an attribute that in fact held values,
+// queryable in FQL and exported as if it were true. count() folds members,
+// not numbers, so it reads this instead.
+//
+// A nil Members keeps the pre-existing behaviour: count() falls back to the
+// numeric inputs.
+type Members map[string]int
 
 // Refs returns the distinct identifiers the formula reads, in first-seen
 // order — aggregated and bare alike, which is what a cycle check needs.
@@ -50,11 +63,27 @@ func (e *Expr) Refs() []string { return e.refs }
 // may not read directly.
 func (e *Expr) ScalarRefs() []string { return e.scalarRefs }
 
+// NumericRefs returns the identifiers whose values must coerce to numbers:
+// every name read bare, and every name folded by sum, avg, min or max.
+//
+// A name read only by count() is NOT here. count folds members rather than
+// numbers, so counting tags or photos is meaningful; summing them is not.
+// The distinction is what lets `count(tags)` be accepted over a string
+// attribute while `sum(tags)` is refused at definition time instead of
+// materializing 0 for every entity.
+func (e *Expr) NumericRefs() []string { return e.numericRefs }
+
 // Eval computes the formula against the given inputs. A referenced name with
 // no input, a bare name with more than one, or a division by zero, makes the
 // result undefined (ok=false).
 func (e *Expr) Eval(vars Inputs) (result float64, ok bool) {
-	return e.root.eval(vars)
+	return e.root.eval(vars, nil)
+}
+
+// EvalWithMembers is Eval with a member count per name, so count() folds
+// values of any data type rather than only the ones that coerce to a number.
+func (e *Expr) EvalWithMembers(vars Inputs, members Members) (result float64, ok bool) {
+	return e.root.eval(vars, members)
 }
 
 // EvalRat computes the formula in exact rational arithmetic.
@@ -69,12 +98,17 @@ func (e *Expr) Eval(vars Inputs) (result float64, ok bool) {
 // decimal expansion (1/3) is exact here and is rounded only when the caller
 // renders it.
 func (e *Expr) EvalRat(vars RatInputs) (result *big.Rat, ok bool) {
-	return e.root.evalRat(vars)
+	return e.root.evalRat(vars, nil)
+}
+
+// EvalRatWithMembers is EvalRat with a member count per name. See Members.
+func (e *Expr) EvalRatWithMembers(vars RatInputs, members Members) (result *big.Rat, ok bool) {
+	return e.root.evalRat(vars, members)
 }
 
 type node interface {
-	eval(vars Inputs) (float64, bool)
-	evalRat(vars RatInputs) (*big.Rat, bool)
+	eval(vars Inputs, members Members) (float64, bool)
+	evalRat(vars RatInputs, members Members) (*big.Rat, bool)
 }
 
 // numNode keeps the literal's source text alongside its float form, so exact
@@ -85,9 +119,9 @@ type numNode struct {
 	text string
 }
 
-func (n numNode) eval(Inputs) (float64, bool) { return n.f, true }
+func (n numNode) eval(Inputs, Members) (float64, bool) { return n.f, true }
 
-func (n numNode) evalRat(RatInputs) (*big.Rat, bool) {
+func (n numNode) evalRat(RatInputs, Members) (*big.Rat, bool) {
 	r, ok := new(big.Rat).SetString(n.text)
 	return r, ok
 }
@@ -100,7 +134,7 @@ func (n numNode) evalRat(RatInputs) (*big.Rat, bool) {
 // are refused at write time, so this is the defensive half of the same rule.
 type refNode string
 
-func (r refNode) eval(vars Inputs) (float64, bool) {
+func (r refNode) eval(vars Inputs, _ Members) (float64, bool) {
 	v, ok := vars[string(r)]
 	if !ok || len(v) != 1 {
 		return 0, false
@@ -108,7 +142,7 @@ func (r refNode) eval(vars Inputs) (float64, bool) {
 	return v[0], true
 }
 
-func (r refNode) evalRat(vars RatInputs) (*big.Rat, bool) {
+func (r refNode) evalRat(vars RatInputs, _ Members) (*big.Rat, bool) {
 	v, ok := vars[string(r)]
 	if !ok || len(v) != 1 || v[0] == nil {
 		return nil, false
@@ -147,10 +181,20 @@ type aggNode struct {
 	name string
 }
 
-func (a aggNode) eval(vars Inputs) (float64, bool) {
+// count folds MEMBERS, not numbers. numeric is how many of the name's values
+// coerced to a number, and is used only when the caller supplies no member
+// count.
+func (a aggNode) count(numeric int, members Members) int {
+	if members == nil {
+		return numeric
+	}
+	return members[a.name]
+}
+
+func (a aggNode) eval(vars Inputs, members Members) (float64, bool) {
 	vals := vars[a.name]
 	if a.fn == AggCount {
-		return float64(len(vals)), true
+		return float64(a.count(len(vals), members)), true
 	}
 	if len(vals) == 0 {
 		return 0, false
@@ -177,10 +221,10 @@ func (a aggNode) eval(vars Inputs) (float64, bool) {
 	return 0, false
 }
 
-func (a aggNode) evalRat(vars RatInputs) (*big.Rat, bool) {
+func (a aggNode) evalRat(vars RatInputs, members Members) (*big.Rat, bool) {
 	vals := vars[a.name]
 	if a.fn == AggCount {
-		return new(big.Rat).SetInt64(int64(len(vals))), true
+		return new(big.Rat).SetInt64(int64(a.count(len(vals), members))), true
 	}
 	if len(vals) == 0 {
 		return nil, false
@@ -217,12 +261,12 @@ type binNode struct {
 	left, right node
 }
 
-func (b binNode) eval(vars Inputs) (float64, bool) {
-	l, ok := b.left.eval(vars)
+func (b binNode) eval(vars Inputs, members Members) (float64, bool) {
+	l, ok := b.left.eval(vars, members)
 	if !ok {
 		return 0, false
 	}
-	r, ok := b.right.eval(vars)
+	r, ok := b.right.eval(vars, members)
 	if !ok {
 		return 0, false
 	}
@@ -242,12 +286,12 @@ func (b binNode) eval(vars Inputs) (float64, bool) {
 	return 0, false
 }
 
-func (b binNode) evalRat(vars RatInputs) (*big.Rat, bool) {
-	l, ok := b.left.evalRat(vars)
+func (b binNode) evalRat(vars RatInputs, members Members) (*big.Rat, bool) {
+	l, ok := b.left.evalRat(vars, members)
 	if !ok {
 		return nil, false
 	}
-	r, ok := b.right.evalRat(vars)
+	r, ok := b.right.evalRat(vars, members)
 	if !ok {
 		return nil, false
 	}
@@ -270,13 +314,13 @@ func (b binNode) evalRat(vars RatInputs) (*big.Rat, bool) {
 
 type negNode struct{ inner node }
 
-func (n negNode) eval(vars Inputs) (float64, bool) {
-	v, ok := n.inner.eval(vars)
+func (n negNode) eval(vars Inputs, members Members) (float64, bool) {
+	v, ok := n.inner.eval(vars, members)
 	return -v, ok
 }
 
-func (n negNode) evalRat(vars RatInputs) (*big.Rat, bool) {
-	v, ok := n.inner.evalRat(vars)
+func (n negNode) evalRat(vars RatInputs, members Members) (*big.Rat, bool) {
+	v, ok := n.inner.evalRat(vars, members)
 	if !ok {
 		return nil, false
 	}
@@ -298,7 +342,7 @@ func Parse(src string) (*Expr, error) {
 	if root == nil {
 		return nil, fmt.Errorf("empty formula")
 	}
-	return &Expr{root: root, refs: p.refs, scalarRefs: p.scalarRefs}, nil
+	return &Expr{root: root, refs: p.refs, scalarRefs: p.scalarRefs, numericRefs: p.numericRefs}, nil
 }
 
 type tokKind int
@@ -323,13 +367,27 @@ type token struct {
 }
 
 type parser struct {
-	src        string
-	pos        int
-	tok        token
-	refs       []string
-	scalarRefs []string
-	seen       map[string]bool
-	seenScalar map[string]bool
+	src         string
+	pos         int
+	tok         token
+	refs        []string
+	scalarRefs  []string
+	numericRefs []string
+	seen        map[string]bool
+	seenScalar  map[string]bool
+	seenNumeric map[string]bool
+}
+
+// recordNumericRef notes a name whose values have to coerce to numbers.
+func (p *parser) recordNumericRef(name string) {
+	if p.seenNumeric == nil {
+		p.seenNumeric = map[string]bool{}
+	}
+	if p.seenNumeric[name] {
+		return
+	}
+	p.seenNumeric[name] = true
+	p.numericRefs = append(p.numericRefs, name)
 }
 
 func (p *parser) next() {
@@ -383,16 +441,34 @@ func (p *parser) parseCall(fn Aggregate) (node, error) {
 		return nil, fmt.Errorf("%s expects a single attribute name", fn)
 	}
 	name := p.tok.text
-	if _, isAgg := aggregates[name]; isAgg {
+	if _, isAgg := aggregates[name]; isAgg && p.peekIsLParen() {
 		return nil, fmt.Errorf("%s cannot aggregate another aggregate", fn)
 	}
 	p.recordRef(name, false)
+	if fn != AggCount {
+		// sum, avg, min and max fold NUMBERS, so their source has to be a
+		// numeric attribute. count folds members, so it accepts any type.
+		p.recordNumericRef(name)
+	}
 	p.next()
 	if p.tok.kind != tokRParen {
 		return nil, fmt.Errorf("expected ')' after %s(%s", fn, name)
 	}
 	p.next()
 	return aggNode{fn: fn, name: name}, nil
+}
+
+// peekIsLParen reports whether the next token is '(' without consuming it.
+// The lexer holds one token, and p.pos is already past it, so the answer is
+// the next non-space character of the source.
+func (p *parser) peekIsLParen() bool {
+	for i := p.pos; i < len(p.src); i++ {
+		if unicode.IsSpace(rune(p.src[i])) {
+			continue
+		}
+		return p.src[i] == '('
+	}
+	return false
 }
 
 // recordRef notes a referenced name, and whether it was read BARE — which is
@@ -473,10 +549,17 @@ func (p *parser) parseFactor() (node, error) {
 		return numNode{f: f, text: text}, nil
 	case tokIdent:
 		name := p.tok.text
-		if fn, isAgg := aggregates[name]; isAgg {
+		// An aggregate name is only a call when a '(' follows it. Treating
+		// the five names as reserved words broke every stored formula that
+		// read an attribute called count, sum, min, max or avg — "count * 2"
+		// stopped parsing, the materializer skipped it silently, and the
+		// validation sweep then failed writes to unrelated attributes in the
+		// same hierarchy.
+		if fn, isAgg := aggregates[name]; isAgg && p.peekIsLParen() {
 			return p.parseCall(fn)
 		}
 		p.recordRef(name, true)
+		p.recordNumericRef(name)
 		p.next()
 		return refNode(name), nil
 	case tokLParen:

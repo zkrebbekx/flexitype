@@ -696,3 +696,296 @@ func TestComputedAggregates(t *testing.T) {
 		})
 	})
 }
+
+// TestAggregateSourceTypesAreChecked proves an aggregate over a non-numeric
+// attribute is decided at definition time rather than silently materializing
+// a wrong number.
+//
+// count() answers 0 on an empty list, and the numeric inputs are empty for
+// every data type the coercion does not handle. `count(tags)` over
+// multi-valued strings therefore materialized 0 for every entity while the
+// attribute held values — queryable in FQL, exported to CSV and counted
+// toward completeness. Counting members is a reasonable thing to ask for, so
+// count() now folds members of any type; sum, avg, min and max fold numbers,
+// so a non-numeric source is refused.
+func TestAggregateSourceTypesAreChecked(t *testing.T) {
+	Convey("Given a multi-valued string attribute", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		product, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "product", DisplayName: "Product"})
+		So(err, ShouldBeNil)
+		tags, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: product.ID.String(), InternalName: "tags",
+			DisplayName: "Tags", DataType: "string", MultiValued: true,
+		})
+		So(err, ShouldBeNil)
+
+		add := func(v string) {
+			raw, merr := json.Marshal(v)
+			So(merr, ShouldBeNil)
+			_, serr := svc.Interactors(ctx).Values().Set(ctx, appvalue.SetInput{
+				AttributeDefinitionID: tags.ID.String(), EntityID: "p1",
+				TypeDefinitionID: product.ID.String(), Value: raw,
+			})
+			So(serr, ShouldBeNil)
+		}
+		valueOf := func(attrID string) (string, bool) {
+			vals, verr := svc.Interactors(ctx).Values().ListByEntity(ctx, product.ID.String(), "p1")
+			So(verr, ShouldBeNil)
+			for _, v := range vals {
+				if v.AttributeDefinitionID.String() == attrID {
+					return v.Value.String(), true
+				}
+			}
+			return "", false
+		}
+
+		Convey("When a formula counts it", func() {
+			counted, cerr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: product.ID.String(), InternalName: "tag_count",
+				DisplayName: "Tag count", DataType: "integer",
+				Computed: json.RawMessage(`{"kind":"formula","formula":"count(tags)"}`),
+			})
+			So(cerr, ShouldBeNil)
+
+			Convey("Then the count tracks the members it holds", func() {
+				add("red")
+				v, ok := valueOf(counted.ID.String())
+				So(ok, ShouldBeTrue)
+				So(v, ShouldEqual, "1")
+
+				add("blue")
+				add("green")
+				v, _ = valueOf(counted.ID.String())
+				So(v, ShouldEqual, "3")
+			})
+		})
+
+		Convey("When a formula sums it", func() {
+			_, cerr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: product.ID.String(), InternalName: "tag_total",
+				DisplayName: "Tag total", DataType: "integer",
+				Computed: json.RawMessage(`{"kind":"formula","formula":"sum(tags)"}`),
+			})
+
+			Convey("Then it is refused, naming the attribute and its type", func() {
+				So(cerr, ShouldNotBeNil)
+				So(cerr.Error(), ShouldContainSubstring, "numeric")
+			})
+		})
+
+		Convey("When a formula reads it bare after a date attribute", func() {
+			_, derr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: product.ID.String(), InternalName: "released",
+				DisplayName: "Released", DataType: "date",
+			})
+			So(derr, ShouldBeNil)
+			_, cerr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: product.ID.String(), InternalName: "age",
+				DisplayName: "Age", DataType: "integer",
+				Computed: json.RawMessage(`{"kind":"formula","formula":"released * 2"}`),
+			})
+
+			Convey("Then a non-numeric bare source is refused too", func() {
+				So(cerr, ShouldNotBeNil)
+				So(cerr.Error(), ShouldContainSubstring, "numeric")
+			})
+		})
+	})
+}
+
+// TestIntegerAggregatesAreExact proves an integer computed attribute is
+// evaluated exactly.
+//
+// The exact evaluator was wired for a decimal target only, so an integer
+// target went through float64 and every operand above 2^53 was narrowed:
+// sum{9007199254740993, 1} materialized 9007199254740992 — wrong by two, with
+// no error and no clear. A genuine overflow still clears the value.
+func TestIntegerAggregatesAreExact(t *testing.T) {
+	Convey("Given a multi-valued integer attribute beyond float64 precision", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		order, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "order", DisplayName: "Order"})
+		So(err, ShouldBeNil)
+		amounts, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: order.ID.String(), InternalName: "n_src",
+			DisplayName: "Amounts", DataType: "integer", MultiValued: true,
+		})
+		So(err, ShouldBeNil)
+		total, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: order.ID.String(), InternalName: "tot_n",
+			DisplayName: "Total", DataType: "integer",
+			Computed: json.RawMessage(`{"kind":"formula","formula":"sum(n_src)"}`),
+		})
+		So(err, ShouldBeNil)
+
+		add := func(entity, v string) {
+			_, serr := svc.Interactors(ctx).Values().Set(ctx, appvalue.SetInput{
+				AttributeDefinitionID: amounts.ID.String(), EntityID: entity,
+				TypeDefinitionID: order.ID.String(), Value: json.RawMessage(v),
+			})
+			So(serr, ShouldBeNil)
+		}
+		valueOf := func(entity string) (string, bool) {
+			vals, verr := svc.Interactors(ctx).Values().ListByEntity(ctx, order.ID.String(), entity)
+			So(verr, ShouldBeNil)
+			for _, v := range vals {
+				if v.AttributeDefinitionID.String() == total.ID.String() {
+					return v.Value.String(), true
+				}
+			}
+			return "", false
+		}
+
+		Convey("When members beyond 2^53 are summed", func() {
+			add("o1", "9007199254740993")
+			add("o1", "1")
+
+			Convey("Then the total is exact", func() {
+				v, ok := valueOf("o1")
+				So(ok, ShouldBeTrue)
+				So(v, ShouldEqual, "9007199254740994")
+			})
+		})
+
+		Convey("When the total genuinely overflows int64", func() {
+			add("o2", "9223372036854775807")
+			add("o2", "9223372036854775806")
+
+			Convey("Then the value is cleared rather than written wrong", func() {
+				_, ok := valueOf("o2")
+				So(ok, ShouldBeFalse)
+			})
+		})
+	})
+}
+
+// TestScopedSourceGuardCoversEveryEntryPoint proves the structural guard
+// holds for both flags, in one request, and on create as well as update.
+//
+// The multi-valued relaxation — an aggregate wants every member, so gaining
+// members is fine — was implemented with one `continue` that short-circuited
+// the localizable/scopable half too. Setting both flags in ONE request
+// therefore passed, and the materializer then folded only the base-scope
+// members: a subtotal presented as the total. The guard also ran on update
+// only, so creating the source AFTER the formula skipped it entirely.
+func TestScopedSourceGuardCoversEveryEntryPoint(t *testing.T) {
+	Convey("Given a decimal source and a formula that aggregates it", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		order, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "order", DisplayName: "Order"})
+		So(err, ShouldBeNil)
+		amount, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: order.ID.String(), InternalName: "amount",
+			DisplayName: "Amount", DataType: "decimal",
+		})
+		So(err, ShouldBeNil)
+		_, err = it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: order.ID.String(), InternalName: "total",
+			DisplayName: "Total", DataType: "decimal",
+			Computed: json.RawMessage(`{"kind":"formula","formula":"sum(amount)"}`),
+		})
+		So(err, ShouldBeNil)
+
+		update := func(in appattribute.UpdateInput) error {
+			in.ID = amount.ID.String()
+			_, uerr := svc.Interactors(ctx).Attributes().Update(ctx, in)
+			return uerr
+		}
+		base := appattribute.UpdateInput{DisplayName: "Amount"}
+
+		Convey("When multi_valued and localizable are set in one request", func() {
+			in := base
+			in.MultiValued = true
+			in.Localizable = true
+			err := update(in)
+
+			Convey("Then it is refused, as localizable alone is", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "localizable or scopable")
+			})
+		})
+
+		Convey("When multi_valued and scopable are set in one request", func() {
+			in := base
+			in.MultiValued = true
+			in.Scopable = true
+			err := update(in)
+
+			Convey("Then it is refused too", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "localizable or scopable")
+			})
+		})
+
+		Convey("When only multi_valued is set", func() {
+			in := base
+			in.MultiValued = true
+			err := update(in)
+
+			Convey("Then it is allowed, because the formula aggregates the name", func() {
+				So(err, ShouldBeNil)
+			})
+		})
+	})
+
+	Convey("Given a formula written before its source exists", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		order, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "order", DisplayName: "Order"})
+		So(err, ShouldBeNil)
+		_, err = it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: order.ID.String(), InternalName: "doubled",
+			DisplayName: "Doubled", DataType: "decimal",
+			Computed: json.RawMessage(`{"kind":"formula","formula":"line_total * 2"}`),
+		})
+		So(err, ShouldBeNil)
+
+		create := func(name string, in appattribute.CreateInput) error {
+			in.TypeDefinitionID = order.ID.String()
+			in.InternalName = name
+			in.DisplayName = name
+			in.DataType = "decimal"
+			_, cerr := svc.Interactors(ctx).Attributes().Create(ctx, in)
+			return cerr
+		}
+
+		Convey("When the source is created multi-valued", func() {
+			err := create("line_total", appattribute.CreateInput{MultiValued: true})
+
+			Convey("Then it is refused, as the update path refuses it", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "multi-valued")
+			})
+		})
+
+		Convey("When the source is created localizable", func() {
+			err := create("line_total", appattribute.CreateInput{Localizable: true})
+
+			Convey("Then it is refused too", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "localizable or scopable")
+			})
+		})
+
+		Convey("When the source is created as an ordinary scalar", func() {
+			err := create("line_total", appattribute.CreateInput{})
+
+			Convey("Then it is accepted", func() {
+				So(err, ShouldBeNil)
+			})
+		})
+	})
+}

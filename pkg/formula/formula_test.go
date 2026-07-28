@@ -319,3 +319,125 @@ func TestAggregates(t *testing.T) {
 		})
 	})
 }
+
+// TestAggregateNamesAreNotReservedWords proves an attribute called count,
+// sum, min, max or avg still reads bare.
+//
+// The five names were treated as calls unconditionally, so `count * 2` — an
+// ordinary quantity attribute named count — stopped parsing. A stored formula
+// is rehydrated without re-validation, so it survived in the database and
+// then failed twice: the materializer skipped it silently and froze the last
+// value, and the validation sweep, which walks every computed attribute in
+// the hierarchy, failed the create or update of UNRELATED attributes with an
+// "invalid formula" the caller never wrote.
+func TestAggregateNamesAreNotReservedWords(t *testing.T) {
+	Convey("Given formulas that read aggregate names as ordinary attributes", t, func() {
+		cases := []struct {
+			src  string
+			refs []string
+		}{
+			{"count * 2", []string{"count"}},
+			{"min + max", []string{"min", "max"}},
+			{"price * count", []string{"price", "count"}},
+			{"sum / 2", []string{"sum"}},
+			{"avg - 1", []string{"avg"}},
+		}
+
+		Convey("Then each parses and reads the name bare", func() {
+			for _, c := range cases {
+				expr, err := formula.Parse(c.src)
+				So(err, ShouldBeNil)
+				So(expr.Refs(), ShouldResemble, c.refs)
+				So(expr.ScalarRefs(), ShouldResemble, c.refs)
+			}
+		})
+
+		Convey("Then a call form is still a call, including with a space before '('", func() {
+			expr, err := formula.Parse("count (tags) + 1")
+			So(err, ShouldBeNil)
+			So(expr.Refs(), ShouldResemble, []string{"tags"})
+			So(expr.ScalarRefs(), ShouldBeEmpty)
+		})
+
+		Convey("Then an aggregate over an attribute named count still works", func() {
+			expr, err := formula.Parse("sum(count)")
+			So(err, ShouldBeNil)
+			So(expr.Refs(), ShouldResemble, []string{"count"})
+			So(expr.NumericRefs(), ShouldResemble, []string{"count"})
+		})
+
+		Convey("Then a nested aggregate is still refused", func() {
+			_, err := formula.Parse("sum(count(x))")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "cannot aggregate another aggregate")
+		})
+	})
+}
+
+// TestCountFoldsMembersNotNumbers proves count() reports how many values a
+// name holds, whatever their data type.
+//
+// Inputs carries only the values that coerce to a number, so count() over a
+// name whose members are strings, dates or media saw an empty list and
+// answered 0 — a plausible number for an attribute that in fact held values.
+func TestCountFoldsMembersNotNumbers(t *testing.T) {
+	Convey("Given a name with three members, none of them numeric", t, func() {
+		expr, err := formula.Parse("count(tags)")
+		So(err, ShouldBeNil)
+
+		Convey("When the member count is supplied", func() {
+			got, ok := expr.EvalWithMembers(formula.Inputs{}, formula.Members{"tags": 3})
+
+			Convey("Then it counts the members", func() {
+				So(ok, ShouldBeTrue)
+				So(got, ShouldEqual, 3)
+			})
+		})
+
+		Convey("When exact evaluation is used", func() {
+			got, ok := expr.EvalRatWithMembers(formula.RatInputs{}, formula.Members{"tags": 3})
+
+			Convey("Then it counts the members there too", func() {
+				So(ok, ShouldBeTrue)
+				So(got.RatString(), ShouldEqual, "3")
+			})
+		})
+
+		Convey("When no member count is supplied", func() {
+			got, ok := expr.Eval(formula.Inputs{})
+
+			Convey("Then it falls back to the numeric inputs", func() {
+				So(ok, ShouldBeTrue)
+				So(got, ShouldEqual, 0)
+			})
+		})
+	})
+
+	Convey("Given a sum over a name whose members do not coerce", t, func() {
+		expr, err := formula.Parse("sum(tags)")
+		So(err, ShouldBeNil)
+
+		Convey("When it is evaluated with a member count but no numbers", func() {
+			_, ok := expr.EvalWithMembers(formula.Inputs{}, formula.Members{"tags": 3})
+
+			Convey("Then the result is undefined rather than zero", func() {
+				So(ok, ShouldBeFalse)
+			})
+		})
+	})
+}
+
+// TestNumericRefsSeparatesCountFromTheRest pins which names have to coerce to
+// numbers: every bare read, and every name folded by sum, avg, min or max.
+func TestNumericRefsSeparatesCountFromTheRest(t *testing.T) {
+	Convey("Given a formula that counts one name and sums another", t, func() {
+		expr, err := formula.Parse("count(photos) + sum(amounts) + price")
+		So(err, ShouldBeNil)
+
+		Convey("Then only the folded and bare names are numeric", func() {
+			So(expr.Refs(), ShouldResemble, []string{"photos", "amounts", "price"})
+			So(expr.NumericRefs(), ShouldResemble, []string{"amounts", "price"})
+			So(expr.ScalarRefs(), ShouldResemble, []string{"price"})
+		})
+	})
+}

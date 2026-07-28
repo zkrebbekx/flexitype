@@ -255,6 +255,54 @@ func TestMigrationLeaseIntegration(t *testing.T) {
 			})
 		})
 
+		// The commonest reason Migrate returns is that the caller's context
+		// ended, and the release ran on that same context — a no-op, which
+		// stranded the lease for the full TTL while the process was alive
+		// and able to free it.
+		Convey("When it is released on a context that has already been cancelled", func() {
+			dead, cancel := context.WithCancel(ctx)
+			cancel()
+			l.release(dead)
+
+			Convey("Then the row is still freed", func() {
+				var holder string
+				So(pool.Get(&holder, `SELECT holder FROM flexitype_schema_lock WHERE id = 1`), ShouldBeNil)
+				So(holder, ShouldEqual, "")
+			})
+		})
+
+		Reset(func() { freeLease() })
+	})
+
+	// A runner that dies holding the lease leaves a row with a live
+	// expires_at that nobody renews. With leaseWait below leaseTTL, every
+	// replica booting in that window gave up BEFORE the lease could expire —
+	// inside a container startup path, so the orchestrator restarted it and
+	// it repeated, and a whole generation could not boot.
+	Convey("Given the lease timings", t, func() {
+		Convey("Then a waiter outlasts an abandoned lease", func() {
+			So(leaseWait, ShouldBeGreaterThan, leaseTTL)
+		})
+	})
+
+	Convey("Given a lease abandoned by a dead runner", t, func() {
+		freeLease()
+		pool.MustExec(
+			`UPDATE flexitype_schema_lock
+			    SET holder = 'dead-runner', acquired_at = now(), expires_at = now() + interval '15 minutes'
+			  WHERE id = 1`)
+
+		Convey("When a survivor gives up waiting", func() {
+			l := &migrateLease{q: pool, holder: "me", now: time.Now}
+			holder, expires := l.currentHolder(ctx)
+
+			Convey("Then the blocker and its expiry are named, so an operator can correlate it", func() {
+				So(holder, ShouldEqual, "dead-runner")
+				So(expires, ShouldNotEqual, "unknown")
+				So(expires, ShouldNotBeEmpty)
+			})
+		})
+
 		Reset(func() { freeLease() })
 	})
 }

@@ -7,6 +7,35 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — A migration that is interrupted recovers, and an abandoned lease frees itself
+
+- **A no-transaction migration reaps its own invalid indexes before it
+  replays.** A failed `CREATE INDEX CONCURRENTLY` leaves an INVALID index
+  behind. The name then exists, so `IF NOT EXISTS` skipped the rebuild for
+  ever — and migration 000028 also drops the index it replaces, so a replay
+  removed the working index and left only the invalid one. Every by-entity
+  revision read then sequentially scanned the table, permanently, while the
+  schema version read as current and nothing raised an error. The trigger is
+  an ordinary pod lifecycle event during a deploy: an OOMKill, an eviction or
+  a lock timeout part-way through the build. The reap covers every
+  no-transaction migration (000018, 000021 and 000025 build indexes
+  concurrently too), and is a no-op when nothing is invalid.
+- **`leaseWait` now exceeds `leaseTTL`.** A runner that dies holding the
+  migration lease leaves a row with a live `expires_at` that nobody renews.
+  With a 10-minute wait against a 15-minute TTL, every replica booting inside
+  that window gave up BEFORE the lease could expire — inside a container
+  startup path, so the orchestrator restarted it and it repeated, and a whole
+  generation could not boot. The wait is the TTL plus a two-minute margin, so
+  a survivor outlasts the abandoned lease.
+- **The acquire failure names the blocker.** It reports the current holder and
+  the `expires_at` it is waiting on, so an operator can correlate the stall
+  with the pod that died.
+- **The lease is released on a detached context.** The commonest reason
+  `Migrate` returns is that the caller's context ended, and releasing on that
+  same context was a no-op — so an embedded deployment with a cancellable
+  startup context stranded the lease for the full TTL while the process was
+  alive and able to free it.
+
 ### Fixed — Five one-sided guards: DSN quoting, the pre-auth limiter, the GraphQL schema key, the effective-permissions view and the time zone
 
 - **The TLS guard parses the connection string with libpq's grammar.** The

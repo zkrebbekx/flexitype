@@ -7,6 +7,37 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Added — Computed aggregates: `sum`, `count`, `avg`, `min`, `max`
+
+A formula could not read a multi-valued attribute at all. Evaluation carried
+one value per name, so a multi-valued source collapsed to whichever member the
+repository returned last — adding a member changed the answer with no change
+to the schema or the formula — and the definition is now refused outright.
+Refusing was right; leaving no way to express the aggregate was the gap.
+
+```
+{"kind": "formula", "formula": "sum(line_totals)"}
+```
+
+- **A name carries every value the entity holds for it.** A bare name must
+  resolve to exactly one; an aggregate folds the whole list. So
+  `line_totals * 2` is still refused and `sum(line_totals)` is not, and the
+  rule is enforced at definition time rather than producing a number later.
+- **The reverse guard follows the same rule.** An attribute a formula reads
+  bare cannot be made multi-valued; one that is only ever aggregated can,
+  because the aggregate already asked for every member.
+- **`count` of an absent attribute is 0; `sum`, `avg`, `min` and `max` are
+  undefined.** Counting nothing has one reading. A total over no data is
+  unknown rather than nought, and an undefined formula clears the value.
+- **Exact for decimals.** Aggregates evaluate in rational arithmetic on a
+  `decimal` target, so `sum` of `0.1` and `0.2` stores `0.3`.
+- Localizable and scopable sources stay refused, aggregated or not:
+  evaluation reads the base scope, and folding values that mean different
+  things per locale is not an aggregate anyone asked for.
+
+Rollups **across relationships** remain unsupported and are documented as a
+gap rather than approximated. New: [docs/computed.md](docs/computed.md).
+
 ### Documentation — GraphQL introspection and the field ACL
 
 The GraphQL schema is built from the caller's READABLE attribute set and

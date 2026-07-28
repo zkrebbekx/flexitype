@@ -526,3 +526,173 @@ func TestRebuildClearsAnUndefinedFormula(t *testing.T) {
 		})
 	})
 }
+
+// TestComputedAggregates covers the feature that replaces the collapse.
+//
+// A formula could not read a multi-valued attribute at all, because
+// evaluation carried one value per name and picking a member silently was the
+// defect. An aggregate says which members it wants — all of them — so the
+// answer is defined and changes only when the data does.
+func TestComputedAggregates(t *testing.T) {
+	Convey("Given a multi-valued numeric attribute", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		order, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "order", DisplayName: "Order"})
+		So(err, ShouldBeNil)
+		lines, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: order.ID.String(), InternalName: "line_totals",
+			DisplayName: "Line totals", DataType: "integer", MultiValued: true,
+		})
+		So(err, ShouldBeNil)
+
+		add := func(v string) {
+			_, serr := svc.Interactors(ctx).Values().Set(ctx, appvalue.SetInput{
+				AttributeDefinitionID: lines.ID.String(), EntityID: "o1",
+				TypeDefinitionID: order.ID.String(), Value: json.RawMessage(v),
+			})
+			So(serr, ShouldBeNil)
+		}
+		valueOf := func(attrID string) (string, bool) {
+			vals, verr := svc.Interactors(ctx).Values().ListByEntity(ctx, order.ID.String(), "o1")
+			So(verr, ShouldBeNil)
+			for _, v := range vals {
+				if v.AttributeDefinitionID.String() == attrID {
+					return v.Value.String(), true
+				}
+			}
+			return "", false
+		}
+
+		Convey("When a formula aggregates it", func() {
+			total, cerr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: order.ID.String(), InternalName: "total",
+				DisplayName: "Total", DataType: "integer",
+				Computed: json.RawMessage(`{"kind":"formula","formula":"sum(line_totals)"}`),
+			})
+			So(cerr, ShouldBeNil)
+
+			Convey("Then it is accepted, where a bare read is not", func() {
+				_, berr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+					TypeDefinitionID: order.ID.String(), InternalName: "doubled",
+					DisplayName: "Doubled", DataType: "integer",
+					Computed: json.RawMessage(`{"kind":"formula","formula":"line_totals * 2"}`),
+				})
+				So(berr, ShouldNotBeNil)
+				So(berr.Error(), ShouldContainSubstring, "aggregate")
+			})
+
+			Convey("Then the total tracks every member, not an arbitrary one", func() {
+				add("10")
+				v, ok := valueOf(total.ID.String())
+				So(ok, ShouldBeTrue)
+				So(v, ShouldEqual, "10")
+
+				add("20")
+				v, _ = valueOf(total.ID.String())
+				So(v, ShouldEqual, "30")
+
+				add("30")
+				v, _ = valueOf(total.ID.String())
+				So(v, ShouldEqual, "60")
+			})
+		})
+
+		Convey("When a formula counts it", func() {
+			counted, cerr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: order.ID.String(), InternalName: "line_count",
+				DisplayName: "Line count", DataType: "integer",
+				Computed: json.RawMessage(`{"kind":"formula","formula":"count(line_totals)"}`),
+			})
+			So(cerr, ShouldBeNil)
+
+			Convey("Then an entity with no members counts zero rather than clearing", func() {
+				add("5")
+				v, ok := valueOf(counted.ID.String())
+				So(ok, ShouldBeTrue)
+				So(v, ShouldEqual, "1")
+			})
+		})
+
+		Convey("When an aggregate reads a decimal attribute", func() {
+			amounts, aerr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: order.ID.String(), InternalName: "amounts",
+				DisplayName: "Amounts", DataType: "decimal", MultiValued: true,
+			})
+			So(aerr, ShouldBeNil)
+			exact, eerr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: order.ID.String(), InternalName: "amount_total",
+				DisplayName: "Amount total", DataType: "decimal",
+				Computed: json.RawMessage(`{"kind":"formula","formula":"sum(amounts)"}`),
+			})
+			So(eerr, ShouldBeNil)
+
+			for _, v := range []string{`"0.1"`, `"0.2"`} {
+				_, serr := svc.Interactors(ctx).Values().Set(ctx, appvalue.SetInput{
+					AttributeDefinitionID: amounts.ID.String(), EntityID: "o1",
+					TypeDefinitionID: order.ID.String(), Value: json.RawMessage(v),
+				})
+				So(serr, ShouldBeNil)
+			}
+
+			Convey("Then the sum is exact, not 0.30000000000000004", func() {
+				v, ok := valueOf(exact.ID.String())
+				So(ok, ShouldBeTrue)
+				So(v, ShouldEqual, "0.3")
+			})
+		})
+	})
+
+	Convey("Given a scalar attribute a formula aggregates", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		order, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "order", DisplayName: "Order"})
+		So(err, ShouldBeNil)
+		amount, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: order.ID.String(), InternalName: "amount",
+			DisplayName: "Amount", DataType: "integer",
+		})
+		So(err, ShouldBeNil)
+		_, err = svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: order.ID.String(), InternalName: "total",
+			DisplayName: "Total", DataType: "integer",
+			Computed: json.RawMessage(`{"kind":"formula","formula":"sum(amount)"}`),
+		})
+		So(err, ShouldBeNil)
+
+		Convey("When that attribute is made multi-valued", func() {
+			_, uerr := svc.Interactors(ctx).Attributes().Update(ctx, appattribute.UpdateInput{
+				ID: amount.ID.String(), DisplayName: "Amount", MultiValued: true,
+			})
+
+			Convey("Then it is allowed: the formula asked for every member", func() {
+				So(uerr, ShouldBeNil)
+			})
+		})
+
+		Convey("And a second formula reading it bare", func() {
+			_, berr := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+				TypeDefinitionID: order.ID.String(), InternalName: "doubled",
+				DisplayName: "Doubled", DataType: "integer",
+				Computed: json.RawMessage(`{"kind":"formula","formula":"amount * 2"}`),
+			})
+			So(berr, ShouldBeNil)
+
+			Convey("When that attribute is made multi-valued", func() {
+				_, uerr := svc.Interactors(ctx).Attributes().Update(ctx, appattribute.UpdateInput{
+					ID: amount.ID.String(), DisplayName: "Amount", MultiValued: true,
+				})
+
+				Convey("Then it is refused: the bare reader would start collapsing", func() {
+					So(uerr, ShouldNotBeNil)
+					So(uerr.Error(), ShouldContainSubstring, "bare name")
+				})
+			})
+		})
+	})
+}

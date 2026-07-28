@@ -18,6 +18,7 @@ import (
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
+	"github.com/zkrebbekx/flexitype/pkg/formula"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
@@ -223,7 +224,11 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 			if cerr := checkFormulaCycle(in.InternalName, refs, deps); cerr != nil {
 				return cerr
 			}
-			if serr := assertFormulaSourcesAreScalar(ctx, attrs, hierarchy, refs); serr != nil {
+			scalarRefs, serr := formulaScalarRefs(computed.Formula)
+			if serr != nil {
+				return serr
+			}
+			if serr := assertFormulaSourcesAreScalar(ctx, attrs, hierarchy, refs, scalarRefs); serr != nil {
 				return serr
 			}
 		}
@@ -404,7 +409,11 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			if derr != nil {
 				return derr
 			}
-			if serr := assertFormulaSourcesAreScalar(ctx, attrs, hierarchy, refs); serr != nil {
+			scalarRefs, srerr := formulaScalarRefs(computed.Formula)
+			if srerr != nil {
+				return srerr
+			}
+			if serr := assertFormulaSourcesAreScalar(ctx, attrs, hierarchy, refs, scalarRefs); serr != nil {
 				return serr
 			}
 			if cerr := checkFormulaCycle(attr.InternalName(), refs, deps); cerr != nil {
@@ -795,7 +804,27 @@ func (i *Interactor) normalizeQuantityConstraints(ctx context.Context, dt valueo
 // computedDeps maps each computed-formula attribute in the hierarchy to the
 // attribute names its formula reads, for cycle detection.
 func (i *Interactor) computedDeps(ctx context.Context, attrs domainattribute.Repository, hierarchy []*domaintypedef.TypeDefinition) (map[string][]string, error) {
-	deps := map[string][]string{}
+	full, err := i.computedRefs(ctx, attrs, hierarchy)
+	if err != nil {
+		return nil, err
+	}
+	deps := make(map[string][]string, len(full))
+	for name, r := range full {
+		deps[name] = r.all
+	}
+	return deps, nil
+}
+
+// formulaRefs is one formula's references, split by how they are read.
+type formulaRefs struct {
+	all  []string
+	bare map[string]bool
+}
+
+// computedRefs collects every computed attribute's references in the
+// hierarchy, recording which are read bare.
+func (i *Interactor) computedRefs(ctx context.Context, attrs domainattribute.Repository, hierarchy []*domaintypedef.TypeDefinition) (map[string]formulaRefs, error) {
+	out := map[string]formulaRefs{}
 	for _, link := range hierarchy {
 		list, err := domainattribute.ListAllForType(ctx, attrs, link.ID())
 		if err != nil {
@@ -810,10 +839,18 @@ func (i *Interactor) computedDeps(ctx context.Context, attrs domainattribute.Rep
 			if verr != nil {
 				return nil, verr
 			}
-			deps[a.InternalName()] = refs
+			scalar, serr := formulaScalarRefs(c.Formula)
+			if serr != nil {
+				return nil, serr
+			}
+			bare := make(map[string]bool, len(scalar))
+			for _, r := range scalar {
+				bare[r] = true
+			}
+			out[a.InternalName()] = formulaRefs{all: refs, bare: bare}
 		}
 	}
-	return deps, nil
+	return out, nil
 }
 
 // assertNoFormulaReadsScopedSource refuses making an attribute multi-valued,
@@ -846,46 +883,67 @@ func (i *Interactor) assertNoFormulaReadsScopedSource(
 		return err
 	}
 	hierarchy = appendUnseenTypes(hierarchy, descendants)
-	deps, err := i.computedDeps(ctx, attrs, hierarchy)
+	deps, err := i.computedRefs(ctx, attrs, hierarchy)
 	if err != nil {
 		return err
 	}
+	gainingMulti := !before.MultiValued && in.MultiValued
 	for name, refs := range deps {
-		for _, ref := range refs {
+		for _, ref := range refs.all {
 			if ref != before.InternalName {
+				continue
+			}
+			// Becoming multi-valued is only a problem for a formula that
+			// reads the name BARE. One that aggregates it — sum(x) — is
+			// asking for every member, so gaining members is the intended
+			// case rather than a break.
+			if gainingMulti && !refs.bare[ref] {
 				continue
 			}
 			return domainerrors.NewConflict(
 				"cannot make the attribute multi-valued, localizable or scopable: a computed formula reads it, "+
-					"and evaluation carries one base-scope value per name",
+					"and evaluation reads one base-scope value per bare name",
 				"attribute", before.InternalName, "formula", name)
 		}
 	}
 	return nil
 }
 
-// assertFormulaSourcesAreScalar refuses a formula that reads a multi-valued,
-// localizable or scopable attribute.
+// formulaScalarRefs parses a formula and returns the names it reads bare.
+func formulaScalarRefs(src string) ([]string, error) {
+	expr, err := formula.Parse(src)
+	if err != nil {
+		return nil, domainerrors.NewValidation(err.Error())
+	}
+	return expr.ScalarRefs(), nil
+}
+
+// assertFormulaSourcesAreScalar refuses a formula that reads a multi-valued
+// attribute BARE, or a localizable or scopable one at all.
 //
-// Evaluation carries ONE number per source name, so a multi-valued source
-// collapsed to whichever member the repository returned last, and a scoped
-// value was skipped entirely. Adding or removing a member changed the answer
-// with no other change to the schema or the formula, and nothing signalled
-// it: the computed attribute was populated, queryable in FQL and counted
-// toward completeness, so the number looked plausible and tracked nothing.
+// A bare name must resolve to one value. A multi-valued source read bare
+// collapsed to whichever member the repository returned last, so adding a
+// member changed the answer with nothing to explain it — while the computed
+// attribute stayed populated, queryable in FQL and counted toward
+// completeness. Reading it inside an aggregate is fine, and is the point:
+// `sum(line_totals)` says which member it wants, namely all of them.
 //
-// Refusing is the loud option, and the same one this wave chose for rollups:
-// an aggregate over many members is a different feature (sum, count) rather
-// than an accident of row order. It is enforced at write time, so a formula
-// that cannot be evaluated meaningfully cannot be stored.
+// Localizable and scopable sources stay refused outright. Evaluation reads
+// the base scope, and folding values that mean different things in different
+// locales is not an aggregate anyone asked for; a schema author who wants one
+// can compute per-locale attributes explicitly.
 func assertFormulaSourcesAreScalar(ctx context.Context, attrs domainattribute.Repository,
-	hierarchy []*domaintypedef.TypeDefinition, refs []string) error {
+	hierarchy []*domaintypedef.TypeDefinition, refs, scalarRefs []string) error {
 	if len(refs) == 0 {
 		return nil
 	}
 	wanted := make(map[string]bool, len(refs))
 	for _, r := range refs {
 		wanted[r] = true
+	}
+	bare := make(map[string]bool, len(scalarRefs))
+	for _, r := range scalarRefs {
+		bare[r] = true
 	}
 	for _, link := range hierarchy {
 		list, err := domainattribute.ListAllForType(ctx, attrs, link.ID())
@@ -897,10 +955,10 @@ func assertFormulaSourcesAreScalar(ctx context.Context, attrs domainattribute.Re
 				continue
 			}
 			switch {
-			case a.MultiValued():
+			case a.MultiValued() && bare[a.InternalName()]:
 				return domainerrors.NewValidation(
-					"a formula cannot read a multi-valued attribute: evaluation carries one value per name, "+
-						"so it would silently use an arbitrary member",
+					"a formula cannot read a multi-valued attribute directly: a bare name must resolve to "+
+						"one value. Wrap it in an aggregate — sum, count, avg, min or max",
 					"attribute", a.InternalName())
 			case a.Localizable() || a.Scopable():
 				return domainerrors.NewValidation(

@@ -36,9 +36,6 @@ type ListValuesOptions struct {
 	EntityID string
 	// IncludeArchived folds in soft-deleted values.
 	IncludeArchived bool
-	// ChangeSetID overlays a draft change-set's staged mutations on the
-	// stored values, so a caller can preview a change-set before publishing.
-	ChangeSetID string
 }
 
 func (o ListValuesOptions) query() url.Values {
@@ -54,9 +51,6 @@ func (o ListValuesOptions) query() url.Values {
 	}
 	if o.IncludeArchived {
 		q.Set("include_archived", "true")
-	}
-	if o.ChangeSetID != "" {
-		q.Set("changeset", o.ChangeSetID)
 	}
 	return q
 }
@@ -187,16 +181,23 @@ func (c *Client) PurgeTenant(ctx context.Context) (*PurgeReport, error) {
 type EventPage struct {
 	Events []FeedEvent `json:"items"`
 	// NextCursor is the position to pass as After for the following page.
-	// Empty means the caller has reached the end of the retained feed.
-	NextCursor string `json:"next_cursor"`
+	//
+	// It is an int64 because the feed's cursor is a sequence number, and the
+	// server always emits it — declaring it a string made ListPage fail to
+	// decode on EVERY call, including against an empty feed.
+	NextCursor int64 `json:"next_cursor"`
 }
 
 // ListPage returns one page of the event feed, after the given position, and
 // the cursor for the next page. limit 0 uses the server default.
-func (s *EventsService) ListPage(ctx context.Context, after string, types []string, limit int) (*EventPage, error) {
+//
+// after is the feed SEQUENCE to resume from — 0 for the beginning. It was
+// typed as a string, which did not match the API and could not be produced
+// from the page this method returns.
+func (s *EventsService) ListPage(ctx context.Context, after int64, types []string, limit int) (*EventPage, error) {
 	q := url.Values{}
-	if after != "" {
-		q.Set("after", after)
+	if after > 0 {
+		q.Set("after", strconv.FormatInt(after, 10))
 	}
 	if len(types) > 0 {
 		q["types"] = []string{joinComma(types)}

@@ -7,6 +7,52 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — Go client: three methods returned silently wrong data
+
+Six defects (#419), three of them silent-wrong-answer bugs on methods added to
+close earlier gaps.
+
+- **`Events().List` returned all-zero events.** The client type was flat
+  (`feed_seq`, `id`, `type`, …); the server sends
+  `{"seq":N,"envelope":{…}}`. **No key overlapped**, so decoding produced the
+  right *number* of events with every field zero and no error, and a consumer
+  dispatching on `Type` saw `""` for ever. `FeedEvent` now decodes the nested
+  shape and keeps a flat surface.
+- **`Events().ListPage` could never succeed.** `NextCursor` was declared a
+  string while the server emits a number, and `next_cursor` is always present
+  — so the method failed on every call, including against an empty feed. It is
+  an `int64`, and `after` is an `int64` too, so the cursor a page returns is
+  usable as the next page's argument.
+- **`Values().List(ChangeSetID:)` returned live values.** The option sent
+  `changeset` to the paginated `/values` endpoint, which does not read it; the
+  overlay exists only on `GET /entities/{type}/{entity}/values`. A reviewer
+  previewing a change-set was shown the **pre-change** values as the preview
+  and could approve a diff that was never displayed. The option is gone,
+  replaced by `Entities().ValuesPreview`, and the server now **refuses**
+  `?changeset=` on `/values` rather than ignoring it.
+- **`SavedViews().Update` was neither a full replace nor sparse.** A nil
+  `Columns` marshalled to `null`, which the server's sparse decoder reads as
+  "absent", so a rename cleared `query` and `sort` while leaving `columns`
+  alone. Columns are always transmitted, as `[]` when nil, and the godoc
+  points renames at `Patch`.
+- **`RevisionValue` dropped `locale`, `channel` and `typed`.** `AsOf` returned
+  a localized entity as N rows with identical `internal_name` and no way to
+  tell them apart, and rendered a quantity as the lossy display string — the
+  typed form exists on the server precisely because the display form is lossy.
+
+### Fixed — Saved views: a concurrent patch no longer discards a field
+
+`Patch` did `Get`, merged, then called `Update`, which performed a second
+unguarded `Get` and a blind write — in the same release that added optimistic
+locking to change-sets. Two concurrent patches, one setting the sort and one
+renaming, each wrote the other's field back as it was: the "one client
+silently clears what another set" outcome the sparse decoder was added to
+remove, moved from an omitted field to a concurrent write.
+
+Saved views now carry a `version` (migration `000029`), and the store's
+`Update` is a compare-and-swap that answers **409** on a stale write. `Patch`
+compares against the version it merged against.
+
 ### Fixed — Event retention and the bulk redrive
 
 - **Dead deliveries pinned their envelopes for ever** (#405). The envelope

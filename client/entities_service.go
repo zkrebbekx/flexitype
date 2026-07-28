@@ -54,6 +54,22 @@ func (s *EntitiesService) Values(ctx context.Context, typeID, entityID string) (
 	return items[AttributeValue](ctx, s.c, "/entities/"+typeID+"/"+url.PathEscape(entityID)+"/values", nil)
 }
 
+// ValuesPreview returns an entity's values with a draft change-set's staged
+// mutations overlaid, so a reviewer sees what publishing would produce
+// without touching live data.
+//
+// The overlay exists on this per-entity endpoint only. ListValuesOptions once
+// carried a ChangeSetID that it sent to the paginated /values endpoint, which
+// does not read it — so a preview silently returned the LIVE values, and a
+// reviewer could approve a diff that was never displayed. The option is gone;
+// this is the supported way.
+func (s *EntitiesService) ValuesPreview(ctx context.Context, typeID, entityID, changeSetID string) ([]AttributeValue, error) {
+	q := url.Values{}
+	q.Set("changeset", changeSetID)
+	return items[AttributeValue](ctx, s.c,
+		"/entities/"+typeID+"/"+url.PathEscape(entityID)+"/values", q)
+}
+
 // Relationships returns an entity's links, with definitions and roles resolved.
 func (s *EntitiesService) Relationships(ctx context.Context, typeID, entityID string) ([]EntityLink, error) {
 	return items[EntityLink](ctx, s.c, "/entities/"+typeID+"/"+url.PathEscape(entityID)+"/relationships", nil)

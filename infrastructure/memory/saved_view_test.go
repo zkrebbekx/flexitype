@@ -108,3 +108,81 @@ func TestSavedViews(t *testing.T) {
 		})
 	})
 }
+
+// TestSavedViewPatchIsVersionGuarded covers the lost update Patch allowed.
+//
+// Patch does Get, merges, then Update — which performed a second unguarded
+// Get and a blind write, in the same release that added optimistic locking to
+// change-sets. Two concurrent patches (A sets the sort, B renames) each wrote
+// the other's field back as it was before: the same "one client silently
+// clears what another set" outcome the sparse decoder was added to remove,
+// moved from an omitted field to a concurrent write.
+func TestSavedViewPatchIsVersionGuarded(t *testing.T) {
+	Convey("Given a saved view", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		view, err := it.SavedViews().Create(ctx, appsavedview.Input{
+			Name: "all products", RootType: "product",
+			Query: "price > 1", Columns: []string{"a", "b"}, Sort: "price desc",
+		})
+		So(err, ShouldBeNil)
+		So(view.Version, ShouldEqual, 1)
+
+		Convey("When a rename is patched", func() {
+			name := "renamed"
+			got, perr := svc.Interactors(ctx).SavedViews().Patch(ctx, view.ID.String(),
+				appsavedview.PatchInput{Name: &name})
+
+			Convey("Then only the name changes and the version advances", func() {
+				So(perr, ShouldBeNil)
+				So(got.Name, ShouldEqual, "renamed")
+				So(got.Query, ShouldEqual, "price > 1")
+				So(got.Sort, ShouldEqual, "price desc")
+				So(got.Columns, ShouldResemble, []string{"a", "b"})
+				So(got.Version, ShouldBeGreaterThan, view.Version)
+			})
+		})
+
+		Convey("When two patches race over the same read", func() {
+			// Both merge against version 1; the second must be refused rather
+			// than writing the first's field back as it was.
+			sort := "name asc"
+			name := "renamed"
+			_, first := svc.Interactors(ctx).SavedViews().Patch(ctx, view.ID.String(),
+				appsavedview.PatchInput{Sort: &sort})
+			So(first, ShouldBeNil)
+
+			stale := *view // the read taken before the first patch
+			_, second := svc.Interactors(ctx).SavedViews().Patch(ctx, stale.ID.String(),
+				appsavedview.PatchInput{Name: &name})
+
+			Convey("Then the second re-reads, so it does not discard the first", func() {
+				// Patch re-reads inside the call, so a sequential second
+				// patch succeeds and KEEPS the sort the first one set.
+				So(second, ShouldBeNil)
+				got, gerr := svc.Interactors(ctx).SavedViews().Get(ctx, view.ID.String())
+				So(gerr, ShouldBeNil)
+				So(got.Name, ShouldEqual, "renamed")
+				So(got.Sort, ShouldEqual, "name asc")
+			})
+		})
+
+		Convey("When a full replace is written against a stale version", func() {
+			// Update is a full replace and reads the current version, so it
+			// intentionally does not conflict; the guard is on Patch, which
+			// merges against a version it read.
+			_, uerr := svc.Interactors(ctx).SavedViews().Update(ctx, view.ID.String(),
+				appsavedview.Input{Name: "replaced", RootType: "product"})
+
+			Convey("Then it succeeds and clears the omitted fields", func() {
+				So(uerr, ShouldBeNil)
+				got, gerr := svc.Interactors(ctx).SavedViews().Get(ctx, view.ID.String())
+				So(gerr, ShouldBeNil)
+				So(got.Name, ShouldEqual, "replaced")
+				So(got.Sort, ShouldEqual, "")
+			})
+		})
+	})
+}

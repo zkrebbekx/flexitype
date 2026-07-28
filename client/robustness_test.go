@@ -491,3 +491,127 @@ func TestAssignRolesReplacesBothLists(t *testing.T) {
 		t.Fatal("body omitted field_permissions, so the overrides could not be cleared")
 	}
 }
+
+// Given the server's nested feed shape, When FeedEvent decodes it, Then the
+// flat fields are populated — the client type had no key in common with the
+// wire form, so List returned the right NUMBER of events with every field
+// zero and no error, and a consumer dispatching on Type saw "" for ever.
+func TestFeedEventDecodesTheNestedEnvelope(t *testing.T) {
+	raw := []byte(`{"seq":42,"envelope":{
+		"id":"01ABC","type":"flexitype.value.updated","aggregate_type":"value",
+		"aggregate_id":"v1","tenant_id":"acme","actor":"ci",
+		"occurred_at":"2026-07-28T10:00:00Z","recorded_at":"2026-07-28T10:00:01Z",
+		"schema_version":1,"payload":{"entity_id":"e1"}}}`)
+
+	var ev FeedEvent
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if ev.Seq != 42 {
+		t.Fatalf("seq = %d, want 42", ev.Seq)
+	}
+	if ev.Type != "flexitype.value.updated" {
+		t.Fatalf("type = %q, want the envelope's type", ev.Type)
+	}
+	if ev.ID != "01ABC" || ev.TenantID != "acme" || ev.Actor != "ci" {
+		t.Fatalf("identity fields not lifted from the envelope: %+v", ev)
+	}
+	if ev.OccurredAt.IsZero() || ev.RecordedAt.IsZero() || ev.SchemaVersion != 1 {
+		t.Fatalf("envelope metadata not lifted: %+v", ev)
+	}
+	if string(ev.Payload) == "" {
+		t.Fatal("payload not lifted from the envelope")
+	}
+}
+
+// Given the feed's int64 cursor, When ListPage reads a page, Then it decodes
+// and the cursor round-trips — NextCursor was declared a string while the
+// server always emits a number, so this call failed on every invocation,
+// including against an empty feed.
+func TestListPageDecodesTheIntegerCursor(t *testing.T) {
+	var gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[{"seq":7,"envelope":{"id":"01","type":"t"}}],"next_cursor":7}`))
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	page, err := c.Events().ListPage(context.Background(), 3, nil, 0)
+	if err != nil {
+		t.Fatalf("ListPage: %v", err)
+	}
+	if page.NextCursor != 7 {
+		t.Fatalf("next cursor = %d, want 7", page.NextCursor)
+	}
+	if len(page.Events) != 1 || page.Events[0].Seq != 7 || page.Events[0].Type != "t" {
+		t.Fatalf("events not decoded: %+v", page.Events)
+	}
+	if gotQuery != "after=3" {
+		t.Fatalf("query = %q, want after=3", gotQuery)
+	}
+
+	// The cursor a page returns must be usable as the next page's After.
+	if _, err := c.Events().ListPage(context.Background(), page.NextCursor, nil, 0); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+}
+
+// Given a saved-view full replace with no columns, When Update sends it, Then
+// columns travels as [] — the server reads null as "absent", so a nil slice
+// made Update neither a full replace nor sparse: it cleared query and sort
+// while leaving columns as stored.
+func TestSavedViewUpdateAlwaysSendsColumns(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"01","name":"renamed","version":2}`))
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := c.SavedViews().Update(context.Background(), "01", SavedViewInput{
+		Name: "renamed", RootType: "product",
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	cols, ok := gotBody["columns"]
+	if !ok {
+		t.Fatal("columns omitted, so the replace would leave the stored value")
+	}
+	if arr, isArr := cols.([]any); !isArr || len(arr) != 0 {
+		t.Fatalf("columns = %v, want an empty array", cols)
+	}
+}
+
+// Given a revision value with a scope and a typed form, When it decodes, Then
+// locale, channel and typed survive — without them AsOf returned a localized
+// entity as N rows with identical InternalName and no way to tell them apart,
+// and rendered a quantity as the lossy display string.
+func TestRevisionValueCarriesScopeAndTypedForm(t *testing.T) {
+	raw := []byte(`{"attribute_definition_id":"01","internal_name":"price",
+		"display_name":"Price","data_type":"quantity","locale":"fr-FR","channel":"web",
+		"value":"10 kg","typed":{"type":"quantity","magnitude":"10","unit":"kg"}}`)
+
+	var v RevisionValue
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if v.Locale != "fr-FR" || v.Channel != "web" {
+		t.Fatalf("scope lost: %+v", v)
+	}
+	if len(v.Typed) == 0 {
+		t.Fatal("typed form lost, so a quantity cannot be reconstructed")
+	}
+	if v.Value != "10 kg" {
+		t.Fatalf("display form = %q", v.Value)
+	}
+}

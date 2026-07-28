@@ -28,11 +28,22 @@ type View struct {
 	Sort      string                `json:"sort"`
 	CreatedAt time.Time             `json:"created_at"`
 	UpdatedAt time.Time             `json:"updated_at"`
+	// Version increments on every write and guards against a lost update.
+	//
+	// Patch reads, merges and writes, so two concurrent patches — one setting
+	// the sort, one renaming — each wrote the other's field back as it was
+	// before: the same "one client silently clears what another set" outcome
+	// the sparse decoder was added to remove, moved from an omitted field to
+	// a concurrent write.
+	Version int `json:"version"`
 }
 
 // Store persists saved views.
 type Store interface {
 	Create(ctx context.Context, v View) error
+	// Update persists the view only if the stored version still matches
+	// v.Version, and returns a conflict otherwise. It increments the stored
+	// version on success.
 	Update(ctx context.Context, v View) error
 	Delete(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) error
 	Get(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) (View, error)
@@ -85,6 +96,9 @@ func (i *Interactor) Create(ctx context.Context, in Input) (*View, error) {
 		Sort:      in.Sort,
 		CreatedAt: now,
 		UpdatedAt: now,
+		// A new view starts at 1, so the first read a client takes already
+		// carries a version it can compare-and-swap against.
+		Version: 1,
 	}
 	if err := i.store.Create(ctx, v); err != nil {
 		return nil, err
@@ -92,18 +106,28 @@ func (i *Interactor) Create(ctx context.Context, in Input) (*View, error) {
 	return &v, nil
 }
 
-// Update replaces a view's fields.
+// Update replaces a view's fields, guarded by the version it reads.
 func (i *Interactor) Update(ctx context.Context, rawID string, in Input) (*View, error) {
 	id, err := ulid.Parse(rawID)
 	if err != nil {
 		return nil, domainerrors.NewValidation(err.Error())
 	}
+	return i.update(ctx, id, in, 0)
+}
+
+// update writes a view. expectVersion of 0 means "whatever is stored now",
+// which is what a full replace does; Patch passes the version it merged
+// against, so a concurrent write is reported rather than discarded.
+func (i *Interactor) update(ctx context.Context, id ulid.ID, in Input, expectVersion int) (*View, error) {
 	if err := in.validate(); err != nil {
 		return nil, err
 	}
 	existing, err := i.store.Get(ctx, tenantOf(ctx), id)
 	if err != nil {
 		return nil, err
+	}
+	if expectVersion > 0 {
+		existing.Version = expectVersion
 	}
 	existing.Name = in.Name
 	existing.RootType = in.RootType
@@ -114,6 +138,7 @@ func (i *Interactor) Update(ctx context.Context, rawID string, in Input) (*View,
 	if err := i.store.Update(ctx, existing); err != nil {
 		return nil, err
 	}
+	existing.Version++
 	return &existing, nil
 }
 
@@ -166,7 +191,10 @@ func (i *Interactor) Patch(ctx context.Context, rawID string, in PatchInput) (*V
 	if in.Sort != nil {
 		merged.Sort = *in.Sort
 	}
-	return i.Update(ctx, rawID, merged)
+	// Merge and write against the version this patch READ, so a concurrent
+	// write is reported rather than silently discarded. Update re-reads, so
+	// the version is threaded explicitly.
+	return i.update(ctx, id, merged, existing.Version)
 }
 
 // Get loads one view.

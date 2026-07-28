@@ -547,10 +547,6 @@ func (e cellEntry) text() string {
 	return string(e.Value)
 }
 
-// multiValueCellKey tags the LEGACY multi-value cell format, still accepted on
-// import for files an earlier release produced.
-const multiValueCellKey = "values"
-
 // multiValueCellPrefix marks a multi-value cell OUT OF BAND.
 //
 // Every in-band sentinel drawn from the JSON grammar can be forged by a JSON
@@ -603,6 +599,8 @@ func scopedCell(cell string, dt valueobjects.DataType) ([]cellEntry, bool) {
 		return nil, false
 	}
 	if strings.HasPrefix(trimmed, "{") {
+		// The LEGACY tagged key, still read so a file an earlier release
+		// exported still imports.
 		var tagged struct {
 			Values []cellEntry `json:"values"`
 		}

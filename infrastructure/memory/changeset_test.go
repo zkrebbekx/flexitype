@@ -248,6 +248,24 @@ func TestChangeSetStoreDirect(t *testing.T) {
 			})
 		})
 
+		Convey("When stale publish claims are listed", func() {
+			// A publish claims the set before it applies the mutations. A
+			// request that ends mid-publish leaves the claim behind, and the
+			// scheduler needs to find it.
+			stranded := mk(ulidAt('5'), tenantA, "stranded", appchangeset.StatePublishing, t0, nil)
+			fresh := mk(ulidAt('6'), tenantB, "fresh", appchangeset.StatePublishing, later, nil)
+			So(store.Create(ctx, stranded), ShouldBeNil)
+			So(store.Create(ctx, fresh), ShouldBeNil)
+			reclaimer, ok := store.(appchangeset.ClaimReclaimer)
+			So(ok, ShouldBeTrue)
+			got, err := reclaimer.StalePublishing(ctx, due)
+			So(err, ShouldBeNil)
+
+			Convey("Then only claims older than the cutoff qualify, across all tenants", func() {
+				So(names(got), ShouldResemble, []string{"stranded"})
+			})
+		})
+
 		Convey("When a change-set is updated", func() {
 			// Update is a compare-and-swap on version, so write from a fresh
 			// read rather than from the literal built above.

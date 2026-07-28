@@ -83,6 +83,35 @@ plausible number rather than an error.
 
 `pkg/formula` gains `Members`, `EvalWithMembers`, `EvalRatWithMembers` and
 `NumericRefs`. The existing `Eval` and `EvalRat` are unchanged.
+### Fixed — A publish that ends mid-flight no longer strands the change-set
+
+A publish claims the set (state `publishing`) before it applies the
+mutations, and the release on failure used the caller's context. The
+commonest reason a publish fails is that this very context ended — a client
+timeout, a load-balancer idle timeout, a pod eviction — so the release failed
+too. `Reject` refuses `publishing`, `Publish` refused it, `AddMutation`
+refuses it, and the scheduler selected only `approved`: no API could move the
+set, its mutations unapplied, and recovery needed a manual `UPDATE` against
+`flexitype_changeset`.
+
+- **The release runs on a detached context** (`context.WithoutCancel` plus a
+  short deadline), so a cancelled request still hands the claim back.
+- **A stale claim is reclaimable.** Once a claim is older than
+  `changeset.PublishClaimTTL` (15 minutes), the set is publishable again: the
+  scheduler retries it, and so does an explicit publish. The mutations are
+  declarative, so a retry reaches the same state whether or not the stranded
+  publish committed its values.
+- **A reclaim that fails releases to `approved`**, never back into
+  `publishing`, so a set cannot be parked for another TTL.
+- **Rejecting a publishing set stays refused**, because a stranded publish
+  may have committed its values and a rejected set would then report
+  untouched data for changes that are live. The refusal now names the reclaim
+  path and the time it becomes possible.
+
+The scheduler finds stranded claims through a new optional store interface,
+`changeset.ClaimReclaimer`. Both built-in stores implement it. An embedder's
+own store still satisfies `changeset.Store` unchanged; without the interface
+a stranded set is recovered by publishing it again.
 
 ### Fixed — A purge deletes every matching row, in the canonical order, and keeps blobs another entity still uses
 

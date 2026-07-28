@@ -99,6 +99,22 @@ func (s *changesetStore) DueForPublish(_ context.Context, now time.Time) ([]chan
 	return out, nil
 }
 
+// StalePublishing returns change-sets whose publish claim is older than the
+// cutoff, so the scheduler can retry a publish that never finished. See
+// changeset.ClaimReclaimer.
+func (s *changesetStore) StalePublishing(_ context.Context, before time.Time) ([]changeset.ChangeSet, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []changeset.ChangeSet{}
+	for _, cs := range s.sets {
+		if cs.State == changeset.StatePublishing && !cs.UpdatedAt.After(before) {
+			out = append(out, cs)
+		}
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].UpdatedAt.Before(out[b].UpdatedAt) })
+	return out, nil
+}
+
 // ChangeSetEraser builds the in-memory change-set residual eraser, mirroring
 // the Postgres one.
 //

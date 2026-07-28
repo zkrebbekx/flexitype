@@ -51,6 +51,10 @@ type Config struct {
 	MaxImportBytes int64
 	// MaxMediaBytes caps a media upload; 0 uses the server default (32 MiB).
 	MaxMediaBytes int64
+	// TimeZone is the IANA zone whose calendar day `today` and `now` resolve
+	// against in dependency conditions and dynamic defaults. Empty means UTC,
+	// which is what the system did before there was a setting at all.
+	TimeZone string
 
 	// Delivery-machinery tuning. The options existed in code and none of
 	// them was reachable from a deployment, so the one interaction that
@@ -193,6 +197,7 @@ func Load() (Config, error) {
 		EnableConsole:        e.bool("FLEXITYPE_ENABLE_CONSOLE", true),
 		MaxImportBytes:       int64(e.int("FLEXITYPE_MAX_IMPORT_BYTES", 0)),
 		MaxMediaBytes:        int64(e.int("FLEXITYPE_MAX_MEDIA_BYTES", 0)),
+		TimeZone:             envStr("FLEXITYPE_TIMEZONE", ""),
 		RelayInterval:        e.duration("FLEXITYPE_RELAY_INTERVAL", 0),
 		RelayBatchSize:       e.int("FLEXITYPE_RELAY_BATCH_SIZE", 0),
 		RelayLeaseTTL:        e.duration("FLEXITYPE_RELAY_LEASE_TTL", 0),
@@ -239,6 +244,14 @@ func Load() (Config, error) {
 			URL:             os.Getenv("FLEXITYPE_DB_URL"),
 			Params:          os.Getenv("FLEXITYPE_DB_PARAMS"),
 		},
+	}
+	// Fail on an unknown zone at boot rather than silently falling back to
+	// UTC: a deployment that asked for Australia/Adelaide and got UTC has a
+	// day boundary that is wrong by hours, and nothing would say so.
+	if cfg.TimeZone != "" {
+		if _, err := time.LoadLocation(cfg.TimeZone); err != nil {
+			return Config{}, fmt.Errorf("FLEXITYPE_TIMEZONE %q is not a known IANA zone: %w", cfg.TimeZone, err)
+		}
 	}
 	if cfg.Port <= 0 || cfg.Port > 65535 {
 		return Config{}, fmt.Errorf("invalid FLEXITYPE_PORT %d", cfg.Port)

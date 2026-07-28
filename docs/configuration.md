@@ -115,6 +115,18 @@ These switches let one image serve as both an API tier and a worker tier.
 | `FLEXITYPE_ENABLE_CONSOLE` | `true` | Serve the embedded admin console. With `false`, the SPA is not mounted and an unmatched path returns a JSON 404. |
 | `FLEXITYPE_MAX_IMPORT_BYTES` | `16777216` (16 MiB) | Maximum size of a CSV import upload. A larger body is refused before it is read. |
 | `FLEXITYPE_MAX_MEDIA_BYTES` | `33554432` (32 MiB) | Maximum size of a media upload. |
+| `FLEXITYPE_TIMEZONE` | UTC | IANA zone whose **calendar day** `today` and `now` resolve against in dependency conditions and dynamic defaults. An unknown zone fails at boot. |
+
+`FLEXITYPE_TIMEZONE` changes which day those name, not how anything is
+stored: a date value is a calendar date held as midnight UTC either way.
+Without it, a deployment outside UTC had a date-boundary rule that was wrong
+for part of every day — a condition on "expires before today" flipped at the
+wrong hour, and a `today` default recorded yesterday for anything created
+after the UTC midnight.
+
+An embedder serving tenants in several zones from one process stamps
+`uow.WithTimeZone` per request instead; a per-request zone wins over this
+setting.
 ## Connection string
 
 | Variable | Default | Purpose |

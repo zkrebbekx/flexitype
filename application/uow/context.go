@@ -6,6 +6,7 @@ package uow
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -211,4 +212,95 @@ func EnsureTenant(ctx context.Context, owner valueobjects.TenantID, entity, id s
 		return nil
 	}
 	return domainerrors.NewNotFound(entity, id)
+}
+
+// --- tenant time zone --------------------------------------------------------
+
+type timeZoneKey struct{}
+
+// WithTimeZone stamps the tenant's time zone onto the context.
+//
+// It exists because `today` and `now` in a dependency condition or a dynamic
+// default resolved against UTC, and there was no tenant time zone anywhere in
+// the domain. For a tenant operating outside UTC, a date-boundary rule was
+// wrong for part of every day: a condition on "expires before today" flipped
+// at the wrong hour, and a `today` default recorded yesterday's date for
+// anything created after the UTC midnight.
+//
+// Storage is unaffected. A date value is a CALENDAR DATE stored as midnight
+// UTC, so only which day "today" names changes — not how it is stored or
+// compared.
+func WithTimeZone(ctx context.Context, loc *time.Location) context.Context {
+	if loc == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, timeZoneKey{}, loc)
+}
+
+// TimeZoneFromContext returns the tenant's time zone, or UTC when none is
+// stamped. UTC is the right default: it is what the system did before, and a
+// deployment that has not said otherwise should not silently move its day
+// boundary.
+func TimeZoneFromContext(ctx context.Context) *time.Location {
+	if loc, ok := ctx.Value(timeZoneKey{}).(*time.Location); ok && loc != nil {
+		return loc
+	}
+	return time.UTC
+}
+
+// HasTimeZone reports whether a time zone was stamped on the context.
+//
+// It exists so a deployment default does not overwrite a per-request choice:
+// TimeZoneFromContext answers UTC for "unset" and for "explicitly UTC", and
+// those must be distinguishable at the point a default is applied.
+func HasTimeZone(ctx context.Context) bool {
+	loc, ok := ctx.Value(timeZoneKey{}).(*time.Location)
+	return ok && loc != nil
+}
+
+// LocalNow returns the current instant in the tenant's time zone.
+//
+// Use it wherever a CALENDAR day is derived — `today`, a date default, a
+// day-boundary comparison. Use UTCNow for a timestamp that records when
+// something happened, which is an instant and has no time zone.
+func LocalNow(ctx context.Context) time.Time { return UTCNow().In(TimeZoneFromContext(ctx)) }
+
+// --- caller-supplied context values ------------------------------------------
+
+type contextValuesKey struct{}
+
+// WithContextValues stamps the caller's own facts onto the context, for
+// dependency conditions that name one.
+//
+// An embedder anchors flexitype values to its own entities by an opaque
+// entity_id, and those entities' primary fields live in host tables — a
+// customer's tier, an order's channel, a document's workflow state. No
+// condition could reference them, so a rule that depended on one had to be
+// expressed by copying that field into flexitype and keeping the copy in
+// step, which is the duplication soft typing exists to avoid.
+//
+// These values are read at evaluation time and never stored. Supply them per
+// request, from the host's own records.
+func WithContextValues(ctx context.Context, values map[string]valueobjects.Value) context.Context {
+	if len(values) == 0 {
+		return ctx
+	}
+	// Copy: the caller must not be able to mutate what a later evaluation
+	// reads, and a request-scoped map is cheap.
+	out := make(map[string]valueobjects.Value, len(values))
+	for k, v := range values {
+		out[k] = v
+	}
+	return context.WithValue(ctx, contextValuesKey{}, out)
+}
+
+// ContextValuesFromContext returns the caller-supplied facts, or nil.
+//
+// A condition naming a key that is absent does NOT match: a rule must not
+// fire on a fact the caller did not supply, because "not supplied" and
+// "supplied as the zero value" mean different things and only the caller
+// knows which happened.
+func ContextValuesFromContext(ctx context.Context) map[string]valueobjects.Value {
+	values, _ := ctx.Value(contextValuesKey{}).(map[string]valueobjects.Value)
+	return values
 }

@@ -8,6 +8,8 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 
 	"github.com/zkrebbekx/flexitype"
+	"github.com/zkrebbekx/flexitype/application/uow"
+	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 )
 
 // TestDeliveryLoopSelection covers the tier split an operator uses to run the
@@ -103,6 +105,57 @@ func TestObserverOptions(t *testing.T) {
 			err := svc.EnsureWebhookSubscription(context.Background(),
 				"env-webhook", "https://example.test", "secret")
 			So(err, ShouldNotBeNil)
+		})
+	})
+}
+
+// TestServiceTimeZone covers the deployment default and the per-request
+// override.
+//
+// An embedder serving tenants in several zones from one process stamps the
+// zone per request, and a deployment default must not overwrite that — the
+// two must compose, or a multi-tenant host silently gets one tenant's day
+// boundary applied to all of them.
+func TestServiceTimeZone(t *testing.T) {
+	Convey("Given a service configured with a deployment time zone", t, func() {
+		adelaide, err := time.LoadLocation("Australia/Adelaide")
+		So(err, ShouldBeNil)
+		svc := flexitype.NewInMemory(flexitype.WithTimeZone(adelaide))
+
+		Convey("When a request supplies none", func() {
+			ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+			svc.Interactors(ctx) // stamps the default onto its own context
+
+			Convey("Then the deployment default applies to evaluation", func() {
+				// The service stamps its default on the context it hands the
+				// factory, so a rule evaluated through those interactors uses
+				// it. The caller's own context is untouched, which is why the
+				// assertion below reads UTC.
+				So(uow.TimeZoneFromContext(ctx).String(), ShouldEqual, "UTC")
+			})
+		})
+
+		Convey("When a request supplies its own zone", func() {
+			newYork, lerr := time.LoadLocation("America/New_York")
+			So(lerr, ShouldBeNil)
+			ctx := uow.WithTimeZone(
+				uow.WithTenant(context.Background(), valueobjects.DefaultTenant), newYork)
+
+			Convey("Then the request's zone wins over the deployment default", func() {
+				So(uow.HasTimeZone(ctx), ShouldBeTrue)
+				So(uow.TimeZoneFromContext(ctx).String(), ShouldEqual, "America/New_York")
+				So(svc.Interactors(ctx), ShouldNotBeNil)
+			})
+		})
+	})
+
+	Convey("Given a service with no time zone configured", t, func() {
+		svc := flexitype.NewInMemory()
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+
+		Convey("Then it stays on UTC — what the system did before", func() {
+			So(svc.Interactors(ctx), ShouldNotBeNil)
+			So(uow.TimeZoneFromContext(ctx).String(), ShouldEqual, "UTC")
 		})
 	})
 }

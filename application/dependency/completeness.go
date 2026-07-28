@@ -287,7 +287,10 @@ func (i *Interactor) attributeRequired(
 	if len(deps) == 0 {
 		return a.Required(), nil
 	}
-	schema, err := domaindependency.ResolveEffective(a, deps, filled, i.now())
+	// Tenant-local: a dynamic condition compares CALENDAR days
+	// ("expires before today"), and a UTC day boundary is the wrong one for
+	// part of every day in any tenant outside UTC.
+	schema, err := domaindependency.ResolveEffectiveWithContext(a, deps, filled, uow.ContextValuesFromContext(ctx), uow.LocalNow(ctx))
 	if err != nil {
 		return false, err
 	}

@@ -80,6 +80,25 @@ Call `uow.RequireAccessPolicy()` once at startup if every request in your
 application is user-driven: it makes a missing access policy an error rather
 than full access. It is one-way and process-wide, so set it before serving.
 
+## 4a. Optional per-request context
+
+```go
+ctx = uow.WithTimeZone(ctx, tenantLocation)          // calendar day for today/now
+ctx = uow.WithContextValues(ctx, map[string]valueobjects.Value{
+    "customer_tier": valueobjects.NewStringValue(customer.Tier),
+})
+```
+
+- **Time zone** decides which calendar day `today` and `now` name in a
+  dependency condition or a dynamic default. Default UTC. It changes the day,
+  not the storage.
+- **Context values** let a dependency condition test a fact that lives in
+  YOUR tables — a customer's tier, an order's channel, a document's workflow
+  state — with `{"context_key": "customer_tier"}`. Nothing about it is stored
+  here, and a condition naming a key you did not supply does not match:
+  "absent" and "present but false" are different, and only you know which
+  happened.
+
 ## 5. Background work
 
 None of it runs unless you run it.

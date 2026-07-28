@@ -17,8 +17,9 @@ import (
 
 // fakeFeedStore serves a fixed ordered log.
 type fakeFeedStore struct {
-	events []Event
-	pruned int
+	events     []Event
+	pruned     int
+	deadPruned int
 }
 
 func (s *fakeFeedStore) List(_ context.Context, _ valueobjects.TenantID, after int64, types []string, limit int) ([]Event, error) {
@@ -56,6 +57,11 @@ func (s *fakeFeedStore) Floor(context.Context, valueobjects.TenantID) (int64, er
 
 func (s *fakeFeedStore) Prune(context.Context, time.Time) (int, error) {
 	s.pruned++
+	return 0, nil
+}
+
+func (s *fakeFeedStore) PruneDeadLetters(context.Context, time.Time) (int, error) {
+	s.deadPruned++
 	return 0, nil
 }
 
@@ -239,12 +245,13 @@ func TestFeedCursorNaming(t *testing.T) {
 // errFeedStore fails Prune a fixed number of times, recording each cutoff it
 // was called with.
 type errFeedStore struct {
-	mu       sync.Mutex
-	cutoffs  []time.Time
-	err      error
-	floorErr error
-	listErr  error
-	floor    int64
+	mu          sync.Mutex
+	cutoffs     []time.Time
+	deadCutoffs []time.Time
+	err         error
+	floorErr    error
+	listErr     error
+	floor       int64
 	// lastLimit records the limit List was called with, so limit clamping is
 	// observable.
 	lastLimit int
@@ -266,6 +273,22 @@ func (s *errFeedStore) Prune(_ context.Context, cutoff time.Time) (int, error) {
 	defer s.mu.Unlock()
 	s.cutoffs = append(s.cutoffs, cutoff)
 	return 0, s.err
+}
+
+func (s *errFeedStore) PruneDeadLetters(_ context.Context, cutoff time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deadCutoffs = append(s.deadCutoffs, cutoff)
+	return 0, s.err
+}
+
+// deadLetterCalls returns the cutoffs the dead-letter prune was called with.
+func (s *errFeedStore) deadLetterCalls() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]time.Time, len(s.deadCutoffs))
+	copy(out, s.deadCutoffs)
+	return out
 }
 
 func (s *errFeedStore) calls() []time.Time {
@@ -398,6 +421,62 @@ func TestPruner(t *testing.T) {
 			Convey("Then Run still returns without panicking", func() {
 				So(func() { silent.Run(ctx) }, ShouldNotPanic)
 				So(store.calls(), ShouldHaveLength, 1)
+			})
+		})
+	})
+}
+
+// TestPrunerBoundsDeadLetters covers the bound the dead-letter keep-alive
+// needed.
+//
+// The envelope prune keeps anything a dead delivery references — right, since
+// the dead letter is the evidence needed to redrive it — but nothing else
+// deleted a dead row. One decommissioned endpoint therefore pinned its
+// envelopes for ever, and FLEXITYPE_EVENT_RETENTION stopped bounding the
+// outbox or the feed at all. Nothing surfaced it: the deployment looked
+// healthy until the table did.
+func TestPrunerBoundsDeadLetters(t *testing.T) {
+	Convey("Given a pruner over a store that records its cutoffs", t, func() {
+		store := &errFeedStore{}
+		now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+		p := NewPruner(store, 7*24*time.Hour, nil)
+		p.now = func() time.Time { return now }
+
+		Convey("When a pass runs", func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // one pass, then stop
+			p.Run(ctx)
+
+			Convey("Then dead letters are pruned as well as envelopes", func() {
+				So(store.calls(), ShouldHaveLength, 1)
+				So(store.deadLetterCalls(), ShouldHaveLength, 1)
+			})
+
+			Convey("Then the dead-letter cutoff is the longer default", func() {
+				So(store.deadLetterCalls()[0], ShouldHappenBefore, store.calls()[0])
+				So(store.deadLetterCalls()[0], ShouldEqual, now.Add(-DefaultDeadLetterRetention))
+			})
+		})
+
+		Convey("When a shorter dead-letter retention is configured", func() {
+			p.WithDeadLetterRetention(48 * time.Hour)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			p.Run(ctx)
+
+			Convey("Then that bound is used", func() {
+				So(store.deadLetterCalls()[0], ShouldEqual, now.Add(-48*time.Hour))
+			})
+		})
+
+		Convey("When a non-positive retention is configured", func() {
+			p.WithDeadLetterRetention(0)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			p.Run(ctx)
+
+			Convey("Then the default stands rather than pruning everything", func() {
+				So(store.deadLetterCalls()[0], ShouldEqual, now.Add(-DefaultDeadLetterRetention))
 			})
 		})
 	})

@@ -70,6 +70,7 @@ type options struct {
 	relayOpts           []outbox.RelayOption
 	workerOpts          []webhook.WorkerOption
 	retention           time.Duration
+	deadLetterRetention time.Duration
 	webhookAllowPrivate bool
 	webhookTimeout      time.Duration
 	timeZone            *time.Location
@@ -235,6 +236,20 @@ func WithEventRetention(d time.Duration) Option {
 	return func(o *options) { o.retention = d }
 }
 
+// WithDeadLetterRetention bounds how long a DEAD delivery is kept (default 30
+// days). Only meaningful with WithOutbox.
+//
+// The envelope prune keeps anything a dead delivery references, which is what
+// makes a dead letter redrivable — but nothing else deleted a dead row, so one
+// decommissioned endpoint pinned its envelopes for ever and the event
+// retention stopped bounding the outbox or the feed at all. This is where that
+// bound lives. It is far longer than the event retention on purpose: a dead
+// letter has to outlive the events it references long enough for an operator
+// to notice it.
+func WithDeadLetterRetention(d time.Duration) Option {
+	return func(o *options) { o.deadLetterRetention = d }
+}
+
 // WithWebhookAllowPrivate lets webhook subscriptions target private,
 // loopback and link-local hosts over http — for on-prem deployments whose
 // consumers live on internal networks. Off by default (SSRF guard).
@@ -339,7 +354,8 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 			retention = 7 * 24 * time.Hour
 		}
 		feedStore := postgres.NewFeedStore(pool)
-		pruner = feed.NewPruner(feedStore, retention, o.onBgError)
+		pruner = feed.NewPruner(feedStore, retention, o.onBgError).
+			WithDeadLetterRetention(o.deadLetterRetention)
 
 		cfg.Outbox = store
 		cfg.OutboxNudge = relay.Nudge

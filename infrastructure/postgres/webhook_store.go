@@ -374,8 +374,26 @@ func (s *deliveryStore) List(ctx context.Context, filter webhook.DeliveryFilter,
 	return out, total, nil
 }
 
+// redeliverBatch bounds one redrive statement, and redeliverRamp spreads the
+// revived backlog over a window.
+//
+// Both exist for the same reason the pruner is batched: the endpoint's own
+// documentation gives "thousands" as the target scale, and a single unbounded
+// UPDATE over that many rows is one long transaction holding locks on a large
+// slice of the delivery table — blocking the worker's FOR UPDATE SKIP LOCKED
+// claims and the delivery-stats scrape for its duration.
+//
+// The ramp matters as much. Setting one next_attempt_at on every revived row
+// hands the worker the whole backlog at once, pointed at the endpoint that has
+// just come back — a good way to knock it over again and produce a second
+// outage. Spreading the schedule turns the backlog into a rate.
+const (
+	redeliverBatch = 500
+	redeliverRamp  = 5 * time.Minute
+)
+
 // RedeliverMatching returns every dead delivery matching the filter to
-// pending in one statement, and reports how many it moved.
+// pending, in bounded batches, and reports how many it moved.
 //
 // It resets attempts as well as the schedule: a redriven delivery starts a
 // fresh retry budget, so an endpoint that was down for a day does not exhaust
@@ -387,18 +405,39 @@ func (s *deliveryStore) RedeliverMatching(ctx context.Context, filter webhook.De
 		where = append(where, "subscription_id = ?")
 		args = append(args, filter.SubscriptionID)
 	}
-	args = append([]any{now, now}, args...)
-	res, err := s.q.ExecContext(ctx, bind(`UPDATE flexitype_webhook_delivery
-	 SET status = 'pending', attempts = 0, next_attempt_at = ?, lease_expires_at = NULL, updated_at = ?
-	 WHERE `+strings.Join(where, " AND ")), args...)
-	if err != nil {
-		return 0, fmt.Errorf("redeliver dead deliveries: %w", err)
+	clause := strings.Join(where, " AND ")
+
+	total := 0
+	for {
+		// next_attempt_at is spread across the ramp with random(), so the
+		// recovered endpoint sees a rate rather than a spike.
+		batchArgs := append([]any{now, redeliverRamp.String(), now}, args...)
+		batchArgs = append(batchArgs, redeliverBatch)
+		res, err := s.q.ExecContext(ctx, bind(`UPDATE flexitype_webhook_delivery
+		 SET status = 'pending', attempts = 0,
+		     next_attempt_at = ?::timestamptz + random() * ?::interval,
+		     lease_expires_at = NULL, updated_at = ?
+		 WHERE id IN (
+		     SELECT id FROM flexitype_webhook_delivery
+		      WHERE `+clause+`
+		      ORDER BY id
+		      LIMIT ?)`), batchArgs...)
+		if err != nil {
+			return total, fmt.Errorf("redeliver dead deliveries: %w", err)
+		}
+		n, aerr := res.RowsAffected()
+		if aerr != nil {
+			return total, fmt.Errorf("redeliver dead deliveries: %w", aerr)
+		}
+		total += int(n)
+		if int(n) < redeliverBatch {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return total, nil
+		}
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("redeliver dead deliveries: %w", err)
-	}
-	return int(n), nil
+	return total, nil
 }
 
 func (s *deliveryStore) Redeliver(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID, now time.Time) error {

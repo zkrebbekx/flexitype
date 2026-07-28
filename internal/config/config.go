@@ -104,6 +104,11 @@ type Config struct {
 	// EventRetention is how long expanded events stay readable in the
 	// events feed before pruning (outbox mode only).
 	EventRetention time.Duration
+	// DeadLetterRetention bounds how long a dead delivery is kept before it
+	// stops pinning its envelope. Far longer than EventRetention: a dead
+	// letter is the record of a delivery that never succeeded, and it has to
+	// outlive the events it references long enough to be noticed.
+	DeadLetterRetention time.Duration
 	// WebhookAllowPrivate lets webhook subscriptions target private hosts
 	// (on-prem consumers). Off by default — SSRF guard.
 	WebhookAllowPrivate bool
@@ -235,6 +240,7 @@ func Load() (Config, error) {
 		EnableGraphQLFederation: e.bool("FLEXITYPE_FEATURE_GRAPHQL_FEDERATION", false),
 		BlobDir:                 os.Getenv("FLEXITYPE_BLOB_DIR"),
 		EventRetention:          e.duration("FLEXITYPE_EVENT_RETENTION", 7*24*time.Hour),
+		DeadLetterRetention:     e.duration("FLEXITYPE_DEAD_LETTER_RETENTION", 30*24*time.Hour),
 		WebhookAllowPrivate:     e.bool("FLEXITYPE_WEBHOOK_ALLOW_PRIVATE", false),
 		EnableMetrics:           e.bool("FLEXITYPE_METRICS", true),
 		EnableProvisioning:      e.bool("FLEXITYPE_PROVISIONING", false),

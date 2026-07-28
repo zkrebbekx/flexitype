@@ -175,3 +175,41 @@ func (s *cursorStore) Commit(ctx context.Context, tenant valueobjects.TenantID, 
 	}
 	return nil
 }
+
+// PruneDeadLetters deletes dead delivery rows older than the cutoff, in
+// bounded batches, so their envelopes become prunable.
+//
+// The envelope prune keeps anything a dead delivery references, which is
+// right — the dead letter is the evidence an operator needs in order to
+// redrive it — but nothing else ever deleted a dead row. A single
+// decommissioned endpoint therefore pinned its envelopes for ever, and
+// FLEXITYPE_EVENT_RETENTION stopped bounding the outbox (described in
+// migration 000025 as "the largest table in an event-heavy deployment") or
+// the events feed. Nothing surfaced it: the deployment looked healthy until
+// the table did.
+//
+// The cutoff is on updated_at, which is when the delivery last failed, so the
+// clock starts when the row went dead rather than when the event happened.
+func (s *feedStore) PruneDeadLetters(ctx context.Context, cutoff time.Time) (int, error) {
+	total := 0
+	for {
+		res, err := s.q.ExecContext(ctx, bind(
+			`DELETE FROM flexitype_webhook_delivery
+			  WHERE id IN (
+			      SELECT id FROM flexitype_webhook_delivery
+			       WHERE status = 'dead' AND updated_at < ?
+			       ORDER BY updated_at
+			       LIMIT ?)`), cutoff, pruneBatch)
+		if err != nil {
+			return total, fmt.Errorf("prune dead letters: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		total += int(n)
+		if int(n) < pruneBatch {
+			return total, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return total, nil
+		}
+	}
+}

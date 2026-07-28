@@ -215,10 +215,17 @@ func (m *Materializer) RecomputeType(ctx context.Context, tenant valueobjects.Te
 				return count, fmt.Errorf("list entities of %s: %w", id, err)
 			}
 			for _, e := range entities.Items {
-				if e.LastUpdatedAt.After(startedAt) {
+				// Skip on >= rather than >. An entity written at the same
+				// instant the rebuild started is in the same race, and the
+				// comparison boundary is not something to be clever about:
+				// skipping an entity that was already correct costs nothing,
+				// because the write path recomputed it synchronously against
+				// the new definition. Recomputing one that is being written
+				// can clear a value from half-written inputs.
+				if !e.LastUpdatedAt.Before(startedAt) {
 					continue
 				}
-				if err := m.Recompute(ctx, id, e.EntityID); err != nil {
+				if err := m.recomputeConverging(ctx, id, e.EntityID); err != nil {
 					return count, fmt.Errorf("recompute %s: %w", e.EntityID, err)
 				}
 				count++
@@ -428,6 +435,26 @@ func (m *Materializer) typeHasComputed(ctx context.Context, it *application.Inte
 // and materializes the results. Missing inputs (or division by zero) remove
 // a stale computed value rather than writing a wrong one.
 func (m *Materializer) Recompute(ctx context.Context, typeID, entityID string) error {
+	return m.recompute(ctx, typeID, entityID, true)
+}
+
+// recomputeConverging is the background-rebuild variant: it writes computed
+// values and never clears one.
+//
+// Clearing is what makes a concurrent write destructive. A rebuild that reads
+// an entity mid-write sees half its inputs, computes an undefined result, and
+// would clear a value that is about to be correct — and it cannot tell that
+// apart from a formula that has genuinely become undefined. The write path
+// can: it runs inside the writing request with the entity's whole value set.
+//
+// So a rebuild converges values FORWARD, and a computed value that becomes
+// undefined for an entity is cleared by that entity's next write or by the
+// tenant-wide RecomputeComputed.
+func (m *Materializer) recomputeConverging(ctx context.Context, typeID, entityID string) error {
+	return m.recompute(ctx, typeID, entityID, false)
+}
+
+func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, allowClear bool) error {
 	// Fast path: a type known to hold no computed attribute needs no work and
 	// no query at all.
 	if known, has := m.cachedHasComputed(typeID); known && !has {
@@ -496,6 +523,9 @@ func (m *Materializer) Recompute(ctx context.Context, typeID, entityID string) e
 			continue
 		}
 		clearStale := func() error {
+			if !allowClear {
+				return nil
+			}
 			if id := computedValueID[c.ID.String()]; id != "" {
 				// A nested recompute (synchronous dispatch) may already have
 				// cleared it — tolerate an already-removed (archived) value.
@@ -694,3 +724,11 @@ func numberForType(dt valueobjects.DataType, f float64, ok bool) (json.RawMessag
 		return nil, false // no numeric target type
 	}
 }
+
+// clearsStaleValues reports whether a recompute in the given mode may remove
+// a computed value that no longer has a defined result.
+//
+// It exists so the rule is testable and named rather than implicit in a
+// boolean argument: only the write path clears, because only the write path
+// can tell "undefined" from "mid-write".
+func (m *Materializer) clearsStaleValues(allowClear bool) bool { return allowClear }

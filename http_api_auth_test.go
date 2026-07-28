@@ -500,6 +500,10 @@ func TestHTTPDisabledFeatures(t *testing.T) {
 					a.delete("/api/v1/webhook-subscriptions/" + missingULID),
 					a.get("/api/v1/webhook-subscriptions/" + missingULID + "/deliveries"),
 					a.post("/api/v1/webhook-deliveries/"+missingULID+"/redeliver", nil),
+					// The bulk redrive is behind the same gate: a deployment
+					// with no event delivery has no dead letters to redrive,
+					// and reporting 0 would read as "nothing to recover".
+					a.post("/api/v1/webhook-deliveries/redeliver-dead", nil),
 				} {
 					So(call.Status, ShouldEqual, http.StatusNotImplemented)
 					So(call.errorCode(), ShouldEqual, "FEATURE_DISABLED")

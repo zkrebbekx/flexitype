@@ -50,8 +50,14 @@ func (i *Interactor) ApplyMutations(ctx context.Context, muts []Mutation) error 
 		return nil
 	}
 	tenant := uow.TenantFromContext(ctx)
+	// Canonical entity order (see lockorder.go). A change-set publish applies
+	// mutations in insertion order, so two publishes over the same entities
+	// deadlocked on the entity-summary rows — 40 rounds out of 40 in the
+	// reported reproduction. The index an error reports is still the caller's.
+	order := canonicalOrder(muts, func(m Mutation) string { return m.EntityID })
 	return i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {
-		for idx, m := range muts {
+		for _, idx := range order {
+			m := muts[idx]
 			switch m.Kind {
 			case MutationSet:
 				if _, err := i.setWithin(ctx, tx, c, SetInput{

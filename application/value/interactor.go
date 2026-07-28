@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
 	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
@@ -467,29 +466,10 @@ func (i *Interactor) SetBatch(ctx context.Context, in BatchSetInput) (*BatchSetO
 		return nil, domainerrors.NewValidation("batch exceeds the maximum item count", "max", maxBatchItems)
 	}
 
-	// Apply in a canonical entity order, so two batches touching the same
-	// entities take the entity-summary rows in the same sequence.
-	//
-	// Every value write refreshes a shared summary row per
-	// (type, entity). Two batches writing DISJOINT value rows of the same two
-	// entities, in opposite order, therefore deadlocked on those summary rows
-	// even though their own rows never conflicted — and nothing sorts entity
-	// ids, so opposite order is the normal case rather than the exception. A
-	// retry would re-run the same unordered writes into the same lock ordering.
-	//
-	// The caller's order is preserved in the output and in the item index an
-	// error reports, so the ordering is invisible from outside.
-	order := make([]int, len(in.Items))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool {
-		x, y := in.Items[order[a]], in.Items[order[b]]
-		if x.TypeDefinitionID != y.TypeDefinitionID {
-			return x.TypeDefinitionID < y.TypeDefinitionID
-		}
-		return x.EntityID < y.EntityID
-	})
+	// Apply in the canonical entity order every multi-entity write uses, so
+	// two transactions touching the same entities take the entity-summary
+	// rows in the same sequence. See lockorder.go.
+	order := canonicalOrder(in.Items, func(it SetInput) string { return it.EntityID })
 
 	out := &BatchSetOutput{Items: make([]domainvalue.Snapshot, len(in.Items))}
 	err := i.uow.Execute(ctx, func(tx db.Transactor, c *uow.Collector) error {

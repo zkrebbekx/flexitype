@@ -103,6 +103,15 @@ type preparedRow struct {
 	inputs []SetInput
 }
 
+// entity reports the row's entity id, which is the canonical lock-ordering
+// key. Every input on one CSV row names the same entity.
+func (p preparedRow) entity() string {
+	if len(p.inputs) == 0 {
+		return ""
+	}
+	return p.inputs[0].EntityID
+}
+
 // errRowValid is the sentinel a dry-run row returns to force its unit of
 // work to roll back after validating cleanly — nothing is written, but the
 // row exercised the full validation path (types, constraints, dependencies,
@@ -259,7 +268,12 @@ func (i *Interactor) importTransactional(ctx context.Context, tenant valueobject
 		if err := cache.prefetch(cctx, i.values.WithTx(tx).(appctx.ValueReader), tenant, preparedEntityIDs(valid)); err != nil {
 			return err
 		}
-		for _, p := range valid {
+		// Canonical entity order (see lockorder.go): CSV rows arrive in
+		// whatever order the file has, so two imports over the same entities
+		// otherwise take the entity-summary rows in opposite order. The row
+		// number an error reports is still the file's.
+		for _, idx := range canonicalOrder(valid, func(p preparedRow) string { return p.entity() }) {
+			p := valid[idx]
 			for _, item := range p.inputs {
 				if _, err := i.setWithin(cctx, tx, c, item); err != nil {
 					failedRow = p.row
@@ -315,8 +329,9 @@ func (i *Interactor) writeChunk(ctx context.Context, tenant valueobjects.TenantI
 		if err := cache.prefetch(cctx, i.values.WithTx(tx).(appctx.ValueReader), tenant, preparedEntityIDs(chunk)); err != nil {
 			return err
 		}
-		for _, p := range chunk {
-			for _, item := range p.inputs {
+		// Canonical entity order, as in importTransactional.
+		for _, idx := range canonicalOrder(chunk, func(p preparedRow) string { return p.entity() }) {
+			for _, item := range chunk[idx].inputs {
 				if _, err := i.setWithin(cctx, tx, c, item); err != nil {
 					return err
 				}

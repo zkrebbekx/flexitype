@@ -389,7 +389,8 @@ Embedded services register the same handler directly:
 Machine-to-machine auth via bearer tokens (`ft_<account>_<secret>`), accounts
 declared in a JSON file with SHA-256 secret hashes and `read`/`write`/`admin`
 scopes plus optional per-attribute field permissions; each account is pinned to
-a tenant. (The human-identity / SSO roadmap is in
+a tenant. Database-backed deployments assign those permissions through
+**roles** rather than per account. (The human-identity / SSO roadmap is in
 [docs/design/identity.md](docs/design/identity.md).)
 
 ```json
@@ -431,6 +432,26 @@ The permission set applies to every surface that returns an attribute value:
 
 Writes are symmetric: a `write` level is required to set or remove a value, and
 removing a whole entity requires `write` on every attribute that entity holds.
+
+#### Roles
+
+A role names a permission set once, so many accounts share it instead of each
+carrying a copy. An account holds role names; the effective permission is
+merged at authentication, so a change to a role reaches every holder as soon
+as the auth cache entry expires.
+
+```bash
+curl -X PUT $BASE/api/v1/roles -H "Authorization: Bearer $ADMIN" \
+  -d '{"tenant_name":"acme","name":"analyst","scopes":["read"],
+       "field_permissions":{"salary":"none"}}'
+
+curl -X POST $BASE/api/v1/service-accounts -H "Authorization: Bearer $ADMIN" \
+  -d '{"tenant_name":"acme","name":"jamie","roles":["analyst"]}'
+```
+
+Scopes union across roles, field permissions take the most permissive level
+any role grants, and the account's own entry wins over every role. The full
+rules are in [docs/design/identity.md](docs/design/identity.md#roles).
 
 Embedders stamp the policy themselves with `uow.WithAccess`. Set
 `uow.Access.Default` to `uow.PermNone` to turn the permission set into an

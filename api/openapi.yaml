@@ -1130,18 +1130,33 @@ paths:
     post:
       tags: [provisioning]
       summary: Create a service account (admin scope)
-      description: The bearer token is returned once and is never recoverable.
+      description: >
+        The bearer token is returned once and is never recoverable. Supply at
+        least one scope or one role; a credential that grants nothing is
+        refused.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [tenant_name, name, scopes]
+              required: [tenant_name, name]
               properties:
                 tenant_name: { type: string }
                 name: { type: string, description: "lowercase [a-z0-9_-], 2-64 chars" }
-                scopes: { type: array, items: { type: string, enum: [read, write, admin] } }
+                scopes:
+                  type: array
+                  items: { type: string, enum: [read, write, admin] }
+                  description: >
+                    Optional when roles are given: an account whose whole
+                    permission set comes from its roles needs no scope of its
+                    own. At least one scope or one role is required.
+                roles:
+                  type: array
+                  items: { type: string }
+                  description: Role names in the same tenant. The account gets the union of their scopes.
+                field_permissions:
+                  $ref: "#/components/schemas/FieldPermissions"
       responses:
         "201":
           description: Created (token shown once)
@@ -1170,6 +1185,89 @@ paths:
         "204": { description: Revoked }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+
+  /service-accounts/{id}/roles:
+    parameters: [{ $ref: "#/components/parameters/ID" }]
+    put:
+      tags: [provisioning]
+      summary: Replace a service account's roles and overrides (admin scope)
+      description: >
+        Replaces both lists. The account's effective scopes are the union of
+        its own scopes and its roles' scopes. Its effective field permissions
+        are the most permissive level any role grants, unless the account
+        carries its own override for that attribute, which wins. The auth
+        cache entry is evicted, so a removal takes effect at once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                roles: { type: array, items: { type: string } }
+                field_permissions: { $ref: "#/components/schemas/FieldPermissions" }
+      responses:
+        "204": { description: Assigned }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /roles:
+    get:
+      tags: [provisioning]
+      summary: List a tenant's roles (admin scope)
+      parameters: [{ name: tenant_name, in: query, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Roles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { items: { type: array, items: { $ref: "#/components/schemas/Role" } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [provisioning]
+      summary: Create or replace a role (admin scope)
+      description: >
+        The write replaces the whole role. A partial update would make "what
+        does this role allow" a question about history rather than about the
+        current record.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant_name, name]
+              properties:
+                tenant_name: { type: string }
+                name: { type: string, description: "lowercase [a-z0-9_-], 2-64 chars" }
+                description: { type: string }
+                scopes: { type: array, items: { type: string, enum: [read, write, admin] } }
+                field_permissions: { $ref: "#/components/schemas/FieldPermissions" }
+      responses:
+        "200":
+          description: Created or replaced
+          content: { application/json: { schema: { $ref: "#/components/schemas/Role" } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /roles/{name}:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    delete:
+      tags: [provisioning]
+      summary: Delete a role (admin scope)
+      description: >
+        An account that names the role keeps the name and resolves nothing for
+        it, so a deleted role removes grants rather than leaving accounts
+        pointing at a permission set nobody can read.
+      parameters: [{ name: tenant_name, in: query, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
 
   /type-definitions/{id}/completeness:
     parameters: [{ $ref: "#/components/parameters/ID" }]
@@ -2190,6 +2288,26 @@ components:
         name: { type: string }
         scopes: { type: array, items: { type: string, enum: [read, write, admin] } }
         active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        roles: { type: array, items: { type: string } }
+        field_permissions: { $ref: "#/components/schemas/FieldPermissions" }
+    FieldPermissions:
+      type: object
+      description: >
+        Maps an attribute internal name to none, read or write. An attribute
+        that is not listed stays fully accessible.
+      additionalProperties: { type: string, enum: [none, read, write] }
+    Role:
+      type: object
+      description: A named permission set that accounts in the same tenant hold.
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        scopes: { type: array, items: { type: string, enum: [read, write, admin] } }
+        field_permissions: { $ref: "#/components/schemas/FieldPermissions" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     AccountWithToken:

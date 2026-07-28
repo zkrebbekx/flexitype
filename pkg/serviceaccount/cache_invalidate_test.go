@@ -3,6 +3,7 @@ package serviceaccount
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -122,6 +123,54 @@ func TestCacheInvalidate(t *testing.T) {
 			So(c, ShouldEqual, inner)
 			_, ok := c.(Invalidator)
 			So(ok, ShouldBeFalse)
+		})
+	})
+}
+
+// TestCacheEvictsExpiredEntriesWhenLarge covers the sweep that keeps the cache
+// from growing without bound.
+//
+// The cache is keyed by token. A deployment that rotates secrets, or that
+// authenticates many accounts, adds one entry per token and never reuses the
+// old key, so without the sweep the map grows for the lifetime of the process
+// and holds every account it ever saw.
+func TestCacheEvictsExpiredEntriesWhenLarge(t *testing.T) {
+	Convey("Given a cache holding more than 1024 expired entries", t, func() {
+		inner := &staticAuth{secret: "s1"}
+		c := NewCachingAuthenticator(inner, time.Minute).(*cachingAuthenticator)
+
+		clock := time.Now()
+		c.now = func() time.Time { return clock }
+		for i := 0; i < 1100; i++ {
+			_, err := c.AuthenticateCtx(context.Background(),
+				MintToken("acct"+strconv.Itoa(i), "s1"))
+			So(err, ShouldBeNil)
+		}
+		So(len(c.cache), ShouldEqual, 1100)
+		So(len(c.byAccount), ShouldEqual, 1100)
+
+		Convey("When the entries expire and one more token authenticates", func() {
+			clock = clock.Add(2 * time.Minute)
+			fresh := MintToken("newcomer", "s1")
+			_, err := c.AuthenticateCtx(context.Background(), fresh)
+
+			Convey("Then the expired entries are dropped from both maps", func() {
+				So(err, ShouldBeNil)
+				So(len(c.cache), ShouldEqual, 1)
+				So(len(c.byAccount), ShouldEqual, 1)
+				_, held := c.cache[fresh]
+				So(held, ShouldBeTrue)
+				So(c.byAccount["newcomer"], ShouldHaveLength, 1)
+			})
+		})
+
+		Convey("When the entries are still live and one more token authenticates", func() {
+			_, err := c.AuthenticateCtx(context.Background(), MintToken("newcomer", "s1"))
+
+			Convey("Then nothing is dropped: the sweep only removes expired entries", func() {
+				So(err, ShouldBeNil)
+				So(len(c.cache), ShouldEqual, 1101)
+			})
 		})
 	})
 }

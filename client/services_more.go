@@ -726,6 +726,11 @@ type CreateServiceAccountInput struct {
 	TenantName string   `json:"tenant_name"`
 	Name       string   `json:"name"`
 	Scopes     []string `json:"scopes,omitempty"`
+	// Roles the account holds from the start.
+	Roles []string `json:"roles,omitempty"`
+	// FieldPermissions are per-account overrides. Roles are the normal way
+	// to grant a permission set; use this for one account that differs.
+	FieldPermissions map[string]string `json:"field_permissions,omitempty"`
 }
 
 // CreateServiceAccount provisions a service account and returns its one-time token.
@@ -749,4 +754,56 @@ func (s *AdminService) RotateServiceAccount(ctx context.Context, id string) (*Se
 // RevokeServiceAccount deletes a service account.
 func (s *AdminService) RevokeServiceAccount(ctx context.Context, id string) error {
 	return s.c.do(ctx, http.MethodDelete, "/service-accounts/"+id, nil, nil, nil)
+}
+
+// UpsertRoleInput creates or replaces a role. The write replaces the whole
+// role rather than patching it, so the stored record is the full grant.
+type UpsertRoleInput struct {
+	TenantName       string            `json:"tenant_name"`
+	Name             string            `json:"name"`
+	Description      string            `json:"description,omitempty"`
+	Scopes           []string          `json:"scopes,omitempty"`
+	FieldPermissions map[string]string `json:"field_permissions,omitempty"`
+}
+
+// UpsertRole creates or replaces a role.
+func (s *AdminService) UpsertRole(ctx context.Context, in UpsertRoleInput) (*Role, error) {
+	var out Role
+	if err := s.c.do(ctx, http.MethodPut, "/roles", nil, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListRoles returns one tenant's roles. tenant is required: the endpoint has
+// no cross-tenant listing.
+func (s *AdminService) ListRoles(ctx context.Context, tenant string) ([]Role, error) {
+	if tenant == "" {
+		return nil, fmt.Errorf("flexitype: ListRoles requires a tenant name")
+	}
+	return items[Role](ctx, s.c, "/roles", url.Values{"tenant_name": {tenant}})
+}
+
+// DeleteRole removes a role. An account that names it resolves nothing for
+// it, so the grant goes away with the role.
+func (s *AdminService) DeleteRole(ctx context.Context, tenant, name string) error {
+	if tenant == "" {
+		return fmt.Errorf("flexitype: DeleteRole requires a tenant name")
+	}
+	return s.c.do(ctx, http.MethodDelete, "/roles/"+url.PathEscape(name),
+		url.Values{"tenant_name": {tenant}}, nil, nil)
+}
+
+// AssignRolesInput replaces an account's roles and its own overrides. Both
+// lists are replaced, so an empty slice clears them.
+type AssignRolesInput struct {
+	Roles            []string          `json:"roles"`
+	FieldPermissions map[string]string `json:"field_permissions"`
+}
+
+// AssignRoles replaces a service account's roles and per-account overrides.
+// The server evicts the account's auth-cache entry, so a removed permission
+// stops applying at once rather than at the end of the cache TTL.
+func (s *AdminService) AssignRoles(ctx context.Context, id string, in AssignRolesInput) error {
+	return s.c.do(ctx, http.MethodPut, "/service-accounts/"+url.PathEscape(id)+"/roles", nil, in, nil)
 }

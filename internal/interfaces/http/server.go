@@ -287,6 +287,12 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 			r.Post("/", s.createServiceAccount)
 			r.Post("/{id}/rotate", s.rotateServiceAccount)
 			r.Delete("/{id}", s.revokeServiceAccount)
+			r.Put("/{id}/roles", s.assignRoles)
+		})
+		api.Route("/roles", func(r chi.Router) {
+			r.Get("/", s.listRoles)
+			r.Put("/", s.upsertRole)
+			r.Delete("/{name}", s.deleteRole)
 		})
 	})
 

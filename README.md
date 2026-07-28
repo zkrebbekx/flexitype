@@ -65,7 +65,11 @@ No backend; data resets on reload.
   (`GET /query?locale=fr&channel=web`)
 - **Computed attributes**: derive a value from a formula over other
   attributes (`(price - cost) / price`) — materialized by an event subscriber
-  so the result is an ordinary, FQL-queryable value that stays in sync
+  so the result is an ordinary, FQL-queryable value that stays in sync.
+  **Aggregates** fold a multi-valued attribute: `sum`, `count`, `avg`, `min`,
+  `max` (`sum(line_totals)`). A bare name must resolve to one value, so a
+  multi-valued attribute has to be aggregated explicitly rather than
+  collapsed to an arbitrary member
 - **Units of measure**: a `quantity` attribute pins a tenant *unit family*
   (mass, length, …) with per-unit conversion factors; values normalize to a
   base unit so `weight > 5.5 kg` compares `6000 g` correctly, and min/max

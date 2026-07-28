@@ -552,13 +552,16 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 	}
 	// Numeric inputs by internal name (base scope only). Also index computed
 	// value ids so a now-undefined formula can be cleared.
-	inputs := map[string]float64{}
+	// Every value a name holds, in repository order — not one. Assigning
+	// collapsed a multi-valued source to whichever member came back last, so
+	// adding a member changed the answer with nothing to explain it.
+	inputs := formula.Inputs{}
 	// exact carries the same inputs as rationals, for decimal targets. A
 	// decimal evaluated in binary float64 materialized artifacts —
 	// 0.1 + 0.2 stored as 0.30000000000000004 — which then failed exact
 	// equality in FQL and appeared verbatim in exports. Choosing `decimal` is
 	// how a schema author asks for exactness.
-	exact := map[string]*big.Rat{}
+	exact := formula.RatInputs{}
 	computedValueID := map[string]string{} // attr id -> value id
 	nameByID := map[string]string{}
 	for _, a := range attrs {
@@ -570,10 +573,10 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 		}
 		if name := nameByID[v.AttributeDefinitionID.String()]; name != "" {
 			if f, ok := toFloat(v.Value); ok {
-				inputs[name] = f
+				inputs[name] = append(inputs[name], f)
 			}
 			if r, ok := toRat(v.Value); ok {
-				exact[name] = r
+				exact[name] = append(exact[name], r)
 			}
 		}
 		computedValueID[v.AttributeDefinitionID.String()] = v.ID.String()

@@ -11,6 +11,7 @@ export const router = createRouter({
     { path: '/delivery', component: () => import('./pages/DeliveryPage.vue') },
     { path: '/graphql', component: () => import('./pages/GraphQLPage.vue') },
     { path: '/activity', component: () => import('./pages/ActivityPage.vue') },
+    { path: '/roles', component: () => import('./pages/RolesPage.vue') },
     { path: '/settings', component: () => import('./pages/SettingsPage.vue') },
     { path: '/:pathMatch(.*)*', component: () => import('./pages/NotFoundPage.vue') },
   ],

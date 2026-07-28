@@ -121,6 +121,18 @@ role list, which is the record an auditor reads.
   tenant. A change an operator makes during an incident applies at once
   rather than at the end of the cache TTL on every replica.
 
+### The console
+
+The admin console has a **Roles** page (`/roles`): create and replace roles,
+see which accounts hold each one, and open an account to see what it can
+*actually* do — its own scopes unioned with its roles', and the merged
+per-attribute levels, resolved by the same code the enforcement path runs.
+
+The list shows what is **stored**, which is what an operator edits. The
+account view shows what is **computed**. An account holding a role that no
+longer exists is called out there: it is denied every attribute until the role
+is restored or the account reassigned.
+
 ### Endpoints
 
 All need the `admin` scope.

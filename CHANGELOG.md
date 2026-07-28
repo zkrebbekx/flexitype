@@ -83,6 +83,7 @@ plausible number rather than an error.
 
 `pkg/formula` gains `Members`, `EvalWithMembers`, `EvalRatWithMembers` and
 `NumericRefs`. The existing `Eval` and `EvalRat` are unchanged.
+
 ### Fixed — A publish that ends mid-flight no longer strands the change-set
 
 A publish claims the set (state `publishing`) before it applies the

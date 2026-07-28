@@ -33,6 +33,19 @@ func ResolveEffective(
 	sourceValues map[valueobjects.AttributeDefinitionID][]valueobjects.Value,
 	now time.Time,
 ) (EffectiveSchema, error) {
+	return ResolveEffectiveWithContext(target, deps, sourceValues, nil, now)
+}
+
+// ResolveEffectiveWithContext is ResolveEffective with the caller's own facts
+// available to conditions that name one, so a rule can depend on a field that
+// lives in the host's tables rather than in flexitype.
+func ResolveEffectiveWithContext(
+	target *attribute.Definition,
+	deps []*Dependency,
+	sourceValues map[valueobjects.AttributeDefinitionID][]valueobjects.Value,
+	ctxValues map[string]valueobjects.Value,
+	now time.Time,
+) (EffectiveSchema, error) {
 	schema := EffectiveSchema{
 		Required:    target.Required(),
 		Constraints: target.Constraints(),
@@ -45,7 +58,7 @@ func ResolveEffective(
 		if d.IsArchived() || !d.TargetAttributeID().Equals(target.ID()) {
 			continue
 		}
-		matched, err := d.MatchesAny(sourceValues[d.SourceAttributeID()], now)
+		matched, err := d.MatchesAnyWithContext(sourceValues[d.SourceAttributeID()], ctxValues, now)
 		if err != nil {
 			return EffectiveSchema{}, err
 		}

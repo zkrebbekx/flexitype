@@ -203,6 +203,18 @@ func run(log *logger.Logger) error {
 		}
 		log.Info().Msg("transactional outbox enabled; event delivery API active")
 	}
+	if cfg.TimeZone != "" {
+		// Validated at config load, so this cannot fail here — but handle it
+		// rather than discarding an error that would silently leave the
+		// deployment on UTC with a day boundary hours away from the one it
+		// asked for.
+		loc, lerr := time.LoadLocation(cfg.TimeZone)
+		if lerr != nil {
+			return fmt.Errorf("load timezone %q: %w", cfg.TimeZone, lerr)
+		}
+		opts = append(opts, flexitype.WithTimeZone(loc))
+		log.Info().Str("timezone", cfg.TimeZone).Msg("calendar day resolves in this zone")
+	}
 	if cfg.EnableSearchIndex {
 		opts = append(opts, flexitype.WithSearchIndex())
 		log.Info().Msg("search index enabled")

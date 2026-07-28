@@ -50,6 +50,7 @@ type Service struct {
 	relay        *outbox.Relay
 	indexer      *search.Indexer
 	materializer *computed.Materializer
+	timeZone     *time.Location
 	worker       *webhook.Worker
 	pruner       *feed.Pruner
 	blobs        blob.Store
@@ -70,6 +71,7 @@ type options struct {
 	retention           time.Duration
 	webhookAllowPrivate bool
 	webhookTimeout      time.Duration
+	timeZone            *time.Location
 	searchIndex         bool
 	failClosedACL       bool
 	blobs               blob.Store
@@ -182,6 +184,22 @@ func WithOutbox(opts ...outbox.RelayOption) Option {
 // concurrency, HTTP client). Only meaningful with WithOutbox.
 func WithDeliveryWorker(opts ...webhook.WorkerOption) Option {
 	return func(o *options) { o.workerOpts = opts }
+}
+
+// WithTimeZone sets the calendar day that `today` and `now` resolve against
+// in dependency conditions and dynamic defaults. Default UTC.
+//
+// It changes which day those name, not how anything is stored: a date value
+// is a calendar date held as midnight UTC either way. Without it, a tenant
+// operating outside UTC had a date-boundary rule that was wrong for part of
+// every day — a condition on "expires before today" flipped at the wrong
+// hour, and a `today` default recorded yesterday for anything created after
+// the UTC midnight.
+//
+// Per-request override: stamp uow.WithTimeZone on the context, which is how
+// an embedder serves tenants in different zones from one process.
+func WithTimeZone(loc *time.Location) Option {
+	return func(o *options) { o.timeZone = loc }
 }
 
 // WithWebhookTimeout bounds one webhook delivery attempt (default 10s).
@@ -340,6 +358,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		relay:        relay,
 		indexer:      indexer,
 		materializer: materializer,
+		timeZone:     o.timeZone,
 		worker:       worker,
 		pruner:       pruner,
 		blobs:        o.blobs,
@@ -423,6 +442,7 @@ func NewInMemory(opts ...Option) *Service {
 		factory:      factory,
 		indexer:      indexer,
 		materializer: materializer,
+		timeZone:     o.timeZone,
 		blobs:        o.blobs,
 		graphql:      graphqlEngine,
 		onBgError:    o.onBgError,
@@ -589,6 +609,12 @@ func (s *Service) SchemaDrift(ctx context.Context) ([]int, error) {
 // Interactors returns a request-scoped usecase set. Call once per request
 // or unit of work so dataloader caches stay request-local.
 func (s *Service) Interactors(ctx context.Context) *application.Interactors {
+	// Stamp the deployment's time zone unless the caller already chose one.
+	// A per-request stamp wins, which is how an embedder serves tenants in
+	// different zones from one process.
+	if s.timeZone != nil && !uow.HasTimeZone(ctx) {
+		ctx = uow.WithTimeZone(ctx, s.timeZone)
+	}
 	return s.factory.New(ctx)
 }
 

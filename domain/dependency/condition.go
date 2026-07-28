@@ -52,10 +52,25 @@ type Condition struct {
 	PatternSubstring bool                       `json:"pattern_substring,omitempty"`
 	Dynamic          *valueobjects.DynamicValue `json:"dynamic,omitempty"`
 	Op               DynamicOp                  `json:"op,omitempty"`
+	// ContextKey names a CALLER-SUPPLIED fact to test instead of the rule's
+	// source attribute.
+	//
+	// An embedder anchors flexitype values to its own entities by an opaque
+	// entity_id, and those entities' primary fields live in host tables — a
+	// customer's tier, an order's channel, a document's workflow state. No
+	// condition could reference them, so a rule that depends on one had to be
+	// expressed by copying that field into flexitype and keeping the copy in
+	// step, which is the duplication soft typing exists to avoid.
+	//
+	// The value comes from the context the request carries
+	// (uow.WithContextValues), so it is the host's fact at evaluation time
+	// and is never stored here.
+	ContextKey string `json:"context_key,omitempty"`
 }
 
 type conditionJSON struct {
 	Kind             ConditionKind              `json:"kind"`
+	ContextKey       string                     `json:"context_key,omitempty"`
 	Value            json.RawMessage            `json:"value,omitempty"`
 	Values           []json.RawMessage          `json:"values,omitempty"`
 	Min              json.RawMessage            `json:"min,omitempty"`
@@ -68,7 +83,8 @@ type conditionJSON struct {
 
 // MarshalJSON encodes value operands in their self-describing typed form.
 func (c Condition) MarshalJSON() ([]byte, error) {
-	out := conditionJSON{Kind: c.Kind, Pattern: c.Pattern, PatternSubstring: c.PatternSubstring, Dynamic: c.Dynamic, Op: c.Op}
+	out := conditionJSON{Kind: c.Kind, Pattern: c.Pattern, PatternSubstring: c.PatternSubstring,
+		Dynamic: c.Dynamic, Op: c.Op, ContextKey: c.ContextKey}
 
 	marshal := func(v *valueobjects.Value) (json.RawMessage, error) {
 		if v == nil {
@@ -108,6 +124,7 @@ func (c *Condition) UnmarshalJSON(b []byte) error {
 	c.PatternSubstring = in.PatternSubstring
 	c.Dynamic = in.Dynamic
 	c.Op = in.Op
+	c.ContextKey = in.ContextKey
 	c.Value, c.Min, c.Max, c.Values = nil, nil, nil, nil
 
 	unmarshal := func(raw json.RawMessage) (*valueobjects.Value, error) {

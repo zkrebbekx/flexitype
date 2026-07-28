@@ -478,7 +478,9 @@ func (i *Interactor) EffectiveSchema(ctx context.Context, rawAttrID, rawEntityID
 		}
 	}
 
-	schema, err := domaindependency.ResolveEffective(def, targeting, sourceValues, i.now())
+	// Tenant-local: see completeness.go — a dynamic condition compares
+	// calendar days, not instants.
+	schema, err := domaindependency.ResolveEffectiveWithContext(def, targeting, sourceValues, uow.ContextValuesFromContext(ctx), uow.LocalNow(ctx))
 	if err != nil {
 		return nil, err
 	}

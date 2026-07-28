@@ -202,11 +202,23 @@ func (d *Dependency) Archive(now time.Time) ([]events.Event, error) {
 // An attribute with no values is evaluated once against the zero value, so
 // conditions that test absence behave as before.
 func (d *Dependency) MatchesAny(sources []valueobjects.Value, now time.Time) (bool, error) {
+	return d.MatchesAnyWithContext(sources, nil, now)
+}
+
+// MatchesAnyWithContext is MatchesAny with the caller's own facts available
+// to conditions that name one.
+//
+// An embedder's entities keep their primary fields in host tables — a
+// customer's tier, an order's channel — and no condition could reference
+// them, so a rule that depended on one had to be expressed by copying the
+// field into flexitype and keeping the copy in step. ctxValues carries those
+// facts for this evaluation only; nothing is stored.
+func (d *Dependency) MatchesAnyWithContext(sources []valueobjects.Value, ctxValues map[string]valueobjects.Value, now time.Time) (bool, error) {
 	if len(sources) == 0 {
-		return d.Matches(valueobjects.Value{}, now)
+		return d.matches(valueobjects.Value{}, ctxValues, now)
 	}
 	for _, v := range sources {
-		ok, err := d.Matches(v, now)
+		ok, err := d.matches(v, ctxValues, now)
 		if err != nil {
 			return false, err
 		}
@@ -219,8 +231,25 @@ func (d *Dependency) MatchesAny(sources []valueobjects.Value, now time.Time) (bo
 
 // Matches reports whether one source value satisfies every condition.
 func (d *Dependency) Matches(source valueobjects.Value, now time.Time) (bool, error) {
+	return d.matches(source, nil, now)
+}
+
+func (d *Dependency) matches(source valueobjects.Value, ctxValues map[string]valueobjects.Value, now time.Time) (bool, error) {
 	for _, c := range d.conditions {
-		ok, err := c.Matches(source, now)
+		// A condition naming a context key tests the caller's fact instead
+		// of the rule's source attribute. An absent key does not match: a
+		// rule must not fire on a fact the caller did not supply, because
+		// "not supplied" and "supplied as the zero value" mean different
+		// things and only the caller knows which happened.
+		subject := source
+		if c.ContextKey != "" {
+			v, ok := ctxValues[c.ContextKey]
+			if !ok {
+				return false, nil
+			}
+			subject = v
+		}
+		ok, err := c.Matches(subject, now)
 		if err != nil {
 			return false, err
 		}

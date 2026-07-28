@@ -29,6 +29,10 @@ systems, built as a production-grade DDD Go service.
 > stamp, migrations, background loops — that previously lived only in scattered
 > package comments.
 >
+> **Deploying it?** [deploy/kubernetes/](deploy/kubernetes/) has working
+> manifests for the API and worker tiers, with probes, scrape config and the
+> two alerts worth having.
+>
 > **Sizing it?** [docs/scale.md](docs/scale.md) publishes measured numbers and
 > hot-table maintenance guidance. **Verifying a release?** Binaries carry
 > cosign signatures, SLSA provenance and an SBOM — see

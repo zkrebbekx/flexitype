@@ -115,6 +115,37 @@ These switches let one image serve as both an API tier and a worker tier.
 | `FLEXITYPE_ENABLE_CONSOLE` | `true` | Serve the embedded admin console. With `false`, the SPA is not mounted and an unmatched path returns a JSON 404. |
 | `FLEXITYPE_MAX_IMPORT_BYTES` | `16777216` (16 MiB) | Maximum size of a CSV import upload. A larger body is refused before it is read. |
 | `FLEXITYPE_MAX_MEDIA_BYTES` | `33554432` (32 MiB) | Maximum size of a media upload. |
+## Connection string
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FLEXITYPE_DB_URL` | — | A complete libpq connection string or URL. **Replaces the six fields below entirely.** |
+| `FLEXITYPE_DB_PARAMS` | — | Extra `keyword=value` pairs appended to the rendered form. |
+
+The six-field form (`FLEXITYPE_DB_HOST`, `_PORT`, `_USER`, `_PASSWORD`,
+`_NAME`, `_SSLMODE`) covers the common case. It rendered a fixed parameter
+list and nothing could add to it, so `sslrootcert` (a private CA),
+`application_name` (identifying the connection in `pg_stat_activity`),
+`connect_timeout` (so a pod does not hang on an unreachable host) and
+`target_session_attrs` were unreachable through documented configuration.
+
+```bash
+# One extra parameter, keeping the six-field form:
+FLEXITYPE_DB_PARAMS="application_name=flexitype connect_timeout=5"
+
+# Or the whole connection string:
+FLEXITYPE_DB_URL="postgres://u:p@db:5432/flexitype?sslmode=verify-full&sslrootcert=/etc/ssl/ca.pem"
+```
+
+**A supplied URL goes through the same TLS guard.** `sslmode=disable` against
+a non-loopback host is refused whichever setting expressed it — the escape
+hatch is not a way to turn that protection off. An unparseable connection
+string reads as `disable`, which is the safe direction.
+
+libpq's `PG*` environment variables also work as a fallback, but prefer these:
+a `PG*` variable set for one purpose silently affects every libpq client in
+the pod.
+
 ## Connection poolers
 
 flexitype supports **transaction-mode** pooling (PgBouncer, pgcat, RDS Proxy)

@@ -1,0 +1,47 @@
+# Prometheus Operator scrape config. Delete this file if you scrape by the
+# pod annotations the deployments already carry.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: flexitype
+  labels: { app.kubernetes.io/name: flexitype }
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/name: flexitype }
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+# Alert on the LAG, not the depth. 500 pending envelopes is healthy under load
+# and alarming if the oldest of them is an hour old; a count cannot tell those
+# apart, which is why the depth gauge alone was never enough.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: flexitype
+  labels: { app.kubernetes.io/name: flexitype }
+spec:
+  groups:
+    - name: flexitype.delivery
+      rules:
+        - alert: FlexitypeOutboxLag
+          expr: flexitype_outbox_oldest_pending_seconds > 300
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "flexitype relay is behind"
+            description: >-
+              The oldest undispatched envelope has been waiting more than five
+              minutes. Check the worker tier is running and that the relay is
+              not erroring.
+        - alert: FlexitypeDeadLetters
+          expr: flexitype_webhook_deliveries{status="dead"} > 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "flexitype has dead webhook deliveries"
+            description: >-
+              Deliveries exhausted their attempts (about 5 hours by default).
+              They are retained, not lost: redrive with
+              POST /api/v1/webhook-deliveries/redeliver-dead.

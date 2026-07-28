@@ -757,6 +757,15 @@ func (s *Service) APIHandler(cfg APIConfig) http.Handler {
 func schemaChangeRecomputer(m *computed.Materializer, onErr func(error)) func(valueobjects.TenantID, string) {
 	return func(tenant valueobjects.TenantID, typeID string) {
 		go func() {
+			// Let the burst settle first. A schema change is normally
+			// followed immediately by writes — an import, a seeding script,
+			// the console applying a template — and a rebuild that overlaps
+			// them recomputes entities whose inputs are still arriving. It
+			// cannot corrupt them (a rebuild never clears), but it is wasted
+			// work racing the write path that is already recomputing each
+			// entity correctly.
+			time.Sleep(schemaRecomputeSettle)
+
 			// Detached from the request: the rebuild outlives the response,
 			// and a cancelled request must not abandon it half-done.
 			ctx, cancel := context.WithTimeout(
@@ -773,3 +782,8 @@ func schemaChangeRecomputer(m *computed.Materializer, onErr func(error)) func(va
 // schemaRecomputeTimeout bounds one background rebuild, so a pathological
 // type cannot pin a goroutine and a connection for ever.
 const schemaRecomputeTimeout = 30 * time.Minute
+
+// schemaRecomputeSettle delays a rebuild so it does not race the writes that
+// normally follow a schema change. Convergence is already "shortly after",
+// not "at", the edit; this makes the shortly-after land after the burst.
+const schemaRecomputeSettle = 500 * time.Millisecond

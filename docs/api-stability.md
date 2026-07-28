@@ -18,8 +18,11 @@ code corrected. v1.2.0 used it four times: quoted values for integer
 attributes are refused, `DELETE` of a missing unit family or match rule
 answers 404 rather than 204, provisioning routes authorize before the feature
 gate, and a bad `?limit=`/`?cursor=` on `/activity` answers 422 rather than
-500. Each such change is listed in the changelog under a **BREAKING** heading
-with the old and new behaviour. What does *not* ship in a minor is a change to
+500. v1.3.0 used it twice: a formula that reads or folds a non-numeric
+attribute is refused with 422 rather than materializing `0`, and a purge that
+cannot remove the rows still matching its predicate reports an error rather
+than a success receipt. Each such change is listed in the changelog under a
+**BREAKING** heading with the old and new behaviour. What does *not* ship in a minor is a change to
 a shape or a name that behaved correctly. Every release is a git tag (`vX.Y.Z`), a GitHub
 release, and an entry in [CHANGELOG.md](../CHANGELOG.md). Pin a tag; do not
 depend on `main`.

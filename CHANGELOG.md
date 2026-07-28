@@ -7,6 +7,53 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-07-28
+
+Twenty defects an independent reviewer raised against the 1.2 line, closed in
+six pull requests. Two were P0: a right-to-erasure purge that could report
+success with the data still present, and a change-set publish that a cancelled
+request stranded with no API able to move it.
+
+It is a minor release rather than a patch because the fixes add public API:
+`Service.Context`, `uow.AccessFromPermissions`, `changeset.ClaimReclaimer` and
+`changeset.PublishClaimTTL`, `computed.Materializer.OnFormulaError`,
+`ratelimit.Limiter.Refund`, and `formula.Members` with `EvalWithMembers`,
+`EvalRatWithMembers` and `NumericRefs`. Nothing existing changed shape.
+
+### BREAKING — check before upgrading
+
+Six behaviour changes are visible from outside. Each is the documented
+contract being honoured, and two of them can refuse a request that previously
+succeeded — the carve-out `docs/api-stability.md` states.
+
+- **`FLEXITYPE_TIMEZONE` now reaches rule evaluation.** It previously reached
+  nothing, so every `today`/`now` dependency rule and dynamic default resolved
+  in UTC whatever the setting said. A deployment that set it will see
+  date-boundary rules fire on the configured day — which is the point, and is
+  a change from what it did yesterday. An embedder must pass its context
+  through `Service.Context` (see `docs/embedding.md`); the API does it in
+  middleware.
+- **A formula may only read or fold a numeric attribute.** *(Refuses what
+  previously succeeded.)* `sum`, `avg`, `min` and `max` over a `string`,
+  `date`, `json` or other non-numeric source, and a bare read of one, are
+  refused with `422` at create and update. They previously materialized `0` or
+  nothing at all. `count()` accepts any type, because it folds members. A
+  stored formula is not re-validated, so an existing definition keeps working
+  until it is next written — the materializer reports it through the
+  background-error observer instead.
+- **A purge that cannot make progress reports an error.** *(Refuses what
+  previously "succeeded".)* Completion is decided by a count of the remaining
+  rows, not by a chunk that removed nothing, so an erasure that leaves rows
+  behind fails loudly instead of returning a receipt.
+- **CSV multi-value cells carry a `#flexitype-values:` prefix.** A tool that
+  parses an export must handle it. Import still accepts both earlier formats
+  for non-`json` columns, so old files load unchanged.
+- **The pre-authentication rate limiter counts failed authentications**, not
+  every request. A deployment behind a proxy will stop seeing `429` on healthy
+  authenticated traffic.
+- **`leaseWait` for migrations is 17 minutes**, up from 10, so a runner waits
+  out an abandoned lease instead of exiting before it can expire.
+
 ### Fixed — A migration that is interrupted recovers, and an abandoned lease frees itself
 
 - **A no-transaction migration reaps its own invalid indexes before it
@@ -1523,7 +1570,8 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 - Quantity `one_of` members and defaults are unit-rebased; equal quantities in
   different units compare equal.
 
-[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/zkrebbekx/flexitype/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/zkrebbekx/flexitype/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/zkrebbekx/flexitype/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/zkrebbekx/flexitype/releases/tag/v1.0.0

@@ -717,11 +717,16 @@ WITH live AS (
       FROM flexitype_attribute_value
      WHERE tenant_id = ? AND attribute_definition_id = ? AND archived_at IS NULL
 ),
-per_entity AS (SELECT entity_id, COUNT(*) AS n FROM live GROUP BY entity_id),
+-- Grouped by SCOPE as well as entity. Grouping on the entity alone counted a
+-- localizable attribute holding one value per locale as "more than one
+-- value", so making it single-valued was refused for data the new schema can
+-- express perfectly — and the only way through was deleting real data.
+per_entity AS (SELECT entity_id, COUNT(*) AS n FROM live
+                GROUP BY entity_id, COALESCE(locale, ''), COALESCE(channel, '')),
 per_value  AS (SELECT v, COUNT(DISTINCT entity_id) AS n FROM live WHERE v IS NOT NULL GROUP BY v)
 SELECT
   (SELECT COUNT(*) FROM live)                                        AS live_values,
-  (SELECT COUNT(*) FROM per_entity WHERE n > 1)                      AS entities_with_many,
+  (SELECT COUNT(DISTINCT entity_id) FROM per_entity WHERE n > 1)     AS entities_with_many,
   (SELECT COUNT(*) FROM live WHERE COALESCE(locale, '') <> ''
                                 OR COALESCE(channel, '') <> '')      AS scoped_values,
   (SELECT COALESCE(SUM(n), 0) FROM per_value WHERE n > 1)            AS duplicate_values`

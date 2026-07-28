@@ -297,28 +297,42 @@ func (r *valueRepo) AttributeDataShape(_ context.Context, tenant valueobjects.Te
 	defer r.s.mu.RUnlock()
 
 	var out domainvalue.DataShape
-	perEntity := map[string]int{}
-	perValue := map[string]int{}
+	// Keyed by (entity, locale, channel), not by entity alone: a localizable
+	// attribute holding one value per locale is not "more than one value" for
+	// the purposes of making it single-valued, and counting it as such
+	// refused the change for data the new schema expresses perfectly.
+	perScope := map[string]int{}
+	// Duplicates are counted per DISTINCT ENTITY, as Postgres does.
+	perValue := map[string]map[string]bool{}
+	manyEntities := map[string]bool{}
 	for _, snap := range r.s.values {
 		if snap.TenantID != tenant || !snap.AttributeDefinitionID.Equals(attrID) || snap.ArchivedAt != nil {
 			continue
 		}
 		out.LiveValues++
-		perEntity[snap.EntityID.String()]++
+		entity := snap.EntityID.String()
+		key := entity + "\x1f" + snap.Locale + "\x1f" + snap.Channel
+		perScope[key]++
+		if perScope[key] > 1 {
+			manyEntities[entity] = true
+		}
 		if snap.Locale != "" || snap.Channel != "" {
 			out.ScopedValues++
 		}
-		// Key duplicates on the rendered value; that is what a unique
-		// constraint compares.
-		perValue[snap.Value.Text()]++
-	}
-	for _, n := range perEntity {
-		if n > 1 {
-			out.EntitiesWithMany++
+		// Key duplicates on the value's OWN rendering, not on Text(): Text()
+		// is "" for integer, float, bool, date, json, media and quantity, so
+		// three distinct integers read as three copies of the same value and
+		// a unique flag was refused. Postgres compares the stored rendering,
+		// whichever typed column holds it.
+		rendered := snap.Value.String()
+		if perValue[rendered] == nil {
+			perValue[rendered] = map[string]bool{}
 		}
+		perValue[rendered][entity] = true
 	}
-	for _, n := range perValue {
-		if n > 1 {
+	out.EntitiesWithMany = len(manyEntities)
+	for _, entities := range perValue {
+		if n := len(entities); n > 1 {
 			out.DuplicateValues += n
 		}
 	}

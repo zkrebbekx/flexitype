@@ -144,6 +144,22 @@ func (i *Interactor) normalizeQuantityOperands(
 				return err
 			}
 			effect.Constraints[idx] = domainattribute.MaxValue{Max: nv}
+		case domainattribute.OneOf:
+			// The attribute-level normaliser rebases a one_of's members; the
+			// effect loop had no arm for it, so an effect naming an allowed
+			// quantity compared a caller's base magnitude against an
+			// unconverted member and refused the EXACT allowed value —
+			// blaming the writer for a rule the schema author wrote.
+			members := make([]valueobjects.Value, len(cc.Values))
+			for k, v := range cc.Values {
+				nv, verr := rebaseTarget(v)
+				if verr != nil {
+					return verr
+				}
+				members[k] = nv
+			}
+			effect.Constraints[idx] = domainattribute.OneOf{Values: members}
+
 		}
 	}
 	return nil

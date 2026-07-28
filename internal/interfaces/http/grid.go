@@ -96,6 +96,12 @@ func (s *server) entityFacets(w http.ResponseWriter, r *http.Request) {
 
 // resolveEntitySet collects the whole result set's entity ids (capped): the
 // FQL matches when `query` is present, otherwise all of the type's entities.
+//
+// The sweep pages with ListEntitiesStable, not the newest-first listing. The
+// presentation order pages on last_updated_at, which every write moves — so
+// an entity written mid-sweep jumped ahead of the cursor and was omitted from
+// the facet counts, which then disagreed with the grid beside them. Order is
+// irrelevant to an aggregation; stability is not.
 func (s *server) resolveEntitySet(r *http.Request, typeID string) ([]string, error) {
 	app := application.FromContext(r.Context())
 	limit := 500
@@ -107,7 +113,7 @@ func (s *server) resolveEntitySet(r *http.Request, typeID string) ([]string, err
 		var items []string
 		var next *string
 		if q == "" {
-			out, err := app.Values().ListEntities(r.Context(), typeID, boolQuery(r, "include_descendants"), db.PageArgs{Limit: &limit, Cursor: cursor})
+			out, err := app.Values().ListEntitiesStable(r.Context(), typeID, boolQuery(r, "include_descendants"), db.PageArgs{Limit: &limit, Cursor: cursor})
 			if err != nil {
 				return nil, err
 			}

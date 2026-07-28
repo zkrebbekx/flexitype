@@ -259,7 +259,18 @@ type RevisionValue struct {
 	InternalName          string `json:"internal_name"`
 	DisplayName           string `json:"display_name"`
 	DataType              string `json:"data_type"`
-	Value                 string `json:"value"`
+	// Locale and Channel are the value's scope. Without them a localized
+	// entity came back as N rows with identical InternalName and no way to
+	// tell them apart.
+	Locale  string `json:"locale,omitempty"`
+	Channel string `json:"channel,omitempty"`
+	// Value is the DISPLAY form: lossy for structured types, and what the
+	// console and the diff show. A quantity renders as "10 kg", a media value
+	// as its filename.
+	Value string `json:"value"`
+	// Typed is the self-describing round-trippable form, added on the server
+	// precisely because Value is lossy. Read this to reconstruct a value.
+	Typed json.RawMessage `json:"typed,omitempty"`
 }
 
 // EntityRevision is an immutable point-in-time snapshot of an entity's values.
@@ -494,14 +505,59 @@ type WebhookDelivery struct {
 }
 
 // FeedEvent is one entry in the events feed.
+//
+// The wire shape is NESTED: the server sends {"seq":N,"envelope":{...}}. This
+// type was flat (feed_seq, id, type, …) and no key overlapped, so decoding
+// produced the right NUMBER of events with every field zero and no error — a
+// consumer dispatching on Type saw "" for ever. UnmarshalJSON maps the nested
+// form onto these fields so callers keep one flat struct.
 type FeedEvent struct {
-	FeedSeq    int64           `json:"feed_seq"`
-	ID         string          `json:"id"`
-	Type       string          `json:"type"`
-	TenantID   string          `json:"tenant_id,omitempty"`
-	Actor      string          `json:"actor,omitempty"`
-	OccurredAt time.Time       `json:"occurred_at"`
-	Payload    json.RawMessage `json:"payload,omitempty"`
+	// Seq is the feed position. Pass the last one you processed as After.
+	Seq           int64           `json:"seq"`
+	ID            string          `json:"id"`
+	Type          string          `json:"type"`
+	AggregateType string          `json:"aggregate_type,omitempty"`
+	AggregateID   string          `json:"aggregate_id,omitempty"`
+	TenantID      string          `json:"tenant_id,omitempty"`
+	Actor         string          `json:"actor,omitempty"`
+	OccurredAt    time.Time       `json:"occurred_at"`
+	RecordedAt    time.Time       `json:"recorded_at,omitempty"`
+	SchemaVersion int             `json:"schema_version,omitempty"`
+	Payload       json.RawMessage `json:"payload,omitempty"`
+}
+
+// UnmarshalJSON decodes the server's {"seq":…,"envelope":{…}} shape.
+func (e *FeedEvent) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Seq      int64 `json:"seq"`
+		Envelope struct {
+			ID            string          `json:"id"`
+			Type          string          `json:"type"`
+			AggregateType string          `json:"aggregate_type"`
+			AggregateID   string          `json:"aggregate_id"`
+			TenantID      string          `json:"tenant_id"`
+			Actor         string          `json:"actor"`
+			OccurredAt    time.Time       `json:"occurred_at"`
+			RecordedAt    time.Time       `json:"recorded_at"`
+			SchemaVersion int             `json:"schema_version"`
+			Payload       json.RawMessage `json:"payload"`
+		} `json:"envelope"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	e.Seq = wire.Seq
+	e.ID = wire.Envelope.ID
+	e.Type = wire.Envelope.Type
+	e.AggregateType = wire.Envelope.AggregateType
+	e.AggregateID = wire.Envelope.AggregateID
+	e.TenantID = wire.Envelope.TenantID
+	e.Actor = wire.Envelope.Actor
+	e.OccurredAt = wire.Envelope.OccurredAt
+	e.RecordedAt = wire.Envelope.RecordedAt
+	e.SchemaVersion = wire.Envelope.SchemaVersion
+	e.Payload = wire.Envelope.Payload
+	return nil
 }
 
 // Tenant is a provisioning tenant.

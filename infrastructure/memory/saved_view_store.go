@@ -35,9 +35,25 @@ func (s *savedViewStore) Create(_ context.Context, v savedview.View) error {
 	return nil
 }
 
+// Update is a compare-and-swap on version, mirroring the Postgres store: a
+// caller holding a stale read gets a conflict rather than overwriting whatever
+// landed in between.
 func (s *savedViewStore) Update(_ context.Context, v savedview.View) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	stored, ok := s.views[v.ID.String()]
+	if !ok || stored.TenantID != v.TenantID {
+		return domainerrors.NewNotFound("saved_view", v.ID.String())
+	}
+	want := v.Version
+	if want < 1 {
+		want = 1
+	}
+	if stored.Version > 0 && stored.Version != want {
+		return domainerrors.NewConflict(
+			"the saved view was modified by someone else; re-read it and retry", "id", v.ID.String())
+	}
+	v.Version = want + 1
 	s.views[v.ID.String()] = v
 	return nil
 }

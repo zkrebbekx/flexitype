@@ -2387,6 +2387,12 @@ components:
             tenant_id: { type: string }
             created_at: { type: string, format: date-time }
             updated_at: { type: string, format: date-time }
+            version:
+              type: integer
+              description: >
+                Increments on every write. PATCH compares against the version
+                it read, so two concurrent patches cannot silently discard
+                each other's field; a stale write answers 409.
     SchemaBundle:
       type: object
       description: A portable, internal-name-keyed snapshot of a tenant's schema.

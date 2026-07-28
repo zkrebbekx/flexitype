@@ -122,11 +122,28 @@ type SavedViewsService struct{ c *Client }
 // so a zero value clears the stored one — use SavedViewPatch to change some
 // fields and leave the rest alone.
 type SavedViewInput struct {
-	Name     string   `json:"name"`
-	RootType string   `json:"root_type"`
-	Query    string   `json:"query"`
-	Columns  []string `json:"columns"`
-	Sort     string   `json:"sort"`
+	Name     string `json:"name"`
+	RootType string `json:"root_type"`
+	Query    string `json:"query"`
+	// Columns is always transmitted, as [] when nil.
+	//
+	// The server's sparse decoder reads "" as "clear" and null as "absent",
+	// so a nil slice made Update neither a full replace nor sparse: it
+	// cleared query and sort while leaving columns as stored. Sending an
+	// explicit empty array makes the documented full-replace true for every
+	// field.
+	Columns []string `json:"columns"`
+	Sort    string   `json:"sort"`
+}
+
+// MarshalJSON transmits a nil Columns as [], so Update replaces every field.
+func (in SavedViewInput) MarshalJSON() ([]byte, error) {
+	type wire SavedViewInput
+	w := wire(in)
+	if w.Columns == nil {
+		w.Columns = []string{}
+	}
+	return json.Marshal(w)
 }
 
 // SavedViewPatch is a sparse update: a nil field is left as it is stored.
@@ -166,7 +183,11 @@ func (s *SavedViewsService) Create(ctx context.Context, in SavedViewInput) (*Sav
 }
 
 // Update replaces every field of a saved view. A zero value in the input
-// clears the stored value; use Patch to change a subset.
+// clears the stored value.
+//
+// Use Patch for anything else — including a rename. Update is a full replace,
+// so renaming with it clears the query, columns and sort unless the caller
+// restates them, which is how a rename came to wipe a view's sort order.
 func (s *SavedViewsService) Update(ctx context.Context, id string, in SavedViewInput) (*SavedView, error) {
 	var out SavedView
 	if err := s.c.do(ctx, http.MethodPatch, "/saved-views/"+id, nil, in, &out); err != nil {

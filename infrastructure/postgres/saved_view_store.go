@@ -32,6 +32,7 @@ type savedViewRow struct {
 	Sort      string    `db:"sort"`
 	CreatedAt time.Time `db:"created_at"`
 	UpdatedAt time.Time `db:"updated_at"`
+	Version   int       `db:"version"`
 }
 
 func (r savedViewRow) toView() (savedview.View, error) {
@@ -51,31 +52,58 @@ func (r savedViewRow) toView() (savedview.View, error) {
 		Sort:      r.Sort,
 		CreatedAt: r.CreatedAt,
 		UpdatedAt: r.UpdatedAt,
+		Version:   r.Version,
 	}, nil
 }
 
 func (s *savedViewStore) Create(ctx context.Context, v savedview.View) error {
 	cols, _ := json.Marshal(v.Columns)
 	_, err := s.q.ExecContext(ctx, bind(
-		`INSERT INTO flexitype_saved_view (id, tenant_id, name, root_type, query, columns, sort, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-		v.ID, v.TenantID.String(), v.Name, v.RootType, v.Query, jsonbParam(cols), v.Sort, v.CreatedAt, v.UpdatedAt)
+		`INSERT INTO flexitype_saved_view
+		   (id, tenant_id, name, root_type, query, columns, sort, created_at, updated_at, version)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		v.ID, v.TenantID.String(), v.Name, v.RootType, v.Query, jsonbParam(cols), v.Sort,
+		v.CreatedAt, v.UpdatedAt, maxInt(v.Version, 1))
 	if err != nil {
 		return fmt.Errorf("insert saved view: %w", err)
 	}
 	return nil
 }
 
+// Update is a compare-and-swap on version: a caller holding a stale read gets
+// a conflict rather than overwriting whatever landed in between.
 func (s *savedViewStore) Update(ctx context.Context, v savedview.View) error {
 	cols, _ := json.Marshal(v.Columns)
-	_, err := s.q.ExecContext(ctx, bind(
-		`UPDATE flexitype_saved_view SET name = ?, root_type = ?, query = ?, columns = ?, sort = ?, updated_at = ?
-		 WHERE id = ? AND tenant_id = ?`),
-		v.Name, v.RootType, v.Query, jsonbParam(cols), v.Sort, v.UpdatedAt, v.ID, v.TenantID.String())
+	res, err := s.q.ExecContext(ctx, bind(
+		`UPDATE flexitype_saved_view
+		    SET name = ?, root_type = ?, query = ?, columns = ?, sort = ?, updated_at = ?,
+		        version = version + 1
+		  WHERE id = ? AND tenant_id = ? AND version = ?`),
+		v.Name, v.RootType, v.Query, jsonbParam(cols), v.Sort, v.UpdatedAt,
+		v.ID, v.TenantID.String(), maxInt(v.Version, 1))
 	if err != nil {
 		return fmt.Errorf("update saved view: %w", err)
 	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update saved view: %w", err)
+	}
+	if n == 0 {
+		// Either the view is gone or another writer moved it on. Both are
+		// reported the same way: re-read and retry.
+		return domainerrors.NewConflict(
+			"the saved view was modified by someone else; re-read it and retry", "id", v.ID.String())
+	}
 	return nil
+}
+
+// maxInt keeps a zero version — a caller that built a View by hand — from
+// failing the compare-and-swap against a row that starts at 1.
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (s *savedViewStore) Delete(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) error {

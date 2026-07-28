@@ -18,6 +18,7 @@ import (
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
@@ -594,6 +595,14 @@ func (s *server) removeValue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listValues(w http.ResponseWriter, r *http.Request) {
+	// The change-set overlay is implemented on the per-entity endpoint only.
+	// Ignoring the parameter here meant a preview silently returned LIVE
+	// values, so a reviewer could approve a diff that was never displayed.
+	if csID := r.URL.Query().Get("changeset"); csID != "" {
+		writeError(w, s.log, domainerrors.NewValidation(
+			"the change-set overlay is available on GET /entities/{type}/{entity}/values", "changeset", csID))
+		return
+	}
 	out, err := application.FromContext(r.Context()).Values().List(r.Context(), appvalue.ListInput{
 		TypeDefinitionID:      r.URL.Query().Get("type_definition_id"),
 		AttributeDefinitionID: r.URL.Query().Get("attribute_definition_id"),

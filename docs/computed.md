@@ -41,7 +41,14 @@ that the number tracked nothing.
 
 The same rule works in reverse: an attribute a formula reads **bare** cannot
 be made multi-valued. One that is only ever aggregated can, because the
-aggregate already asked for every member.
+aggregate already asked for every member. Becoming **localizable or scopable**
+is refused for either kind of reader, aggregates included, because evaluation
+reads the base scope and would drop every scoped member.
+
+The reverse rule applies on **create** as well as update. Writing
+`total = line_total * 2` before `line_total` exists is accepted — the
+reference is unresolved — so creating `line_total` afterwards as multi-valued,
+localizable or scopable is refused at that point.
 
 ## Aggregates
 
@@ -64,6 +71,20 @@ The argument is a single name. An aggregate folds one attribute's values;
 allowing an expression there would raise the question of what it means to fold
 a computation over members that need not correspond to each other.
 
+### Source data types
+
+`sum`, `avg`, `min` and `max` fold **numbers**, so their source must be a
+`bool`, `integer`, `float` or `decimal` attribute. A formula that folds or
+reads any other type is refused at write time.
+
+`count` folds **members**, so it accepts a source of any data type:
+`count(tags)` over multi-valued strings and `count(photos)` over multi-valued
+media both report how many values the entity holds.
+
+The names `sum`, `count`, `avg`, `min` and `max` are not reserved. They are
+aggregates only when a `(` follows, so an attribute called `count` still reads
+bare in `count * 2`.
+
 ## Scoped attributes are refused
 
 A formula cannot read a **localizable or scopable** attribute at all, even
@@ -74,9 +95,12 @@ per-locale sources.
 
 ## Exactness
 
-A `decimal` target is evaluated in exact rational arithmetic, aggregates
-included, so `sum` of `0.1` and `0.2` stores `0.3` rather than
-`0.30000000000000004`. Everything else evaluates in `float64`.
+A `decimal` or `integer` target is evaluated in exact rational arithmetic,
+aggregates included, so `sum` of `0.1` and `0.2` stores `0.3` rather than
+`0.30000000000000004`, and `sum` of `9007199254740993` and `1` stores
+`9007199254740994` rather than a value narrowed through `float64`. A result
+outside `int64` clears the value rather than storing a wrong one. A `float`
+target evaluates in `float64`, which is what choosing that type asks for.
 
 ## Rollups across relationships
 

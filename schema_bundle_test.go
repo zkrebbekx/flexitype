@@ -215,9 +215,16 @@ func TestSchemaBundleRoundTrip(t *testing.T) {
 					DataType: "quantity", UnitFamily: "mass", DisplayUnit: "g",
 				},
 				{
+					Type: "part", InternalName: "tare", DisplayName: "Tare", DataType: "float",
+				},
+				{
+					// The formula reads a NUMERIC source. It used to read the
+					// quantity attribute, which the evaluator cannot coerce,
+					// so the computed value could never materialize — the
+					// case the numeric-source rule now refuses at write time.
 					Type: "part", InternalName: "net_mass", DisplayName: "Net Mass",
 					DataType: "float",
-					Computed: json.RawMessage(`{"kind":"formula","formula":"mass"}`),
+					Computed: json.RawMessage(`{"kind":"formula","formula":"tare * 2"}`),
 				},
 				{
 					Type: "part", InternalName: "note", DisplayName: "Note", DataType: "string",
@@ -244,7 +251,7 @@ func TestSchemaBundleRoundTrip(t *testing.T) {
 		Convey("When the bundle is first imported", func() {
 			Convey("Then every object is created", func() {
 				So(res.Types.Created, ShouldEqual, 2)
-				So(res.Attributes.Created, ShouldEqual, 4)
+				So(res.Attributes.Created, ShouldEqual, 5)
 				So(res.RelationshipDefinitions.Created, ShouldEqual, 1)
 				So(res.Dependencies.Created, ShouldEqual, 1)
 				So(res.Types.Skipped, ShouldEqual, 0)
@@ -259,7 +266,7 @@ func TestSchemaBundleRoundTrip(t *testing.T) {
 				So(again.Types.Created, ShouldEqual, 0)
 				So(again.Types.Skipped, ShouldEqual, 2)
 				So(again.Attributes.Created, ShouldEqual, 0)
-				So(again.Attributes.Skipped, ShouldEqual, 4)
+				So(again.Attributes.Skipped, ShouldEqual, 5)
 				So(again.RelationshipDefinitions.Created, ShouldEqual, 0)
 				So(again.RelationshipDefinitions.Skipped, ShouldEqual, 1)
 				So(again.Dependencies.Created, ShouldEqual, 0)
@@ -274,7 +281,7 @@ func TestSchemaBundleRoundTrip(t *testing.T) {
 			Convey("Then the bundle carries the current version and every object kind", func() {
 				So(out.Version, ShouldEqual, appschema.BundleVersion)
 				So(out.Types, ShouldHaveLength, 2)
-				So(out.Attributes, ShouldHaveLength, 4)
+				So(out.Attributes, ShouldHaveLength, 5)
 				So(out.RelationshipDefinitions, ShouldHaveLength, 1)
 				So(out.Dependencies, ShouldHaveLength, 1)
 				So(out.UnitFamilies, ShouldHaveLength, 1)
@@ -312,7 +319,7 @@ func TestSchemaBundleRoundTrip(t *testing.T) {
 			Convey("Then the schema reconstructs object-for-object", func() {
 				So(err, ShouldBeNil)
 				So(replay.Types.Created, ShouldEqual, 2)
-				So(replay.Attributes.Created, ShouldEqual, 4)
+				So(replay.Attributes.Created, ShouldEqual, 5)
 				So(replay.RelationshipDefinitions.Created, ShouldEqual, 1)
 				So(replay.Dependencies.Created, ShouldEqual, 1)
 			})

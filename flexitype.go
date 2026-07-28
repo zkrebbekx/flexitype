@@ -375,6 +375,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	// the writing request regardless of the outbox.
 	materializer := computed.NewMaterializer(factory)
 	materializer.OnSchemaChange(schemaChangeRecomputer(materializer, o.onBgError))
+	materializer.OnFormulaError(o.onBgError)
 	projections.Register(materializer, events.WithEventTypes(computed.EventTypes()...))
 
 	// The GraphQL schema mirrors the live type definitions; an internal-projection
@@ -468,6 +469,7 @@ func NewInMemory(opts ...Option) *Service {
 	})
 	materializer := computed.NewMaterializer(factory)
 	materializer.OnSchemaChange(schemaChangeRecomputer(materializer, o.onBgError))
+	materializer.OnFormulaError(o.onBgError)
 	projections.Register(materializer, events.WithEventTypes(computed.EventTypes()...))
 	graphqlEngine := gql.NewEngine(gqlOptions(o)...)
 	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))

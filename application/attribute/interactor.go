@@ -224,12 +224,30 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 			if cerr := checkFormulaCycle(in.InternalName, refs, deps); cerr != nil {
 				return cerr
 			}
-			scalarRefs, serr := formulaScalarRefs(computed.Formula)
+			scalarRefs, numericRefs, serr := formulaRefKinds(computed.Formula)
 			if serr != nil {
 				return serr
 			}
-			if serr := assertFormulaSourcesAreScalar(ctx, attrs, hierarchy, refs, scalarRefs); serr != nil {
+			if serr := assertFormulaSourcesAreScalar(ctx, attrs, hierarchy, refs, scalarRefs, numericRefs); serr != nil {
 				return serr
+			}
+		}
+
+		// The reverse guard runs on CREATE too. It used to run on update
+		// only, so a schema author could write `total = line_total * 2`
+		// before line_total existed — accepted, because the reference is
+		// unresolved — and then create line_total as multi-valued or
+		// localizable. A bare name needs exactly one base-scope value, so the
+		// formula was permanently undefined: an attribute the schema
+		// advertises that never holds a value, with no error at any point.
+		if in.MultiValued || in.Localizable || in.Scopable {
+			deps, derr := i.computedRefs(ctx, attrs, hierarchy)
+			if derr != nil {
+				return derr
+			}
+			if rerr := refuseFormulaReaders(in.InternalName, deps, in.MultiValued,
+				in.Localizable || in.Scopable); rerr != nil {
+				return rerr
 			}
 		}
 
@@ -409,11 +427,11 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			if derr != nil {
 				return derr
 			}
-			scalarRefs, srerr := formulaScalarRefs(computed.Formula)
+			scalarRefs, numericRefs, srerr := formulaRefKinds(computed.Formula)
 			if srerr != nil {
 				return srerr
 			}
-			if serr := assertFormulaSourcesAreScalar(ctx, attrs, hierarchy, refs, scalarRefs); serr != nil {
+			if serr := assertFormulaSourcesAreScalar(ctx, attrs, hierarchy, refs, scalarRefs, numericRefs); serr != nil {
 				return serr
 			}
 			if cerr := checkFormulaCycle(attr.InternalName(), refs, deps); cerr != nil {
@@ -835,13 +853,21 @@ func (i *Interactor) computedRefs(ctx context.Context, attrs domainattribute.Rep
 			if c == nil || c.Kind != domainattribute.ComputedFormula {
 				continue
 			}
+			// A STORED formula that no longer parses is skipped, not
+			// raised. This sweep walks every computed attribute in the
+			// hierarchy to cycle-check the one being written, so raising here
+			// failed the create or update of an UNRELATED attribute with an
+			// "invalid formula" naming a formula the caller did not write —
+			// an operator with a schema they could not edit. The materializer
+			// reports the unparseable formula through the background-error
+			// observer, which is where a pre-existing data problem belongs.
 			refs, verr := c.Validate()
 			if verr != nil {
-				return nil, verr
+				continue
 			}
 			scalar, serr := formulaScalarRefs(c.Formula)
 			if serr != nil {
-				return nil, serr
+				continue
 			}
 			bare := make(map[string]bool, len(scalar))
 			for _, r := range scalar {
@@ -888,22 +914,44 @@ func (i *Interactor) assertNoFormulaReadsScopedSource(
 		return err
 	}
 	gainingMulti := !before.MultiValued && in.MultiValued
-	for name, refs := range deps {
+	gainingScope := (!before.Localizable && in.Localizable) || (!before.Scopable && in.Scopable)
+	return refuseFormulaReaders(before.InternalName, deps, gainingMulti, gainingScope)
+}
+
+// refuseFormulaReaders refuses the structural change when a formula reads the
+// attribute in a way the change would break.
+//
+// The two halves are INDEPENDENT. The bare-read relaxation applies to the
+// multi-valued transition alone: a formula that aggregates the name —
+// sum(x) — is asking for every member, so gaining members is the intended
+// case. Gaining a locale or a channel is refused for ANY reader, aggregate
+// included, because evaluation reads the base scope and would drop every
+// scoped member.
+//
+// One `continue` used to implement the relaxation for both, so setting
+// multi_valued and localizable in ONE request passed the guard entirely — and
+// the materializer then folded only the base-scope members, reporting a
+// subtotal as the total.
+func refuseFormulaReaders(name string, deps map[string]formulaRefs, gainingMulti, gainingScope bool) error {
+	for formulaName, refs := range deps {
 		for _, ref := range refs.all {
-			if ref != before.InternalName {
+			if ref != name {
 				continue
 			}
-			// Becoming multi-valued is only a problem for a formula that
-			// reads the name BARE. One that aggregates it — sum(x) — is
-			// asking for every member, so gaining members is the intended
-			// case rather than a break.
+			if gainingScope {
+				return domainerrors.NewConflict(
+					"cannot make the attribute localizable or scopable: a computed formula reads it, "+
+						"and evaluation reads the base scope only, so the scoped values would be ignored",
+					"attribute", name, "formula", formulaName)
+			}
 			if gainingMulti && !refs.bare[ref] {
 				continue
 			}
 			return domainerrors.NewConflict(
-				"cannot make the attribute multi-valued, localizable or scopable: a computed formula reads it, "+
-					"and evaluation reads one base-scope value per bare name",
-				"attribute", before.InternalName, "formula", name)
+				"cannot make the attribute multi-valued: a computed formula reads it bare, "+
+					"and a bare name must resolve to one value. Wrap it in an aggregate — "+
+					"sum, count, avg, min or max",
+				"attribute", name, "formula", formulaName)
 		}
 	}
 	return nil
@@ -916,6 +964,16 @@ func formulaScalarRefs(src string) ([]string, error) {
 		return nil, domainerrors.NewValidation(err.Error())
 	}
 	return expr.ScalarRefs(), nil
+}
+
+// formulaRefKinds parses a formula and returns the names it reads bare and
+// the names whose values must coerce to numbers.
+func formulaRefKinds(src string) (scalar, numeric []string, err error) {
+	expr, perr := formula.Parse(src)
+	if perr != nil {
+		return nil, nil, domainerrors.NewValidation(perr.Error())
+	}
+	return expr.ScalarRefs(), expr.NumericRefs(), nil
 }
 
 // assertFormulaSourcesAreScalar refuses a formula that reads a multi-valued
@@ -933,7 +991,7 @@ func formulaScalarRefs(src string) ([]string, error) {
 // locales is not an aggregate anyone asked for; a schema author who wants one
 // can compute per-locale attributes explicitly.
 func assertFormulaSourcesAreScalar(ctx context.Context, attrs domainattribute.Repository,
-	hierarchy []*domaintypedef.TypeDefinition, refs, scalarRefs []string) error {
+	hierarchy []*domaintypedef.TypeDefinition, refs, scalarRefs, numericRefs []string) error {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -944,6 +1002,10 @@ func assertFormulaSourcesAreScalar(ctx context.Context, attrs domainattribute.Re
 	bare := make(map[string]bool, len(scalarRefs))
 	for _, r := range scalarRefs {
 		bare[r] = true
+	}
+	numeric := make(map[string]bool, len(numericRefs))
+	for _, r := range numericRefs {
+		numeric[r] = true
 	}
 	for _, link := range hierarchy {
 		list, err := domainattribute.ListAllForType(ctx, attrs, link.ID())
@@ -965,10 +1027,33 @@ func assertFormulaSourcesAreScalar(ctx context.Context, attrs domainattribute.Re
 					"a formula cannot read a localizable or scopable attribute: evaluation reads the base "+
 						"scope only, so the scoped values would be ignored",
 					"attribute", a.InternalName())
+			case numeric[a.InternalName()] && !isNumericDataType(a.DataType()):
+				return domainerrors.NewValidation(
+					"a formula can only read or fold a numeric attribute: bool, integer, float or decimal. "+
+						"count() folds members of any type",
+					"attribute", a.InternalName(), "data_type", a.DataType().String())
 			}
 		}
 	}
 	return nil
+}
+
+// isNumericDataType reports whether values of the type coerce to numbers.
+//
+// Only these four reach the evaluator. A formula over any other type produced
+// nothing at all for a bare read — and 0 for count(), because counting an
+// empty numeric list is legitimately zero. That 0 was queryable in FQL,
+// exported and counted toward completeness while the attribute held values,
+// so a non-numeric source is now refused where it has to coerce, and counted
+// as members where it does not.
+func isNumericDataType(dt valueobjects.DataType) bool {
+	switch dt {
+	case valueobjects.DataTypeBool, valueobjects.DataTypeInteger,
+		valueobjects.DataTypeFloat, valueobjects.DataTypeDecimal:
+		return true
+	default:
+		return false
+	}
 }
 
 // decodeComputed parses the optional computed-attribute spec.

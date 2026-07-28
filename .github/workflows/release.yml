@@ -81,7 +81,14 @@ jobs:
             tag="${module}/${VERSION}"
             # An existing tag on this exact commit is the only benign
             # failure — a re-run of the same release. Anything else fails.
-            existing=$(gh api "repos/${REPO}/git/ref/tags/${tag}" --jq .object.sha 2>/dev/null || true)
+            # `gh api` writes its 404 body to STDOUT, so `|| true` on the
+            # assignment captured `{"message":"Not Found",…}` as the existing
+            # sha and every first-time tag failed as a conflict. v1.3.0 hit
+            # exactly that. Branch on the EXIT STATUS instead, and keep the
+            # body out of the variable.
+            if ! existing=$(gh api "repos/${REPO}/git/ref/tags/${tag}" --jq .object.sha 2>/dev/null); then
+              existing=""
+            fi
             if [ -n "$existing" ]; then
               if [ "$existing" = "$SHA" ]; then
                 echo "${tag} already points at ${SHA}"

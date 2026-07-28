@@ -61,5 +61,18 @@ func TestReleaseTagsOnlyResolvableModules(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(string(raw), ShouldContainSubstring, "for module in "+strings.Join(releaseTagged, " ")+"; do")
 		})
+
+		// `gh api` writes its 404 body to STDOUT, so capturing the probe with
+		// `|| true` put `{"message":"Not Found",…}` in the variable that is
+		// supposed to hold an existing tag's sha — and every FIRST-TIME tag
+		// then failed as a conflict against a sha that was really an error
+		// message. v1.3.0 hit exactly that, after the binaries were built.
+		Convey("Then the tag probe branches on the exit status, not on captured output", func() {
+			raw, err := os.ReadFile(filepath.Join(".github", "workflows", "release.yml"))
+			So(err, ShouldBeNil)
+			So(string(raw), ShouldNotContainSubstring, "git/ref/tags/${tag}\" --jq .object.sha 2>/dev/null || true")
+			So(string(raw), ShouldContainSubstring,
+				"if ! existing=$(gh api \"repos/${REPO}/git/ref/tags/${tag}\" --jq .object.sha 2>/dev/null); then")
+		})
 	})
 }

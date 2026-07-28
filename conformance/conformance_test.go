@@ -23,7 +23,7 @@ import (
 func TestClientConformance(t *testing.T) {
 	Convey("Given a standalone flexitype service and its Go client", t, func() {
 		svc := flexitype.NewInMemory(flexitype.WithSearchIndex())
-		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{}))
+		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{AllowAnonymous: true}))
 		Reset(ts.Close)
 
 		c, err := client.New(ts.URL) // dev mode: auth disabled, no token
@@ -211,7 +211,7 @@ func TestEventCursorConformance(t *testing.T) {
 		So(svc.Migrate(context.Background()), ShouldBeNil)
 		pool.MustExec(`TRUNCATE flexitype_event_cursor`)
 
-		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{}))
+		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{AllowAnonymous: true}))
 		Reset(ts.Close)
 
 		c, err := client.New(ts.URL)
@@ -277,7 +277,7 @@ func TestEventCursorConformance(t *testing.T) {
 func TestSilentlyBrokenMethodsConformance(t *testing.T) {
 	Convey("Given a standalone service and its Go client", t, func() {
 		svc := flexitype.NewInMemory()
-		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{}))
+		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{AllowAnonymous: true}))
 		Reset(ts.Close)
 
 		c, err := client.New(ts.URL)
@@ -363,7 +363,7 @@ func TestSilentlyBrokenMethodsConformance(t *testing.T) {
 func TestErasureAndValuesConformance(t *testing.T) {
 	Convey("Given a standalone service and its Go client", t, func() {
 		svc := flexitype.NewInMemory()
-		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{}))
+		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{AllowAnonymous: true}))
 		Reset(ts.Close)
 
 		c, err := client.New(ts.URL)

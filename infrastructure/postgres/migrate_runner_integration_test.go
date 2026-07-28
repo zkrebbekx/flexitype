@@ -258,3 +258,50 @@ func TestMigrationLeaseIntegration(t *testing.T) {
 		Reset(func() { freeLease() })
 	})
 }
+
+// TestMigrateFallbackIntegration covers the single-transaction fallback, the
+// path a transactor that cannot pin a connection takes.
+//
+// It is the one place a session-scoped advisory lock is still correct:
+// pg_advisory_xact_lock is released by the transaction that took it.
+func TestMigrateFallbackIntegration(t *testing.T) {
+	pool := testdb.Open(t, "postgres_fallback")
+	ctx := context.Background()
+	if err := Migrate(ctx, db.NewTransactor(pool)); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	Convey("Given a fully migrated schema", t, func() {
+		Convey("When the fallback path runs", func() {
+			err := Migrate(ctx, noPinTransactor{db.NewTransactor(pool)})
+
+			Convey("Then it finds nothing to do and succeeds", func() {
+				So(err, ShouldBeNil)
+			})
+		})
+	})
+
+	Convey("Given one transactional migration recorded as unapplied", t, func() {
+		// 000027 is transactional and idempotent (DROP/CREATE INDEX IF [NOT]
+		// EXISTS), so re-applying it is safe and exercises the fallback's
+		// apply-and-record loop.
+		pool.MustExec(`DELETE FROM flexitype_schema_migrations WHERE version = 27`)
+
+		Convey("When the fallback path runs", func() {
+			err := Migrate(ctx, noPinTransactor{db.NewTransactor(pool)})
+
+			Convey("Then it applies and records it in one transaction", func() {
+				So(err, ShouldBeNil)
+				var applied int
+				So(pool.Get(&applied,
+					`SELECT count(*) FROM flexitype_schema_migrations WHERE version = 27`), ShouldBeNil)
+				So(applied, ShouldEqual, 1)
+			})
+		})
+
+		Reset(func() {
+			pool.MustExec(
+				`INSERT INTO flexitype_schema_migrations (version) VALUES (27) ON CONFLICT DO NOTHING`)
+		})
+	})
+}

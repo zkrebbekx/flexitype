@@ -169,3 +169,47 @@ ctx = uow.WithActor(ctx, uow.Actor{ID: user.ID})
 ctx = uow.WithAccess(ctx, policyFor(user))
 _, err = svc.Interactors(ctx).Values().Set(ctx, appvalue.SetInput{ ... })
 ```
+
+## Authentication is required
+
+`APIConfig.Accounts` is the trust boundary. **A nil authenticator serves the
+whole API — including the irreversible `POST /admin/purge` — to unauthenticated
+callers.**
+
+So it cannot be reached by omission:
+
+- `NewAPIHandler` returns an error when `Accounts` is nil and
+  `AllowAnonymous` is not set.
+- `APIHandler` panics in the same case. It is a composition-time
+  misconfiguration, so it fails at startup rather than once per request.
+
+```go
+h, err := svc.NewAPIHandler(flexitype.APIConfig{
+    Accounts: accounts, // a serviceaccount.Store, or Service.NewAccountLookup
+})
+if err != nil {
+    return err
+}
+```
+
+For a local development stack, state the choice:
+
+```go
+h, _ := svc.NewAPIHandler(flexitype.APIConfig{AllowAnonymous: true})
+```
+
+This mirrors the standalone binary, which refuses to boot without an account
+source unless `FLEXITYPE_DEV_INSECURE=true`.
+
+### Throttle failed credentials too
+
+`RateLimiter` and `TenantRateLimiter` key on a resolved principal, so neither
+can throttle a request that fails to authenticate — and each of those costs a
+database round trip and a hash, uncached. Set `AuthRateLimiter` as well:
+
+```go
+flexitype.APIConfig{
+    Accounts:        accounts,
+    AuthRateLimiter: ratelimit.New(20, 40), // by client address, before auth
+}
+```

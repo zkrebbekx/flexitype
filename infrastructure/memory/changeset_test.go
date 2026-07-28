@@ -452,3 +452,91 @@ func TestChangeSetErasureResidue(t *testing.T) {
 		})
 	})
 }
+
+// TestChangeSetACLEdges covers the error paths in the change-set field ACL.
+func TestChangeSetACLEdges(t *testing.T) {
+	Convey("Given a change-set holding a mutation with an unparseable attribute id", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		it := svc.Interactors(ctx)
+
+		emp, err := it.TypeDefinitions().Create(ctx,
+			apptypedef.CreateInput{InternalName: "employee", DisplayName: "Employee"})
+		So(err, ShouldBeNil)
+		attr, err := it.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: emp.ID.String(), InternalName: "grade",
+			DisplayName: "Grade", DataType: "integer",
+		})
+		So(err, ShouldBeNil)
+
+		cs, err := it.ChangeSets().Create(ctx, appchangeset.CreateInput{Name: "cs"})
+		So(err, ShouldBeNil)
+
+		Convey("When a mutation names an attribute id that is not a ULID", func() {
+			_, err := it.ChangeSets().AddMutation(ctx, cs.ID.String(), appvalue.Mutation{
+				Kind: appvalue.MutationSet, AttributeDefinitionID: "not-a-ulid",
+				EntityID: "emp-1", TypeDefinitionID: emp.ID.String(),
+				Value: json.RawMessage(`1`),
+			})
+
+			Convey("Then it is refused as a validation error, not accepted unchecked", func() {
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
+			})
+		})
+
+		Convey("When a restricted principal names an attribute that does not exist", func() {
+			// An unresolvable attribute is not one the policy can be shown to
+			// permit, so it is unwritable — the same rule the value read
+			// paths apply. (An admin principal bypasses the field ACL
+			// entirely; publish then rejects the unknown attribute.)
+			restricted := uow.WithAccess(ctx, uow.Access{
+				Attr: map[string]uow.Perm{"grade": uow.PermWrite},
+			})
+			_, err := svc.Interactors(restricted).ChangeSets().AddMutation(restricted, cs.ID.String(),
+				appvalue.Mutation{
+					Kind: appvalue.MutationSet, AttributeDefinitionID: ulid.New().String(),
+					EntityID: "emp-1", TypeDefinitionID: emp.ID.String(),
+					Value: json.RawMessage(`1`),
+				})
+
+			Convey("Then it is refused rather than staged", func() {
+				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeForbidden)
+			})
+		})
+
+		Convey("When a set with no mutations is read", func() {
+			got, err := it.ChangeSets().Get(ctx, cs.ID.String())
+
+			Convey("Then redaction is a no-op", func() {
+				So(err, ShouldBeNil)
+				So(got.Mutations, ShouldBeEmpty)
+			})
+		})
+
+		Convey("When a removal is staged for an attribute the caller may write", func() {
+			_, err := it.ChangeSets().AddMutation(ctx, cs.ID.String(), appvalue.Mutation{
+				Kind: appvalue.MutationRemove, AttributeDefinitionID: attr.ID.String(),
+				EntityID: "emp-1", TypeDefinitionID: emp.ID.String(),
+			})
+
+			Convey("Then it is accepted: a removal is a write like any other", func() {
+				So(err, ShouldBeNil)
+			})
+		})
+
+		Convey("When a removal is staged for an attribute the caller may not write", func() {
+			restricted := uow.WithAccess(ctx, uow.Access{
+				Attr: map[string]uow.Perm{"grade": uow.PermRead},
+			})
+			_, err := svc.Interactors(restricted).ChangeSets().AddMutation(restricted, cs.ID.String(),
+				appvalue.Mutation{
+					Kind: appvalue.MutationRemove, AttributeDefinitionID: attr.ID.String(),
+					EntityID: "emp-1", TypeDefinitionID: emp.ID.String(),
+				})
+
+			Convey("Then read access is not enough to stage a removal", func() {
+				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeForbidden)
+			})
+		})
+	})
+}

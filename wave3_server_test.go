@@ -31,7 +31,7 @@ func TestRecomputeWithoutSearchIndex(t *testing.T) {
 	Convey("Given a service with no search index configured", t, func() {
 		svc := flexitype.NewInMemory()
 		// No WithSearchIndex option, which is what leaves s.indexer nil.
-		handler := svc.APIHandler(flexitype.APIConfig{})
+		handler := svc.APIHandler(flexitype.APIConfig{AllowAnonymous: true})
 
 		Convey("When an admin posts to the recompute endpoint", func() {
 			// A nil authenticator runs as the system actor with admin scope,

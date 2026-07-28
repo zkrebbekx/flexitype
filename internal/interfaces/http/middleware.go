@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -207,6 +208,59 @@ func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(ht
 // unauthenticated (development) requests key on a single shared bucket. A
 // rejected request gets 429 with a Retry-After header and is counted per
 // tenant. A nil limiter disables throttling.
+// preAuthRateLimit throttles by client address BEFORE authentication.
+//
+// The per-account and per-tenant limiters sit after authenticate, which writes
+// 401 without calling next — so a failed authentication was never throttled at
+// all. Each bad bearer token costs a SQL round trip against
+// flexitype_service_account plus a constant-time hash, and only SUCCESSFUL
+// authentications are cached, so every attempt was a fresh database hit. An
+// unauthenticated attacker could exhaust the connection pool with a loop, and
+// token brute-force had no throttle whatever. The ceilings that exist cannot
+// apply: the principal is unknown until after the check they sit behind.
+//
+// Keyed on the client address, which is the only identifier available before
+// a credential is resolved. Rejections are counted on the same rate-limit
+// metric as the others, so the condition is visible on the dashboard an
+// operator already has.
+func preAuthRateLimit(limiter *ratelimit.Limiter, m *metrics.Metrics) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if limiter == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			ok, retry := limiter.Allow(clientKey(r))
+			if ok {
+				next.ServeHTTP(w, r)
+				return
+			}
+			m.CountRateLimitReject(uow.TenantFromContext(r.Context()).String())
+			w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
+			var body errorBody
+			body.Error.Code = "RATE_LIMITED"
+			body.Error.Message = "rate limit exceeded; retry later"
+			writeJSON(w, http.StatusTooManyRequests, body)
+		})
+	}
+}
+
+// clientKey identifies the caller before authentication.
+//
+// RemoteAddr is used rather than X-Forwarded-For: a header is attacker-
+// supplied, so trusting it would let one client spread its attempts across
+// unlimited keys and defeat the limiter entirely. Behind a proxy this keys on
+// the proxy, which is a ceiling on aggregate unauthenticated traffic rather
+// than a per-client one — a real limit, and stated in the documentation
+// rather than left to be discovered.
+func clientKey(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 func rateLimit(limiter, tenantLimiter *ratelimit.Limiter, m *metrics.Metrics) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

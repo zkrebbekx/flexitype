@@ -132,6 +132,18 @@ type Config struct {
 	TenantRateLimitRPS float64
 	// TenantRateLimitBurst is the aggregate token-bucket ceiling.
 	TenantRateLimitBurst int
+	// AuthRateLimitRPS throttles requests by CLIENT ADDRESS before
+	// authentication; 0 disables it.
+	//
+	// The other two limiters key on a resolved principal and run after the
+	// authentication middleware, which short-circuits on a bad credential —
+	// so a failed authentication was never throttled. Each costs a database
+	// round trip and a hash, and only successful authentications are cached,
+	// so an unauthenticated caller could exhaust the connection pool and
+	// brute-force tokens with nothing bounding either.
+	AuthRateLimitRPS float64
+	// AuthRateLimitBurst is the pre-authentication token-bucket ceiling.
+	AuthRateLimitBurst int
 	// PubSubProject, when set, publishes every event to Google Cloud
 	// Pub/Sub in addition to any webhook subscriptions.
 	PubSubProject string
@@ -232,6 +244,8 @@ func Load() (Config, error) {
 		RateLimitBurst:          e.int("FLEXITYPE_RATE_LIMIT_BURST", 200),
 		TenantRateLimitRPS:      e.float("FLEXITYPE_TENANT_RATE_LIMIT_RPS", 500),
 		TenantRateLimitBurst:    e.int("FLEXITYPE_TENANT_RATE_LIMIT_BURST", 2000),
+		AuthRateLimitRPS:        e.float("FLEXITYPE_AUTH_RATE_LIMIT_RPS", 20),
+		AuthRateLimitBurst:      e.int("FLEXITYPE_AUTH_RATE_LIMIT_BURST", 40),
 		PubSubProject:           os.Getenv("FLEXITYPE_PUBSUB_PROJECT"),
 		PubSubTopic:             envStr("FLEXITYPE_PUBSUB_TOPIC", "flexitype-events"),
 		PubSubOrdering:          e.bool("FLEXITYPE_PUBSUB_ORDERING", false),
@@ -271,14 +285,24 @@ func Load() (Config, error) {
 	if len(e.errs) > 0 {
 		return Config{}, fmt.Errorf("invalid configuration: %w", errors.Join(e.errs...))
 	}
-	if cfg.DevInsecure {
-		cfg.RequireAuth = false
-	}
+	// FLEXITYPE_DEV_INSECURE is the ONLY way to boot unauthenticated.
+	//
+	// FLEXITYPE_REQUIRE_AUTH=false used to be a second, undocumented one: it
+	// skipped this check entirely, so a manifest carried over from before the
+	// fail-closed default kept booting open while the warning named a
+	// variable nobody had set. RequireAuth no longer disables anything; a
+	// deployment that set it and has no account source is refused, and told
+	// which variable actually expresses that intent.
+	cfg.RequireAuth = !cfg.DevInsecure
 	if cfg.RequireAuth && cfg.ServiceAccountsPath == "" && !cfg.EnableProvisioning {
+		hint := ""
+		if raw := os.Getenv("FLEXITYPE_REQUIRE_AUTH"); raw != "" && !parseBoolOrTrue(raw) {
+			hint = " (FLEXITYPE_REQUIRE_AUTH=false does not disable authentication)"
+		}
 		return Config{}, fmt.Errorf(
-			"no account source is configured: set FLEXITYPE_SERVICE_ACCOUNTS or FLEXITYPE_PROVISIONING=true. " +
-				"To run without authentication — which serves the whole API, including the irreversible " +
-				"admin purge, to anonymous callers — set FLEXITYPE_DEV_INSECURE=true explicitly")
+			"no account source is configured: set FLEXITYPE_SERVICE_ACCOUNTS or FLEXITYPE_PROVISIONING=true. "+
+				"To run without authentication — which serves the whole API, including the irreversible "+
+				"admin purge, to anonymous callers — set FLEXITYPE_DEV_INSECURE=true explicitly%s", hint)
 	}
 	// Unencrypted database traffic is only tolerated to a loopback host (local
 	// dev / a sidecar). A non-loopback host with sslmode=disable would send
@@ -295,10 +319,16 @@ func Load() (Config, error) {
 	// off by accident: the whole point of the guard is that unencrypted
 	// credentials never leave the host, and which setting expressed the
 	// connection does not change that.
-	sslMode, host := cfg.Database.SSLMode, cfg.Database.Host
-	if cfg.Database.URL != "" {
-		sslMode, host = sslModeAndHostOf(cfg.Database.URL)
-	}
+	// The guard reads the RENDERED DSN, so it sees what libpq will see.
+	//
+	// It used to read the individual settings and re-parse only when
+	// FLEXITYPE_DB_URL was set, which left FLEXITYPE_DB_PARAMS — appended
+	// verbatim to the connection string — outside it entirely. libpq resolves
+	// duplicate keywords LAST-WINS, so `FLEXITYPE_DB_PARAMS="sslmode=disable"`
+	// silently turned TLS off while the guard read the `sslmode=require` it
+	// was told about, and `host=` inside the params redirected the connection,
+	// with the configured credentials, to another server.
+	sslMode, host := sslModeAndHostOf(cfg.Database.DSN())
 	if sslMode == "disable" && !isLoopbackHost(host) && !cfg.DevInsecure {
 		return Config{}, fmt.Errorf(
 			"sslmode=disable is not allowed for non-loopback host %q; use require/verify-full, "+
@@ -334,6 +364,20 @@ func (e *envReader) int(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// ParseBoolOrTrueForTest exposes parseBoolOrTrue to the package's external
+// test, which cannot reach an unexported function.
+func ParseBoolOrTrueForTest(raw string) bool { return parseBoolOrTrue(raw) }
+
+// parseBoolOrTrue reports a boolean environment value, treating anything
+// unparseable as true so an unreadable setting is never read as an opt-out.
+func parseBoolOrTrue(raw string) bool {
+	b, err := strconv.ParseBool(raw)
+	if err != nil {
+		return true
+	}
+	return b
 }
 
 func (e *envReader) bool(key string, fallback bool) bool {
@@ -399,8 +443,15 @@ func sslModeAndHostOf(dsn string) (sslMode, host string) {
 		if v := u.Query().Get("sslmode"); v != "" {
 			sslMode = v
 		}
+		if v := u.Query().Get("hostaddr"); v != "" {
+			host = v
+		}
 		return sslMode, host
 	}
+	// Keyword form. The LAST occurrence of a keyword wins, as in libpq, so a
+	// value appended by FLEXITYPE_DB_PARAMS is what the guard evaluates —
+	// which is the point: it is also what the connection uses.
+	var hostAddr string
 	for _, field := range strings.Fields(dsn) {
 		key, value, ok := strings.Cut(field, "=")
 		if !ok {
@@ -409,9 +460,16 @@ func sslModeAndHostOf(dsn string) (sslMode, host string) {
 		switch key {
 		case "host":
 			host = value
+		case "hostaddr":
+			// hostaddr bypasses name resolution entirely, so it is where the
+			// connection actually goes when both are present.
+			hostAddr = value
 		case "sslmode":
 			sslMode = value
 		}
+	}
+	if hostAddr != "" {
+		host = hostAddr
 	}
 	return sslMode, host
 }

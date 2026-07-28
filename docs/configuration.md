@@ -61,7 +61,7 @@ hostname. Never set it in a deployment reachable by anything but you.
 | `FLEXITYPE_SERVICE_ACCOUNTS` | _(unset)_ | Path to the service-account JSON file (file mode). |
 | `FLEXITYPE_PROVISIONING` | `false` | Enable database-backed auth and the admin-scoped tenant/service-account API. |
 | `FLEXITYPE_DEV_INSECURE` | `false` | Run with authentication disabled, and permit an unencrypted database connection to a non-loopback host. Local development only. |
-| `FLEXITYPE_REQUIRE_AUTH` | `true` | Refuse to boot unless an account source (file or provisioning) is configured. `FLEXITYPE_DEV_INSECURE` overrides it. |
+| `FLEXITYPE_REQUIRE_AUTH` | `true` | Reports that an account source is required. **Setting it to `false` does not disable authentication** — `FLEXITYPE_DEV_INSECURE` is the only opt-out, so a manifest carried over from an older release cannot boot open by omission. |
 | `FLEXITYPE_BOOTSTRAP_ADMIN` | `false` | On startup, if no accounts exist, seed a `default` tenant and `bootstrap-admin` admin account. Its token is printed to **stdout once** (never to the structured log) — capture it. |
 | `FLEXITYPE_AUTH_CACHE_TTL` | `30s` | How long a successful authentication is cached. Rotation, revocation, a role write or delete, and a tenant deactivation all evict the affected entries immediately, so this bounds only a change made directly in the database. |
 
@@ -132,7 +132,7 @@ setting.
 | Variable | Default | Purpose |
 |---|---|---|
 | `FLEXITYPE_DB_URL` | — | A complete libpq connection string or URL. **Replaces the six fields below entirely.** |
-| `FLEXITYPE_DB_PARAMS` | — | Extra `keyword=value` pairs appended to the rendered form. |
+| `FLEXITYPE_DB_PARAMS` | — | Extra `keyword=value` pairs appended to the rendered form. The TLS guard reads the **rendered DSN**, so a `sslmode`, `host` or `hostaddr` here is evaluated exactly as libpq resolves it (last wins) — the hatch cannot turn the protection off, by accident or otherwise. |
 
 The six-field form (`FLEXITYPE_DB_HOST`, `_PORT`, `_USER`, `_PASSWORD`,
 `_NAME`, `_SSLMODE`) covers the common case. It rendered a fixed parameter
@@ -288,6 +288,8 @@ that ceiling off.
 | `FLEXITYPE_RATE_LIMIT_RPS` | `50` | Sustained requests per second per **service account**. |
 | `FLEXITYPE_RATE_LIMIT_BURST` | `200` | Token-bucket ceiling for short bursts, per account. |
 | `FLEXITYPE_TENANT_RATE_LIMIT_RPS` | `500` | Sustained requests per second per **tenant**, across all of its accounts. |
+| `FLEXITYPE_AUTH_RATE_LIMIT_RPS` | `20` | Requests per **client address** before authentication; `0` disables. The per-account and per-tenant ceilings key on a resolved principal, so neither can throttle a failed credential — and each of those costs a database round trip and a hash, uncached. Behind a proxy this keys on the proxy, giving a ceiling on aggregate unauthenticated traffic rather than a per-client one: `X-Forwarded-For` is deliberately not read, because a header is attacker-supplied and trusting it would let one client spread its attempts across unlimited keys. |
+| `FLEXITYPE_AUTH_RATE_LIMIT_BURST` | `40` | Pre-authentication token-bucket ceiling. |
 | `FLEXITYPE_TENANT_RATE_LIMIT_BURST` | `2000` | Token-bucket ceiling for short bursts, per tenant. |
 
 The per-account limiter alone cannot bound a tenant: a tenant that creates more

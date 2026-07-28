@@ -42,6 +42,9 @@ type ServerConfig struct {
 	// across all of its service accounts. Without it, a tenant multiplies its
 	// effective rate by the number of accounts it creates.
 	TenantRateLimiter *ratelimit.Limiter
+	// AuthRateLimiter throttles by client address BEFORE authentication, so a
+	// failed credential is throttled at all. Nil disables it.
+	AuthRateLimiter *ratelimit.Limiter
 	// BlobStore serves media downloads; nil when media is disabled.
 	BlobStore blob.Store
 	// GraphQL serves the read-only GraphQL API; nil disables the endpoint.
@@ -107,6 +110,9 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 	r.Get("/api/v1/openapi.yaml", s.openAPIYAML)
 
 	r.Route("/api/v1", func(api chi.Router) {
+		// Before auth: a failed authentication must be throttled too, and it
+		// cannot be keyed on a principal that does not exist yet.
+		api.Use(preAuthRateLimit(cfg.AuthRateLimiter, cfg.Metrics))
 		api.Use(authenticate(cfg.Accounts, cfg.Logger))
 		// Throttle after auth so the limiter keys on the resolved account
 		// and counts usage per tenant.

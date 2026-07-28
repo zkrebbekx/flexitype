@@ -7,6 +7,47 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — The deployment trust boundary
+
+Three ways a deployment served more than its operator believed.
+
+- **Library mode served the whole API to anonymous callers** (#414). The
+  fail-closed authentication default was added to `internal/config`, which
+  governs only the standalone binary. `APIConfig.Accounts == nil` still
+  stamped an admin principal on every request, with no boot-time refusal and
+  not even the warning the binary prints — so an embedder who mounted the
+  handler the way the embedding guide documents served everything, including
+  the irreversible `POST /admin/purge`, unauthenticated. That state now needs
+  an explicit `AllowAnonymous`: `NewAPIHandler` returns an error without it,
+  and `APIHandler` panics, because it is a composition-time misconfiguration
+  rather than a per-request one.
+- **Failed authentication was never rate limited** (#416). The per-account and
+  per-tenant limiters run *after* `authenticate`, which writes 401 without
+  calling `next` — so 200 bad tokens meant 200 credential lookups, each a
+  database round trip and a hash, none cached and none counted. An
+  unauthenticated caller could exhaust the connection pool with a loop, and
+  token brute-force had no throttle at all. A pre-authentication limiter keyed
+  on the **client address** now runs first
+  (`FLEXITYPE_AUTH_RATE_LIMIT_RPS`, default 20; `APIConfig.AuthRateLimiter`),
+  and its rejections count on the existing rate-limit metric. It deliberately
+  ignores `X-Forwarded-For`: a header is attacker-supplied, so trusting it
+  would let one client spread its attempts across unlimited keys.
+- **`FLEXITYPE_DB_PARAMS` could turn off TLS or redirect the connection**
+  (#402). The params are appended verbatim to the connection string and libpq
+  resolves duplicate keywords **last-wins**, while the guard re-parsed only
+  when `FLEXITYPE_DB_URL` was set — so `DB_PARAMS="sslmode=disable"` shipped
+  credentials in the clear with `sslmode=require` still in the manifest, and
+  `host=`/`hostaddr=` sent them to another server. The guard now reads the
+  **rendered DSN**, so it evaluates what libpq will use, including `hostaddr`,
+  which bypasses name resolution entirely.
+
+Also: **`FLEXITYPE_REQUIRE_AUTH=false` was a second, undocumented way to boot
+unauthenticated** (#420) — it skipped the account-source check, so a manifest
+carried over from before the fail-closed default kept booting open while the
+warning named `FLEXITYPE_DEV_INSECURE`, which nobody had set. It no longer
+disables anything, and a deployment that set it with no account source is
+refused and told which variable actually expresses that intent.
+
 ### Fixed — Concurrent migrations through a transaction-mode pooler
 
 The migration runner took a **session-scoped** advisory lock and held it

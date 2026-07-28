@@ -31,7 +31,14 @@ func indexValidity(t *testing.T, pool *sqlx.DB, name string) (exists, valid bool
 
 // leaveInvalidIndex builds an invalid index the way production does: a
 // CREATE INDEX CONCURRENTLY interrupted part-way. An open transaction on the
-// table makes the build wait, and a statement timeout then cancels it.
+// table makes the build wait, and a cancelled context then stops it.
+//
+// The interruption is a CONTEXT deadline, not `SET statement_timeout`. A SET
+// is session state, and these suites also run through a transaction-mode
+// pooler, where session state leaks to whichever backend serves the next
+// transaction — a 1-second timeout planted here failed an unrelated purge in
+// a later package. A context deadline sends a cancel request and touches no
+// session state.
 func leaveInvalidIndex(t *testing.T, pool *sqlx.DB, table, index string) {
 	t.Helper()
 	blocker, err := pool.Beginx()
@@ -45,17 +52,11 @@ func leaveInvalidIndex(t *testing.T, pool *sqlx.DB, table, index string) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		conn, cerr := pool.Connx(context.Background())
-		if cerr != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
-		if _, err := conn.ExecContext(context.Background(), `SET statement_timeout = '1s'`); err != nil {
-			return
-		}
-		// Cancelled by the timeout while it waits for the blocker: the index
-		// is left behind, INVALID.
-		_, _ = conn.ExecContext(context.Background(),
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		// Cancelled while it waits for the blocker: the index is left
+		// behind, INVALID.
+		_, _ = pool.ExecContext(ctx,
 			`CREATE INDEX CONCURRENTLY IF NOT EXISTS `+index+` ON `+table+` (a)`)
 	}()
 

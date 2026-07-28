@@ -7,6 +7,44 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — Five one-sided guards: DSN quoting, the pre-auth limiter, the GraphQL schema key, the effective-permissions view and the time zone
+
+- **The TLS guard parses the connection string with libpq's grammar.** The
+  keyword form was split on whitespace and cut at the first `=`, so a
+  single-quoted value kept its quotes: `sslmode='disable'` was compared as
+  `'disable'`, matched nothing and passed a guard that exists to refuse
+  exactly that — while lib/pq honoured the quoted form and connected in
+  cleartext. `host` and `hostaddr` were evaluated unstripped for the same
+  reason. Quoted values, backslash escapes and spaces around `=` are now read
+  as libpq reads them.
+- **The pre-authentication limiter charges failed authentications, not
+  traffic.** A token is taken up front and refunded unless the response is
+  401. Charging every request made the shipped 20 rps default a ceiling on
+  ALL traffic behind an ingress or a `Cluster`-policy LoadBalancer, where
+  every request appears to come from one address: healthy authenticated
+  clients, well inside their per-account and per-tenant budgets, got 429.
+  `pkg/ratelimit` gains `Limiter.Refund`.
+- **The GraphQL schema-cache key covers `Access.Default`.** An empty `Attr`
+  map signed as `"open"` whatever the default was, so `uow.DenyAll()` — what
+  an account naming a deleted role resolves to — collided with an
+  unrestricted principal. Whichever arrived first warmed the cache for both:
+  a deny-all caller was served the unrestricted schema, disclosing every
+  restricted attribute name, or an unrestricted caller was served an empty
+  one and every query failed. The key is now a hash of the whole policy.
+- **The effective-permissions view reports what is enforced.** Enforcement
+  ignores the merged field-permission map when the account holds admin, and
+  ignores it entirely when a role is unresolved, so a reviewer could read
+  `salary: none` off an account with unrestricted field access. The view
+  gains `field_acl_bypassed` and `denied_all`, both derived by the same
+  function the request path uses (`uow.AccessFromPermissions`), and the
+  console shows what applies instead of the map.
+- **`FLEXITYPE_TIMEZONE` reaches rule evaluation.** `Service.Interactors`
+  stamped the zone onto a context it then discarded, and the HTTP middleware
+  never stamped it at all — an interactor set carries no context of its own,
+  so every `today`/`now` rule and dynamic default resolved in UTC. The API
+  stamps it in middleware; the background loops stamp it too; and embedders
+  pass their context through the new `Service.Context` first.
+
 ### Fixed — Aggregates: reserved words, non-numeric sources, integer precision and a guard that skipped half its rule
 
 Five defects introduced with the aggregate feature, all of which produced a

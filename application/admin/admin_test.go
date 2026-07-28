@@ -563,7 +563,22 @@ func TestRoleSafety(t *testing.T) {
 					})
 				})
 
+				// The view answers "what may this account actually do", so it
+				// reports what the request path ENFORCES. Enforcement ignores
+				// the merged map for an admin and ignores it entirely when a
+				// role is unresolved, so the map alone answered the wrong
+				// question for the two cases where being wrong matters most.
 				Convey("When the account's effective permissions are read", func() {
+					view, err := it.EffectiveAccount(ctx, out.Account.ID.String())
+					So(err, ShouldBeNil)
+
+					Convey("Then neither override flag is set for an ordinary restricted account", func() {
+						So(view.FieldACLBypassed, ShouldBeFalse)
+						So(view.DeniedAll, ShouldBeFalse)
+					})
+				})
+
+				Convey("When the account's effective permissions are read again", func() {
 					view, err := it.EffectiveAccount(ctx, out.Account.ID.String())
 
 					Convey("Then the role's grants are resolved, not just named", func() {
@@ -592,6 +607,83 @@ func TestRoleSafety(t *testing.T) {
 
 			Convey("Then it is a validation error", func() {
 				So(domainerrors.IsValidation(err), ShouldBeTrue)
+			})
+		})
+	})
+}
+
+// TestEffectiveAccountReportsWhatIsEnforced covers the two cases where the
+// merged field-permission map is not what applies.
+//
+// Enforcement ignores the map when the account holds admin, and ignores it
+// entirely when a role is unresolved. A permissions review that read
+// `salary: none` off an admin account would sign it off as restricted while
+// enforcement granted unrestricted field access on every surface — values,
+// revisions, media, exports, GraphQL. An account whose only role was deleted
+// displayed "denied every attribute" and "no restrictions" in the same panel.
+func TestEffectiveAccountReportsWhatIsEnforced(t *testing.T) {
+	Convey("Given a provisioned tenant", t, func() {
+		store := newFakeStore()
+		it := admin.NewInteractor(store)
+		ctx := context.Background()
+		_, err := it.CreateTenant(ctx, "acme")
+		So(err, ShouldBeNil)
+
+		Convey("When an admin-scoped account also carries a field restriction", func() {
+			out, cerr := it.CreateAccount(ctx, admin.CreateAccountInput{
+				TenantName: "acme", Name: "ops", Scopes: []string{"admin"},
+			})
+			So(cerr, ShouldBeNil)
+			// Written directly: the API refuses to combine admin with field
+			// permissions, and this is the state a direct row edit produces.
+			acct := store.accounts[out.Account.ID.String()]
+			acct.FieldPermissions = map[string]string{"salary": "none"}
+			store.accounts[out.Account.ID.String()] = acct
+
+			view, verr := it.EffectiveAccount(ctx, out.Account.ID.String())
+
+			Convey("Then the view says the field ACL is bypassed", func() {
+				So(verr, ShouldBeNil)
+				So(view.FieldACLBypassed, ShouldBeTrue)
+				So(view.DeniedAll, ShouldBeFalse)
+				// The merged map is still reported, and is now explicitly
+				// labelled as not what applies.
+				So(view.FieldPermissions["salary"], ShouldEqual, "none")
+			})
+		})
+
+		Convey("When an account names a role that no longer exists", func() {
+			out, cerr := it.CreateAccount(ctx, admin.CreateAccountInput{
+				TenantName: "acme", Name: "analyst", Scopes: []string{"read"},
+			})
+			So(cerr, ShouldBeNil)
+			// The role is deleted out from under the account, which the API
+			// refuses but a direct row edit produces.
+			acct := store.accounts[out.Account.ID.String()]
+			acct.Roles = []string{"reviewer"}
+			store.accounts[out.Account.ID.String()] = acct
+
+			view, verr := it.EffectiveAccount(ctx, out.Account.ID.String())
+
+			Convey("Then the view says every attribute is denied", func() {
+				So(verr, ShouldBeNil)
+				So(view.DeniedAll, ShouldBeTrue)
+				So(view.FieldACLBypassed, ShouldBeFalse)
+				So(view.UnresolvedRoles, ShouldResemble, []string{"reviewer"})
+			})
+		})
+
+		Convey("When an account declares no restrictions at all", func() {
+			out, cerr := it.CreateAccount(ctx, admin.CreateAccountInput{
+				TenantName: "acme", Name: "writer", Scopes: []string{"write"},
+			})
+			So(cerr, ShouldBeNil)
+			view, verr := it.EffectiveAccount(ctx, out.Account.ID.String())
+
+			Convey("Then the field ACL is reported as not applying", func() {
+				So(verr, ShouldBeNil)
+				So(view.FieldACLBypassed, ShouldBeTrue)
+				So(view.DeniedAll, ShouldBeFalse)
 			})
 		})
 	})

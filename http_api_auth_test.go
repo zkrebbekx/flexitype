@@ -599,6 +599,42 @@ func TestFailedAuthIsRateLimited(t *testing.T) {
 		})
 	})
 
+	// The token is charged to the OUTCOME. Charging every request made the
+	// bucket a ceiling on ALL traffic: behind an ingress or a Cluster-policy
+	// LoadBalancer every request appears to come from one address, so the
+	// shipped 20 rps default throttled healthy authenticated clients that
+	// were well inside their per-account and per-tenant budgets.
+	Convey("Given an API with a pre-authentication limiter of one token and a valid credential", t, func() {
+		reader, readerToken := account("01KXREADER0000000000000000", "reader", "acme",
+			[]serviceaccount.Scope{serviceaccount.ScopeRead}, nil)
+		a := newAPI(t, flexitype.APIConfig{
+			Accounts:        serviceaccount.NewStore([]serviceaccount.Account{reader}),
+			AuthRateLimiter: ratelimit.New(0.001, 1),
+		})
+
+		Convey("When a burst of authenticated requests arrives from one address", func() {
+			statuses := map[int]int{}
+			for i := 0; i < 20; i++ {
+				statuses[a.as(readerToken).get("/api/v1/type-definitions").Status]++
+			}
+
+			Convey("Then none is throttled: the bucket bounds failures, not traffic", func() {
+				So(statuses[http.StatusOK], ShouldEqual, 20)
+				So(statuses[http.StatusTooManyRequests], ShouldEqual, 0)
+			})
+		})
+
+		Convey("When a failure spends the token and a valid credential follows", func() {
+			bad := a.as("ft_01KXREADER0000000000000000_wrong").get("/api/v1/type-definitions")
+			So(bad.Status, ShouldEqual, http.StatusUnauthorized)
+
+			Convey("Then the good request is throttled, because the failure kept the token", func() {
+				So(a.as(readerToken).get("/api/v1/type-definitions").Status,
+					ShouldEqual, http.StatusTooManyRequests)
+			})
+		})
+	})
+
 	Convey("Given an API with no pre-authentication limiter", t, func() {
 		reader, readerToken := account("01KXREADER0000000000000000", "reader", "acme",
 			[]serviceaccount.Scope{serviceaccount.ScopeRead}, nil)

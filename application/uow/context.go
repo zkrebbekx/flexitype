@@ -106,6 +106,35 @@ func DenyAll() Access {
 	return Access{Default: PermNone}
 }
 
+// AccessFromPermissions derives a principal's field-level access from a
+// RESOLVED permission set: whether it holds admin, how many of its roles
+// could not be resolved, and its merged per-attribute levels.
+//
+// It is the one place the rule lives, so a view that answers "what may this
+// account actually do" cannot report something the request path does not
+// enforce. The effective-permissions view read the merged map directly, and
+// enforcement ignores that map for an admin and ignores it entirely for an
+// unresolved role — so the view was wrong for the highest-privilege case and
+// contradicted itself for a deleted role.
+//
+// An account naming a role that no longer exists is denied every attribute. A
+// missing role contributes no permissions, and an empty map otherwise reads
+// as "unrestricted", so deleting a role would have converted every account
+// restricted only by it into one with full field access.
+func AccessFromPermissions(admin bool, unresolvedRoles int, fieldPermissions map[string]string) Access {
+	if unresolvedRoles > 0 {
+		return DenyAll()
+	}
+	if admin || len(fieldPermissions) == 0 {
+		return Access{Admin: true}
+	}
+	attr := make(map[string]Perm, len(fieldPermissions))
+	for name, level := range fieldPermissions {
+		attr[name] = Perm(level)
+	}
+	return Access{Attr: attr}
+}
+
 // SystemAccess is the unrestricted policy internal maintenance runs under:
 // the outbox relay, the delivery worker, the retention pruner, the search
 // reindex and the computed recompute. Those loops have no principal, so they

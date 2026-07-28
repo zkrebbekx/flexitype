@@ -127,6 +127,16 @@ after the UTC midnight.
 An embedder serving tenants in several zones from one process stamps
 `uow.WithTimeZone` per request instead; a per-request zone wins over this
 setting.
+
+The standalone API stamps the zone on the request context in its middleware.
+An embedder must pass its own context through `Service.Context` first, because
+the zone has to travel on the context handed to each interactor METHOD:
+
+```go
+ctx = svc.Context(ctx)               // stamps the configured zone
+it := svc.Interactors(ctx)
+schema, err := it.TypeDefinitions().EffectiveAttributes(ctx, typeID)
+```
 ## Connection string
 
 | Variable | Default | Purpose |
@@ -289,7 +299,7 @@ that ceiling off.
 | `FLEXITYPE_RATE_LIMIT_RPS` | `50` | Sustained requests per second per **service account**, **per API process** — see the note below. |
 | `FLEXITYPE_RATE_LIMIT_BURST` | `200` | Token-bucket ceiling for short bursts, per account. |
 | `FLEXITYPE_TENANT_RATE_LIMIT_RPS` | `500` | Sustained requests per second per **tenant**, across all of its accounts, **per API process**. |
-| `FLEXITYPE_AUTH_RATE_LIMIT_RPS` | `20` | Requests per **client address** before authentication; `0` disables. The per-account and per-tenant ceilings key on a resolved principal, so neither can throttle a failed credential — and each of those costs a database round trip and a hash, uncached. Behind a proxy this keys on the proxy, giving a ceiling on aggregate unauthenticated traffic rather than a per-client one: `X-Forwarded-For` is deliberately not read, because a header is attacker-supplied and trusting it would let one client spread its attempts across unlimited keys. |
+| `FLEXITYPE_AUTH_RATE_LIMIT_RPS` | `20` | **Failed** authentications per **client address**; `0` disables. A token is taken before authentication and refunded unless the response is 401, so the bucket bounds bad credentials rather than traffic: an authenticated client is limited by the per-account and per-tenant ceilings, not by this one. Those ceilings key on a resolved principal, so neither can throttle a failed credential — and each failure costs a database round trip and a hash, uncached. Behind a proxy this keys on the proxy, giving a ceiling on aggregate failed authentications rather than a per-client one: `X-Forwarded-For` is deliberately not read, because a header is attacker-supplied and trusting it would let one client spread its attempts across unlimited keys. |
 | `FLEXITYPE_AUTH_RATE_LIMIT_BURST` | `40` | Pre-authentication token-bucket ceiling. |
 | `FLEXITYPE_TENANT_RATE_LIMIT_BURST` | `2000` | Token-bucket ceiling for short bursts, per tenant. |
 

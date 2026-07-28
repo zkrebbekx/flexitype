@@ -501,7 +501,7 @@ func (s *Service) RunOutboxRelay(ctx context.Context, loops ...DeliveryLoops) {
 	// The delivery machinery has no principal, so it stamps the system policy
 	// explicitly rather than inheriting the default — WithFailClosedACL
 	// inverts that default to deny-all.
-	ctx = uow.WithSystemAccess(ctx)
+	ctx = s.Context(uow.WithSystemAccess(ctx))
 	// Block until every selected loop has observed ctx cancellation and
 	// returned, so shutdown can be ordered around this call: the relay,
 	// delivery worker and pruner are fully stopped before the pool or
@@ -554,7 +554,9 @@ func (s *Service) RunChangeSetScheduler(ctx context.Context, interval time.Durat
 	if interval <= 0 {
 		interval = time.Minute
 	}
-	ctx = uow.WithSystemAccess(ctx) // a scheduler tick has no principal
+	// A scheduler tick has no principal, and it evaluates the same rules a
+	// request does, so it takes the deployment's zone too.
+	ctx = s.Context(uow.WithSystemAccess(ctx))
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -605,7 +607,7 @@ func (s *Service) ReindexSearch(ctx context.Context, tenant valueobjects.TenantI
 	if s.indexer == nil {
 		return 0, domainerrors.NewValidation("the search index is disabled; enable it with WithSearchIndex")
 	}
-	return s.indexer.Reindex(uow.WithSystemAccess(ctx), tenant)
+	return s.indexer.Reindex(s.Context(uow.WithSystemAccess(ctx)), tenant)
 }
 
 // RecomputeComputed re-materializes every entity's computed attributes for a
@@ -614,7 +616,7 @@ func (s *Service) ReindexSearch(ctx context.Context, tenant valueobjects.TenantI
 // process crash between commit and that post-commit can leave a computed value
 // stale; this rebuilds them all. Returns the number of entities recomputed.
 func (s *Service) RecomputeComputed(ctx context.Context, tenant valueobjects.TenantID) (int, error) {
-	return s.materializer.RecomputeTenant(uow.WithSystemAccess(ctx), tenant)
+	return s.materializer.RecomputeTenant(s.Context(uow.WithSystemAccess(ctx)), tenant)
 }
 
 // Migrate applies flexitype's embedded schema migrations. Safe to call on
@@ -645,14 +647,36 @@ func (s *Service) SchemaDrift(ctx context.Context) ([]int, error) {
 
 // Interactors returns a request-scoped usecase set. Call once per request
 // or unit of work so dataloader caches stay request-local.
+//
+// PASS THE CONTEXT THROUGH Context FIRST when the deployment sets a time
+// zone. An interactor set carries no context of its own — every method takes
+// one from its caller — so a zone stamped here would reach nothing:
+//
+//	ctx = svc.Context(ctx)
+//	it := svc.Interactors(ctx)
+//	schema, err := it.TypeDefinitions().EffectiveAttributes(ctx, typeID)
 func (s *Service) Interactors(ctx context.Context) *application.Interactors {
-	// Stamp the deployment's time zone unless the caller already chose one.
-	// A per-request stamp wins, which is how an embedder serves tenants in
-	// different zones from one process.
+	return s.factory.New(s.Context(ctx))
+}
+
+// Context returns ctx with the service-wide defaults stamped on it: the
+// deployment's time zone, when one is configured.
+//
+// It exists because those defaults have to travel on the context the CALLER
+// passes to each interactor method. Stamping them inside Interactors derived
+// a context that was then discarded, so FLEXITYPE_TIMEZONE never reached rule
+// evaluation and every `today`/`now` dependency rule and dynamic default
+// resolved in UTC — the read and write paths agreeing only because both were
+// wrong. The API stamps the same defaults in its middleware, which owns the
+// request context.
+//
+// A caller that already chose a zone keeps it, which is how a host serves
+// tenants in different zones from one process.
+func (s *Service) Context(ctx context.Context) context.Context {
 	if s.timeZone != nil && !uow.HasTimeZone(ctx) {
 		ctx = uow.WithTimeZone(ctx, s.timeZone)
 	}
-	return s.factory.New(ctx)
+	return ctx
 }
 
 // Factory exposes the underlying usecase factory for advanced wiring.
@@ -840,6 +864,7 @@ func (s *Service) NewAPIHandler(cfg APIConfig) (http.Handler, error) {
 		DisableConsole:    cfg.DisableConsole,
 		MaxImportBytes:    cfg.MaxImportBytes,
 		MaxMediaBytes:     cfg.MaxMediaBytes,
+		TimeZone:          s.timeZone,
 	}
 	if cfg.EnableProvisioning {
 		var adminOpts []admin.Option

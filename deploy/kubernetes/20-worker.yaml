@@ -1,0 +1,67 @@
+# The worker tier: the relay, the delivery worker, the retention pruner and
+# the change-set scheduler. It serves no API traffic.
+#
+# One replica by default. The relay and the delivery worker are safe on many
+# (the relay leases batches; the worker claims FOR UPDATE SKIP LOCKED), so
+# scale up when delivery is the bottleneck. The pruner and the scheduler are
+# safe on many too but gain nothing from it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flexitype-worker
+  labels: { app.kubernetes.io/name: flexitype, app.kubernetes.io/component: worker }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: flexitype, app.kubernetes.io/component: worker }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: flexitype, app.kubernetes.io/component: worker }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: flexitype
+          image: ghcr.io/zkrebbekx/flexitype:latest # pin a digest in production
+          ports: [{ name: http, containerPort: 8080 }]
+          envFrom: [{ configMapRef: { name: flexitype } }]
+          env:
+            - { name: FLEXITYPE_RUN_RELAY, value: "true" }
+            - { name: FLEXITYPE_RUN_DELIVERY_WORKER, value: "true" }
+            - { name: FLEXITYPE_RUN_PRUNER, value: "true" }
+            - { name: FLEXITYPE_RUN_SCHEDULER, value: "true" }
+            # The API tier already migrated; a second migrator would only
+            # queue on the advisory lock.
+            - { name: FLEXITYPE_MIGRATE_ON_START, value: "false" }
+            # No console and no API surface on a tier that serves neither.
+            - { name: FLEXITYPE_ENABLE_CONSOLE, value: "false" }
+            # Keep the lease longer than a batch takes to drain — see
+            # docs/configuration.md for the arithmetic.
+            - { name: FLEXITYPE_RELAY_LEASE_TTL, value: "120s" }
+            - name: FLEXITYPE_DB_URL
+              valueFrom: { secretKeyRef: { name: flexitype-db, key: url } }
+          volumeMounts:
+            - { name: accounts, mountPath: /etc/flexitype, readOnly: true }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: accounts
+          secret: { secretName: flexitype-accounts }

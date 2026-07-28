@@ -1,0 +1,18 @@
+# Settings shared by both tiers. Secrets (the database URL, the service
+# accounts file) are referenced, never inlined.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flexitype
+  labels: { app.kubernetes.io/name: flexitype }
+data:
+  FLEXITYPE_PORT: "8080"
+  FLEXITYPE_LOG_FORMAT: "json"
+  FLEXITYPE_LOG_LEVEL: "info"
+  # Authentication is required by default; the accounts file is mounted from
+  # a secret. Do not set FLEXITYPE_DEV_INSECURE here — it turns the guards off.
+  FLEXITYPE_SERVICE_ACCOUNTS: "/etc/flexitype/accounts.json"
+  FLEXITYPE_MIGRATE_ON_START: "true"
+  FLEXITYPE_FEATURE_SEARCH_INDEX: "true"
+  FLEXITYPE_OUTBOX: "true"
+  FLEXITYPE_SHUTDOWN_TIMEOUT: "30s"

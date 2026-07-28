@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -144,12 +146,39 @@ type Database struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
+
+	// URL is a complete libpq connection string or URL. When set it replaces
+	// the fields above entirely, which is the escape hatch for any parameter
+	// they do not model.
+	URL string
+	// Params are extra libpq keyword=value pairs appended to the rendered
+	// form, for the common case of adding one parameter without restating
+	// the whole connection string.
+	Params string
 }
 
 // DSN renders the lib/pq connection string.
+//
+// FLEXITYPE_DB_URL wins outright when set, so any libpq parameter is
+// reachable — `sslrootcert` for a private CA, `application_name` so the
+// connection is identifiable in pg_stat_activity, `connect_timeout` so a
+// pod does not hang on an unreachable host, `target_session_attrs` for a
+// read-write endpoint. The six-field form rendered a fixed parameter list
+// and no setting could add to it, so those were unreachable through
+// documented configuration.
+//
+// FLEXITYPE_DB_PARAMS appends to the six-field form for the common case of
+// wanting one extra parameter without restating the whole URL.
 func (d Database) DSN() string {
-	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+	if d.URL != "" {
+		return d.URL
+	}
+	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		d.Host, d.Port, d.User, d.Password, d.Name, d.SSLMode)
+	if d.Params != "" {
+		dsn += " " + d.Params
+	}
+	return dsn
 }
 
 // Load reads configuration from the environment with production-safe
@@ -207,6 +236,8 @@ func Load() (Config, error) {
 			MaxOpenConns:    e.int("FLEXITYPE_DB_MAX_OPEN_CONNS", 25),
 			MaxIdleConns:    e.int("FLEXITYPE_DB_MAX_IDLE_CONNS", 10),
 			ConnMaxLifetime: e.duration("FLEXITYPE_DB_CONN_MAX_LIFETIME", 30*time.Minute),
+			URL:             os.Getenv("FLEXITYPE_DB_URL"),
+			Params:          os.Getenv("FLEXITYPE_DB_PARAMS"),
 		},
 	}
 	if cfg.Port <= 0 || cfg.Port > 65535 {
@@ -241,10 +272,20 @@ func Load() (Config, error) {
 	// a host called "postgres", which this guard refused, so the documented
 	// first-touch experience crash-looped on config validation. Treating
 	// RFC1918 or container hostnames as loopback would have been too broad.
-	if cfg.Database.SSLMode == "disable" && !isLoopbackHost(cfg.Database.Host) && !cfg.DevInsecure {
+	//
+	// A supplied FLEXITYPE_DB_URL goes through the SAME guard. Letting a URL
+	// past it would have made the escape hatch a way to turn the protection
+	// off by accident: the whole point of the guard is that unencrypted
+	// credentials never leave the host, and which setting expressed the
+	// connection does not change that.
+	sslMode, host := cfg.Database.SSLMode, cfg.Database.Host
+	if cfg.Database.URL != "" {
+		sslMode, host = sslModeAndHostOf(cfg.Database.URL)
+	}
+	if sslMode == "disable" && !isLoopbackHost(host) && !cfg.DevInsecure {
 		return Config{}, fmt.Errorf(
-			"FLEXITYPE_DB_SSLMODE=disable is not allowed for non-loopback host %q; use require/verify-full, "+
-				"or set FLEXITYPE_DEV_INSECURE=true for a local development stack", cfg.Database.Host)
+			"sslmode=disable is not allowed for non-loopback host %q; use require/verify-full, "+
+				"or set FLEXITYPE_DEV_INSECURE=true for a local development stack", host)
 	}
 	if len(e.errs) > 0 {
 		return Config{}, fmt.Errorf("invalid configuration: %w", errors.Join(e.errs...))
@@ -326,4 +367,34 @@ func isLoopbackHost(host string) bool {
 		return ip.IsLoopback()
 	}
 	return false
+}
+
+// sslModeAndHostOf extracts the sslmode and host from a connection string in
+// either libpq form: a URL (postgres://…?sslmode=…) or keyword=value pairs.
+//
+// An unparseable or absent sslmode reads as "disable", which is the safe
+// direction: the guard then demands a loopback host rather than assuming the
+// connection is encrypted.
+func sslModeAndHostOf(dsn string) (sslMode, host string) {
+	sslMode = "disable"
+	if u, err := url.Parse(dsn); err == nil && u.Scheme != "" && u.Host != "" {
+		host = u.Hostname()
+		if v := u.Query().Get("sslmode"); v != "" {
+			sslMode = v
+		}
+		return sslMode, host
+	}
+	for _, field := range strings.Fields(dsn) {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "host":
+			host = value
+		case "sslmode":
+			sslMode = value
+		}
+	}
+	return sslMode, host
 }

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zkrebbekx/flexitype/api/schemas/envelope.schema.json",
+  "title": "flexitype event envelope",
+  "description": "The wire envelope every flexitype event is delivered in — over a webhook, on the events feed, and through an external publisher. schema_version is bumped when this shape changes incompatibly, and the bump is called out in the changelog.",
+  "type": "object",
+  "required": ["id", "type", "aggregate_type", "aggregate_id", "occurred_at", "recorded_at", "schema_version", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "ULID of this envelope. Stable across redeliveries, so it is the key a consumer deduplicates on: delivery is at-least-once."
+    },
+    "type": {
+      "type": "string",
+      "description": "Versionless event name, e.g. flexitype.value.updated.",
+      "pattern": "^flexitype\\.[a-z_]+\\.[a-z_]+$"
+    },
+    "aggregate_type": { "type": "string" },
+    "aggregate_id": { "type": "string" },
+    "tenant_id": { "type": "string" },
+    "actor": { "type": "string" },
+    "occurred_at": {
+      "type": "string", "format": "date-time",
+      "description": "When the domain change happened."
+    },
+    "recorded_at": {
+      "type": "string", "format": "date-time",
+      "description": "When the envelope was written. With the outbox these differ by the relay's latency."
+    },
+    "schema_version": { "type": "integer", "minimum": 1 },
+    "payload": {
+      "description": "The event's own body. See payloads.schema.json.",
+      "type": "object"
+    }
+  }
+}

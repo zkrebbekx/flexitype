@@ -37,6 +37,19 @@ import (
 var version = "dev"
 
 func main() {
+	// The container image is distroless: this binary is the only executable
+	// in it, so it is also what the image's HEALTHCHECK runs. Without this
+	// subcommand the image could declare no health check at all, and an
+	// orchestrator reading image metadata treated a process that was up but
+	// not serving as healthy.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := healthcheck(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	log := logger.New(logger.Config{
 		Level:  os.Getenv("FLEXITYPE_LOG_LEVEL"),
 		Format: os.Getenv("FLEXITYPE_LOG_FORMAT"),
@@ -44,6 +57,34 @@ func main() {
 	if err := run(log); err != nil {
 		log.Fatal().Err(err).Msg("application error")
 	}
+}
+
+// healthcheck probes the local /readyz endpoint and reports failure through
+// the exit code.
+//
+// Readiness rather than liveness: "can this instance take traffic" is the
+// question an orchestrator is asking, and it covers the database as well as
+// the process.
+func healthcheck() error {
+	port := os.Getenv("FLEXITYPE_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+"/readyz", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("readyz: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("readyz: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func run(log *logger.Logger) error {

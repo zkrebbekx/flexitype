@@ -23,6 +23,16 @@ systems, built as a production-grade DDD Go service.
 > applies from 1.0 — see [API stability](docs/api-stability.md). Embed with
 > `go get github.com/zkrebbekx/flexitype@vX.Y.Z`, or grab a standalone binary
 > from [Releases](https://github.com/zkrebbekx/flexitype/releases).
+>
+> **Embedding it?** [docs/embedding.md](docs/embedding.md) collects the
+> library-mode contracts — request-scoped interactors, the tenant/actor/access
+> stamp, migrations, background loops — that previously lived only in scattered
+> package comments.
+>
+> **Sizing it?** [docs/scale.md](docs/scale.md) publishes measured numbers and
+> hot-table maintenance guidance. **Verifying a release?** Binaries carry
+> cosign signatures, SLSA provenance and an SBOM — see
+> [docs/releases.md](docs/releases.md).
 
 Runs two ways from one codebase:
 

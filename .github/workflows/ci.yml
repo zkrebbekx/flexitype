@@ -64,6 +64,33 @@ jobs:
       - name: Client conformance (client SDK vs the real handler)
         run: |
           cd conformance && go test -race ./...
+      # docs/configuration.md states that transaction-mode pooling is
+      # supported. That is a contract, so it is tested rather than asserted:
+      # the Postgres suites run again through PgBouncer in transaction mode.
+      # binary_parameters=yes because lib/pq uses the extended query protocol,
+      # which a pooled connection cannot serve with named prepared statements.
+      - name: Postgres through PgBouncer (transaction pooling)
+        env:
+          FLEXITYPE_TEST_DSN: postgres://postgres:postgres@localhost:6432/flexitype?sslmode=disable&binary_parameters=yes
+        run: |
+          set -euo pipefail
+          docker run -d --name pgbouncer --network host \
+            -e DB_HOST=localhost -e DB_PORT=5432 -e DB_USER=postgres \
+            -e DB_PASSWORD=postgres -e DB_NAME=flexitype \
+            -e POOL_MODE=transaction -e AUTH_TYPE=scram-sha-256 \
+            -e LISTEN_PORT=6432 -e MAX_PREPARED_STATEMENTS=100 \
+            edoburu/pgbouncer:v1.24.1-p1
+          for i in $(seq 1 30); do
+            if pg_isready -h localhost -p 6432 -U postgres > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          # Serially, sharing the default schema: the per-package schema
+          # isolation is carried as a startup parameter, which a
+          # transaction-mode pooler does not proxy. That is a limit of the
+          # test harness, not of the product's SQL — which is exactly what
+          # this job exists to prove.
+          FLEXITYPE_TEST_SHARED_SCHEMA=1 go test -count=1 -p 1 ./infrastructure/postgres/... .
+          docker rm -f pgbouncer
       - name: Smoke test (migrations + service boot)
         env:
           FLEXITYPE_PORT: "58080"

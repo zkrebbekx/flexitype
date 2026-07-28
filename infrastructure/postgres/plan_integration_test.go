@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -34,6 +35,15 @@ import (
 // indexable. Each case also EXPLAINs the shape it replaced, so the test
 // records the difference rather than asserting an unexplained constant.
 func TestQueryPlansIntegration(t *testing.T) {
+	// Plan pinning needs a session-level `SET enable_seqscan = off` held
+	// across statements, which a transaction-mode pooler does not preserve —
+	// it hands the next statement a different backend. The pooled CI job
+	// exists to prove the product's SQL is transaction-pooling safe, and this
+	// test's mechanism is not; running it there would assert the pooler's
+	// behaviour rather than the query shapes.
+	if os.Getenv("FLEXITYPE_TEST_SHARED_SCHEMA") != "" {
+		t.Skip("plan pinning needs session state a transaction pooler does not keep")
+	}
 	pool := testdb.Open(t, "postgres_plans")
 	// One connection, so the session-level enable_seqscan below applies to
 	// every statement rather than to whichever connection the pool hands out.

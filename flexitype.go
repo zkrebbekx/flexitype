@@ -73,6 +73,7 @@ type options struct {
 	webhookTimeout      time.Duration
 	timeZone            *time.Location
 	searchIndex         bool
+	gqlFederation       bool
 	failClosedACL       bool
 	blobs               blob.Store
 }
@@ -155,6 +156,22 @@ func WithCleanupObserver(fn func(err error)) Option {
 // uow.RequireAccessPolicy.
 func WithFailClosedACL() Option {
 	return func(o *options) { o.failClosedACL = true }
+}
+
+// WithGraphQLFederation exposes the GraphQL endpoint as an Apollo-Federation
+// subgraph: `_service { sdl }`, `_entities(representations:)`, and
+// `@key(fields: "entityId")` on every entity type.
+//
+// Without it the endpoint is a standalone schema that a federated gateway
+// cannot compose at all. With it, a gateway resolves an entity this service
+// holds attributes for from the entity id another subgraph already owns,
+// which is the natural modelling for an attribute service.
+//
+// It is off by default: a federated schema carries three fields no standalone
+// client asks for, and `_entities` is a batch read a non-federated deployment
+// has no reason to expose.
+func WithGraphQLFederation() Option {
+	return func(o *options) { o.gqlFederation = true }
 }
 
 // WithoutSearch disables the FQL query surface for this deployment.
@@ -347,7 +364,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	// This is a fast-path hint only: correctness is backed by the persisted
 	// schema_version (issue #192), so routing it off the external dispatcher keeps
 	// cross-replica invalidation intact.
-	graphqlEngine := gql.NewEngine(gql.WithErrorObserver(o.onBgError))
+	graphqlEngine := gql.NewEngine(gqlOptions(o)...)
 	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
 
 	return &Service{
@@ -434,7 +451,7 @@ func NewInMemory(opts ...Option) *Service {
 	materializer := computed.NewMaterializer(factory)
 	materializer.OnSchemaChange(schemaChangeRecomputer(materializer, o.onBgError))
 	projections.Register(materializer, events.WithEventTypes(computed.EventTypes()...))
-	graphqlEngine := gql.NewEngine(gql.WithErrorObserver(o.onBgError))
+	graphqlEngine := gql.NewEngine(gqlOptions(o)...)
 	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
 	return &Service{
 		transactor:   transactor,
@@ -813,3 +830,13 @@ const schemaRecomputeTimeout = 30 * time.Minute
 // normally follow a schema change. Convergence is already "shortly after",
 // not "at", the edit; this makes the shortly-after land after the burst.
 const schemaRecomputeSettle = 500 * time.Millisecond
+
+// gqlOptions assembles the GraphQL engine's options from the facade options,
+// so both constructors configure the engine identically.
+func gqlOptions(o *options) []gql.EngineOption {
+	opts := []gql.EngineOption{gql.WithErrorObserver(o.onBgError)}
+	if o.gqlFederation {
+		opts = append(opts, gql.WithFederation())
+	}
+	return opts
+}

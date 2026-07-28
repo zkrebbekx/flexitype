@@ -219,6 +219,10 @@ func run(log *logger.Logger) error {
 		opts = append(opts, flexitype.WithSearchIndex())
 		log.Info().Msg("search index enabled")
 	}
+	if cfg.EnableGraphQLFederation {
+		opts = append(opts, flexitype.WithGraphQLFederation())
+		log.Info().Msg("graphql federation subgraph enabled")
+	}
 	if cfg.BlobDir != "" {
 		store, err := blob.NewDiskStore(cfg.BlobDir)
 		if err != nil {

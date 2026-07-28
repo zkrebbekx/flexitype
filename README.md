@@ -120,7 +120,12 @@ No backend; data resets on reload.
   `pageInfo`, on-demand `totalCount`), with FQL exposed as a `filter` argument.
   Relationship fields resolve through the dataloaders (no N+1), the schema
   regenerates on definition events, and introspection reflects only the
-  caller's readable types.
+  caller's readable types. Opt into **Apollo Federation** and it also serves
+  `_service { sdl }`, `_entities(representations:)` and `@key(fields:
+  "entityId")` on every type, so a gateway resolves your dynamic attributes
+  onto an entity another subgraph owns
+  (`FLEXITYPE_FEATURE_GRAPHQL_FEDERATION=true`, or
+  `flexitype.WithGraphQLFederation()`).
 - **Faceted grid & saved views**: project chosen attributes as columns
   (`/entities/{type}/grid`), get value counts over the current result set
   (`/entities/{type}/facets`), and persist a type + query + columns as a named

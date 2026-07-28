@@ -7,6 +7,52 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Added — GraphQL: an opt-in Apollo Federation subgraph
+
+The GraphQL endpoint was a standalone schema with no `_service`, no
+`_entities` and no `@key`. A gateway cannot compose a subgraph without them,
+so an adopter already running a federated graph could not add this service at
+all — and the shape that suits an attribute service best, where dynamic
+attributes appear as fields on a type another subgraph owns, was closed to
+them. The fallback was to call the REST API from their own graph layer and
+merge results by hand.
+
+`FLEXITYPE_FEATURE_GRAPHQL_FEDERATION=true`, or
+`flexitype.WithGraphQLFederation()`, now serves the subgraph contract:
+
+- `_service { sdl }` returns the subgraph SDL with `@key(fields: "entityId")`
+  on every entity type. `entityId` is the same opaque id every other surface
+  uses, so the gateway joins on an id your own system already owns.
+- `_entities(representations: [_Any!]!)` resolves entities from another
+  subgraph's representations, through the same batched read path the
+  connections use. The answer preserves the representation order — position is
+  the only thing that ties a result to its representation — and a repeated id
+  is read once and placed at both positions.
+- The field ACL applies. The SDL a caller reads carries only the types and
+  attributes that caller may read, and `_entities` resolves the same set.
+- A batch is capped at 500 representations: it is a single list argument, so
+  it escapes the field-count cost guard entirely.
+- An id this service holds no values for resolves to an object with null
+  fields, not an error. flexitype does not own entity existence.
+
+It is off by default. A federated schema carries three fields no standalone
+client asks for, and `_entities` is a batch read a non-federated deployment has
+no reason to expose.
+
+Documentation: [docs/federation.md](docs/federation.md). Closes #327.
+
+### Fixed — GraphQL: a domain error from a resolver read as "internal error"
+
+graphql-go wraps every error a resolver returns in `*gqlerrors.Error` to
+attach the field path. That type carries its cause in an `OriginalError` field
+and has no `Unwrap` method, so the sanitizer's `errors.As` stopped at the
+wrapper and masked the error. Every domain error a resolver raised therefore
+reached the client as `internal error`: a not-found read as a server fault,
+and a validation message the caller needed in order to fix its own request was
+replaced by nothing. The sanitizer now peels the wrapper first, so GraphQL
+returns the same client-facing messages REST does. Infrastructure errors are
+still masked.
+
 ### Added — Roles: one permission set, many accounts
 
 Field permissions were stored per service account with no indirection. A

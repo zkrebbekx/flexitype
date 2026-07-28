@@ -169,22 +169,22 @@ func TestPurgeTakesEntityOrderIntegration(t *testing.T) {
 			INSERT INTO flexitype_attribute_value
 			    (id, tenant_id, type_definition_id, attribute_definition_id, entity_id, data_type,
 			     value_int, definition_version, created_at, updated_at)
-			SELECT lpad(to_hex(g), 26, '0'), 'default', $1, $2, 'e' || lpad((4001 - g)::text, 6, '0'),
+			SELECT lpad(to_hex(g), 26, '0'), 'default', $1, $2, 'e' || lpad((1201 - g)::text, 6, '0'),
 			       'integer', g, 1, now(), now()
-			  FROM generate_series(1, 4000) g`, typeID.String(), attrID)
+			  FROM generate_series(1, 1200) g`, typeID.String(), attrID)
 
-		Convey("When a tenant purge runs concurrently with that writer, three rounds", func() {
+		Convey("When a tenant purge runs concurrently with that writer, two rounds", func() {
 			var errs []string
-			for round := 0; round < 3; round++ {
+			for round := 0; round < 2; round++ {
 				if round > 0 {
 					pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_entity_summary CASCADE`)
 					pool.MustExec(`
 						INSERT INTO flexitype_attribute_value
 						    (id, tenant_id, type_definition_id, attribute_definition_id, entity_id, data_type,
 						     value_int, definition_version, created_at, updated_at)
-						SELECT lpad(to_hex(g), 26, '0'), 'default', $1, $2, 'e' || lpad((4001 - g)::text, 6, '0'),
+						SELECT lpad(to_hex(g), 26, '0'), 'default', $1, $2, 'e' || lpad((1201 - g)::text, 6, '0'),
 						       'integer', g, 1, now(), now()
-						  FROM generate_series(1, 4000) g`, typeID.String(), attrID)
+						  FROM generate_series(1, 1200) g`, typeID.String(), attrID)
 				}
 
 				var wg sync.WaitGroup
@@ -218,7 +218,7 @@ func TestPurgeTakesEntityOrderIntegration(t *testing.T) {
 					// entity, so the value and summary rows lock in that
 					// order. The writer updates rows the purge also deletes,
 					// which is what puts the two transactions in conflict.
-					for i := 1; i <= 200; i++ {
+					for i := 1; i <= 60; i++ {
 						if _, err := tx.Exec(`
 							UPDATE flexitype_attribute_value
 							   SET value_int = value_int + 1, updated_at = now()

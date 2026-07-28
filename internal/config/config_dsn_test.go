@@ -75,3 +75,39 @@ func TestSSLGuardCoversTheURL(t *testing.T) {
 		})
 	})
 }
+
+// TestSSLGuardParsesLibpqQuoting proves the guard evaluates the value libpq
+// will use, not the raw text.
+//
+// The keyword form was split with strings.Fields and cut at the first '=', so
+// a single-quoted value kept its quotes: `sslmode='disable'` was compared as
+// `'disable'`, matched nothing, and passed a guard that exists to refuse
+// exactly that — while lib/pq honoured the quoted form and connected in
+// cleartext. Quoting is a plausible habit, since libpq's own documentation
+// quotes values.
+func TestSSLGuardParsesLibpqQuoting(t *testing.T) {
+	Convey("Given keyword connection strings in libpq's real grammar", t, func() {
+		for _, tc := range []struct {
+			name, dsn, wantMode, wantHost string
+		}{
+			{"quoted sslmode", "host=db.internal sslmode='disable'", "disable", "db.internal"},
+			{"quoted host", "host='evil.example.com' sslmode=require", "require", "evil.example.com"},
+			{"quoted hostaddr wins", "host=db.internal hostaddr='203.0.113.9' sslmode=require",
+				"require", "203.0.113.9"},
+			{"spaces around =", "host = db.internal sslmode = disable", "disable", "db.internal"},
+			{"quoted value with a space", "host='db one' sslmode=require", "require", "db one"},
+			{"escaped quote inside a value", `host='db\'one' sslmode=require`, "require", "db'one"},
+			{"escaped space in a bare value", `host=db\ one sslmode=require`, "require", "db one"},
+			{"last occurrence wins", "sslmode=require sslmode='disable'", "disable", ""},
+			{"unterminated quote", "host=db.internal sslmode='disable", "disable", "db.internal"},
+			{"bare token is skipped", "verbose host=db.internal sslmode=require", "require", "db.internal"},
+		} {
+			mode, host := sslModeAndHostOf(tc.dsn)
+
+			Convey("Then "+tc.name+" reads as "+tc.wantMode+"/"+tc.wantHost, func() {
+				So(mode, ShouldEqual, tc.wantMode)
+				So(host, ShouldEqual, tc.wantHost)
+			})
+		}
+	})
+}

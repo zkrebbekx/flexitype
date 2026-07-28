@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Config is the standalone service configuration.
@@ -457,25 +458,83 @@ func sslModeAndHostOf(dsn string) (sslMode, host string) {
 	// Keyword form. The LAST occurrence of a keyword wins, as in libpq, so a
 	// value appended by FLEXITYPE_DB_PARAMS is what the guard evaluates —
 	// which is the point: it is also what the connection uses.
-	var hostAddr string
-	for _, field := range strings.Fields(dsn) {
-		key, value, ok := strings.Cut(field, "=")
-		if !ok {
-			continue
-		}
-		switch key {
-		case "host":
-			host = value
-		case "hostaddr":
-			// hostaddr bypasses name resolution entirely, so it is where the
-			// connection actually goes when both are present.
-			hostAddr = value
-		case "sslmode":
-			sslMode = value
-		}
+	opts := parseKeywordDSN(dsn)
+	if v, ok := opts["sslmode"]; ok {
+		sslMode = v
 	}
-	if hostAddr != "" {
-		host = hostAddr
+	host = opts["host"]
+	// hostaddr bypasses name resolution entirely, so it is where the
+	// connection actually goes when both are present.
+	if v := opts["hostaddr"]; v != "" {
+		host = v
 	}
 	return sslMode, host
+}
+
+// parseKeywordDSN parses libpq keyword/value connection options, with the
+// LAST occurrence of a keyword winning, as in libpq — so a value appended by
+// FLEXITYPE_DB_PARAMS is what the guard evaluates, which is also what the
+// connection uses.
+//
+// It follows libpq's grammar rather than splitting on whitespace: a value may
+// be SINGLE-QUOTED, may contain backslash escapes, and may have spaces around
+// the '='. Splitting on whitespace and cutting at '=' left the quotes in the
+// value, so `sslmode='disable'` was compared as `'disable'`, matched nothing,
+// and passed a guard that exists to refuse exactly that — while lib/pq
+// honoured the quoted form and connected in cleartext.
+func parseKeywordDSN(dsn string) map[string]string {
+	opts := map[string]string{}
+	r := []rune(dsn)
+	i, n := 0, len(r)
+	skipSpace := func() {
+		for i < n && unicode.IsSpace(r[i]) {
+			i++
+		}
+	}
+	for {
+		skipSpace()
+		if i >= n {
+			return opts
+		}
+		start := i
+		for i < n && !unicode.IsSpace(r[i]) && r[i] != '=' {
+			i++
+		}
+		key := string(r[start:i])
+		skipSpace()
+		if i >= n || r[i] != '=' {
+			// A bare token with no '=' is malformed. libpq rejects the whole
+			// string; the guard cannot, so it skips the token and keeps
+			// reading — the guard must not become more permissive because a
+			// string it does not understand appears earlier in the DSN.
+			continue
+		}
+		i++ // consume '='
+		skipSpace()
+		var b strings.Builder
+		if i < n && r[i] == '\'' {
+			i++
+			for i < n && r[i] != '\'' {
+				if r[i] == '\\' && i+1 < n {
+					i++
+				}
+				b.WriteRune(r[i])
+				i++
+			}
+			if i < n {
+				i++ // consume the closing quote
+			}
+		} else {
+			for i < n && !unicode.IsSpace(r[i]) {
+				if r[i] == '\\' && i+1 < n {
+					i++
+				}
+				b.WriteRune(r[i])
+				i++
+			}
+		}
+		if key != "" {
+			opts[key] = b.String()
+		}
+	}
 }

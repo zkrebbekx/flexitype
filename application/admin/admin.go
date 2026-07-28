@@ -482,6 +482,15 @@ func (i *Interactor) EffectiveAccount(ctx context.Context, rawID string) (*Effec
 		FieldPermissions: acct.FieldPermissions,
 	}, acct.Roles, grants)
 
+	// The enforced policy, derived by the same function the request path
+	// uses. The merged map alone answered the wrong question: enforcement
+	// ignores it for an admin, and ignores it entirely when a role is
+	// unresolved.
+	enforced := uow.AccessFromPermissions(
+		resolved.HasScope(serviceaccount.ScopeAdmin),
+		len(resolved.UnresolvedRoles),
+		resolved.FieldPermissions)
+
 	return &EffectiveAccountView{
 		ID:               acct.ID,
 		TenantID:         acct.TenantID,
@@ -491,6 +500,8 @@ func (i *Interactor) EffectiveAccount(ctx context.Context, rawID string) (*Effec
 		Scopes:           resolved.Scopes,
 		FieldPermissions: resolved.FieldPermissions,
 		UnresolvedRoles:  resolved.UnresolvedRoles,
+		FieldACLBypassed: enforced.Admin,
+		DeniedAll:        len(resolved.UnresolvedRoles) > 0,
 	}, nil
 }
 
@@ -511,6 +522,17 @@ type EffectiveAccountView struct {
 	// A principal carrying one is denied every attribute, so this being
 	// non-empty is a fault to repair, not a note.
 	UnresolvedRoles []string `json:"unresolved_roles,omitempty"`
+	// FieldACLBypassed reports that enforcement grants EVERY attribute
+	// regardless of FieldPermissions — the account holds admin, or it
+	// declares no restrictions at all. When it is true, FieldPermissions
+	// describes what the roles merged to, NOT what applies: a reviewer
+	// reading `salary: none` under an admin account would otherwise sign off
+	// an account with unrestricted field access.
+	FieldACLBypassed bool `json:"field_acl_bypassed"`
+	// DeniedAll reports that enforcement denies EVERY attribute because a
+	// role could not be resolved. It takes precedence over FieldACLBypassed
+	// and over FieldPermissions.
+	DeniedAll bool `json:"denied_all"`
 }
 
 // AssignRolesInput sets an account's roles and its own overrides.

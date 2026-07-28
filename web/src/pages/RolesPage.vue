@@ -363,17 +363,41 @@ const effective = useQuery({
 
         <div>
           <h3 class="text-(--text-muted)">Effective field permissions</h3>
-          <ul class="mono mt-1 space-y-0.5 text-xs">
-            <li v-for="(level, attr) in effective.data.value.field_permissions ?? {}" :key="attr">
-              {{ attr }}: {{ level }}
-            </li>
-          </ul>
-          <p
-            v-if="!Object.keys(effective.data.value.field_permissions ?? {}).length"
-            class="text-(--text-muted)"
-          >
-            No restrictions — every attribute is readable and writable.
+          <!-- What is ENFORCED comes first. The merged map is shown only when
+               it is what applies: enforcement ignores it for an admin, and
+               ignores it entirely when a role is unresolved, so listing it
+               unconditionally let a reviewer read "salary: none" off an
+               account with unrestricted field access. -->
+          <p v-if="effective.data.value.denied_all" class="mt-1 text-(--danger)">
+            Every attribute is denied — an unresolved role fails access closed. The list below
+            is the merged map, not what applies.
           </p>
+          <p v-else-if="effective.data.value.field_acl_bypassed" class="mt-1">
+            <strong>The field ACL does not apply to this account.</strong>
+            It holds <span class="mono">admin</span> or declares no restrictions, so every
+            attribute is readable and writable.
+          </p>
+          <template v-else>
+            <ul class="mono mt-1 space-y-0.5 text-xs">
+              <li v-for="(level, attr) in effective.data.value.field_permissions ?? {}" :key="attr">
+                {{ attr }}: {{ level }}
+              </li>
+            </ul>
+          </template>
+          <details
+            v-if="
+              (effective.data.value.denied_all || effective.data.value.field_acl_bypassed) &&
+              Object.keys(effective.data.value.field_permissions ?? {}).length
+            "
+            class="mt-2"
+          >
+            <summary class="cursor-pointer text-(--text-muted)">Merged map (not enforced)</summary>
+            <ul class="mono mt-1 space-y-0.5 text-xs">
+              <li v-for="(level, attr) in effective.data.value.field_permissions ?? {}" :key="attr">
+                {{ attr }}: {{ level }}
+              </li>
+            </ul>
+          </details>
         </div>
 
         <div>

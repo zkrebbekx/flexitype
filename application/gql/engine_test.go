@@ -153,16 +153,11 @@ func TestAccessSignature(t *testing.T) {
 	Convey("Given callers with different permission sets", t, func() {
 		Convey("When the caller is an admin", func() {
 			Convey("Then every admin shares one schema-cache key", func() {
-				So(accessSignature(uow.Access{Admin: true}), ShouldEqual, "admin")
+				So(accessSignature(uow.Access{Admin: true}),
+					ShouldEqual, accessSignature(uow.Access{Admin: true}))
+				// An admin bypasses the field ACL, so its own map is moot.
 				So(accessSignature(uow.Access{Admin: true, Attr: map[string]uow.Perm{"a": "read"}}),
-					ShouldEqual, "admin")
-			})
-		})
-
-		Convey("When the caller restricts no attributes", func() {
-			Convey("Then it uses the open key", func() {
-				So(accessSignature(uow.Access{}), ShouldEqual, "open")
-				So(accessSignature(uow.Access{Attr: map[string]uow.Perm{}}), ShouldEqual, "open")
+					ShouldEqual, accessSignature(uow.Access{Admin: true}))
 			})
 		})
 
@@ -172,14 +167,17 @@ func TestAccessSignature(t *testing.T) {
 			}})
 
 			Convey("Then the signature is deterministic regardless of map order", func() {
-				So(sig, ShouldEqual, "name:read,price:none")
-
-				// Same set, built in the other order, must key identically or the
-				// cache would fragment per request.
+				// Same set, built in the other order, must key identically or
+				// the cache would fragment per request.
 				again := accessSignature(uow.Access{Attr: map[string]uow.Perm{
 					"name": "read", "price": "none",
 				}})
 				So(again, ShouldEqual, sig)
+			})
+
+			Convey("Then the key is a fixed-width hash rather than the map", func() {
+				So(len(sig), ShouldEqual, 64)
+				So(sig, ShouldNotContainSubstring, "price")
 			})
 		})
 
@@ -189,6 +187,32 @@ func TestAccessSignature(t *testing.T) {
 
 			Convey("Then they key to different schemas so introspection stays scoped", func() {
 				So(a, ShouldNotEqual, b)
+			})
+		})
+
+		// An empty Attr map used to sign as "open" whatever Default was, so
+		// uow.DenyAll() collided with an unrestricted principal: whichever
+		// arrived first warmed the cache for both. A deny-all caller was
+		// served the unrestricted schema, disclosing every restricted
+		// attribute name — or an unrestricted caller was served an empty one
+		// and every query failed.
+		Convey("When a deny-all caller meets an unrestricted one", func() {
+			denyAll := accessSignature(uow.DenyAll())
+			open := accessSignature(uow.Access{})
+
+			Convey("Then they never share a schema", func() {
+				So(denyAll, ShouldNotEqual, open)
+			})
+		})
+
+		Convey("When an allow-list and a deny-list name the same attributes", func() {
+			denyList := accessSignature(uow.Access{Attr: map[string]uow.Perm{"name": "read"}})
+			allowList := accessSignature(uow.Access{
+				Default: uow.PermNone, Attr: map[string]uow.Perm{"name": "read"},
+			})
+
+			Convey("Then the default is part of the key", func() {
+				So(denyList, ShouldNotEqual, allowList)
 			})
 		})
 	})

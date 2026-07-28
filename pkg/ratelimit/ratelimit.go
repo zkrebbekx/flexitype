@@ -76,6 +76,30 @@ func (l *Limiter) Allow(key string) (bool, time.Duration) {
 	return false, retry
 }
 
+// Refund returns one token to a key's bucket, capped at the burst ceiling.
+//
+// It exists so a limiter can charge for an OUTCOME rather than for a request:
+// the caller takes a token up front, and gives it back when the request turns
+// out not to be the kind the limiter is there to bound. The pre-auth limiter
+// charges failed authentications this way; charging every request made a
+// 20 rps ceiling apply to all authenticated traffic behind a proxy, where
+// every request appears to come from one address.
+//
+// A refund for an unknown key creates nothing: a bucket that does not exist
+// is already full. A nil limiter does nothing.
+func (l *Limiter) Refund(key string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.buckets[key]
+	if !ok {
+		return
+	}
+	b.tokens = minFloat(l.burst, b.tokens+1)
+}
+
 // evictIfLarge drops full (idle) buckets when the map grows large, so a
 // churn of distinct keys can't leak memory. Caller holds the lock.
 func (l *Limiter) evictIfLarge(now time.Time) {

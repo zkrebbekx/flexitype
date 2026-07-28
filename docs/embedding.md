@@ -83,7 +83,8 @@ than full access. It is one-way and process-wide, so set it before serving.
 ## 4a. Optional per-request context
 
 ```go
-ctx = uow.WithTimeZone(ctx, tenantLocation)          // calendar day for today/now
+ctx = svc.Context(ctx)                               // service-wide defaults (WithTimeZone)
+ctx = uow.WithTimeZone(ctx, tenantLocation)          // per-request override, wins over the above
 ctx = uow.WithContextValues(ctx, map[string]valueobjects.Value{
     "customer_tier": valueobjects.NewStringValue(customer.Tier),
 })
@@ -91,7 +92,10 @@ ctx = uow.WithContextValues(ctx, map[string]valueobjects.Value{
 
 - **Time zone** decides which calendar day `today` and `now` name in a
   dependency condition or a dynamic default. Default UTC. It changes the day,
-  not the storage.
+  not the storage. The zone has to be on the context you pass to each
+  interactor METHOD, not only on the one you built the interactors with — an
+  interactor set carries no context of its own. `Service.Context` stamps the
+  service-wide zone; `uow.WithTimeZone` overrides it per request.
 - **Context values** let a dependency condition test a fact that lives in
   YOUR tables — a customer's tier, an order's channel, a document's workflow
   state — with `{"context_key": "customer_tier"}`. Nothing about it is stored

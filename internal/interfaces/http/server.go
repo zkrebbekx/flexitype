@@ -6,6 +6,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -60,6 +61,13 @@ type ServerConfig struct {
 	MaxImportBytes int64
 	// MaxMediaBytes caps a media upload. 0 uses DefaultMaxMediaBytes.
 	MaxMediaBytes int64
+	// TimeZone is the deployment's calendar zone for `today` and `now`. It is
+	// stamped on the REQUEST context, because that is the context every
+	// handler passes to the interactor methods. Stamping it where the
+	// interactor set is built did nothing: the set carries no context, and
+	// each method takes one from its own caller — so FLEXITYPE_TIMEZONE never
+	// reached rule evaluation and every date rule resolved in UTC.
+	TimeZone *time.Location
 }
 
 // Upload ceilings. They were compile-time constants, absent from the
@@ -119,6 +127,9 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 		// Throttle after auth so the limiter keys on the resolved account
 		// and counts usage per tenant.
 		api.Use(rateLimit(cfg.RateLimiter, cfg.TenantRateLimiter, cfg.Metrics))
+		// The zone goes on before the interactors, so a handler's ctx carries
+		// it into every rule evaluation.
+		api.Use(withTimeZone(cfg.TimeZone))
 		// Interactors after auth: the set is built with the request's actor
 		// and tenant already on the context.
 		api.Use(withInteractors(cfg.Factory))

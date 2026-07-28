@@ -14,6 +14,8 @@ package gql
 import (
 	"container/list"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -446,19 +448,36 @@ func (e *Engine) cachePut(key string, gen uint64, schema graphql.Schema) {
 
 // accessSignature keys the schema cache by the caller's readable-attribute set
 // so introspection stays permission-scoped without rebuilding per request.
+//
+// EVERY field of Access enters the key, Default included. An empty Attr map
+// used to sign as "open" whatever the default was, so uow.DenyAll() —
+// Access{Default: PermNone} with no per-attribute entries, which is what an
+// account naming a deleted role resolves to — collided with an unrestricted
+// principal. Whichever arrived first warmed the cache for both: a deny-all
+// caller was served the unrestricted schema, disclosing every restricted
+// attribute name, or an unrestricted caller was served an empty one and every
+// query failed. Two callers get one schema only when the same permissions
+// produce it.
+//
+// The result is HASHED so the key stays bounded however many attributes a
+// policy names.
 func accessSignature(a uow.Access) string {
 	if a.Admin {
-		return "admin"
+		// Admin grants everything (uow.Access.CanRead), so its own map and
+		// default do not shape the schema and every admin shares one.
+		sum := sha256.Sum256([]byte("admin"))
+		return hex.EncodeToString(sum[:])
 	}
-	if len(a.Attr) == 0 {
-		return "open"
-	}
-	parts := make([]string, 0, len(a.Attr))
+	parts := make([]string, 0, len(a.Attr)+1)
+	parts = append(parts, "default="+string(a.Default))
+	attrs := make([]string, 0, len(a.Attr))
 	for name, perm := range a.Attr {
-		parts = append(parts, name+":"+string(perm))
+		attrs = append(attrs, name+":"+string(perm))
 	}
-	sort.Strings(parts)
-	return strings.Join(parts, ",")
+	sort.Strings(attrs)
+	parts = append(parts, attrs...)
+	sum := sha256.Sum256([]byte(strings.Join(parts, ",")))
+	return hex.EncodeToString(sum[:])
 }
 
 // resultErr builds a single-error result. It is used for pre-execution

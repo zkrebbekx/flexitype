@@ -836,6 +836,13 @@ export interface EffectiveAccount {
   /** Roles the account holds that no longer exist. Non-empty is a fault:
    *  such a principal is denied every attribute. */
   unresolved_roles?: string[]
+  /** Enforcement grants EVERY attribute regardless of field_permissions —
+   *  the account holds admin, or declares no restrictions. When true,
+   *  field_permissions says what the roles merged to, not what applies. */
+  field_acl_bypassed?: boolean
+  /** Enforcement denies EVERY attribute because a role is unresolved. It
+   *  takes precedence over field_acl_bypassed and field_permissions. */
+  denied_all?: boolean
 }
 
 export interface Tenant {

@@ -29,6 +29,30 @@ func withInteractors(factory application.Factory) func(http.Handler) http.Handle
 	}
 }
 
+// withTimeZone stamps the deployment's calendar zone on the request context,
+// so `today` and `now` in dependency rules and dynamic defaults resolve
+// against the configured day rather than UTC.
+//
+// It belongs here rather than where the interactor set is built: the set
+// carries no context of its own, and every interactor method takes a ctx from
+// its caller — which, for the API, is the request context this middleware
+// owns. A caller that already chose a zone keeps it, which is how a host
+// serves tenants in different zones from one process.
+func withTimeZone(loc *time.Location) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if loc == nil {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			if !uow.HasTimeZone(ctx) {
+				ctx = uow.WithTimeZone(ctx, loc)
+			}
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
 // consoleThemeScriptHash is the SHA-256 of the inline pre-paint theme <script>
 // in web/index.html (which Vite copies verbatim into the served index.html).
 // Pinning its hash in script-src lets the console keep that one inline script
@@ -123,18 +147,14 @@ func (s *server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 // change to the account row. The API refuses to delete a role that accounts
 // still name (see admin.DeleteRole); this is the second line, covering a row
 // edited directly in the database and the window inside a race.
+// The rule itself lives in uow.AccessFromPermissions, so the admin
+// effective-permissions view answers with what this path enforces rather than
+// with a map enforcement may ignore.
 func accessFor(account serviceaccount.Account) uow.Access {
-	if len(account.UnresolvedRoles) > 0 {
-		return uow.DenyAll()
-	}
-	if account.HasScope(serviceaccount.ScopeAdmin) || len(account.FieldPermissions) == 0 {
-		return uow.Access{Admin: true}
-	}
-	attr := make(map[string]uow.Perm, len(account.FieldPermissions))
-	for name, level := range account.FieldPermissions {
-		attr[name] = uow.Perm(level)
-	}
-	return uow.Access{Attr: attr}
+	return uow.AccessFromPermissions(
+		account.HasScope(serviceaccount.ScopeAdmin),
+		len(account.UnresolvedRoles),
+		account.FieldPermissions)
 }
 
 func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(http.Handler) http.Handler {
@@ -223,6 +243,11 @@ func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(ht
 // a credential is resolved. Rejections are counted on the same rate-limit
 // metric as the others, so the condition is visible on the dashboard an
 // operator already has.
+//
+// It bounds FAILED authentications: a token is taken up front and refunded
+// unless the response is 401. The bucket therefore counts what it is there to
+// bound, and a proxy that collapses many clients onto one address no longer
+// caps their successful traffic.
 func preAuthRateLimit(limiter *ratelimit.Limiter, m *metrics.Metrics) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -230,9 +255,21 @@ func preAuthRateLimit(limiter *ratelimit.Limiter, m *metrics.Metrics) func(http.
 				next.ServeHTTP(w, r)
 				return
 			}
-			ok, retry := limiter.Allow(clientKey(r))
+			key := clientKey(r)
+			ok, retry := limiter.Allow(key)
 			if ok {
-				next.ServeHTTP(w, r)
+				// The token is charged to the OUTCOME, not to the request.
+				// Charging every request made this a ceiling on ALL traffic:
+				// behind an ingress or a Cluster-policy LoadBalancer every
+				// request appears to come from one address, so 20 rps
+				// throttled healthy authenticated clients that were well
+				// inside their per-account and per-tenant budgets. Only an
+				// authentication FAILURE keeps the token.
+				rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+				next.ServeHTTP(rec, r)
+				if rec.status != http.StatusUnauthorized {
+					limiter.Refund(key)
+				}
 				return
 			}
 			m.CountRateLimitReject(uow.TenantFromContext(r.Context()).String())
@@ -251,8 +288,8 @@ func preAuthRateLimit(limiter *ratelimit.Limiter, m *metrics.Metrics) func(http.
 // supplied, so trusting it would let one client spread its attempts across
 // unlimited keys and defeat the limiter entirely. Behind a proxy this keys on
 // the proxy, which is a ceiling on aggregate unauthenticated traffic rather
-// than a per-client one — a real limit, and stated in the documentation
-// rather than left to be discovered.
+// than a per-client one — a real limit on failed authentications, and stated
+// in the documentation rather than left to be discovered.
 func clientKey(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

@@ -160,6 +160,25 @@ func (a Access) level(name string) Perm {
 	return PermWrite
 }
 
+// ReadsEverything reports whether the policy hides no attribute value from
+// the principal: admin, or a deny-list that names no unreadable attribute.
+// Surfaces that cannot filter per attribute — the entity search document is
+// one — use it to fail closed instead of serving unredactable content.
+func (a Access) ReadsEverything() bool {
+	if a.Admin {
+		return true
+	}
+	if a.Default == PermNone {
+		return false
+	}
+	for _, p := range a.Attr {
+		if p == PermNone {
+			return false
+		}
+	}
+	return true
+}
+
 // CanRead reports whether the principal may read the named attribute.
 func (a Access) CanRead(name string) bool {
 	if a.Admin {

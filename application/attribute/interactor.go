@@ -995,6 +995,7 @@ func assertFormulaSourcesAreScalar(ctx context.Context, attrs domainattribute.Re
 	if len(refs) == 0 {
 		return nil
 	}
+	access := uow.AccessFromContext(ctx)
 	wanted := make(map[string]bool, len(refs))
 	for _, r := range refs {
 		wanted[r] = true
@@ -1007,6 +1008,7 @@ func assertFormulaSourcesAreScalar(ctx context.Context, attrs domainattribute.Re
 	for _, r := range numericRefs {
 		numeric[r] = true
 	}
+	resolved := make(map[string]bool, len(refs))
 	for _, link := range hierarchy {
 		list, err := domainattribute.ListAllForType(ctx, attrs, link.ID())
 		if err != nil {
@@ -1015,6 +1017,18 @@ func assertFormulaSourcesAreScalar(ctx context.Context, attrs domainattribute.Re
 		for _, a := range list {
 			if !wanted[a.InternalName()] {
 				continue
+			}
+			resolved[a.InternalName()] = true
+			// A computed attribute is materialized under system access and is
+			// born unrestricted, so a formula over a source the caller cannot
+			// read would republish that source's exact values to the caller —
+			// a full field-ACL read bypass. The refusal is worded exactly like
+			// the unresolved-reference refusal below, and it runs BEFORE the
+			// shape checks, so neither the outcome nor the error metadata
+			// confirms that a restricted name exists. CanRead is always true
+			// for an admin, so only field-restricted principals are affected.
+			if !access.CanRead(a.InternalName()) {
+				return errUnknownFormulaSource(a.InternalName())
 			}
 			switch {
 			case a.MultiValued() && bare[a.InternalName()]:
@@ -1035,7 +1049,31 @@ func assertFormulaSourcesAreScalar(ctx context.Context, attrs domainattribute.Re
 			}
 		}
 	}
+	// A field-restricted principal must not learn which names exist. If an
+	// unreadable reference were refused while an unresolved one were accepted,
+	// the difference would be an existence oracle over restricted attribute
+	// names, so BOTH are refused with one error. The cost is that forward
+	// references — a formula written before its source attribute exists — are
+	// no longer available to field-restricted principals. Unrestricted
+	// principals and admins resolve to Admin access and keep them.
+	if !access.Admin {
+		for _, r := range refs {
+			if !resolved[r] {
+				return errUnknownFormulaSource(r)
+			}
+		}
+	}
 	return nil
+}
+
+// errUnknownFormulaSource is the ONE refusal a field-restricted principal sees
+// for a formula reference that is unresolved or unreadable. The two cases must
+// stay indistinguishable — in code, message and metadata — or the difference
+// becomes an existence oracle over restricted attribute names.
+func errUnknownFormulaSource(name string) error {
+	return domainerrors.NewValidation(
+		"the formula references an unknown attribute in this type hierarchy",
+		"attribute", name)
 }
 
 // isNumericDataType reports whether values of the type coerce to numbers.

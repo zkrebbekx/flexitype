@@ -11,22 +11,18 @@
 --
 -- Every statement here is idempotent, because a no-transaction migration that
 -- fails part-way is replayed in full. A failed CONCURRENTLY build leaves an
--- INVALID index behind, which IF NOT EXISTS would then skip forever, so each
--- build drops an invalid namesake first. That drop is plain rather than
--- concurrent: an invalid index holds no data, so it is instant, and it only
--- ever runs after a previous attempt failed.
+-- INVALID index behind, which IF NOT EXISTS would then skip forever. The
+-- runner reaps such an index before it replays this file (reapInvalidIndexes
+-- in migrate.go), scoped to current_schema(). This file must not carry its
+-- own catalogue guards: the earlier in-file DO blocks matched
+-- pg_class.relname without a pg_namespace join, so an invalid index in ANY
+-- schema of the database made them fire, and their unqualified DROP INDEX
+-- resolved through search_path into the wrong schema.
 
 -- Webhook ClaimDue finds the earliest PENDING delivery per subscription. The
 -- existing (subscription_id, feed_seq) index is not partial, so the
 -- min(feed_seq) WHERE status='pending' subquery walks all *delivered* history
 -- first. A partial index makes it an index-only probe.
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
-                WHERE c.relname = 'idx_flexitype_webhook_delivery_pending' AND NOT i.indisvalid) THEN
-        EXECUTE 'DROP INDEX idx_flexitype_webhook_delivery_pending';
-    END IF;
-END $$;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_flexitype_webhook_delivery_pending
     ON flexitype_webhook_delivery (subscription_id, feed_seq)
     WHERE status = 'pending';
@@ -35,13 +31,6 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_flexitype_webhook_delivery_pending
 -- batches, relationship traversals), but the only value index leads with
 -- (tenant_id, type_definition_id, entity_id) and the 2-tuple skips the middle
 -- column, forcing a full-table scan.
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
-                WHERE c.relname = 'idx_flexitype_attribute_value_tenant_entity' AND NOT i.indisvalid) THEN
-        EXECUTE 'DROP INDEX idx_flexitype_attribute_value_tenant_entity';
-    END IF;
-END $$;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_flexitype_attribute_value_tenant_entity
     ON flexitype_attribute_value (tenant_id, entity_id)
     WHERE archived_at IS NULL;
@@ -51,13 +40,6 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_flexitype_attribute_value_tenant_ent
 -- write. Index the expression. Scoped to decimal rows so the ::numeric cast is
 -- evaluated only where value_text is a valid number (value_text also holds
 -- string/enum/url/email text for other data types).
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
-                WHERE c.relname = 'idx_flexitype_attribute_value_decimal' AND NOT i.indisvalid) THEN
-        EXECUTE 'DROP INDEX idx_flexitype_attribute_value_decimal';
-    END IF;
-END $$;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_flexitype_attribute_value_decimal
     ON flexitype_attribute_value (attribute_definition_id, ((value_text)::numeric))
     WHERE data_type = 'decimal' AND archived_at IS NULL;

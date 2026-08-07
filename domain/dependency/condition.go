@@ -41,12 +41,21 @@ const (
 // Condition is one predicate over a source attribute's value. All of a
 // dependency's conditions must match for its effect to apply.
 type Condition struct {
-	Kind    ConditionKind        `json:"kind"`
-	Value   *valueobjects.Value  `json:"-"`
-	Values  []valueobjects.Value `json:"-"`
-	Min     *valueobjects.Value  `json:"-"`
-	Max     *valueobjects.Value  `json:"-"`
-	Pattern string               `json:"pattern,omitempty"`
+	Kind   ConditionKind        `json:"kind"`
+	Value  *valueobjects.Value  `json:"-"`
+	Values []valueobjects.Value `json:"-"`
+	Min    *valueobjects.Value  `json:"-"`
+	Max    *valueobjects.Value  `json:"-"`
+	// MinExclusive/MaxExclusive turn a range bound strict: min becomes
+	// "greater than" and max becomes "less than". The zero value keeps the
+	// inclusive semantics every stored rule already has.
+	//
+	// They exist because an inclusive bound cannot express "over 50000" for a
+	// continuous type: on an integer the author can write min 50001, but on a
+	// float, decimal, date or quantity there is no next value to name.
+	MinExclusive bool   `json:"min_exclusive,omitempty"`
+	MaxExclusive bool   `json:"max_exclusive,omitempty"`
+	Pattern      string `json:"pattern,omitempty"`
 	// PatternSubstring opts a pattern condition out of anchoring, matching
 	// attribute.Pattern.Substring. The zero value keeps the safe semantics.
 	PatternSubstring bool                       `json:"pattern_substring,omitempty"`
@@ -75,6 +84,8 @@ type conditionJSON struct {
 	Values           []json.RawMessage          `json:"values,omitempty"`
 	Min              json.RawMessage            `json:"min,omitempty"`
 	Max              json.RawMessage            `json:"max,omitempty"`
+	MinExclusive     bool                       `json:"min_exclusive,omitempty"`
+	MaxExclusive     bool                       `json:"max_exclusive,omitempty"`
 	Pattern          string                     `json:"pattern,omitempty"`
 	PatternSubstring bool                       `json:"pattern_substring,omitempty"`
 	Dynamic          *valueobjects.DynamicValue `json:"dynamic,omitempty"`
@@ -84,6 +95,7 @@ type conditionJSON struct {
 // MarshalJSON encodes value operands in their self-describing typed form.
 func (c Condition) MarshalJSON() ([]byte, error) {
 	out := conditionJSON{Kind: c.Kind, Pattern: c.Pattern, PatternSubstring: c.PatternSubstring,
+		MinExclusive: c.MinExclusive, MaxExclusive: c.MaxExclusive,
 		Dynamic: c.Dynamic, Op: c.Op, ContextKey: c.ContextKey}
 
 	marshal := func(v *valueobjects.Value) (json.RawMessage, error) {
@@ -122,6 +134,8 @@ func (c *Condition) UnmarshalJSON(b []byte) error {
 	c.Kind = in.Kind
 	c.Pattern = in.Pattern
 	c.PatternSubstring = in.PatternSubstring
+	c.MinExclusive = in.MinExclusive
+	c.MaxExclusive = in.MaxExclusive
 	c.Dynamic = in.Dynamic
 	c.Op = in.Op
 	c.ContextKey = in.ContextKey
@@ -183,6 +197,12 @@ func (c Condition) Validate(sourceType valueobjects.DataType) error {
 	case CondRange:
 		if c.Min == nil && c.Max == nil {
 			return domainerrors.NewValidation("range condition requires min and/or max")
+		}
+		if c.MinExclusive && c.Min == nil {
+			return domainerrors.NewValidation("min_exclusive requires a min bound")
+		}
+		if c.MaxExclusive && c.Max == nil {
+			return domainerrors.NewValidation("max_exclusive requires a max bound")
 		}
 		if !sourceType.IsOrdered() {
 			return domainerrors.NewValidation("range condition requires an ordered source attribute",
@@ -249,7 +269,7 @@ func (c Condition) Matches(source valueobjects.Value, now time.Time) (bool, erro
 			if err != nil {
 				return false, err
 			}
-			if cmp < 0 {
+			if cmp < 0 || (c.MinExclusive && cmp == 0) {
 				return false, nil
 			}
 		}
@@ -258,7 +278,7 @@ func (c Condition) Matches(source valueobjects.Value, now time.Time) (bool, erro
 			if err != nil {
 				return false, err
 			}
-			if cmp > 0 {
+			if cmp > 0 || (c.MaxExclusive && cmp == 0) {
 				return false, nil
 			}
 		}

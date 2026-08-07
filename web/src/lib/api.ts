@@ -95,11 +95,13 @@ export interface TypedValue {
 }
 
 export interface Constraint {
-  kind: 'min_length' | 'max_length' | 'min_value' | 'max_value' | 'pattern' | 'one_of'
+  kind: 'min_length' | 'max_length' | 'min_value' | 'max_value' | 'pattern' | 'one_of' | 'media'
   n?: number
   value?: TypedValue
   expr?: string
   values?: TypedValue[]
+  mime?: string[]
+  max_size?: number
 }
 
 export interface DefaultValue {
@@ -173,7 +175,11 @@ export interface Condition {
   values?: TypedValue[]
   min?: TypedValue
   max?: TypedValue
+  // Strict bounds: min becomes "greater than", max becomes "less than".
+  min_exclusive?: boolean
+  max_exclusive?: boolean
   pattern?: string
+  pattern_substring?: boolean
   dynamic?: { kind: 'now' | 'today' | 'relative_time'; period?: string; amount?: number }
   op?: 'before' | 'after' | 'on_or_before' | 'on_or_after'
 }

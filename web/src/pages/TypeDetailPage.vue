@@ -44,13 +44,19 @@ const attributes = useQuery({
   queryFn: () => api.listAttributes({ type_definition_id: typeId.value, include_archived: true, limit: 200 }),
 })
 
-const dependencies = useQuery({
+const dependenciesQuery = useQuery({
   queryKey: ['dependencies', typeId],
   queryFn: () => api.listDependencies({ limit: 200 }),
-  select: (page) => {
-    const ids = new Set((effective.data.value?.items ?? []).map((e) => e.attribute.id))
-    return page.items.filter((d) => ids.has(d.source_attribute_id) || ids.has(d.target_attribute_id))
-  },
+})
+// Filter to this type's hierarchy as a computed, NOT a query select: a
+// select memoizes on the query's own data, so when the dependency request
+// resolved before effective-attributes it captured an empty attribute set
+// and the list stayed empty until an unrelated refetch.
+const typeDependencies = computed(() => {
+  const ids = new Set((effective.data.value?.items ?? []).map((e) => e.attribute.id))
+  return (dependenciesQuery.data.value?.items ?? []).filter(
+    (d) => ids.has(d.source_attribute_id) || ids.has(d.target_attribute_id),
+  )
 })
 
 const entities = useQuery({
@@ -90,7 +96,7 @@ const tab = ref('attributes')
 const tabsRef = ref<InstanceType<typeof Tabs>>()
 const tabs = computed(() => [
   { key: 'attributes', label: 'Attributes', count: effective.data.value?.items.length },
-  { key: 'dependencies', label: 'Dependencies', count: dependencies.data.value?.length },
+  { key: 'dependencies', label: 'Dependencies', count: typeDependencies.value.length },
   { key: 'relationships', label: 'Relationships', count: relDefs.data.value?.items.length },
   { key: 'entities', label: 'Entities', count: entities.data.value?.page_info.total_count },
 ])
@@ -206,8 +212,15 @@ function describeDependency(d: Dependency): string {
           return `= ${c.value ? renderTyped(c.value) : '?'}`
         case 'in':
           return `in [${(c.values ?? []).map(renderTyped).join(', ')}]`
-        case 'range':
-          return `between ${c.min ? renderTyped(c.min) : '−∞'} and ${c.max ? renderTyped(c.max) : '∞'}`
+        case 'range': {
+          // Single-bound ranges read as comparators; strict bounds show the
+          // strict symbol so "> 50000" and "≥ 50000" stay distinguishable.
+          if (c.min && !c.max) return `${c.min_exclusive ? '>' : '≥'} ${renderTyped(c.min)}`
+          if (c.max && !c.min) return `${c.max_exclusive ? '<' : '≤'} ${renderTyped(c.max)}`
+          const lo = c.min ? `${renderTyped(c.min)}${c.min_exclusive ? ' (excl)' : ''}` : '−∞'
+          const hi = c.max ? `${renderTyped(c.max)}${c.max_exclusive ? ' (excl)' : ''}` : '∞'
+          return `between ${lo} and ${hi}`
+        }
         case 'pattern':
           return `matches ${c.pattern}`
         case 'dynamic':
@@ -404,7 +417,7 @@ function describeEffect(d: Dependency): string {
 
     <div class="flex flex-col gap-2">
       <article
-        v-for="d in dependencies.data.value"
+        v-for="d in typeDependencies"
         :key="d.id"
         class="rounded-lg border border-(--border) bg-(--surface) p-3.5"
       >
@@ -429,7 +442,7 @@ function describeEffect(d: Dependency): string {
       </article>
 
       <EmptyState
-        v-if="!dependencies.isPending.value && !dependencies.data.value?.length"
+        v-if="!dependenciesQuery.isPending.value && !typeDependencies.length"
         title="No dependencies"
         body="Dependencies make one attribute's rules react to another's value — cascading picklists, conditional requirements."
       >

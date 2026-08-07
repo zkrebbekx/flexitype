@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/zkrebbekx/flexitype/application/query"
+	"github.com/zkrebbekx/flexitype/domain/attribute"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -163,7 +164,7 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (tri, error) {
 		return r.evalCompare(n, s)
 
 	case *query.BoundIn:
-		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, s) {
+		for _, snap := range r.scopedValues(n.Attr, n.Link, s) {
 			for _, want := range n.Values {
 				if snap.Value.Equal(want) {
 					return triTrue, nil
@@ -173,7 +174,7 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (tri, error) {
 		return triFalse, nil
 
 	case *query.BoundRange:
-		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, s) {
+		for _, snap := range r.scopedValues(n.Attr, n.Link, s) {
 			lo, err := snap.Value.Compare(n.Lo)
 			if err != nil {
 				return triFalse, err
@@ -189,10 +190,10 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (tri, error) {
 		return triFalse, nil
 
 	case *query.BoundHas:
-		return triOf(len(r.scopedValues(n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, s)) > 0), nil
+		return triOf(len(r.scopedValues(n.Attr, n.Link, s)) > 0), nil
 
 	case *query.BoundStringMatch:
-		for _, snap := range r.scopedValues(n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, s) {
+		for _, snap := range r.scopedValues(n.Attr, n.Link, s) {
 			text := snap.Value.Text()
 			switch n.Kind {
 			case fql.MatchContains:
@@ -229,7 +230,7 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (tri, error) {
 }
 
 func (r *queryRepo) evalCompare(n *query.BoundCompare, s evalScope) (tri, error) {
-	snaps := r.scopedValues(n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, s)
+	snaps := r.scopedValues(n.Attr, n.Link, s)
 
 	switch n.Func {
 	case fql.FuncMin, fql.FuncMax:
@@ -315,10 +316,22 @@ func (r *queryRepo) evalTraversal(n *query.BoundTraversal, s evalScope) (tri, er
 			far = child
 		}
 
+		// A relationship can outlive its counterpart: removing an entity's
+		// last value makes it invisible at the root, but the relationship
+		// stays live. Skip such value-less "ghost" counterparts, mirroring
+		// the Postgres entity-summary guard (issue #475). declaredType
+		// returns "" exactly when the counterpart has no live values, so
+		// this also removes the type-negation divergence (Postgres yielded
+		// NULL for a ghost's type, memory yielded "").
+		farType := r.declaredType(s.tenant, far)
+		if farType == "" {
+			continue
+		}
+
 		res, err := r.eval(n.Inner, evalScope{
 			tenant: s.tenant,
 			entity: far,
-			typeID: r.declaredType(s.tenant, far),
+			typeID: farType,
 			link:   rel.ID.String(),
 			query:  s.query,
 		})
@@ -336,21 +349,34 @@ func (r *queryRepo) evalTraversal(n *query.BoundTraversal, s evalScope) (tri, er
 
 // scopedValues returns the current scope's live values of one attribute.
 // Link-scoped attributes anchor on the enclosing relationship's id.
-func (r *queryRepo) scopedValues(attrDefID string, link, scoped bool, s evalScope) []domainvalue.Snapshot {
+//
+// The query scope pins each dimension separately, mirroring the SQL
+// compiler's valueScope. Locale narrows only a localizable attribute.
+// Channel narrows only a scopable one. The write path stores an empty
+// string in a dimension the attribute does not carry, so pinning that
+// dimension too would exclude every value of a single-dimension attribute
+// (issue #474).
+// Link attributes ignore scope entirely — that keeps the pre-existing
+// behavior, stated here as a deliberate choice.
+func (r *queryRepo) scopedValues(attr attribute.Snapshot, link bool, s evalScope) []domainvalue.Snapshot {
 	entity := s.entity
 	if link {
 		entity = s.link
 	}
+	attrDefID := attr.ID.String()
 	var out []domainvalue.Snapshot
 	for _, snap := range r.s.values {
 		if snap.TenantID.String() != s.tenant || snap.EntityID.String() != entity ||
 			snap.AttributeDefinitionID.String() != attrDefID || snap.ArchivedAt != nil {
 			continue
 		}
-		// Scoped attributes match only within the query's locale/channel;
-		// non-scoped attributes ignore scope.
-		if scoped && (snap.Locale != s.query.Locale || snap.Channel != s.query.Channel) {
-			continue
+		if !link {
+			if attr.Localizable && snap.Locale != s.query.Locale {
+				continue
+			}
+			if attr.Scopable && snap.Channel != s.query.Channel {
+				continue
+			}
 		}
 		out = append(out, snap)
 	}

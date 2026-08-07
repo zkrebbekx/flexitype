@@ -20,7 +20,7 @@ import (
 func TestContextKeyRoundTrip(t *testing.T) {
 	Convey("Given a condition keyed on a caller-supplied fact", t, func() {
 		v := valueobjects.NewStringValue("enterprise")
-		c := Condition{Kind: CondEquals, Value: &v, ContextKey: "customer_tier"}
+		c := Condition{Kind: CondEquals, Value: &v, ContextKey: "customer_tier", ContextType: valueobjects.DataTypeString}
 
 		raw, err := json.Marshal(c)
 		So(err, ShouldBeNil)
@@ -61,7 +61,7 @@ func TestMatchesAnyWithContext(t *testing.T) {
 
 		d, _, err := New(NewInput{
 			TenantID: valueobjects.DefaultTenant, Source: source, Target: target,
-			Conditions: []Condition{{Kind: CondEquals, Value: &want, ContextKey: "customer_tier"}},
+			Conditions: []Condition{{Kind: CondEquals, Value: &want, ContextKey: "customer_tier", ContextType: valueobjects.DataTypeString}},
 			Effect:     Effect{Required: boolPtr(true)},
 		}, now)
 		So(err, ShouldBeNil)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/activity"
 	"github.com/zkrebbekx/flexitype/application/appctx"
+	"github.com/zkrebbekx/flexitype/application/fieldacl"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	appunit "github.com/zkrebbekx/flexitype/application/unit"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -17,6 +18,7 @@ import (
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
+	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
@@ -230,6 +232,9 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domaindepende
 		if err := uow.EnsureTenant(ctx, target.TenantID(), "attribute_definition", in.TargetAttributeID); err != nil {
 			return err
 		}
+		if err := assertRuleAccess(ctx, source, target); err != nil {
+			return err
+		}
 
 		// Both attributes must live on one hierarchy chain so every entity
 		// holding the target also holds (or inherits) the source.
@@ -308,8 +313,16 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domaindepende
 		if err != nil {
 			return err
 		}
-		target, err := attrs.Get(ctx, d.TargetAttributeID())
+		// Lock the target definition the way Create does. The value write
+		// path serializes on this row (lockDefinition), so without the lock
+		// a value write could load the old rule while an Update commits a
+		// tighter effect, then commit a now-forbidden value — permanently,
+		// since nothing revalidates stored values.
+		target, err := attrs.GetForUpdate(ctx, d.TargetAttributeID())
 		if err != nil {
+			return err
+		}
+		if err := assertRuleAccess(ctx, source, target); err != nil {
 			return err
 		}
 
@@ -363,6 +376,25 @@ func (i *Interactor) Archive(ctx context.Context, rawID string) (*domaindependen
 		}
 		if err := uow.EnsureTenant(ctx, d.TenantID(), domaindependency.AggregateType, rawID); err != nil {
 			return err
+		}
+		// Archiving a rule changes what the TARGET attribute accepts, so it
+		// needs the same write right as authoring one — and the same lock:
+		// the value write path serializes on the target definition row, so
+		// an unlocked archive could race a write that still saw the rule.
+		// A target the caller cannot even read reports the dependency as
+		// absent rather than confirming what it points at.
+		target, err := i.attrs.WithTx(tx).GetForUpdate(ctx, d.TargetAttributeID())
+		if err != nil {
+			return err
+		}
+		access := uow.AccessFromContext(ctx)
+		if !access.CanRead(target.InternalName()) {
+			return domainerrors.NewNotFound(domaindependency.AggregateType, rawID)
+		}
+		if !access.CanWrite(target.InternalName()) {
+			return domainerrors.NewForbidden(
+				"archiving a dependency requires write permission on its target attribute",
+				"attribute", target.InternalName())
 		}
 		before := d.Snapshot()
 
@@ -492,6 +524,12 @@ func (i *Interactor) EffectiveSchema(ctx context.Context, rawAttrID, rawEntityID
 	if err := uow.EnsureTenant(ctx, def.TenantID(), "attribute_definition", rawAttrID); err != nil {
 		return nil, err
 	}
+	// A target the caller may not read is reported as not found, exactly as
+	// an unknown ID is: the resolved Required/Restricted/AllowedValues of a
+	// restricted attribute are facts about it the caller may not have.
+	if !uow.AccessFromContext(ctx).CanRead(def.InternalName()) {
+		return nil, domainerrors.NewNotFound("attribute_definition", rawAttrID)
+	}
 	targeting, err := i.deps.ListByTarget(ctx, attrID)
 	if err != nil {
 		return nil, err
@@ -506,6 +544,17 @@ func (i *Interactor) EffectiveSchema(ctx context.Context, rawAttrID, rawEntityID
 		// serve. ListByEntities keys on (tenant, entity) with no type filter,
 		// which is what GraphQL already used.
 		entityValues, err := i.values.ListByEntities(ctx, def.TenantID(), []valueobjects.EntityID{entityID})
+		if err != nil {
+			return nil, err
+		}
+		// Resolve against the caller's READABLE values only. This endpoint
+		// used to read the raw repository, so the one bit it returns was a
+		// function of values the field ACL redacts everywhere else — a rule
+		// keyed on a restricted source made it a binary-search oracle over
+		// that source (~20 requests per exact value). A rule whose source the
+		// caller cannot see now simply does not fire, which matches what the
+		// same caller is told the entity holds.
+		entityValues, err = i.readableOnly(ctx, entityValues)
 		if err != nil {
 			return nil, err
 		}
@@ -527,6 +576,57 @@ func (i *Interactor) EffectiveSchema(ctx context.Context, rawAttrID, rawEntityID
 		Restricted:            schema.Restricted,
 		AllowedValues:         schema.AllowedValues,
 	}, nil
+}
+
+// readableOnly drops the values of attributes the principal may not read,
+// resolving attribute identity by ID the way every other redacting surface
+// does (application/fieldacl). Rule resolution then sees exactly the value
+// set the caller is told the entity holds.
+func (i *Interactor) readableOnly(ctx context.Context, values []*domainvalue.AttributeValue) ([]*domainvalue.AttributeValue, error) {
+	if len(values) == 0 || uow.AccessFromContext(ctx).Admin {
+		return values, nil
+	}
+	ids := make([]valueobjects.AttributeDefinitionID, 0, len(values))
+	for _, av := range values {
+		ids = append(ids, av.AttributeDefinitionID())
+	}
+	readable, err := fieldacl.New(i.attrs).Readable(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := values[:0]
+	for _, av := range values {
+		if readable[av.AttributeDefinitionID().String()] {
+			out = append(out, av)
+		}
+	}
+	return out, nil
+}
+
+// assertRuleAccess is the field-ACL gate for authoring a dependency: the
+// caller must be able to READ the source (a rule keyed on an attribute is a
+// comparison against its values — authoring one over an invisible source is
+// the binary-search oracle the FQL binder refuses) and WRITE the target
+// (the rule changes what the target accepts).
+//
+// An unreadable attribute is reported as not found, exactly as an unknown ID
+// is, so the refusal does not confirm that a restricted attribute exists. A
+// readable-but-unwritable target is a plain permission refusal: the caller
+// already knows the attribute exists.
+func assertRuleAccess(ctx context.Context, source, target *domainattribute.Definition) error {
+	access := uow.AccessFromContext(ctx)
+	if !access.CanRead(source.InternalName()) {
+		return domainerrors.NewNotFound("attribute_definition", source.ID().String())
+	}
+	if !access.CanRead(target.InternalName()) {
+		return domainerrors.NewNotFound("attribute_definition", target.ID().String())
+	}
+	if !access.CanWrite(target.InternalName()) {
+		return domainerrors.NewForbidden(
+			"a dependency requires write permission on its target attribute",
+			"attribute", target.InternalName())
+	}
+	return nil
 }
 
 // checkSameChain verifies the two attributes' declaring types share one

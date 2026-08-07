@@ -84,6 +84,14 @@ func (i *Interactor) entityFilled(
 	if err != nil {
 		return nil, err
 	}
+	// The caller's readable values only, for the same reason EffectiveSchema
+	// filters: a rule keyed on a value the caller may not read must not fire
+	// for that caller, or the resolved requiredness is an oracle over the
+	// restricted value.
+	values, err = i.readableOnly(ctx, values)
+	if err != nil {
+		return nil, err
+	}
 	// Every value of each attribute, not one arbitrary member: a multi-valued
 	// attribute collapsed to whichever row came last, so a dependency whose
 	// source is multi-valued scored against a single member.
@@ -116,6 +124,7 @@ func (i *Interactor) scoreEntity(
 		TypeDefinitionID: t.ID().String(),
 		Missing:          []MissingAttribute{},
 	}
+	access := uow.AccessFromContext(ctx)
 	seen := make(map[valueobjects.AttributeDefinitionID]bool)
 	for _, link := range chain {
 		attrs, err := domainattribute.ListAllForType(ctx, i.attrs, link.ID())
@@ -127,6 +136,14 @@ func (i *Interactor) scoreEntity(
 				continue
 			}
 			seen[a.ID()] = true
+
+			// An attribute the caller may not read is excluded entirely: not
+			// tallied in Required or Filled, never listed in Missing. Listing
+			// it would disclose a restricted attribute's name, and counting it
+			// would make the score a function of values the caller cannot see.
+			if !access.CanRead(a.InternalName()) {
+				continue
+			}
 
 			required, err := i.attributeRequired(ctx, a, filled)
 			if err != nil {

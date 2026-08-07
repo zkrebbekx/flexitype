@@ -206,6 +206,16 @@ func (b *binder) bind(ctx context.Context, node fql.Node, s *scope) (BoundNode, 
 		if !b.searchIndex {
 			return nil, positioned(n.Pos, "matches() requires the search-index feature, which is disabled in this deployment")
 		}
+		// The search document concatenates EVERY textual value of the entity
+		// with no per-attribute identity (application/search/indexer.go), so
+		// a match cannot be filtered by the field ACL the way scopeFor
+		// filters named attributes. Serving it to a field-restricted
+		// principal is a word-by-word disclosure oracle over the restricted
+		// values, so it fails closed until the index carries per-attribute
+		// documents. The refusal names no attribute.
+		if !b.access.ReadsEverything() {
+			return nil, positioned(n.Pos, "matches() is unavailable under a field-restricted access policy: the search document cannot be filtered per attribute")
+		}
 		return &BoundMatches{Query: n.Query}, nil
 
 	case *fql.Traversal:

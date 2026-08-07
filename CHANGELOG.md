@@ -7,6 +7,26 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — A query with both locale and channel skipped single-dimension attributes ([#474])
+
+The FQL compiler pinned both `locale` and `channel` on any localizable or
+scopable attribute. The write path stores an empty string in the dimension
+an attribute does not carry, so a query that supplied both dimensions
+excluded every value of a localizable-only or scopable-only attribute.
+Locale now narrows only a localizable attribute. Channel now narrows only
+a scopable one. Both backends apply the same rule.
+
+### Fixed — Traversals matched value-less ghost counterparts over dangling links ([#475])
+
+Removing an entity's last value hides it at the root, but its
+relationships stay live. A traversal across such a dangling link matched
+the ghost, so `count()=0`, `not has()` and negated type conditions
+wrongly selected the near entity, and `type !=` diverged between the two
+backends. Every traversal hop now requires the counterpart to be visible
+in the entity-summary projection, on both backends. Migration 000031 adds
+the `(tenant_id, entity_id)` index that serves the probe as one B-tree
+lookup.
+
 ## [1.4.0] — 2026-08-07
 
 ### Added — Strict range bounds on dependency conditions ([#466])
@@ -1645,6 +1665,8 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 [#465]: https://github.com/zkrebbekx/flexitype/pull/465
 [#466]: https://github.com/zkrebbekx/flexitype/pull/466
 [#467]: https://github.com/zkrebbekx/flexitype/pull/467
+[#474]: https://github.com/zkrebbekx/flexitype/issues/474
+[#475]: https://github.com/zkrebbekx/flexitype/issues/475
 [1.3.0]: https://github.com/zkrebbekx/flexitype/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/zkrebbekx/flexitype/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/zkrebbekx/flexitype/compare/v1.0.0...v1.1.0

@@ -20,6 +20,15 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/logger"
 )
 
+// evalInstant is the pinned instant every assertion resolves against. At
+// 20:00 UTC the Etc/GMT-14 zone (UTC+14) is at 10:00 on the NEXT day, so the
+// UTC day and the local day always differ. A wall-clock instant only gave
+// that difference for part of the day: before 10:00 UTC the two zones share a
+// date, and the test failed there. See TestTimeZoneReachesEvaluation.
+var evalInstant = time.Date(2026, 1, 15, 20, 0, 0, 0, time.UTC)
+
+func evalClock() time.Time { return evalInstant }
+
 // zoneFixture is a type whose `channel` attribute becomes required as soon as
 // `due_on` is on or after TODAY — a date-boundary rule, and the configured
 // zone is what decides which day that is.
@@ -52,8 +61,8 @@ func seedZoneFixture(ctx context.Context, svc *flexitype.Service) zoneFixture {
 	})
 	So(err, ShouldBeNil)
 
-	// The entity's due date is the UTC day.
-	raw, merr := json.Marshal(valueobjects.NewDateValue(time.Now().UTC()).String())
+	// The entity's due date is the pinned instant's UTC day.
+	raw, merr := json.Marshal(valueobjects.NewDateValue(evalInstant).String())
 	So(merr, ShouldBeNil)
 	_, serr := svc.Interactors(ctx).Values().Set(ctx, appvalue.SetInput{
 		AttributeDefinitionID: dueOn.ID.String(), EntityID: "o1",
@@ -74,19 +83,23 @@ func seedZoneFixture(ctx context.Context, svc *flexitype.Service) zoneFixture {
 // default resolved in UTC. The read and write paths agreed only because both
 // were wrong, which removed the contradiction that would have exposed it.
 //
-// In a zone 14 hours AHEAD of UTC, "today" is already the next day, so
-// `due_on on_or_after today` over a UTC-dated entity is false there and true
-// in UTC. That difference holds at every instant, so the assertion never
-// depends on the hour the test runs.
+// The clock is pinned to 20:00 UTC (WithClock), where Etc/GMT-14 (UTC+14) is
+// already on the NEXT day. So `due_on on_or_after today` over an entity dated
+// on the pinned UTC day is true in UTC and false in the zone — a constant,
+// not a function of when the test runs. The wall clock gave the opposite
+// answer before 10:00 UTC, when the two zones share a date.
 func TestTimeZoneReachesEvaluation(t *testing.T) {
 	ahead, err := time.LoadLocation("Etc/GMT-14")
 	if err != nil {
 		t.Fatalf("load zone: %v", err)
 	}
 
-	Convey("Given a service configured 14 hours ahead of UTC", t, func() {
-		svc := flexitype.NewInMemory(flexitype.WithTimeZone(ahead))
-		plain := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+	Convey("Given a service configured 14 hours ahead of UTC with a pinned clock", t, func() {
+		svc := flexitype.NewInMemory(flexitype.WithTimeZone(ahead), flexitype.WithClock(evalClock))
+		// The bare context carries the pinned clock but NOT the zone: the
+		// zone's absence is the behaviour under test, the clock's presence
+		// only removes the wall clock from the outcome.
+		plain := uow.WithClock(uow.WithTenant(context.Background(), valueobjects.DefaultTenant), evalClock)
 		fx := seedZoneFixture(plain, svc)
 
 		Convey("When the caller passes a bare context", func() {
@@ -124,8 +137,8 @@ func TestTimeZoneReachesEvaluation(t *testing.T) {
 		})
 	})
 
-	Convey("Given the standalone API configured in that zone", t, func() {
-		svc := flexitype.NewInMemory(flexitype.WithTimeZone(ahead))
+	Convey("Given the standalone API configured in that zone with a pinned clock", t, func() {
+		svc := flexitype.NewInMemory(flexitype.WithTimeZone(ahead), flexitype.WithClock(evalClock))
 		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
 		fx := seedZoneFixture(ctx, svc)
 

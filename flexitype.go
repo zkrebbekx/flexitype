@@ -52,6 +52,7 @@ type Service struct {
 	indexer      *search.Indexer
 	materializer *computed.Materializer
 	timeZone     *time.Location
+	clock        func() time.Time
 	worker       *webhook.Worker
 	pruner       *feed.Pruner
 	blobs        blob.Store
@@ -74,6 +75,7 @@ type options struct {
 	webhookAllowPrivate bool
 	webhookTimeout      time.Duration
 	timeZone            *time.Location
+	clock               func() time.Time
 	searchIndex         bool
 	gqlFederation       bool
 	failClosedACL       bool
@@ -219,6 +221,24 @@ func WithDeliveryWorker(opts ...webhook.WorkerOption) Option {
 // an embedder serves tenants in different zones from one process.
 func WithTimeZone(loc *time.Location) Option {
 	return func(o *options) { o.timeZone = loc }
+}
+
+// WithClock pins the instant that `today` and `now` resolve against, for
+// tests and simulations. Production deployments do not set it.
+//
+// It exists because a `today` rule is a function of the wall clock, so a test
+// that asserts on its outcome is only correct during part of the day. A
+// pinned clock makes the outcome a constant. It rides the context exactly as
+// WithTimeZone does — Service.Context and the API middleware stamp it — so it
+// reaches every entry point the zone reaches.
+//
+// Scope: calendar evaluation only (dependency rules, dynamic defaults).
+// Stored timestamps (created_at, updated_at) keep the wall clock, so a pinned
+// clock cannot backdate an audit trail.
+//
+// Per-request override: stamp uow.WithClock on the context.
+func WithClock(now func() time.Time) Option {
+	return func(o *options) { o.clock = now }
 }
 
 // WithWebhookTimeout bounds one webhook delivery attempt (default 10s).
@@ -395,6 +415,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		indexer:      indexer,
 		materializer: materializer,
 		timeZone:     o.timeZone,
+		clock:        o.clock,
 		worker:       worker,
 		pruner:       pruner,
 		blobs:        o.blobs,
@@ -480,6 +501,7 @@ func NewInMemory(opts ...Option) *Service {
 		indexer:      indexer,
 		materializer: materializer,
 		timeZone:     o.timeZone,
+		clock:        o.clock,
 		blobs:        o.blobs,
 		graphql:      graphqlEngine,
 		onBgError:    o.onBgError,
@@ -676,6 +698,9 @@ func (s *Service) Context(ctx context.Context) context.Context {
 	if s.timeZone != nil && !uow.HasTimeZone(ctx) {
 		ctx = uow.WithTimeZone(ctx, s.timeZone)
 	}
+	if s.clock != nil && !uow.HasClock(ctx) {
+		ctx = uow.WithClock(ctx, s.clock)
+	}
 	return ctx
 }
 
@@ -865,6 +890,7 @@ func (s *Service) NewAPIHandler(cfg APIConfig) (http.Handler, error) {
 		MaxImportBytes:    cfg.MaxImportBytes,
 		MaxMediaBytes:     cfg.MaxMediaBytes,
 		TimeZone:          s.timeZone,
+		Clock:             s.clock,
 	}
 	if cfg.EnableProvisioning {
 		var adminOpts []admin.Option

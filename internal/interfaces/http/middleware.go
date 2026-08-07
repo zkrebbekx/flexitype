@@ -53,6 +53,26 @@ func withTimeZone(loc *time.Location) func(http.Handler) http.Handler {
 	}
 }
 
+// withClock stamps a pinned evaluation clock on the request context, so
+// `today` and `now` resolve against a chosen instant rather than the wall
+// clock. Tests and simulations only; a nil clock is the common case and adds
+// no handler. A caller that already stamped a clock keeps it, matching
+// withTimeZone.
+func withClock(now func() time.Time) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if now == nil {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			if !uow.HasClock(ctx) {
+				ctx = uow.WithClock(ctx, now)
+			}
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
 // consoleThemeScriptHash is the SHA-256 of the inline pre-paint theme <script>
 // in web/index.html (which Vite copies verbatim into the served index.html).
 // Pinning its hash in script-src lets the console keep that one inline script

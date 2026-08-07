@@ -68,6 +68,10 @@ type ServerConfig struct {
 	// each method takes one from its own caller — so FLEXITYPE_TIMEZONE never
 	// reached rule evaluation and every date rule resolved in UTC.
 	TimeZone *time.Location
+	// Clock pins the instant `today` and `now` resolve against, for tests
+	// and simulations. It is stamped on the request context exactly as
+	// TimeZone is, and for the same reason. Nil uses the wall clock.
+	Clock func() time.Time
 }
 
 // Upload ceilings. They were compile-time constants, absent from the
@@ -130,6 +134,7 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 		// The zone goes on before the interactors, so a handler's ctx carries
 		// it into every rule evaluation.
 		api.Use(withTimeZone(cfg.TimeZone))
+		api.Use(withClock(cfg.Clock))
 		// Interactors after auth: the set is built with the request's actor
 		// and tenant already on the context.
 		api.Use(withInteractors(cfg.Factory))

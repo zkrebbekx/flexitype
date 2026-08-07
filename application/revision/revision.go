@@ -18,7 +18,6 @@ import (
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
-	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
@@ -166,12 +165,16 @@ func NewInteractor(
 }
 
 // Create captures the entity's current live values as a new revision.
+//
+// As in List: the type is validated, the entity is the key. The capture reads
+// the entity's values with no type filter, so a capture after the anchor
+// narrows still records the full entity.
 func (i *Interactor) Create(ctx context.Context, rawTypeID, entityID, label string) (*Revision, error) {
-	typeID, tenant, err := i.resolveEntity(ctx, rawTypeID, entityID)
+	_, tenant, err := i.resolveEntity(ctx, rawTypeID, entityID)
 	if err != nil {
 		return nil, err
 	}
-	values, err := i.snapshotValues(ctx, tenant, typeID, entityID)
+	values, err := i.snapshotValues(ctx, tenant, entityID)
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +452,34 @@ func (i *Interactor) Restore(ctx context.Context, rawRevisionID string) (*Revisi
 	if err := i.applier.ApplySnapshot(ctx, rev.TypeDefinitionID, rev.EntityID, cells); err != nil {
 		return nil, err
 	}
-	return i.Create(ctx, rev.TypeDefinitionID, rev.EntityID, "restored from revision "+itoa(rev.Seq))
+	// Record the follow-up revision under the entity's CURRENT anchor, not
+	// the anchor at capture time. After the anchor narrows, the captured type
+	// is stale: recording it would write a revision whose type no longer
+	// names the entity's rows.
+	captureType, err := i.currentAnchor(ctx, rev)
+	if err != nil {
+		return nil, err
+	}
+	return i.Create(ctx, captureType, rev.EntityID, "restored from revision "+itoa(rev.Seq))
+}
+
+// currentAnchor returns the type the entity's live rows are anchored to now.
+// The anchor is an invariant of the entity, so every live row carries the
+// same type and the first row answers. When the entity holds no live rows,
+// it returns the revision's captured type, which Create then validates.
+func (i *Interactor) currentAnchor(ctx context.Context, rev *Revision) (string, error) {
+	entityID, err := valueobjects.ParseEntityID(rev.EntityID)
+	if err != nil {
+		return "", domainerrors.NewValidation(err.Error())
+	}
+	rows, err := i.values.ListByEntities(ctx, rev.TenantID, []valueobjects.EntityID{entityID})
+	if err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		return rev.TypeDefinitionID, nil
+	}
+	return rows[0].TypeDefinitionID().String(), nil
 }
 
 // resolveEntity parses the type id, loads the type and enforces the tenant.
@@ -473,12 +503,20 @@ func (i *Interactor) resolveEntity(ctx context.Context, rawTypeID, entityID stri
 
 // snapshotValues captures an entity's live values with their attribute names
 // and data types.
-func (i *Interactor) snapshotValues(ctx context.Context, tenant valueobjects.TenantID, typeID valueobjects.TypeDefinitionID, rawEntityID string) ([]Value, error) {
+//
+// The read is keyed on (tenant, entity) and NOT on the type, for the same
+// reason the Store is (see Store): the write path re-anchors every value row
+// when the anchor narrows to a subtype, so a type-keyed read under the anchor
+// at capture time matches zero rows and records an empty entity. The anchor
+// is an invariant of the entity — every live row carries the same type — so
+// the entity-keyed read returns the same rows the type-keyed read returned
+// whenever that one worked at all.
+func (i *Interactor) snapshotValues(ctx context.Context, tenant valueobjects.TenantID, rawEntityID string) ([]Value, error) {
 	entityID, err := valueobjects.ParseEntityID(rawEntityID)
 	if err != nil {
 		return nil, domainerrors.NewValidation(err.Error())
 	}
-	vals, err := i.values.ListByEntity(ctx, domainvalue.EntityKey{TenantID: tenant, TypeDefinitionID: typeID, EntityID: entityID})
+	vals, err := i.values.ListByEntities(ctx, tenant, []valueobjects.EntityID{entityID})
 	if err != nil {
 		return nil, err
 	}

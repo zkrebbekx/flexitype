@@ -58,6 +58,16 @@ const typeDependencies = computed(() => {
     (d) => ids.has(d.source_attribute_id) || ids.has(d.target_attribute_id),
   )
 })
+// The dependency list joins two queries, so its load state must gate on
+// both: skeleton while either is pending, error while either failed, and
+// the empty state only when both landed with no matching rows (#496).
+const dependenciesPending = computed(() => dependenciesQuery.isPending.value || effective.isPending.value)
+const dependenciesFailed = computed(() => dependenciesQuery.isError.value || effective.isError.value)
+const dependenciesLoadError = computed(() => dependenciesQuery.error.value ?? effective.error.value)
+function retryDependencies() {
+  if (dependenciesQuery.isError.value) dependenciesQuery.refetch()
+  if (effective.isError.value) effective.refetch()
+}
 
 const entities = useQuery({
   queryKey: ['entities', typeId],
@@ -96,7 +106,9 @@ const tab = ref('attributes')
 const tabsRef = ref<InstanceType<typeof Tabs>>()
 const tabs = computed(() => [
   { key: 'attributes', label: 'Attributes', count: effective.data.value?.items.length },
-  { key: 'dependencies', label: 'Dependencies', count: typeDependencies.value.length },
+  // No count until both backing queries land — a premature 0 reads as
+  // "this type has no dependencies" while the data is still loading.
+  { key: 'dependencies', label: 'Dependencies', count: dependenciesPending.value || dependenciesFailed.value ? undefined : typeDependencies.value.length },
   { key: 'relationships', label: 'Relationships', count: relDefs.data.value?.items.length },
   { key: 'entities', label: 'Entities', count: entities.data.value?.page_info.total_count },
 ])
@@ -415,7 +427,18 @@ function describeEffect(d: Dependency): string {
       <Button variant="primary" size="sm" @click="openDep()"><Plus :size="14" /> New dependency</Button>
     </div>
 
-    <div class="flex flex-col gap-2">
+    <div v-if="dependenciesPending" class="flex flex-col gap-2" aria-busy="true">
+      <div v-for="i in 3" :key="i" class="h-20 animate-pulse rounded-lg border border-(--border) bg-(--surface)" />
+    </div>
+
+    <ErrorState
+      v-else-if="dependenciesFailed"
+      title="Couldn't load dependencies"
+      :error="dependenciesLoadError"
+      @retry="retryDependencies()"
+    />
+
+    <div v-else class="flex flex-col gap-2">
       <article
         v-for="d in typeDependencies"
         :key="d.id"
@@ -442,7 +465,7 @@ function describeEffect(d: Dependency): string {
       </article>
 
       <EmptyState
-        v-if="!dependenciesQuery.isPending.value && !typeDependencies.length"
+        v-if="!typeDependencies.length"
         title="No dependencies"
         body="Dependencies make one attribute's rules react to another's value — cascading picklists, conditional requirements."
       >

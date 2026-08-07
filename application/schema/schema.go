@@ -7,6 +7,7 @@
 package schema
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,8 +17,10 @@ import (
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	appunit "github.com/zkrebbekx/flexitype/application/unit"
+	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
+	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
 
@@ -391,7 +394,7 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 	}
 
 	// 2. Attributes.
-	attrIDs, err := i.currentAttributeIDs(ctx, typeIDByName)
+	attrIDs, attrFamilyIDs, err := i.currentAttributeIDs(ctx, typeIDByName)
 	if err != nil {
 		return nil, err
 	}
@@ -437,6 +440,7 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 			return nil, fmt.Errorf("import attribute %q.%q: %w", a.Type, a.InternalName, err)
 		}
 		attrIDs[a.Type+"."+a.InternalName] = snap.ID.String()
+		attrFamilyIDs[snap.ID.String()] = snap.UnitFamilyID
 		res.Attributes.Created++
 	}
 
@@ -477,8 +481,16 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 		res.RelationshipDefinitions.Created++
 	}
 
-	// 4. Dependencies (matched by their source+target attribute pair).
-	existingDeps, err := i.currentDependencyPairs(ctx)
+	// 4. Dependencies — matched by the whole rule: source, target, canonical
+	// conditions and canonical effect. The endpoint pair alone is not a key.
+	// A cascading picklist is by construction several rules on one
+	// source→target pair, one per source value, and a pair key silently
+	// skipped every rule on the pair after the first.
+	existingDeps, err := i.currentDependencyKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	familyByID, err := i.currentUnitFamilies(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -488,8 +500,11 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 		if !sOK || !tOK {
 			return nil, domainerrors.NewValidation("dependency references an unknown attribute", "source", d.SourceType+"."+d.SourceAttribute, "target", d.TargetType+"."+d.TargetAttribute)
 		}
-		pair := srcID + "->" + tgtID
-		if existingDeps[pair] {
+		key, err := bundleDependencyKey(d, srcID, tgtID, attrFamilyIDs, familyByID)
+		if err != nil {
+			return nil, fmt.Errorf("import dependency %s->%s: %w", d.SourceType+"."+d.SourceAttribute, d.TargetType+"."+d.TargetAttribute, err)
+		}
+		if existingDeps[key] {
 			res.Dependencies.Skipped++
 			continue
 		}
@@ -502,7 +517,7 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 		}); err != nil {
 			return nil, fmt.Errorf("import dependency %s->%s: %w", d.SourceType+"."+d.SourceAttribute, d.TargetType+"."+d.TargetAttribute, err)
 		}
-		existingDeps[pair] = true
+		existingDeps[key] = true
 		res.Dependencies.Created++
 	}
 
@@ -562,17 +577,24 @@ func (i *Interactor) currentTypeIDs(ctx context.Context) (map[string]string, err
 	return ids, nil
 }
 
-func (i *Interactor) currentAttributeIDs(ctx context.Context, typeIDByName map[string]string) (map[string]string, error) {
+// currentAttributeIDs returns the tenant's attribute IDs keyed by
+// "type.attribute" name, plus each attribute's unit-family ID keyed by
+// attribute ID (empty when the attribute has none). The family map lets the
+// dependency step rebase a bundle rule's quantity operands the way the
+// create path does.
+func (i *Interactor) currentAttributeIDs(ctx context.Context, typeIDByName map[string]string) (map[string]string, map[string]string, error) {
 	ids := map[string]string{}
+	familyIDs := map[string]string{}
 	for name, typeID := range typeIDByName {
 		cursor := (*string)(nil)
 		for {
 			out, err := i.attrs.ListByTypeDefinition(ctx, typeID, db.PageArgs{Limit: limitPtr(200), Cursor: cursor})
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			for _, a := range out.Items {
 				ids[name+"."+a.InternalName] = a.ID.String()
+				familyIDs[a.ID.String()] = a.UnitFamilyID
 			}
 			if !out.PageInfo.HasNextPage {
 				break
@@ -580,7 +602,7 @@ func (i *Interactor) currentAttributeIDs(ctx context.Context, typeIDByName map[s
 			cursor = out.PageInfo.NextCursor
 		}
 	}
-	return ids, nil
+	return ids, familyIDs, nil
 }
 
 func (i *Interactor) currentRelationshipNames(ctx context.Context) (map[string]bool, error) {
@@ -602,8 +624,11 @@ func (i *Interactor) currentRelationshipNames(ctx context.Context) (map[string]b
 	return names, nil
 }
 
-func (i *Interactor) currentDependencyPairs(ctx context.Context) (map[string]bool, error) {
-	pairs := map[string]bool{}
+// currentDependencyKeys returns the rule key of every dependency the tenant
+// already has. The stored conditions and effect are already rebased, so
+// marshalling them yields the canonical form directly.
+func (i *Interactor) currentDependencyKeys(ctx context.Context) (map[string]bool, error) {
+	keys := map[string]bool{}
 	cursor := (*string)(nil)
 	for {
 		out, err := i.deps.List(ctx, appdependency.ListInput{Page: db.PageArgs{Limit: limitPtr(200), Cursor: cursor}})
@@ -611,14 +636,120 @@ func (i *Interactor) currentDependencyPairs(ctx context.Context) (map[string]boo
 			return nil, err
 		}
 		for _, d := range out.Items {
-			pairs[d.SourceAttributeID.String()+"->"+d.TargetAttributeID.String()] = true
+			key, err := dependencyRuleKey(d.SourceAttributeID.String(), d.TargetAttributeID.String(), d.Conditions, d.Effect)
+			if err != nil {
+				return nil, err
+			}
+			keys[key] = true
 		}
 		if !out.PageInfo.HasNextPage {
 			break
 		}
 		cursor = out.PageInfo.NextCursor
 	}
-	return pairs, nil
+	return keys, nil
+}
+
+// currentUnitFamilies returns the tenant's unit families keyed by ID, or an
+// empty map when unit support is disabled.
+func (i *Interactor) currentUnitFamilies(ctx context.Context) (map[string]appunit.Family, error) {
+	byID := map[string]appunit.Family{}
+	if i.units == nil {
+		return byID, nil
+	}
+	families, err := i.units.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range families {
+		byID[f.ID.String()] = f
+	}
+	return byID, nil
+}
+
+// bundleDependencyKey decodes a bundle rule through the domain
+// unmarshallers, rebases its quantity operands the way the create path
+// does, and returns the rule's idempotency key. Without the rebase a
+// hand-authored quantity operand with an absent or wrong base never matches
+// the stored rule, and every re-import creates one more copy.
+func bundleDependencyKey(d Dependency, srcID, tgtID string, attrFamilyIDs map[string]string, familyByID map[string]appunit.Family) (string, error) {
+	var conditions []domaindependency.Condition
+	if len(d.Conditions) > 0 && string(d.Conditions) != "null" {
+		if err := json.Unmarshal(d.Conditions, &conditions); err != nil {
+			return "", domainerrors.NewValidation("invalid conditions", "error", err.Error())
+		}
+	}
+	var effect domaindependency.Effect
+	if len(d.Effect) > 0 && string(d.Effect) != "null" {
+		if err := json.Unmarshal(d.Effect, &effect); err != nil {
+			return "", domainerrors.NewValidation("invalid effect", "error", err.Error())
+		}
+	}
+	if err := appdependency.RebaseRuleOperands(conditions, &effect,
+		rebaseFunc(attrFamilyIDs[srcID], familyByID),
+		rebaseFunc(attrFamilyIDs[tgtID], familyByID)); err != nil {
+		return "", err
+	}
+	return dependencyRuleKey(srcID, tgtID, conditions, effect)
+}
+
+// rebaseFunc returns the operand rebase for one attribute: appunit.Rebase
+// against the attribute's unit family, or the identity when the attribute
+// has no resolvable family. In the identity case the create path rejects a
+// quantity rule with its own validation error, so the key never has to
+// match a stored one.
+func rebaseFunc(familyID string, familyByID map[string]appunit.Family) func(valueobjects.Value) (valueobjects.Value, error) {
+	fam, ok := familyByID[familyID]
+	if familyID == "" || !ok {
+		return func(v valueobjects.Value) (valueobjects.Value, error) { return v, nil }
+	}
+	return func(v valueobjects.Value) (valueobjects.Value, error) { return appunit.Rebase(fam, v) }
+}
+
+// dependencyRuleKey builds the import idempotency key for one dependency
+// rule: the source attribute ID, the target attribute ID, the canonical
+// conditions JSON and the canonical effect JSON. The description does not
+// participate: two rules that differ only in description are one rule.
+//
+// The conditions and the effect pass through the domain marshallers, so
+// every operand takes its stored, self-describing form. canonicalizeJSON
+// then sorts every object's keys, so a hand-authored bundle and an exported
+// bundle produce one key for one rule. Array order participates: two "in"
+// conditions whose members differ only in order produce two keys, and the
+// import then creates a legal duplicate rule — it never silently skips a
+// distinct one.
+func dependencyRuleKey(srcID, tgtID string, conditions []domaindependency.Condition, effect domaindependency.Effect) (string, error) {
+	condJSON, err := json.Marshal(conditions)
+	if err != nil {
+		return "", err
+	}
+	effJSON, err := json.Marshal(effect)
+	if err != nil {
+		return "", err
+	}
+	condCanon, err := canonicalizeJSON(condJSON)
+	if err != nil {
+		return "", err
+	}
+	effCanon, err := canonicalizeJSON(effJSON)
+	if err != nil {
+		return "", err
+	}
+	return srcID + "->" + tgtID + "|" + string(condCanon) + "|" + string(effCanon), nil
+}
+
+// canonicalizeJSON re-encodes a JSON document deterministically: object keys
+// sort and insignificant whitespace drops. Numbers decode as json.Number,
+// so they keep their exact source digits and a large integer cannot
+// collapse into a neighbouring key through a float64 round-trip.
+func canonicalizeJSON(raw []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var doc any
+	if err := dec.Decode(&doc); err != nil {
+		return nil, err
+	}
+	return json.Marshal(doc)
 }
 
 // topoSortTypes orders types so a parent always precedes its subtypes.

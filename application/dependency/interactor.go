@@ -97,6 +97,30 @@ func (i *Interactor) normalizeQuantityOperands(
 	if err != nil {
 		return err
 	}
+	if effect == nil {
+		return RebaseRuleOperands(conditions, nil, rebaseSource, nil)
+	}
+	rebaseTarget, err := rebaseWith(target)
+	if err != nil {
+		return err
+	}
+	return RebaseRuleOperands(conditions, effect, rebaseSource, rebaseTarget)
+}
+
+// RebaseRuleOperands applies rebaseSource to every condition operand (value,
+// min, max and the members of an "in" condition) and rebaseTarget to every
+// effect operand (allowed values and the members of min_value, max_value and
+// one_of constraints). It mutates conditions and effect in place. A nil
+// effect skips the effect pass, and rebaseTarget may then be nil.
+//
+// It is exported for the schema import: the import keys a bundle rule on the
+// rule's stored form, and the stored form is the rebased form. One shared
+// traversal keeps the import key and the create path from drifting.
+func RebaseRuleOperands(
+	conditions []domaindependency.Condition,
+	effect *domaindependency.Effect,
+	rebaseSource, rebaseTarget func(valueobjects.Value) (valueobjects.Value, error),
+) error {
 	for idx := range conditions {
 		c := &conditions[idx]
 		for _, ref := range []**valueobjects.Value{&c.Value, &c.Min, &c.Max} {
@@ -120,10 +144,6 @@ func (i *Interactor) normalizeQuantityOperands(
 
 	if effect == nil {
 		return nil
-	}
-	rebaseTarget, err := rebaseWith(target)
-	if err != nil {
-		return err
 	}
 	for j, v := range effect.AllowedValues {
 		nv, err := rebaseTarget(v)

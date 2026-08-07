@@ -2129,6 +2129,7 @@ components:
         dynamic: {}
         op: { type: string }
         context_key: { type: string, description: Tests a caller-supplied fact instead of the source value. }
+        context_type: { type: string, description: The data type of the caller-supplied fact. Required with context_key. Operands validate against this type. A fact of a different runtime type does not match. }
     DependencyEffect:
       type: object
       description: What a matched rule does to the target attribute.

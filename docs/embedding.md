@@ -98,10 +98,13 @@ ctx = uow.WithContextValues(ctx, map[string]valueobjects.Value{
   service-wide zone; `uow.WithTimeZone` overrides it per request.
 - **Context values** let a dependency condition test a fact that lives in
   YOUR tables — a customer's tier, an order's channel, a document's workflow
-  state — with `{"context_key": "customer_tier"}`. Nothing about it is stored
-  here, and a condition naming a key you did not supply does not match:
-  "absent" and "present but false" are different, and only you know which
-  happened.
+  state — with `{"context_key": "customer_tier", "context_type": "string"}`.
+  The `context_type` declares the fact's data type. The condition's operands
+  validate against it. Nothing about the fact is stored here. A condition
+  naming a key you did not supply does not match, and a fact you supply with
+  a different type does not match either: "absent", "present but false" and
+  "present with the wrong type" are three different situations, and only the
+  first two are yours to distinguish.
 
 ## 5. Background work
 

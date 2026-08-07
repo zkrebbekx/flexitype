@@ -68,6 +68,60 @@ func TestSavedViewsParityPostgres(t *testing.T) {
 			})
 		})
 
+		// Regression for #472: Get/List omitted the version column, so every
+		// view's CAS was pinned to version 1 and the second update always
+		// returned a conflict.
+		Convey("When a view is updated twice in sequence", func() {
+			v, err := a.Create(ctxA, appsavedview.Input{
+				Name: "Twice", RootType: "product", Query: `status = "active"`,
+			})
+			So(err, ShouldBeNil)
+
+			first, err := a.Update(ctxA, v.ID.String(), appsavedview.Input{
+				Name: "Twice v2", RootType: "product", Query: v.Query,
+			})
+			So(err, ShouldBeNil)
+
+			second, err := a.Update(ctxA, v.ID.String(), appsavedview.Input{
+				Name: "Twice v3", RootType: "product", Query: v.Query,
+			})
+
+			Convey("Then both updates succeed and the version advances", func() {
+				So(err, ShouldBeNil)
+				So(first.Version, ShouldEqual, 2)
+				So(second.Version, ShouldEqual, 3)
+			})
+
+			Convey("And Get and List report the stored version, not zero", func() {
+				So(err, ShouldBeNil)
+				got, err := a.Get(ctxA, v.ID.String())
+				So(err, ShouldBeNil)
+				So(got.Version, ShouldEqual, 3)
+				list, err := a.List(ctxA)
+				So(err, ShouldBeNil)
+				So(list, ShouldHaveLength, 1)
+				So(list[0].Version, ShouldEqual, 3)
+			})
+
+			Convey("And a patch against the version a client read is a conflict once it is stale", func() {
+				So(err, ShouldBeNil)
+				stale := first.Version // the row is now at second.Version
+				staleName := "Twice stale"
+				_, err := a.Patch(ctxA, v.ID.String(), appsavedview.PatchInput{
+					Name: &staleName, Version: &stale,
+				})
+				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeConflict)
+
+				current := second.Version
+				freshName := "Twice v4"
+				patched, err := a.Patch(ctxA, v.ID.String(), appsavedview.PatchInput{
+					Name: &freshName, Version: &current,
+				})
+				So(err, ShouldBeNil)
+				So(patched.Version, ShouldEqual, 4)
+			})
+		})
+
 		Convey("When a name or root type is missing", func() {
 			_, err1 := a.Create(ctxA, appsavedview.Input{Name: "", RootType: "product"})
 			_, err2 := a.Create(ctxA, appsavedview.Input{Name: "x", RootType: ""})

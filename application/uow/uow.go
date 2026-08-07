@@ -193,10 +193,20 @@ func (u *unitOfWork) Execute(ctx context.Context, fn func(tx db.Transactor, c *C
 		// surfaced to the observer rather than silently swallowed into permanent
 		// staleness; since the change is already durable it is reported, not turned
 		// into a request error (a retry would double-apply the committed write).
+		// Projections run under system access, not the writing principal's
+		// field ACL. They read an entity's FULL value set to derive state every
+		// reader shares — a computed value, a search document, a summary row.
+		// Under the writer's ACL, a value the writer may not read is redacted
+		// from those reads, so a least-privileged writer silently corrupted
+		// derived state for everyone (the write side was already exempt via
+		// Internal). The background sweeps stamp the same access; this makes
+		// the per-write path consistent with them. Tenant, actor and deadline
+		// are unchanged — only the field-permission value is replaced.
 		if u.projections != nil {
-			if perr := u.projections.Dispatch(ctx, meta, collector.events...); perr != nil {
+			pctx := WithSystemAccess(ctx)
+			if perr := u.projections.Dispatch(pctx, meta, collector.events...); perr != nil {
 				if u.onDispatch != nil {
-					u.onDispatch(ctx, perr)
+					u.onDispatch(pctx, perr)
 				}
 			}
 		}

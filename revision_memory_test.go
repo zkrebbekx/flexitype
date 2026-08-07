@@ -96,6 +96,100 @@ func TestRevisionInputValidation(t *testing.T) {
 	})
 }
 
+// TestRevisionRestoreAfterNarrowing covers issue #479: a restore after the
+// entity's anchor narrows to a subtype.
+//
+// snapshotValues and the archive pass of ApplySnapshot read the entity
+// through the type-keyed ListByEntity, keyed on the revision's captured type.
+// Narrowing re-anchors every value row to the subtype, so the captured type
+// matched zero rows. The archive pass archived nothing — the restore
+// silently kept post-snapshot values — and the follow-up capture recorded an
+// empty entity.
+func TestRevisionRestoreAfterNarrowing(t *testing.T) {
+	Convey("Given a vehicle entity captured before its anchor narrows to car", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		newIt := svc.Interactors // fresh request-scoped interactor per unit of work
+
+		vehicle, err := newIt(ctx).TypeDefinitions().Create(ctx, apptypedef.CreateInput{
+			InternalName: "vehicle", DisplayName: "Vehicle",
+		})
+		So(err, ShouldBeNil)
+		car, err := newIt(ctx).TypeDefinitions().Create(ctx, apptypedef.CreateInput{
+			InternalName: "car", DisplayName: "Car", ExtendsID: vehicle.ID.String(),
+		})
+		So(err, ShouldBeNil)
+		vin, err := newIt(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: vehicle.ID.String(), InternalName: "vin",
+			DisplayName: "VIN", DataType: "string",
+		})
+		So(err, ShouldBeNil)
+		trim, err := newIt(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: car.ID.String(), InternalName: "trim",
+			DisplayName: "Trim", DataType: "string",
+		})
+		So(err, ShouldBeNil)
+
+		// Write vin with no type: the entity anchors to vehicle, the
+		// declaring type.
+		_, err = newIt(ctx).Values().Set(ctx, appvalue.SetInput{
+			AttributeDefinitionID: vin.ID.String(), EntityID: "e1",
+			Value: json.RawMessage(`"VIN123"`),
+		})
+		So(err, ShouldBeNil)
+
+		r1, err := newIt(ctx).Revisions().Create(ctx, vehicle.ID.String(), "e1", "before narrowing")
+		So(err, ShouldBeNil)
+		So(r1.Values, ShouldHaveLength, 1)
+
+		// Write trim naming car: the anchor narrows and both rows move.
+		_, err = newIt(ctx).Values().Set(ctx, appvalue.SetInput{
+			AttributeDefinitionID: trim.ID.String(), EntityID: "e1",
+			TypeDefinitionID: car.ID.String(), Value: json.RawMessage(`"GT"`),
+		})
+		So(err, ShouldBeNil)
+		liveBefore, err := newIt(ctx).Values().ListByEntity(ctx, car.ID.String(), "e1")
+		So(err, ShouldBeNil)
+		So(liveBefore, ShouldHaveLength, 2)
+
+		Convey("When the pre-narrowing revision is restored", func() {
+			r2, err := newIt(ctx).Revisions().Restore(ctx, r1.ID.String())
+			So(err, ShouldBeNil)
+
+			Convey("Then the live values match the snapshot: vin stays, trim is archived", func() {
+				live, err := newIt(ctx).Values().ListByEntity(ctx, car.ID.String(), "e1")
+				So(err, ShouldBeNil)
+				So(live, ShouldHaveLength, 1)
+				So(live[0].AttributeDefinitionID.String(), ShouldEqual, vin.ID.String())
+				So(live[0].Value.String(), ShouldEqual, "VIN123")
+			})
+
+			Convey("Then the follow-up revision records exactly the restored value set", func() {
+				So(r2.Values, ShouldHaveLength, 1)
+				So(r2.Values[0].InternalName, ShouldEqual, "vin")
+				So(r2.Values[0].Value, ShouldEqual, "VIN123")
+			})
+
+			Convey("Then the follow-up revision carries the entity's current anchor", func() {
+				So(r2.TypeDefinitionID, ShouldEqual, car.ID.String())
+			})
+
+			Convey("Then restoring the follow-up revision round-trips", func() {
+				r3, err := newIt(ctx).Revisions().Restore(ctx, r2.ID.String())
+				So(err, ShouldBeNil)
+				So(r3.Values, ShouldHaveLength, 1)
+				So(r3.Values[0].InternalName, ShouldEqual, "vin")
+				So(r3.Values[0].Value, ShouldEqual, "VIN123")
+
+				live, err := newIt(ctx).Values().ListByEntity(ctx, car.ID.String(), "e1")
+				So(err, ShouldBeNil)
+				So(live, ShouldHaveLength, 1)
+				So(live[0].Value.String(), ShouldEqual, "VIN123")
+			})
+		})
+	})
+}
+
 func TestRevisionLifecycle(t *testing.T) {
 	Convey("Given an entity with scoped and base values", t, func() {
 		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)

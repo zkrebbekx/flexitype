@@ -53,7 +53,7 @@ func TestDependencyContextValues(t *testing.T) {
 		_, err = svc.Interactors(base).Dependencies().Create(base, appdependency.CreateInput{
 			SourceAttributeID: note,
 			TargetAttributeID: poNumber,
-			Conditions: json.RawMessage(`[{"kind":"equals","context_key":"customer_tier",` +
+			Conditions: json.RawMessage(`[{"kind":"equals","context_key":"customer_tier","context_type":"string",` +
 				`"value":{"type":"string","value":"enterprise"}}]`),
 			Effect: json.RawMessage(`{"required":true}`),
 		})
@@ -198,7 +198,7 @@ func TestContextConditionsBindOnTheWritePath(t *testing.T) {
 		_, err = svc.Interactors(base).Dependencies().Create(base, appdependency.CreateInput{
 			SourceAttributeID: note,
 			TargetAttributeID: channel,
-			Conditions: json.RawMessage(`[{"kind":"equals","context_key":"workflow_state",` +
+			Conditions: json.RawMessage(`[{"kind":"equals","context_key":"workflow_state","context_type":"string",` +
 				`"value":{"type":"string","value":"locked"}}]`),
 			Effect: json.RawMessage(`{"allowed_values":[{"type":"string","value":"web"}]}`),
 		})
@@ -283,7 +283,7 @@ func TestCompletenessUsesContextValues(t *testing.T) {
 		_, err = svc.Interactors(base).Dependencies().Create(base, appdependency.CreateInput{
 			SourceAttributeID: note,
 			TargetAttributeID: poNumber,
-			Conditions: json.RawMessage(`[{"kind":"equals","context_key":"customer_tier",` +
+			Conditions: json.RawMessage(`[{"kind":"equals","context_key":"customer_tier","context_type":"string",` +
 				`"value":{"type":"string","value":"enterprise"}}]`),
 			Effect: json.RawMessage(`{"required":true}`),
 		})

@@ -9,6 +9,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/zkrebbekx/flexitype/application/query"
+	"github.com/zkrebbekx/flexitype/domain/attribute"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
@@ -189,23 +190,23 @@ func (r *queryRepository) compile(c *compiler, node query.BoundNode, e entityRef
 		for _, val := range n.Values {
 			args = append(args, valueArg(val))
 		}
-		scope := r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e)
+		scope := r.valueScope(c, v, n.Attr, n.Link, e)
 		return fmt.Sprintf("EXISTS (%s AND %s = %s)",
 			scope, columnExpr(v, n.Attr.DataType), arrayExpr(c.arg(pq.Array(args)), n.Attr.DataType)), nil
 
 	case *query.BoundRange:
 		v := c.alias("v")
-		scope := r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e)
+		scope := r.valueScope(c, v, n.Attr, n.Link, e)
 		return fmt.Sprintf("EXISTS (%s AND %s BETWEEN %s AND %s)",
 			scope, columnExpr(v, n.Attr.DataType), c.arg(valueArg(n.Lo)), c.arg(valueArg(n.Hi))), nil
 
 	case *query.BoundHas:
 		v := c.alias("v")
-		return fmt.Sprintf("EXISTS (%s)", r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e)), nil
+		return fmt.Sprintf("EXISTS (%s)", r.valueScope(c, v, n.Attr, n.Link, e)), nil
 
 	case *query.BoundStringMatch:
 		v := c.alias("v")
-		scope := r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e)
+		scope := r.valueScope(c, v, n.Attr, n.Link, e)
 		var pred string
 		switch n.Kind {
 		// LIKE/ILIKE rather than strpos: strpos is opaque to the planner, so a
@@ -252,7 +253,16 @@ func containsPattern(needle string) string {
 // valueScope renders the correlated FROM/WHERE prefix selecting the
 // current entity's live values of one attribute. Link-scoped attributes
 // anchor on the enclosing relationship's id instead of the entity.
-func (r *queryRepository) valueScope(c *compiler, alias, attrDefID string, link, scoped bool, e entityRef) string {
+//
+// The query scope pins each dimension separately. Locale narrows only a
+// localizable attribute. Channel narrows only a scopable one. The write
+// path stores an empty string in a dimension the attribute does not carry,
+// so pinning that dimension too would exclude every row of a
+// single-dimension attribute (issue #474). Base (zero) scope selects the
+// unscoped value.
+// Link attributes ignore scope entirely — that keeps the pre-existing
+// behavior, stated here as a deliberate choice.
+func (r *queryRepository) valueScope(c *compiler, alias string, attr attribute.Snapshot, link bool, e entityRef) string {
 	entity := e.entity
 	if link {
 		entity = e.link
@@ -260,13 +270,14 @@ func (r *queryRepository) valueScope(c *compiler, alias, attrDefID string, link,
 	base := fmt.Sprintf(`SELECT 1 FROM flexitype_attribute_value %s
 	 WHERE %s.tenant_id = %s AND %s.entity_id = %s
 	   AND %s.attribute_definition_id = %s AND %s.archived_at IS NULL`,
-		alias, alias, e.tenant, alias, entity, alias, c.arg(attrDefID), alias)
-	// Scoped attributes match only within the query's locale/channel; base
-	// (zero) scope selects the unscoped value. Non-scoped attributes ignore
-	// scope entirely.
-	if scoped {
-		base += fmt.Sprintf(" AND %s.locale = %s AND %s.channel = %s",
-			alias, c.arg(c.scope.Locale), alias, c.arg(c.scope.Channel))
+		alias, alias, e.tenant, alias, entity, alias, c.arg(attr.ID.String()), alias)
+	if !link {
+		if attr.Localizable {
+			base += fmt.Sprintf(" AND %s.locale = %s", alias, c.arg(c.scope.Locale))
+		}
+		if attr.Scopable {
+			base += fmt.Sprintf(" AND %s.channel = %s", alias, c.arg(c.scope.Channel))
+		}
 	}
 	return base
 }
@@ -312,23 +323,23 @@ func (r *queryRepository) compileCompare(c *compiler, n *query.BoundCompare, e e
 		// NULL (no values) never satisfies the comparison — absent
 		// attributes don't match, mirroring the EXISTS semantics.
 		return fmt.Sprintf("(%s) %s %s",
-			strings.Replace(r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e),
+			strings.Replace(r.valueScope(c, v, n.Attr, n.Link, e),
 				"SELECT 1", fmt.Sprintf("SELECT %s(%s)", n.Func, col), 1),
 			op, c.arg(valueArg(n.Value))), nil
 
 	case fql.FuncCount:
 		return fmt.Sprintf("(%s) %s %s",
-			strings.Replace(r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e),
+			strings.Replace(r.valueScope(c, v, n.Attr, n.Link, e),
 				"SELECT 1", "SELECT count(*)", 1),
 			op, c.arg(n.Value.Int())), nil
 
 	case fql.FuncLength:
 		return fmt.Sprintf("EXISTS (%s AND char_length(%s.value_text) %s %s)",
-			r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e), v, op, c.arg(n.Value.Int())), nil
+			r.valueScope(c, v, n.Attr, n.Link, e), v, op, c.arg(n.Value.Int())), nil
 
 	default:
 		return fmt.Sprintf("EXISTS (%s AND %s %s %s)",
-			r.valueScope(c, v, n.Attr.ID.String(), n.Link, (n.Attr.Localizable || n.Attr.Scopable) && !n.Link, e), col, op, c.arg(valueArg(n.Value))), nil
+			r.valueScope(c, v, n.Attr, n.Link, e), col, op, c.arg(valueArg(n.Value))), nil
 	}
 }
 
@@ -355,6 +366,20 @@ func (r *queryRepository) compileTraversal(c *compiler, n *query.BoundTraversal,
 		farExpr = rel + ".child_entity_id"
 	}
 
+	// A relationship can outlive its counterpart: removing an entity's last
+	// value deletes its entity-summary row (migration 000019), but the
+	// relationship stays live. Without this guard the traversal matches such
+	// value-less "ghost" counterparts, so count()=0, `not has()` and negated
+	// type conditions wrongly select the near entity (issue #475). The guard
+	// reads the same projection the root candidate set reads, so a
+	// counterpart is traversable exactly when it is visible at the root.
+	// idx_flexitype_entity_summary_entity (tenant_id, entity_id), added in
+	// migration 000031, serves the probe.
+	es := c.alias("es")
+	liveGuard := fmt.Sprintf(`EXISTS (SELECT 1 FROM flexitype_entity_summary %s
+	 WHERE %s.tenant_id = %s.tenant_id AND %s.entity_id = %s)`,
+		es, es, rel, es, farExpr)
+
 	inner, err := r.compile(c, n.Inner, entityRef{
 		tenant: rel + ".tenant_id",
 		entity: farExpr,
@@ -370,9 +395,10 @@ func (r *queryRepository) compileTraversal(c *compiler, n *query.BoundTraversal,
 	return fmt.Sprintf(`EXISTS (SELECT 1 FROM flexitype_relationship %s
 	 WHERE %s.tenant_id = %s AND %s.relationship_definition_id = %s
 	   AND %s.archived_at IS NULL AND %s
+	   AND %s
 	   AND %s)`,
 		rel, rel, e.tenant, rel, defArg,
-		rel, nearCond, inner), nil
+		rel, nearCond, liveGuard, inner), nil
 }
 
 // counterpartType resolves the counterpart entity's declared type as a

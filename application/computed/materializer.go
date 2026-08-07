@@ -512,6 +512,10 @@ func (m *Materializer) recomputeStable(ctx context.Context, typeID, entityID str
 // Computed values are excluded deliberately: the recompute writes those, and
 // including them would make every pass look like a concurrent change.
 func (m *Materializer) sourceFingerprint(ctx context.Context, typeID, entityID string) (string, error) {
+	// System access, independent of the caller: a fingerprint taken over a
+	// principal's redacted subset would differ from one taken by the sweeps,
+	// and a restricted input would look permanently "changed" or invisible.
+	ctx = uow.WithSystemAccess(ctx)
 	it := m.factory.New(ctx)
 	attrs, err := it.TypeDefinitions().EffectiveAttributes(ctx, typeID)
 	if err != nil {
@@ -547,6 +551,13 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 		return nil
 	}
 
+	// A recompute derives state every reader shares, so its input reads run
+	// under system access regardless of who triggered it. Reading through the
+	// triggering principal's field ACL redacted the values that principal may
+	// not see, and the formula then materialized a wrong result — or cleared a
+	// right one — durably, for everyone. The dispatch path stamps the same
+	// access; this keeps the materializer safe if it is ever invoked directly.
+	ctx = uow.WithSystemAccess(ctx)
 	it := m.factory.New(ctx)
 
 	attrs, err := it.TypeDefinitions().EffectiveAttributes(ctx, typeID)

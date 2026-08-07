@@ -118,7 +118,7 @@ func (s *savedViewStore) Delete(ctx context.Context, tenant valueobjects.TenantI
 func (s *savedViewStore) Get(ctx context.Context, tenant valueobjects.TenantID, id ulid.ID) (savedview.View, error) {
 	var row savedViewRow
 	err := s.q.GetContext(ctx, &row, bind(
-		`SELECT id, tenant_id, name, root_type, query, columns, sort, created_at, updated_at
+		`SELECT id, tenant_id, name, root_type, query, columns, sort, created_at, updated_at, version
 		 FROM flexitype_saved_view WHERE id = ? AND tenant_id = ?`), id, tenant.String())
 	if isNoRows(err) {
 		return savedview.View{}, domainerrors.NewNotFound("saved_view", id.String())
@@ -132,7 +132,7 @@ func (s *savedViewStore) Get(ctx context.Context, tenant valueobjects.TenantID, 
 func (s *savedViewStore) List(ctx context.Context, tenant valueobjects.TenantID) ([]savedview.View, error) {
 	var rows []savedViewRow
 	if err := s.q.SelectContext(ctx, &rows, bind(
-		`SELECT id, tenant_id, name, root_type, query, columns, sort, created_at, updated_at
+		`SELECT id, tenant_id, name, root_type, query, columns, sort, created_at, updated_at, version
 		 FROM flexitype_saved_view WHERE tenant_id = ? ORDER BY name`), tenant.String()); err != nil {
 		return nil, fmt.Errorf("list saved views: %w", err)
 	}

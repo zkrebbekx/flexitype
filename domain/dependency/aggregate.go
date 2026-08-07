@@ -242,10 +242,27 @@ func (d *Dependency) matches(source valueobjects.Value, ctxValues map[string]val
 			if !ok {
 				return false, nil
 			}
+			// A fact of the wrong type does not match, the same fail-safe as
+			// an absent fact. The fact's type is the embedder's choice at
+			// call time, so a mismatch is an input condition, not a rule
+			// defect — it must not surface as an error from every write to
+			// the target.
+			if c.ContextType != "" && v.DataType() != c.ContextType {
+				return false, nil
+			}
 			subject = v
 		}
 		ok, err := c.Matches(subject, now)
 		if err != nil {
+			// A comparison error on a caller-supplied fact is the same input
+			// condition as a declared-type mismatch (rules stored before
+			// context_type existed have no declared type to pre-filter on),
+			// so it is a non-match, not an error. Source-value comparisons
+			// keep reporting: their operands were validated against the
+			// attribute type, so an error there is a real defect.
+			if c.ContextKey != "" {
+				return false, nil
+			}
 			return false, err
 		}
 		if !ok {

@@ -293,7 +293,12 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domaindepende
 		if err != nil {
 			return err
 		}
-		target, err := attrs.Get(ctx, d.TargetAttributeID())
+		// Lock the target definition the way Create does. The value write
+		// path serializes on this row (lockDefinition), so without the lock
+		// a value write could load the old rule while an Update commits a
+		// tighter effect, then commit a now-forbidden value — permanently,
+		// since nothing revalidates stored values.
+		target, err := attrs.GetForUpdate(ctx, d.TargetAttributeID())
 		if err != nil {
 			return err
 		}
@@ -353,10 +358,12 @@ func (i *Interactor) Archive(ctx context.Context, rawID string) (*domaindependen
 			return err
 		}
 		// Archiving a rule changes what the TARGET attribute accepts, so it
-		// needs the same write right as authoring one. A target the caller
-		// cannot even read reports the dependency as absent rather than
-		// confirming what it points at.
-		target, err := i.attrs.WithTx(tx).Get(ctx, d.TargetAttributeID())
+		// needs the same write right as authoring one — and the same lock:
+		// the value write path serializes on the target definition row, so
+		// an unlocked archive could race a write that still saw the rule.
+		// A target the caller cannot even read reports the dependency as
+		// absent rather than confirming what it points at.
+		target, err := i.attrs.WithTx(tx).GetForUpdate(ctx, d.TargetAttributeID())
 		if err != nil {
 			return err
 		}

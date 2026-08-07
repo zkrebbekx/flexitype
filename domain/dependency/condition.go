@@ -75,11 +75,22 @@ type Condition struct {
 	// (uow.WithContextValues), so it is the host's fact at evaluation time
 	// and is never stored here.
 	ContextKey string `json:"context_key,omitempty"`
+	// ContextType declares the data type of the caller-supplied fact, and is
+	// required when ContextKey is set. A context condition's subject is not
+	// the source attribute, so validating its operands against the source
+	// type checked the wrong subject: a range over a numeric fact was
+	// unbuildable unless the unrelated source attribute happened to be
+	// ordered and of the operand's type, and a fact arriving as a different
+	// type turned every write to the target into an unclassified comparison
+	// error. Operands validate against this type, and a fact whose runtime
+	// type differs does not match — the same fail-safe as an absent fact.
+	ContextType valueobjects.DataType `json:"context_type,omitempty"`
 }
 
 type conditionJSON struct {
 	Kind             ConditionKind              `json:"kind"`
 	ContextKey       string                     `json:"context_key,omitempty"`
+	ContextType      valueobjects.DataType      `json:"context_type,omitempty"`
 	Value            json.RawMessage            `json:"value,omitempty"`
 	Values           []json.RawMessage          `json:"values,omitempty"`
 	Min              json.RawMessage            `json:"min,omitempty"`
@@ -96,7 +107,7 @@ type conditionJSON struct {
 func (c Condition) MarshalJSON() ([]byte, error) {
 	out := conditionJSON{Kind: c.Kind, Pattern: c.Pattern, PatternSubstring: c.PatternSubstring,
 		MinExclusive: c.MinExclusive, MaxExclusive: c.MaxExclusive,
-		Dynamic: c.Dynamic, Op: c.Op, ContextKey: c.ContextKey}
+		Dynamic: c.Dynamic, Op: c.Op, ContextKey: c.ContextKey, ContextType: c.ContextType}
 
 	marshal := func(v *valueobjects.Value) (json.RawMessage, error) {
 		if v == nil {
@@ -139,6 +150,7 @@ func (c *Condition) UnmarshalJSON(b []byte) error {
 	c.Dynamic = in.Dynamic
 	c.Op = in.Op
 	c.ContextKey = in.ContextKey
+	c.ContextType = in.ContextType
 	c.Value, c.Min, c.Max, c.Values = nil, nil, nil, nil
 
 	unmarshal := func(raw json.RawMessage) (*valueobjects.Value, error) {
@@ -172,9 +184,32 @@ func (c *Condition) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Validate checks the condition's shape against the source attribute's data
-// type.
+// Validate checks the condition's shape against the data type of its
+// SUBJECT: the source attribute's type, or the declared context_type when
+// the condition tests a caller-supplied fact. Validating a context condition
+// against the source type checked the wrong subject — the operand types, the
+// ordered-type rule for range and the textual rule for pattern all describe
+// the fact, not the unrelated source attribute.
 func (c Condition) Validate(sourceType valueobjects.DataType) error {
+	subjectType := sourceType
+	if c.ContextKey != "" {
+		if c.ContextType == "" {
+			return domainerrors.NewValidation(
+				"a context condition requires context_type: the data type of the caller-supplied fact",
+				"context_key", c.ContextKey)
+		}
+		if _, err := valueobjects.ParseDataType(string(c.ContextType)); err != nil {
+			return domainerrors.NewValidation("unknown context_type",
+				"context_type", string(c.ContextType), "context_key", c.ContextKey)
+		}
+		subjectType = c.ContextType
+	} else if c.ContextType != "" {
+		return domainerrors.NewValidation("context_type requires context_key")
+	}
+	// From here every check runs against subjectType. The error messages
+	// keep the source-attribute wording for ordinary conditions; for a
+	// context condition the reported type is the declared context_type.
+	sourceType = subjectType
 	switch c.Kind {
 	case CondEquals:
 		if c.Value == nil {

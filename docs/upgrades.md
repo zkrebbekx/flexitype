@@ -56,10 +56,16 @@ Embedders can read the same fact with `Service.SchemaDrift(ctx)`.
 Each migration runs in **its own transaction**, in version order, while the
 runner holds the migration lease.
 
-The lease is a row, not a session lock, and it is refreshed between
-statements; a runner that loses it — because one statement outlasted the
-15-minute TTL and another runner took over — stops rather than applying DDL
-alongside the new holder. Correctness does not rest on the lease alone: a
+The lease is a row, not a session lock. The runner refreshes it between
+statements. During a long no-transaction statement — a `CREATE INDEX
+CONCURRENTLY` over a large table — a heartbeat renews the lease once a minute
+on a second pooled connection, because the running statement occupies the
+pinned one. The heartbeat interval stays far below the 15-minute TTL, so a
+transient renewal failure retries on the next tick instead of killing the
+build. A runner that loses the lease stops rather than applying DDL alongside
+the new holder: between statements it refuses to continue, and mid-statement
+the heartbeat cancels the running statement. Correctness does not rest on the
+lease alone: a
 transactional migration inserts its version row **before** the DDL, in the
 same transaction, so a second runner's insert blocks on the primary key and
 then finds the version taken.
@@ -101,21 +107,15 @@ the blocking default.
    it for the whole build.
 2. **Every statement in a no-transaction file is idempotent.** The file is
    replayed in full if it is interrupted. Use `IF NOT EXISTS` / `IF EXISTS`.
-3. **A concurrent index build drops an invalid namesake first.** A failed
-   `CREATE INDEX CONCURRENTLY` leaves an `INVALID` index behind, and
-   `IF NOT EXISTS` would then skip it forever. The pattern:
-
-   ```sql
-   DO $$
-   BEGIN
-       IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
-                   WHERE c.relname = 'idx_name' AND NOT i.indisvalid) THEN
-           EXECUTE 'DROP INDEX idx_name';
-       END IF;
-   END $$;
-
-   CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_name ON ...;
-   ```
+3. **The runner reaps an invalid namesake before a replay; the file does
+   not.** A failed `CREATE INDEX CONCURRENTLY` leaves an `INVALID` index
+   behind, and `IF NOT EXISTS` would then skip it forever.
+   `reapInvalidIndexes` (migrate.go) drops such an index before it replays a
+   no-transaction file, and its check is scoped to `current_schema()`. Do not
+   add a catalogue guard to the file itself: a `pg_class.relname` match
+   without a `pg_namespace` join sees every schema in the database, and an
+   unqualified `DROP INDEX` then resolves through `search_path` into the
+   wrong schema. One database can hold several flexitype schemas.
 4. **A no-transaction file creates no tables.** A table is the one object whose
    duplicate creation cannot be made safe under replay. Schema objects belong
    in a transactional file.

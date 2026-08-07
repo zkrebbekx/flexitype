@@ -287,12 +287,49 @@ func HasTimeZone(ctx context.Context) bool {
 	return ok && loc != nil
 }
 
+// --- evaluation clock --------------------------------------------------------
+
+type clockKey struct{}
+
+// WithClock stamps a clock onto the context. LocalNow reads it in place of
+// the wall clock.
+//
+// It exists because a `today` rule is a function of the wall clock, so a test
+// that asserts on its outcome is only correct during part of the day — the
+// assertion that holds at 12:00 UTC fails at 02:00 UTC. A pinned clock makes
+// the outcome a constant. The clock reaches evaluation the same way the time
+// zone does: on the context, because an interactor set carries no context of
+// its own.
+//
+// Scope: LocalNow only — calendar evaluation (`today`/`now` rules, dynamic
+// defaults). Stored timestamps (created_at, updated_at) keep UTCNow, so a
+// pinned clock cannot backdate an audit trail.
+func WithClock(ctx context.Context, now func() time.Time) context.Context {
+	if now == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, clockKey{}, now)
+}
+
+// HasClock reports whether a clock was stamped on the context, so a
+// deployment default does not overwrite a per-request choice.
+func HasClock(ctx context.Context) bool {
+	fn, ok := ctx.Value(clockKey{}).(func() time.Time)
+	return ok && fn != nil
+}
+
 // LocalNow returns the current instant in the tenant's time zone.
 //
 // Use it wherever a CALENDAR day is derived — `today`, a date default, a
 // day-boundary comparison. Use UTCNow for a timestamp that records when
 // something happened, which is an instant and has no time zone.
-func LocalNow(ctx context.Context) time.Time { return UTCNow().In(TimeZoneFromContext(ctx)) }
+func LocalNow(ctx context.Context) time.Time {
+	base := UTCNow()
+	if fn, ok := ctx.Value(clockKey{}).(func() time.Time); ok && fn != nil {
+		base = fn().UTC()
+	}
+	return base.In(TimeZoneFromContext(ctx))
+}
 
 // --- caller-supplied context values ------------------------------------------
 

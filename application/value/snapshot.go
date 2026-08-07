@@ -22,8 +22,7 @@ import (
 // It is the write half of a revision restore. The value strings are the
 // canonical Value.String forms, inverted per data type via cellToRaw.
 func (i *Interactor) ApplySnapshot(ctx context.Context, rawTypeDefID, rawEntityID string, cells []apprevision.SnapshotCell) error {
-	typeDefID, err := valueobjects.ParseTypeDefinitionID(rawTypeDefID)
-	if err != nil {
+	if _, err := valueobjects.ParseTypeDefinitionID(rawTypeDefID); err != nil {
 		return domainerrors.NewValidation(err.Error())
 	}
 	entityID, err := valueobjects.ParseEntityID(rawEntityID)
@@ -84,11 +83,18 @@ func (i *Interactor) ApplySnapshot(ctx context.Context, rawTypeDefID, rawEntityI
 		}
 
 		// Archive current values whose (attribute, scope) is not in the target.
+		//
+		// The read is keyed on (tenant, entity) and NOT on the caller's type.
+		// The caller passes the type captured in the revision, and the write
+		// path re-anchors every value row when the anchor narrows — so a
+		// type-keyed read under the captured type matched zero rows after a
+		// narrowing, archived nothing, and the restore silently kept values
+		// the snapshot does not hold. The anchor is an invariant of the
+		// entity, so the entity-keyed read returns exactly the rows the
+		// type-keyed read returned whenever that one worked at all.
 		values := i.values.WithTx(tx)
 		reads := values.(appctx.ValueReader)
-		current, err := reads.ListByEntity(ctx, domainvalue.EntityKey{
-			TenantID: tenant, TypeDefinitionID: typeDefID, EntityID: entityID,
-		})
+		current, err := reads.ListByEntities(ctx, tenant, []valueobjects.EntityID{entityID})
 		if err != nil {
 			return fmt.Errorf("list current values: %w", err)
 		}

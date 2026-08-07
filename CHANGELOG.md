@@ -7,6 +7,62 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-08-07
+
+### Added — Strict range bounds on dependency conditions ([#466])
+
+A `range` condition accepts `min_exclusive` and `max_exclusive`. An
+exclusive min reads "greater than"; an exclusive max reads "less than".
+Before this, a bound was always inclusive, so "over 50000" had no exact
+form on a float, decimal, date or quantity attribute — there is no next
+value to name. The zero value keeps the inclusive semantics of every
+stored rule. An exclusive flag without its bound is a validation error.
+The client SDK and the OpenAPI schema carry the new fields.
+
+### Added — A type-aware dependency builder in the console ([#466])
+
+The builder now mirrors the API's own validation. It offers each condition
+kind only to the source types that support it. It edits a range as a
+comparator (between / > / ≥ / < / ≤). Every operand renders through the
+typed value input, so dates get pickers, quantities get unit dropdowns,
+and bools and enums get pick-lists. The effect side adds the constraint
+editor the API always accepted but the UI never offered, and the pattern
+condition exposes `pattern_substring`.
+
+### Added — `WithClock`, a pinned evaluation clock ([#465])
+
+`flexitype.WithClock(func() time.Time)` pins the instant that `today` and
+`now` resolve against, for tests and simulations. It rides the context
+exactly as `WithTimeZone` does: `Service.Context` and the API middleware
+stamp it, and per-request `uow.WithClock` overrides it. The scope is
+calendar evaluation only — stored timestamps keep the wall clock, so a
+pinned clock cannot backdate an audit trail.
+
+### Changed — Float value index and per-attribute statistics ([#467])
+
+Migration 000030 adds the value index that `value_float` alone lacked, so
+float and quantity comparisons can be driven from the value side, and adds
+multi-column MCV statistics on each `(attribute_definition_id, value)`
+pair, so the planner sees per-attribute selectivity instead of a blend of
+every attribute sharing the column. Measured on a 20M-row dataset: a
+rare float predicate's match set loads in under 2 ms (was a 200 ms walk),
+and an integer equality dropped from 70 ms to 21 ms from the statistics
+alone. The index builds concurrently; the upgrade does not block writes.
+
+### Fixed — The type page's dependency list could stay empty ([#466])
+
+The list filtered inside a query `select` that closed over the
+effective-attributes query. When the dependency request resolved first,
+the memoized result was empty and the page showed "No dependencies" until
+an unrelated refetch. The filter is now a computed over both queries.
+
+### Fixed — The `today`-rule test held only part of the day ([#465])
+
+`TestTimeZoneReachesEvaluation` asserted an outcome that was a function of
+the wall clock: before 10:00 UTC the test zone shares a date with UTC and
+the assertion failed. The test now pins the clock through `WithClock`,
+so the outcome is a constant.
+
 ### Fixed — The release workflow's nested-module tag probe
 
 `gh api` writes its 404 body to **stdout**, so capturing the "does this tag
@@ -1584,7 +1640,11 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 - Quantity `one_of` members and defaults are unit-rebased; equal quantities in
   different units compare equal.
 
-[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/zkrebbekx/flexitype/compare/v1.3.0...v1.4.0
+[#465]: https://github.com/zkrebbekx/flexitype/pull/465
+[#466]: https://github.com/zkrebbekx/flexitype/pull/466
+[#467]: https://github.com/zkrebbekx/flexitype/pull/467
 [1.3.0]: https://github.com/zkrebbekx/flexitype/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/zkrebbekx/flexitype/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/zkrebbekx/flexitype/compare/v1.0.0...v1.1.0

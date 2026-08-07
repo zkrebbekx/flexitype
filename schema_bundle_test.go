@@ -8,6 +8,7 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 
 	"github.com/zkrebbekx/flexitype"
+	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	appschema "github.com/zkrebbekx/flexitype/application/schema"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	appunit "github.com/zkrebbekx/flexitype/application/unit"
@@ -322,6 +323,149 @@ func TestSchemaBundleRoundTrip(t *testing.T) {
 				So(replay.Attributes.Created, ShouldEqual, 5)
 				So(replay.RelationshipDefinitions.Created, ShouldEqual, 1)
 				So(replay.Dependencies.Created, ShouldEqual, 1)
+			})
+		})
+	})
+}
+
+func TestSchemaBundleDependencyRuleIdempotency(t *testing.T) {
+	Convey("Given a bundle with two cascading-picklist rules on one source→target pair", t, func() {
+		ctx, svc := bundleCtx(t)
+		it := svc.Interactors(ctx)
+		sch := it.Schema()
+
+		usRule := appschema.Dependency{
+			SourceType: "address", SourceAttribute: "country",
+			TargetType: "address", TargetAttribute: "state",
+			Conditions: json.RawMessage(`[{"kind":"equals","value":{"type":"string","value":"US"}}]`),
+			Effect:     json.RawMessage(`{"allowed_values":[{"type":"string","value":"CA"},{"type":"string","value":"NY"}]}`),
+		}
+		auRule := appschema.Dependency{
+			SourceType: "address", SourceAttribute: "country",
+			TargetType: "address", TargetAttribute: "state",
+			Conditions: json.RawMessage(`[{"kind":"equals","value":{"type":"string","value":"AU"}}]`),
+			Effect:     json.RawMessage(`{"allowed_values":[{"type":"string","value":"SA"},{"type":"string","value":"VIC"}]}`),
+		}
+		bundle := &appschema.Bundle{
+			Version: appschema.BundleVersion,
+			Types:   []appschema.Type{{InternalName: "address", DisplayName: "Address"}},
+			Attributes: []appschema.Attribute{
+				{Type: "address", InternalName: "country", DisplayName: "Country", DataType: "string"},
+				{Type: "address", InternalName: "state", DisplayName: "State", DataType: "string"},
+			},
+			Dependencies: []appschema.Dependency{usRule, auRule},
+		}
+
+		Convey("When the bundle is imported", func() {
+			res, err := sch.Import(ctx, bundle)
+			So(err, ShouldBeNil)
+
+			Convey("Then both rules on the pair are created and none is skipped", func() {
+				So(res.Dependencies.Created, ShouldEqual, 2)
+				So(res.Dependencies.Skipped, ShouldEqual, 0)
+
+				deps, err := it.Dependencies().List(ctx, appdependency.ListInput{})
+				So(err, ShouldBeNil)
+				So(deps.Items, ShouldHaveLength, 2)
+			})
+
+			Convey("And when the same bundle is imported again", func() {
+				again, err := sch.Import(ctx, bundle)
+
+				Convey("Then both rules are skipped and none is created", func() {
+					So(err, ShouldBeNil)
+					So(again.Dependencies.Created, ShouldEqual, 0)
+					So(again.Dependencies.Skipped, ShouldEqual, 2)
+
+					deps, err := it.Dependencies().List(ctx, appdependency.ListInput{})
+					So(err, ShouldBeNil)
+					So(deps.Items, ShouldHaveLength, 2)
+				})
+			})
+
+			Convey("And when one rule re-imports with re-ordered JSON object keys", func() {
+				reordered := *bundle
+				reordered.Dependencies = []appschema.Dependency{{
+					SourceType: "address", SourceAttribute: "country",
+					TargetType: "address", TargetAttribute: "state",
+					Conditions: json.RawMessage(`[{"value":{"value":"US","type":"string"},"kind":"equals"}]`),
+					Effect:     json.RawMessage(`{"allowed_values":[{"type":"string","value":"CA"},{"type":"string","value":"NY"}]}`),
+				}}
+				again, err := sch.Import(ctx, &reordered)
+
+				Convey("Then the canonical key still matches and the rule is skipped", func() {
+					So(err, ShouldBeNil)
+					So(again.Dependencies.Created, ShouldEqual, 0)
+					So(again.Dependencies.Skipped, ShouldEqual, 1)
+				})
+			})
+		})
+
+		Convey("When a bundle carries one rule twice (a true duplicate)", func() {
+			dup := *bundle
+			dup.Dependencies = []appschema.Dependency{usRule, usRule}
+			res, err := sch.Import(ctx, &dup)
+
+			Convey("Then the duplicate is skipped and one rule is created", func() {
+				So(err, ShouldBeNil)
+				So(res.Dependencies.Created, ShouldEqual, 1)
+				So(res.Dependencies.Skipped, ShouldEqual, 1)
+			})
+		})
+
+		Convey("When two rules differ only in description", func() {
+			described := usRule
+			described.Description = "US states"
+			d := *bundle
+			d.Dependencies = []appschema.Dependency{usRule, described}
+			res, err := sch.Import(ctx, &d)
+
+			Convey("Then the description does not participate in the key and the second rule is skipped", func() {
+				So(err, ShouldBeNil)
+				So(res.Dependencies.Created, ShouldEqual, 1)
+				So(res.Dependencies.Skipped, ShouldEqual, 1)
+			})
+		})
+	})
+}
+
+func TestSchemaBundleDependencyQuantityKey(t *testing.T) {
+	Convey("Given a bundle rule whose quantity operand omits the base", t, func() {
+		ctx, svc := bundleCtx(t)
+		sch := svc.Interactors(ctx).Schema()
+
+		bundle := &appschema.Bundle{
+			Version: appschema.BundleVersion,
+			UnitFamilies: []appschema.UnitFamily{{
+				Name: "mass", BaseUnit: "g", Units: map[string]float64{"g": 1, "kg": 1000},
+			}},
+			Types: []appschema.Type{{InternalName: "part", DisplayName: "Part"}},
+			Attributes: []appschema.Attribute{
+				{Type: "part", InternalName: "mass", DisplayName: "Mass", DataType: "quantity", UnitFamily: "mass"},
+				{Type: "part", InternalName: "hazard_note", DisplayName: "Hazard Note", DataType: "string"},
+			},
+			Dependencies: []appschema.Dependency{{
+				SourceType: "part", SourceAttribute: "mass",
+				TargetType: "part", TargetAttribute: "hazard_note",
+				// The author wrote "5 kg" without the base magnitude; the
+				// create path stores the operand rebased to base 5000.
+				Conditions: json.RawMessage(`[{"kind":"range","min":{"type":"quantity","value":{"magnitude":"5","unit":"kg"}}}]`),
+				Effect:     json.RawMessage(`{"required":true}`),
+			}},
+		}
+
+		Convey("When the bundle imports twice", func() {
+			first, err := sch.Import(ctx, bundle)
+			So(err, ShouldBeNil)
+			So(first.Dependencies.Created, ShouldEqual, 1)
+			So(first.Dependencies.Skipped, ShouldEqual, 0)
+
+			again, err := sch.Import(ctx, bundle)
+
+			Convey("Then the key rebases the operand and the re-import skips the rule", func() {
+				So(err, ShouldBeNil)
+				So(again.Dependencies.Created, ShouldEqual, 0)
+				So(again.Dependencies.Skipped, ShouldEqual, 1)
 			})
 		})
 	})

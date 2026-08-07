@@ -71,6 +71,55 @@ func TestConditions(t *testing.T) {
 			})
 		})
 
+		Convey("When a range condition marks its bounds exclusive", func() {
+			lower := valueobjects.NewIntegerValue(10)
+			upper := valueobjects.NewIntegerValue(20)
+			cond := Condition{Kind: CondRange, Min: &lower, Max: &upper, MinExclusive: true, MaxExclusive: true}
+
+			atMin, err := cond.Matches(valueobjects.NewIntegerValue(10), now)
+			So(err, ShouldBeNil)
+			atMax, err := cond.Matches(valueobjects.NewIntegerValue(20), now)
+			So(err, ShouldBeNil)
+			inside, err := cond.Matches(valueobjects.NewIntegerValue(15), now)
+			So(err, ShouldBeNil)
+
+			Convey("Then the bound values themselves do not match", func() {
+				So(atMin, ShouldBeFalse)
+				So(atMax, ShouldBeFalse)
+				So(inside, ShouldBeTrue)
+			})
+		})
+
+		Convey("When an exclusive min expresses 'greater than' on a continuous type", func() {
+			threshold := valueobjects.NewFloatValue(50000)
+			cond := Condition{Kind: CondRange, Min: &threshold, MinExclusive: true}
+
+			at, err := cond.Matches(valueobjects.NewFloatValue(50000), now)
+			So(err, ShouldBeNil)
+			over, err := cond.Matches(valueobjects.NewFloatValue(50000.01), now)
+			So(err, ShouldBeNil)
+
+			Convey("Then only values strictly over the threshold match", func() {
+				So(at, ShouldBeFalse)
+				So(over, ShouldBeTrue)
+			})
+		})
+
+		Convey("When an exclusive-bound condition round-trips through JSON", func() {
+			lower := valueobjects.NewIntegerValue(10)
+			cond := Condition{Kind: CondRange, Min: &lower, MinExclusive: true}
+
+			raw, err := json.Marshal(cond)
+			So(err, ShouldBeNil)
+			var back Condition
+			So(json.Unmarshal(raw, &back), ShouldBeNil)
+
+			Convey("Then the exclusivity survives storage", func() {
+				So(back.MinExclusive, ShouldBeTrue)
+				So(back.MaxExclusive, ShouldBeFalse)
+			})
+		})
+
 		Convey("When a dynamic condition compares against 'today'", func() {
 			cond := Condition{
 				Kind:    CondDynamic,

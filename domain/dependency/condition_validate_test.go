@@ -72,6 +72,18 @@ func TestConditionValidation(t *testing.T) {
 				So(Condition{Kind: CondRange, Min: &lo, Max: &hi}.Validate(valueobjects.DataTypeInteger), ShouldBeNil)
 				So(Condition{Kind: CondRange, Max: &hi}.Validate(valueobjects.DataTypeInteger), ShouldBeNil)
 			})
+
+			Convey("Then an exclusive flag needs its own bound", func() {
+				err := Condition{Kind: CondRange, Max: &hi, MinExclusive: true}.Validate(valueobjects.DataTypeInteger)
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
+				So(err.Error(), ShouldContainSubstring, "min_exclusive requires a min bound")
+
+				err = Condition{Kind: CondRange, Min: &lo, MaxExclusive: true}.Validate(valueobjects.DataTypeInteger)
+				So(domainerrors.IsValidation(err), ShouldBeTrue)
+				So(err.Error(), ShouldContainSubstring, "max_exclusive requires a max bound")
+
+				So(Condition{Kind: CondRange, Min: &lo, MinExclusive: true}.Validate(valueobjects.DataTypeInteger), ShouldBeNil)
+			})
 		})
 
 		Convey("When a pattern condition is checked", func() {

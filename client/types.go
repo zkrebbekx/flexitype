@@ -120,14 +120,23 @@ type EntitySummary struct {
 
 // Condition is one dependency condition.
 type Condition struct {
-	Kind    string       `json:"kind"`
-	Value   *TypedValue  `json:"value,omitempty"`
-	Values  []TypedValue `json:"values,omitempty"`
-	Min     *TypedValue  `json:"min,omitempty"`
-	Max     *TypedValue  `json:"max,omitempty"`
-	Pattern string       `json:"pattern,omitempty"`
-	Dynamic *Dynamic     `json:"dynamic,omitempty"`
-	Op      string       `json:"op,omitempty"`
+	Kind   string       `json:"kind"`
+	Value  *TypedValue  `json:"value,omitempty"`
+	Values []TypedValue `json:"values,omitempty"`
+	Min    *TypedValue  `json:"min,omitempty"`
+	Max    *TypedValue  `json:"max,omitempty"`
+	// MinExclusive/MaxExclusive turn a range bound strict: min becomes
+	// "greater than" and max becomes "less than".
+	MinExclusive bool   `json:"min_exclusive,omitempty"`
+	MaxExclusive bool   `json:"max_exclusive,omitempty"`
+	Pattern      string `json:"pattern,omitempty"`
+	// PatternSubstring opts a pattern condition out of anchoring.
+	PatternSubstring bool     `json:"pattern_substring,omitempty"`
+	Dynamic          *Dynamic `json:"dynamic,omitempty"`
+	Op               string   `json:"op,omitempty"`
+	// ContextKey names a caller-supplied fact to test instead of the source
+	// attribute's value.
+	ContextKey string `json:"context_key,omitempty"`
 }
 
 // Effect is a dependency's effect on its target.

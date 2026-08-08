@@ -275,3 +275,91 @@ func TestJSONColumnSurvivesRoundTrip(t *testing.T) {
 		})
 	})
 }
+
+// TestCSVRoundTripOfLegacyShapedText is the regression for #491.
+//
+// The in-band multi-value forms were excluded from json columns only, so any
+// other type still routed a cell starting with '[' into the member decoder. A
+// string attribute holding the literal text `[{"value":"a"},{"value":"b"}]`
+// exported verbatim and re-imported as TWO values: the tool's own export was
+// not round-trip safe, and the report said one valid row with no errors.
+func TestCSVRoundTripOfLegacyShapedText(t *testing.T) {
+	Convey("Given a string value that looks like the legacy multi-value form", t, func() {
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		svc := flexitype.NewInMemory()
+		ia := svc.Interactors(ctx)
+
+		product, err := ia.TypeDefinitions().Create(ctx, apptypedef.CreateInput{
+			InternalName: "product", DisplayName: "Product",
+		})
+		So(err, ShouldBeNil)
+		notes, err := svc.Interactors(ctx).Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: product.ID.String(), InternalName: "notes",
+			DisplayName: "Notes", DataType: "string",
+		})
+		So(err, ShouldBeNil)
+
+		const literal = `[{"value":"a"},{"value":"b"}]`
+		raw, _ := json.Marshal(literal)
+		_, err = svc.Interactors(ctx).Values().Set(ctx, appvalue.SetInput{
+			AttributeDefinitionID: notes.ID.String(), EntityID: "p1",
+			TypeDefinitionID: product.ID.String(), Value: raw,
+		})
+		So(err, ShouldBeNil)
+
+		exported, err := svc.Interactors(ctx).Values().Export(ctx, appvalue.ExportInput{
+			TypeDefinitionID: product.ID.String(),
+		})
+		So(err, ShouldBeNil)
+		So(exported.Rows, ShouldHaveLength, 1)
+		cell := func(name string) string {
+			for i, c := range exported.Columns {
+				if c == name {
+					return exported.Rows[0][i]
+				}
+			}
+			return ""
+		}
+
+		Convey("When the export is imported into a fresh entity", func() {
+			report, ierr := svc.Interactors(ctx).Values().Import(ctx, appvalue.ImportInput{
+				TypeDefinitionID: product.ID.String(),
+				KeyColumn:        "entity_id",
+				Mapping:          map[string]string{"notes": "notes"},
+				Columns:          exported.Columns,
+				Rows:             [][]string{{"p2", cell("notes")}},
+			})
+			So(ierr, ShouldBeNil)
+			So(report.Errors, ShouldBeEmpty)
+
+			Convey("Then it comes back as ONE value holding the original text", func() {
+				vals, verr := svc.Interactors(ctx).Values().ListByEntity(ctx, product.ID.String(), "p2")
+				So(verr, ShouldBeNil)
+				So(vals, ShouldHaveLength, 1)
+				So(vals[0].Value.String(), ShouldEqual, literal)
+			})
+		})
+
+		Convey("When a caller opts in to the legacy in-band forms", func() {
+			report, ierr := svc.Interactors(ctx).Values().Import(ctx, appvalue.ImportInput{
+				TypeDefinitionID: product.ID.String(),
+				KeyColumn:        "entity_id",
+				Mapping:          map[string]string{"notes": "notes"},
+				Columns:          exported.Columns,
+				Rows:             [][]string{{"p3", cell("notes")}},
+
+				AllowLegacyMultiValueCells: true,
+			})
+			So(ierr, ShouldBeNil)
+
+			Convey("Then the old reading is still available for an older file", func() {
+				So(report.RowsWritten, ShouldEqual, 1)
+				vals, verr := svc.Interactors(ctx).Values().ListByEntity(ctx, product.ID.String(), "p3")
+				So(verr, ShouldBeNil)
+				// A single-valued attribute keeps the last member written.
+				So(vals, ShouldHaveLength, 1)
+				So(vals[0].Value.String(), ShouldEqual, "b")
+			})
+		})
+	})
+}

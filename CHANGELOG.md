@@ -40,6 +40,51 @@ object, which a code generator renders as a field that cannot be filled. The
 and referenced. The change is additive; `TestResponseContract` validates the
 live handler against the tightened schemas.
 
+### Added — A bootstrap admin credential a manifest can know ([#547])
+
+`FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN` sets the credential the first admin account
+takes, instead of the service minting one. `flexitype bootstrap-token` prints a
+valid token for an operator to store in a secret manager.
+
+A minted token is printed to stdout once and the shipped image is distroless,
+so an orchestrated deployment could never capture it: every service starts at
+the same moment, and the service that needs the admin credential needs it
+before the log line exists. The only way through was to scrape a container log,
+which is not an interface.
+
+The supplied token must be one flexitype would have minted — `ft_<ULID>_<secret>`
+with a secret of at least 32 characters — so a hand-written or weak value is
+refused at startup rather than at exploitation. It applies on FIRST boot only:
+a tenant that already has an account is left alone, so an environment variable
+cannot re-key a live deployment. It is never logged and never returned.
+
+`Service.BootstrapAdminWithToken` is the embedded equivalent.
+`admin.CreateAccountInput` gained `ID` and `Secret`, which must be supplied
+together.
+
+### Added — `FLEXITYPE_DB_ALLOW_PLAINTEXT` ([#548])
+
+It permits an unencrypted database connection to a non-loopback host, and
+nothing else. `FLEXITYPE_DEV_INSECURE` was the only opt-out from that guard,
+and it ALSO disables authentication, so a stack that needed plaintext Postgres
+over a container network had to set the variable that turns authentication off
+in a deployment where authentication stays on. `FLEXITYPE_DEV_INSECURE` still
+implies the new one, so no manifest breaks. The two conditions are now logged
+separately.
+
+### Fixed — A non-writable blob directory stops the service at start-up ([#553])
+
+`blob.NewDiskStore` proved nothing: `os.MkdirAll` returns nil for a directory
+that already exists, whatever its ownership. A named volume mounts owned by
+root and the shipped image runs as `nonroot`, so a configured
+`FLEXITYPE_BLOB_DIR` the process could not write to built a store, logged
+"media storage enabled", passed every health check, and failed on the first
+upload — hours later, and only for whoever uploaded it.
+
+The store now creates and removes a probe file when it is built, and names the
+directory and the running uid when it cannot. A configuration error stops the
+service, which is the rule the authentication guard already followed.
+
 ### Fixed — `client.WebhooksService.Update` can now succeed
 
 The method sent `SubscriptionInput`, the CREATE body, to

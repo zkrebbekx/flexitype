@@ -270,3 +270,51 @@ func TestMemoryStore(t *testing.T) {
 		})
 	})
 }
+
+// TestDiskStoreRefusesAnUnwritableRoot covers the start-up check.
+//
+// A named volume mounts owned by root and the shipped image runs as a non-root
+// user, so a configured blob root the process cannot write to is the normal
+// shape of the failure. MkdirAll returns nil for a directory that already
+// exists, so the store used to build, report media storage as enabled, and
+// fail on the first upload — hours after the deployment looked healthy.
+func TestDiskStoreRefusesAnUnwritableRoot(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root: every directory is writable, so the check cannot be observed")
+	}
+
+	Convey("Given a directory this process may not write to", t, func() {
+		root := filepath.Join(t.TempDir(), "readonly")
+		So(os.Mkdir(root, 0o500), ShouldBeNil)
+		// Restore the mode so t.TempDir's cleanup can remove the directory.
+		defer func() { _ = os.Chmod(root, 0o700) }()
+
+		Convey("When a disk store is built on it", func() {
+			store, err := NewDiskStore(root)
+
+			Convey("Then it is refused at start-up, rather than on the first upload", func() {
+				So(err, ShouldNotBeNil)
+				So(store, ShouldBeNil)
+				So(err.Error(), ShouldContainSubstring, "not writable")
+				So(err.Error(), ShouldContainSubstring, root)
+			})
+		})
+
+		Convey("When the directory becomes writable", func() {
+			So(os.Chmod(root, 0o700), ShouldBeNil)
+			store, err := NewDiskStore(root)
+
+			Convey("Then the store builds", func() {
+				So(err, ShouldBeNil)
+				So(store, ShouldNotBeNil)
+			})
+
+			Convey("And the probe file it wrote is gone", func() {
+				So(err, ShouldBeNil)
+				entries, readErr := os.ReadDir(root)
+				So(readErr, ShouldBeNil)
+				So(entries, ShouldBeEmpty)
+			})
+		})
+	})
+}

@@ -48,18 +48,23 @@ services:
       FLEXITYPE_DB_NAME: flexitype
       FLEXITYPE_MIGRATE_ON_START: "true"
       # This opts out of ONE production guard: an unencrypted connection to a
-      # non-loopback database host, which is what a compose network is. It does
-      # NOT disable authentication here — that only happens when no account
-      # source is configured, and FLEXITYPE_PROVISIONING below is one. Every
-      # request in this stack still presents a service-account token.
-      FLEXITYPE_DEV_INSECURE: "true"
+      # non-loopback database host, which is what a compose network is. It says
+      # so and nothing else — authentication stays on, and every request in
+      # this stack presents a service-account token.
+      FLEXITYPE_DB_ALLOW_PLAINTEXT: "true"
       # Provisioning creates tenants and service accounts at runtime, which is
       # what onboarding a merchant means here. It also makes authentication
       # database-backed, so no service-account file is involved.
       FLEXITYPE_PROVISIONING: "true"
-      # Seed the first admin account. Its token is printed to STDOUT once;
-      # seed.sh captures it into ./.admin/token, which the platform reads.
+      # Seed the first admin account. This stack DECIDES its token rather than
+      # letting the service mint one: a minted token is printed once, and this
+      # image is distroless, so no other container could ever capture it. The
+      # same value is given to the platform below.
+      #
+      # A real deployment generates one with `flexitype bootstrap-token` and
+      # keeps it in a secret manager. This is a demo value in a public file.
       FLEXITYPE_BOOTSTRAP_ADMIN: "true"
+      FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN: "ft_01KZH2AG00DCWCTQBSWGC3G78F_marketplace-demo-admin-secret-not-for-real-use"
       # The outbox turns each merchant's webhook subscription into a managed
       # one (retries, backoff, dead-lettering). The search index powers FQL
       # matches(), which the merchant console uses.
@@ -112,13 +117,10 @@ services:
       STOREFRONT_HOOK_BASE: http://storefront:9200/hook
       MARKETPLACE_INTERNAL_TOKEN: marketplace-internal-demo-token
       PLATFORM_API_TOKEN: platform-console-demo-token
-      # flexitype prints its bootstrap admin token to stdout once and its image
-      # is distroless, so a compose stack cannot capture it into an environment
-      # variable. The platform waits for this file instead; seed.sh writes it.
-      # In a real deployment the same path is a mounted secret.
-      FLEXITYPE_ADMIN_TOKEN_FILE: /run/marketplace/admin-token
-    volumes:
-      - ./.admin:/run/marketplace:ro
+      # The same value the flexitype service was given above. A real
+      # deployment reads both from one secret, and can still use
+      # FLEXITYPE_ADMIN_TOKEN_FILE to pick up a rotation without a restart.
+      FLEXITYPE_ADMIN_TOKEN: "ft_01KZH2AG00DCWCTQBSWGC3G78F_marketplace-demo-admin-secret-not-for-real-use"
     ports:
       - "9300:9300"
 

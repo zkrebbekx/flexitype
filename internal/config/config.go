@@ -33,6 +33,18 @@ type Config struct {
 	// absent" did not.
 	DevInsecure bool
 
+	// DBAllowPlaintext permits an unencrypted database connection to a
+	// non-loopback host, and nothing else.
+	//
+	// It exists because DevInsecure conflated two unrelated decisions. A stack
+	// that needs plaintext Postgres over a container network — the compose
+	// quickstart connects to a host called "postgres" — had to set the
+	// variable that ALSO reads as "authentication off", and whose warning says
+	// so. An operator then read a warning that was wrong for that deployment.
+	//
+	// DevInsecure still implies this one, so no existing manifest breaks.
+	DBAllowPlaintext bool
+
 	// RequireAuth refuses to boot unless an account source is configured
 	// (a service-account file or provisioning). It turns the default
 	// fail-open "no accounts → auth disabled" behaviour into a hard error,
@@ -131,6 +143,17 @@ type Config struct {
 	// BootstrapAdmin seeds a first admin account when provisioning is on
 	// and the account store is empty.
 	BootstrapAdmin bool
+	// BootstrapAdminToken is the credential the first admin account takes,
+	// supplied by the deployment instead of minted by the service.
+	//
+	// The minted token is printed once and the shipped image is distroless, so
+	// an orchestrated stack cannot capture it: every service starts at the
+	// same moment, and the one that needs the credential needs it before the
+	// log line exists. With this set, a manifest can put the same value in its
+	// secret manager and in both places that need it.
+	//
+	// It is never logged. `flexitype bootstrap-token` prints a valid one.
+	BootstrapAdminToken string
 	// RateLimitRPS is the sustained per-account request rate; 0 disables
 	// rate limiting.
 	RateLimitRPS float64
@@ -221,6 +244,7 @@ func Load() (Config, error) {
 		Port:                    e.int("FLEXITYPE_PORT", 8080),
 		ServiceAccountsPath:     os.Getenv("FLEXITYPE_SERVICE_ACCOUNTS"),
 		DevInsecure:             e.bool("FLEXITYPE_DEV_INSECURE", false),
+		DBAllowPlaintext:        e.bool("FLEXITYPE_DB_ALLOW_PLAINTEXT", false),
 		RequireAuth:             e.bool("FLEXITYPE_REQUIRE_AUTH", true),
 		EnableConsole:           e.bool("FLEXITYPE_ENABLE_CONSOLE", true),
 		MaxImportBytes:          int64(e.int("FLEXITYPE_MAX_IMPORT_BYTES", 0)),
@@ -257,6 +281,7 @@ func Load() (Config, error) {
 		EnableProvisioning:      e.bool("FLEXITYPE_PROVISIONING", false),
 		AuthCacheTTL:            e.duration("FLEXITYPE_AUTH_CACHE_TTL", 30*time.Second),
 		BootstrapAdmin:          e.bool("FLEXITYPE_BOOTSTRAP_ADMIN", false),
+		BootstrapAdminToken:     os.Getenv("FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN"),
 		RateLimitRPS:            e.float("FLEXITYPE_RATE_LIMIT_RPS", 50),
 		RateLimitBurst:          e.int("FLEXITYPE_RATE_LIMIT_BURST", 200),
 		TenantRateLimitRPS:      e.float("FLEXITYPE_TENANT_RATE_LIMIT_RPS", 500),
@@ -345,11 +370,18 @@ func Load() (Config, error) {
 	// silently turned TLS off while the guard read the `sslmode=require` it
 	// was told about, and `host=` inside the params redirected the connection,
 	// with the configured credentials, to another server.
+	//
+	// FLEXITYPE_DB_ALLOW_PLAINTEXT is the opt-out that means ONLY this.
+	// FLEXITYPE_DEV_INSECURE implies it, so a manifest written before the two
+	// were separated keeps working — but a deployment that just needs
+	// plaintext Postgres no longer has to set the variable that turns
+	// authentication off and logs that it did.
+	cfg.DBAllowPlaintext = cfg.DBAllowPlaintext || cfg.DevInsecure
 	sslMode, host := sslModeAndHostOf(cfg.Database.DSN())
-	if sslMode == "disable" && !isLoopbackHost(host) && !cfg.DevInsecure {
+	if sslMode == "disable" && !isLoopbackHost(host) && !cfg.DBAllowPlaintext {
 		return Config{}, fmt.Errorf(
 			"sslmode=disable is not allowed for non-loopback host %q; use require/verify-full, "+
-				"or set FLEXITYPE_DEV_INSECURE=true for a local development stack", host)
+				"or set FLEXITYPE_DB_ALLOW_PLAINTEXT=true for a local development stack", host)
 	}
 	if len(e.errs) > 0 {
 		return Config{}, fmt.Errorf("invalid configuration: %w", errors.Join(e.errs...))

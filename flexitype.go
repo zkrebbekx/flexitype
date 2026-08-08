@@ -914,6 +914,58 @@ func (s *Service) BootstrapAdmin(ctx context.Context, tenantName, accountName st
 	return out.Token, nil
 }
 
+// BootstrapAdminWithToken is BootstrapAdmin with the credential supplied by
+// the caller rather than minted by the service.
+//
+// It exists because the generated token is printed once and the shipped image
+// is distroless, so an orchestrated deployment cannot capture it: a compose
+// file or a Deployment starts every service at the same moment, and the one
+// that needs the admin credential needs it before the log line exists. A
+// deployment can now put the token in its secret manager, hand it to this
+// service, and hand the SAME value to whatever calls the admin API.
+//
+// The token must be one flexitype would have minted: `ft_<ULID>_<secret>`,
+// with a secret of at least admin.MinSuppliedSecretLength characters.
+// `flexitype bootstrap-token` prints a valid one.
+//
+// It reports whether it created the account. Like BootstrapAdmin it is a
+// FIRST-BOOT operation: a tenant that already has an account is left alone,
+// so an environment variable cannot silently re-key a live deployment.
+func (s *Service) BootstrapAdminWithToken(ctx context.Context, tenantName, accountName, token string) (bool, error) {
+	if s.pool == nil {
+		return false, domainerrors.NewValidation("provisioning requires a database-backed service")
+	}
+	id, secret, err := serviceaccount.SplitToken(token)
+	if err != nil {
+		return false, domainerrors.NewValidation(
+			"the supplied bootstrap token is malformed: it must look like ft_<id>_<secret>")
+	}
+	a := s.AdminInteractor()
+
+	// Fail closed, exactly as BootstrapAdmin does: a transient error on the
+	// existence check must not fall through to creating an admin account.
+	existing, err := a.ListAccounts(ctx, tenantName)
+	if err != nil {
+		return false, fmt.Errorf("check existing accounts: %w", err)
+	}
+	if len(existing) > 0 {
+		return false, nil
+	}
+	if _, err := a.CreateTenant(ctx, tenantName); err != nil && !domainerrors.IsConflict(err) {
+		return false, err
+	}
+	if _, err := a.CreateAccount(ctx, admin.CreateAccountInput{
+		TenantName: tenantName,
+		Name:       accountName,
+		Scopes:     []string{"admin"},
+		ID:         id,
+		Secret:     secret,
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // APIHandler returns flexitype's versioned REST API as an http.Handler you
 // can mount in your own router.
 //

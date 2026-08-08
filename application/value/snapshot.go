@@ -41,6 +41,15 @@ func (i *Interactor) ApplySnapshot(ctx context.Context, rawTypeDefID, rawEntityI
 	// snapshot time and holds [A, B] now still held [A, B] after "restore":
 	// B's presence satisfied the key, so nothing archived it. The restore
 	// silently did not restore.
+	//
+	// The value part of the key is the EQUALITY key, not the rendering. The
+	// two passes disagreed otherwise: the set pass skips a write when the
+	// stored value is Equal to the cell, while this key compared renderings.
+	// A snapshot holding decimal "1.5" against a stored "1.50" — Equal, but
+	// rendered differently — made the set pass no-op and this pass archive
+	// the stored value, so restoring a snapshot that HELD a value left the
+	// entity with none. Quantity "5 kg" against a stored "5000 g" is the
+	// same case.
 	type valueKey struct {
 		attr  valueobjects.AttributeDefinitionID
 		scope valueobjects.Scope
@@ -59,7 +68,7 @@ func (i *Interactor) ApplySnapshot(ctx context.Context, rawTypeDefID, rawEntityI
 		target[valueKey{
 			attr:  id,
 			scope: valueobjects.Scope{Locale: c.Locale, Channel: c.Channel},
-			value: v.String(),
+			value: v.EqualityKey(),
 		}] = true
 	}
 
@@ -102,7 +111,7 @@ func (i *Interactor) ApplySnapshot(ctx context.Context, rawTypeDefID, rawEntityI
 			if target[valueKey{
 				attr:  av.AttributeDefinitionID(),
 				scope: av.Scope(),
-				value: av.Value().String(),
+				value: av.Value().EqualityKey(),
 			}] {
 				continue
 			}

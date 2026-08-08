@@ -206,6 +206,7 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 			r.Get("/attributes/{attributeID}/effective-schema", s.effectiveSchema)
 			r.Get("/relationship-requirements", s.relationshipRequirements)
 			r.Get("/completeness", s.entityCompleteness)
+			r.Post("/apply-defaults", s.applyEntityDefaults)
 			r.Get("/revisions", s.listRevisions)
 			r.Post("/revisions", s.createRevision)
 			r.Get("/as-of", s.entityAsOf)

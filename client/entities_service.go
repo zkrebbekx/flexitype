@@ -99,6 +99,18 @@ func (s *EntitiesService) Completeness(ctx context.Context, typeID, entityID str
 	return &out, nil
 }
 
+// ApplyDefaults seeds the declared defaults the entity does not hold,
+// resolving a dynamic default at the moment of the call. An attribute that
+// already holds a base-scope value is left alone, and a computed attribute is
+// skipped.
+func (s *EntitiesService) ApplyDefaults(ctx context.Context, typeID, entityID string) (*AppliedDefaults, error) {
+	var out AppliedDefaults
+	if err := s.c.do(ctx, http.MethodPost, "/entities/"+typeID+"/"+url.PathEscape(entityID)+"/apply-defaults", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Remove archives an entity's values and unlinks its relationships.
 func (s *EntitiesService) Remove(ctx context.Context, typeID, entityID string) error {
 	return s.c.do(ctx, http.MethodDelete, "/entities/"+typeID+"/"+url.PathEscape(entityID), nil, nil, nil)

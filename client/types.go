@@ -242,6 +242,21 @@ type Completeness struct {
 	Missing          []MissingAttribute `json:"missing"`
 }
 
+// AppliedDefault names one attribute an apply-defaults run seeded.
+type AppliedDefault struct {
+	AttributeDefinitionID string `json:"attribute_definition_id"`
+	InternalName          string `json:"internal_name"`
+	Value                 string `json:"value"`
+}
+
+// AppliedDefaults reports what one apply-defaults run seeded. Skipped counts
+// the declared defaults the entity already satisfied.
+type AppliedDefaults struct {
+	EntityID string           `json:"entity_id"`
+	Applied  []AppliedDefault `json:"applied"`
+	Skipped  int              `json:"skipped"`
+}
+
 // EntityScore is one entity's completeness inside a type aggregate.
 type EntityScore struct {
 	EntityID string  `json:"entity_id"`

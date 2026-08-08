@@ -289,6 +289,13 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 		api.Post("/webhook-deliveries/{id}/redeliver", s.redeliverWebhook)
 		api.Post("/webhook-deliveries/redeliver-dead", s.redeliverDeadWebhooks)
 
+		// Parked-outbox recovery (admin-scoped): envelopes that exhausted
+		// their retry budget wait here for an operator redrive. Without
+		// these routes a parked envelope was a silently lost committed
+		// change (issue #478).
+		api.Get("/admin/outbox/parked", s.listParkedOutbox)
+		api.Post("/admin/outbox/redrive", s.redriveOutbox)
+
 		api.Get("/events", s.listEvents)
 		api.Get("/events/stream", s.streamEvents)
 		api.Route("/event-cursors/{consumer}", func(r chi.Router) {

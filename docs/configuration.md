@@ -215,6 +215,8 @@ fails the build here rather than at runtime in the host.
 | `FLEXITYPE_RELAY_INTERVAL` | library default | How often the outbox relay looks for undispatched envelopes. |
 | `FLEXITYPE_RELAY_BATCH_SIZE` | library default | Envelopes claimed per relay pass. |
 | `FLEXITYPE_RELAY_LEASE_TTL` | library default | How long a relay's claim on a batch survives before another relay may reclaim it. |
+| `FLEXITYPE_OUTBOX_MAX_ATTEMPTS` | `25` | Dispatch failures before the relay parks an envelope. A parked envelope waits for an operator redrive. |
+| `FLEXITYPE_OUTBOX_RETRY_CEILING` | `15m` | Cap on the exponential backoff between outbox dispatch attempts (1s, 4s, 16s, ... up to this ceiling). |
 | `FLEXITYPE_WORKER_INTERVAL` | library default | How often the delivery worker looks for due deliveries. |
 | `FLEXITYPE_WORKER_CONCURRENCY` | library default | Deliveries attempted in parallel. |
 | `FLEXITYPE_WORKER_MAX_ATTEMPTS` | `25` | Attempts before a delivery goes to the dead-letter queue. |
@@ -275,6 +277,7 @@ is mounted. Only non-API paths reach the app shell.
 | `FLEXITYPE_OUTBOX` | `false` | Enable the transactional outbox, webhook subscriptions and the events feed. |
 | `FLEXITYPE_DEAD_LETTER_RETENTION` | `720h` (30d) | How long a **dead** delivery is kept before it stops pinning its envelope. The envelope prune keeps anything a dead delivery references, which is what makes a dead letter redrivable — so without this bound one decommissioned endpoint pinned its envelopes for ever and `FLEXITYPE_EVENT_RETENTION` stopped bounding the outbox or the feed. Far longer than the event retention on purpose. |
 | `FLEXITYPE_EVENT_RETENTION` | `168h` (7d) | How long expanded events stay readable in the feed before pruning. |
+| `FLEXITYPE_PARKED_RETENTION` | `720h` (30d) | How long a **parked** envelope is kept before the pruner deletes it. A parked envelope is a committed change that exhausted its retry budget and was never delivered. The prune of a parked envelope is deliberate data loss: after it, the event can never be redriven. Keep this bound well past your alerting-and-redrive window. Alert on the `flexitype_outbox_parked` gauge and redrive with `POST /api/v1/admin/outbox/redrive` long before this bound. |
 | `FLEXITYPE_WEBHOOK_URL` | _(unset)_ | Bootstrap webhook endpoint. With the outbox on, it is upserted as a managed subscription; otherwise it registers a direct hook. |
 | `FLEXITYPE_WEBHOOK_SECRET` | _(unset)_ | HMAC secret for the bootstrap webhook. |
 | `FLEXITYPE_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow subscriptions to target private/loopback/link-local hosts over http (on-prem; relaxes the SSRF guard). |

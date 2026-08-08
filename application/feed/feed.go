@@ -58,6 +58,18 @@ type Store interface {
 	// stopped bounding the outbox or the feed at all. The bound has to exist
 	// somewhere; it exists here, well past the attempt window.
 	PruneDeadLetters(ctx context.Context, cutoff time.Time) (int, error)
+
+	// PruneParked deletes envelopes that were parked before the cutoff.
+	// Returns rows removed.
+	//
+	// A parked envelope has no feed_seq, so the envelope prune never
+	// reached it and one poisonous event type could grow the outbox for
+	// ever. The bound has to exist somewhere; it exists here, under its own
+	// long retention. Deleting a parked envelope is DELIBERATE data loss —
+	// the event was never delivered and never will be — so the retention is
+	// far past the window in which an operator should have noticed the
+	// parked gauge and redriven.
+	PruneParked(ctx context.Context, cutoff time.Time) (int, error)
 }
 
 // CursorStore persists named consumer cursors.
@@ -202,11 +214,23 @@ func (i *Interactor) CommitCursor(ctx context.Context, consumer string, position
 // past any attempt window.
 const DefaultDeadLetterRetention = 30 * 24 * time.Hour
 
+// DefaultParkedRetention bounds how long a parked envelope is kept before
+// the pruner deletes it.
+//
+// Pruning a parked envelope is deliberate data loss: the event was committed
+// but never delivered, and after the prune it never will be. The default is
+// therefore generous — 30 days, matching the dead-letter retention and far
+// past the window in which the parked gauge should have been alerted on and
+// the envelopes redriven. It is a bound on unbounded growth, not a policy
+// against redriving.
+const DefaultParkedRetention = 30 * 24 * time.Hour
+
 // Pruner deletes events past retention on an interval.
 type Pruner struct {
 	store          Store
 	retention      time.Duration
 	deadLetterKeep time.Duration
+	parkedKeep     time.Duration
 	interval       time.Duration
 	onError        func(error)
 	now            func() time.Time
@@ -218,6 +242,7 @@ func NewPruner(store Store, retention time.Duration, onError func(error)) *Prune
 		store:          store,
 		retention:      retention,
 		deadLetterKeep: DefaultDeadLetterRetention,
+		parkedKeep:     DefaultParkedRetention,
 		interval:       time.Hour,
 		onError:        onError,
 		now:            uow.UTCNow,
@@ -233,6 +258,16 @@ func (p *Pruner) WithDeadLetterRetention(d time.Duration) *Pruner {
 	return p
 }
 
+// WithParkedRetention overrides how long a parked envelope is kept before it
+// is deleted. Deleting a parked envelope is deliberate data loss — keep this
+// well past the alerting-and-redrive window. Non-positive values are ignored.
+func (p *Pruner) WithParkedRetention(d time.Duration) *Pruner {
+	if d > 0 {
+		p.parkedKeep = d
+	}
+	return p
+}
+
 // Run prunes until ctx ends.
 func (p *Pruner) Run(ctx context.Context) {
 	ticker := time.NewTicker(p.interval)
@@ -244,6 +279,12 @@ func (p *Pruner) Run(ctx context.Context) {
 			p.onError(err)
 		}
 		if _, err := p.store.Prune(ctx, p.now().Add(-p.retention)); err != nil && p.onError != nil {
+			p.onError(err)
+		}
+		// Parked envelopes last: they are outside the feed_seq prune above
+		// (no feed_seq), so they need their own bound, under the long parked
+		// retention. This delete is deliberate data loss (see PruneParked).
+		if _, err := p.store.PruneParked(ctx, p.now().Add(-p.parkedKeep)); err != nil && p.onError != nil {
 			p.onError(err)
 		}
 		select {

@@ -63,13 +63,15 @@ type Config struct {
 	// takes to drain — could not be corrected without rebuilding.
 	//
 	// Each 0 keeps the library default.
-	RelayInterval     time.Duration
-	RelayBatchSize    int
-	RelayLeaseTTL     time.Duration
-	WorkerInterval    time.Duration
-	WorkerConcurrency int
-	WorkerMaxAttempts int
-	WorkerHTTPTimeout time.Duration
+	RelayInterval      time.Duration
+	RelayBatchSize     int
+	RelayLeaseTTL      time.Duration
+	OutboxMaxAttempts  int
+	OutboxRetryCeiling time.Duration
+	WorkerInterval     time.Duration
+	WorkerConcurrency  int
+	WorkerMaxAttempts  int
+	WorkerHTTPTimeout  time.Duration
 
 	// RunRelay, RunDeliveryWorker, RunPruner and RunScheduler select which
 	// background loops THIS process runs. All default to true, so a
@@ -110,6 +112,11 @@ type Config struct {
 	// letter is the record of a delivery that never succeeded, and it has to
 	// outlive the events it references long enough to be noticed.
 	DeadLetterRetention time.Duration
+	// ParkedRetention bounds how long a parked envelope is kept before the
+	// pruner deletes it. Pruning a parked envelope is deliberate data loss
+	// (the event was never delivered), so it is generous by default and must
+	// stay well past the alerting-and-redrive window.
+	ParkedRetention time.Duration
 	// WebhookAllowPrivate lets webhook subscriptions target private hosts
 	// (on-prem consumers). Off by default — SSRF guard.
 	WebhookAllowPrivate bool
@@ -222,6 +229,8 @@ func Load() (Config, error) {
 		RelayInterval:           e.duration("FLEXITYPE_RELAY_INTERVAL", 0),
 		RelayBatchSize:          e.int("FLEXITYPE_RELAY_BATCH_SIZE", 0),
 		RelayLeaseTTL:           e.duration("FLEXITYPE_RELAY_LEASE_TTL", 0),
+		OutboxMaxAttempts:       e.int("FLEXITYPE_OUTBOX_MAX_ATTEMPTS", 0),
+		OutboxRetryCeiling:      e.duration("FLEXITYPE_OUTBOX_RETRY_CEILING", 0),
 		WorkerInterval:          e.duration("FLEXITYPE_WORKER_INTERVAL", 0),
 		WorkerConcurrency:       e.int("FLEXITYPE_WORKER_CONCURRENCY", 0),
 		WorkerMaxAttempts:       e.int("FLEXITYPE_WORKER_MAX_ATTEMPTS", 0),
@@ -242,6 +251,7 @@ func Load() (Config, error) {
 		BlobDir:                 os.Getenv("FLEXITYPE_BLOB_DIR"),
 		EventRetention:          e.duration("FLEXITYPE_EVENT_RETENTION", 7*24*time.Hour),
 		DeadLetterRetention:     e.duration("FLEXITYPE_DEAD_LETTER_RETENTION", 30*24*time.Hour),
+		ParkedRetention:         e.duration("FLEXITYPE_PARKED_RETENTION", 30*24*time.Hour),
 		WebhookAllowPrivate:     e.bool("FLEXITYPE_WEBHOOK_ALLOW_PRIVATE", false),
 		EnableMetrics:           e.bool("FLEXITYPE_METRICS", true),
 		EnableProvisioning:      e.bool("FLEXITYPE_PROVISIONING", false),

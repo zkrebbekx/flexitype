@@ -29,13 +29,23 @@ type Source interface {
 
 // Depth is a point-in-time view of the outbox and delivery queues.
 type Depth struct {
-	OutboxPending      int64
+	// OutboxPending counts undispatched envelopes the relay will still
+	// retry. Parked envelopes are excluded: a parked row is terminal until
+	// an operator redrives it, so folding it into the pending depth pinned
+	// the gauge (and OldestPendingAge) for ever and buried the real signal.
+	OutboxPending int64
+
+	// OutboxParked counts envelopes that exhausted their retry budget and
+	// wait for an operator redrive (POST /admin/outbox/redrive). Alert on
+	// this being non-zero: every parked envelope is a committed change no
+	// external consumer has seen.
+	OutboxParked       int64
 	DeliveriesByStatus map[string]int64 // pending / inflight / delivered / dead
 
-	// OldestPendingAge is how long the oldest undispatched envelope has been
-	// waiting. It is the metric that actually tells an operator whether the
-	// relay is keeping up: a depth of 500 is healthy under load and alarming
-	// if the oldest of them is an hour old, and a count alone cannot tell
-	// those apart. Zero when nothing is pending.
+	// OldestPendingAge is how long the oldest undispatched, unparked
+	// envelope has been waiting. It is the metric that actually tells an
+	// operator whether the relay is keeping up: a depth of 500 is healthy
+	// under load and alarming if the oldest of them is an hour old, and a
+	// count alone cannot tell those apart. Zero when nothing is pending.
 	OldestPendingAge time.Duration
 }

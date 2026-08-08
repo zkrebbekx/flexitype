@@ -176,6 +176,12 @@ func run(log *logger.Logger) error {
 			relayOpts = append(relayOpts, outbox.WithLeaseTTL(cfg.RelayLeaseTTL))
 		}
 		opts = append(opts, flexitype.WithOutbox(relayOpts...))
+		if cfg.OutboxMaxAttempts > 0 {
+			opts = append(opts, flexitype.WithOutboxMaxAttempts(cfg.OutboxMaxAttempts))
+		}
+		if cfg.OutboxRetryCeiling > 0 {
+			opts = append(opts, flexitype.WithOutboxRetryCeiling(cfg.OutboxRetryCeiling))
+		}
 
 		workerOpts := []webhook.WorkerOption{webhook.WithWorkerErrorObserver(func(err error) {
 			log.Error().Err(err).Msg("webhook delivery worker error")
@@ -197,6 +203,9 @@ func run(log *logger.Logger) error {
 		}
 		if cfg.DeadLetterRetention > 0 {
 			opts = append(opts, flexitype.WithDeadLetterRetention(cfg.DeadLetterRetention))
+		}
+		if cfg.ParkedRetention > 0 {
+			opts = append(opts, flexitype.WithParkedRetention(cfg.ParkedRetention))
 		}
 		if cfg.EventRetention > 0 {
 			opts = append(opts, flexitype.WithEventRetention(cfg.EventRetention))

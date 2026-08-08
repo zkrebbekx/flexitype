@@ -13,6 +13,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application"
 	appfeed "github.com/zkrebbekx/flexitype/application/feed"
+	appoutbox "github.com/zkrebbekx/flexitype/application/outbox"
 	appwebhook "github.com/zkrebbekx/flexitype/application/webhook"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 )
@@ -204,6 +205,73 @@ func (s *server) redeliverDeadWebhooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"redelivered": n})
+}
+
+// --- parked outbox recovery --------------------------------------------------
+
+// outboxOps gates the parked-envelope recovery surface. It sits behind the
+// same feature gate as the rest of the delivery surface, plus the admin
+// scope (checked by the callers): redriving re-publishes committed events.
+// A factory wired without an ops-capable outbox store answers like a
+// disabled feature rather than panicking.
+func (s *server) outboxOps(w http.ResponseWriter, r *http.Request) *appoutbox.Ops {
+	if !s.eventDelivery(w, r) {
+		return nil
+	}
+	if !s.requireAdmin(w, r) {
+		return nil
+	}
+	ops := application.FromContext(r.Context()).OutboxOps()
+	if ops == nil {
+		s.featureDisabled(w, "outbox recovery (enable the outbox)")
+		return nil
+	}
+	return ops
+}
+
+// listParkedOutbox pages the tenant's parked envelopes — the committed
+// changes that exhausted their retry budget and will never deliver without a
+// redrive. Admin scope.
+func (s *server) listParkedOutbox(w http.ResponseWriter, r *http.Request) {
+	ops := s.outboxOps(w, r)
+	if ops == nil {
+		return
+	}
+	out, err := ops.ListParked(r.Context(), appoutbox.ListParkedInput{
+		EventType: r.URL.Query().Get("event_type"),
+		ID:        r.URL.Query().Get("id"),
+		Page:      pageArgs(r),
+	})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	items := out.Items
+	if items == nil {
+		items = []appoutbox.ParkedEnvelope{}
+	}
+	writeJSON(w, http.StatusOK, listResponse{Items: items, PageInfo: out.PageInfo})
+}
+
+// redriveOutbox returns parked envelopes to the retry queue, optionally
+// narrowed to one event type (?event_type=) or one envelope (?id=). Admin
+// scope. The bulk shape mirrors redeliver-dead: after an outage the parked
+// envelopes number in the thousands, and one call each is not a recovery
+// path.
+func (s *server) redriveOutbox(w http.ResponseWriter, r *http.Request) {
+	ops := s.outboxOps(w, r)
+	if ops == nil {
+		return
+	}
+	n, err := ops.Redrive(r.Context(), appoutbox.RedriveInput{
+		EventType: r.URL.Query().Get("event_type"),
+		ID:        r.URL.Query().Get("id"),
+	})
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"redriven": n})
 }
 
 // --- events feed ---------------------------------------------------------------

@@ -19,6 +19,7 @@ import (
 	apperasure "github.com/zkrebbekx/flexitype/application/erasure"
 	appfeed "github.com/zkrebbekx/flexitype/application/feed"
 	"github.com/zkrebbekx/flexitype/application/fieldacl"
+	appoutbox "github.com/zkrebbekx/flexitype/application/outbox"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apprevision "github.com/zkrebbekx/flexitype/application/revision"
@@ -82,6 +83,7 @@ type Interactors struct {
 	activity      *ActivityInteractor
 	webhooks      *appwebhook.Interactor
 	feed          *appfeed.Interactor
+	outboxOps     *appoutbox.Ops
 	schema        *appschema.Interactor
 	savedViews    *appsavedview.Interactor
 	dedup         *appdedup.Interactor
@@ -138,6 +140,11 @@ func (i *Interactors) Webhooks() *appwebhook.Interactor { return i.webhooks }
 // Feed returns the events-feed usecases; nil unless event delivery is
 // enabled (requires the outbox).
 func (i *Interactors) Feed() *appfeed.Interactor { return i.feed }
+
+// OutboxOps returns the parked-envelope recovery usecases (admin listing and
+// redrive); nil unless event delivery is enabled with an ops-capable outbox
+// store.
+func (i *Interactors) OutboxOps() *appoutbox.Ops { return i.outboxOps }
 
 // Schema returns the schema import/export usecases.
 func (i *Interactors) Schema() *appschema.Interactor { return i.schema }

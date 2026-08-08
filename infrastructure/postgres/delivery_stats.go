@@ -24,9 +24,20 @@ func NewDeliveryStats(q db.QueryExecer) deliverystats.Source {
 func (s *deliveryStats) Snapshot(ctx context.Context) (deliverystats.Depth, error) {
 	depth := deliverystats.Depth{DeliveriesByStatus: map[string]int64{}}
 
+	// Parked rows are excluded from the pending depth and its age: a parked
+	// envelope is terminal until an operator redrives it, and counting it
+	// here pinned both gauges for the parked row's whole lifetime — burying
+	// the live backlog signal exactly when an incident made it matter. The
+	// parked set gets its own gauge below so parking stays alarmable.
 	if err := s.q.GetContext(ctx, &depth.OutboxPending,
-		`SELECT count(*) FROM flexitype_event_outbox WHERE dispatched_at IS NULL`); err != nil {
+		`SELECT count(*) FROM flexitype_event_outbox
+		  WHERE dispatched_at IS NULL AND parked_at IS NULL`); err != nil {
 		return depth, fmt.Errorf("count pending outbox: %w", err)
+	}
+
+	if err := s.q.GetContext(ctx, &depth.OutboxParked,
+		`SELECT count(*) FROM flexitype_event_outbox WHERE parked_at IS NOT NULL`); err != nil {
+		return depth, fmt.Errorf("count parked outbox: %w", err)
 	}
 
 	// The age of the oldest undispatched envelope — the expansion lag the
@@ -34,7 +45,8 @@ func (s *deliveryStats) Snapshot(ctx context.Context) (deliverystats.Depth, erro
 	var oldestSeconds sql.NullFloat64
 	if err := s.q.GetContext(ctx, &oldestSeconds,
 		`SELECT EXTRACT(EPOCH FROM (now() - min(recorded_at)))
-		   FROM flexitype_event_outbox WHERE dispatched_at IS NULL`); err != nil {
+		   FROM flexitype_event_outbox
+		  WHERE dispatched_at IS NULL AND parked_at IS NULL`); err != nil {
 		return depth, fmt.Errorf("oldest pending envelope: %w", err)
 	}
 	if oldestSeconds.Valid && oldestSeconds.Float64 > 0 {

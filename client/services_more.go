@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // --- dependencies ------------------------------------------------------------
@@ -795,6 +796,63 @@ func (s *AdminService) EffectiveAccount(ctx context.Context, id string) (*Effect
 		return nil, err
 	}
 	return &out, nil
+}
+
+// ParkedEnvelope is one outbox envelope that exhausted its dispatch retry
+// budget and waits for an operator redrive. It is a committed change no
+// consumer has seen: it is off the events feed and has no webhook
+// deliveries until it is redriven.
+type ParkedEnvelope struct {
+	ID            string    `json:"id"`
+	EventType     string    `json:"event_type"`
+	AggregateType string    `json:"aggregate_type"`
+	AggregateID   string    `json:"aggregate_id"`
+	Attempts      int       `json:"attempts"`
+	LastError     string    `json:"last_error"`
+	RecordedAt    time.Time `json:"recorded_at"`
+	ParkedAt      time.Time `json:"parked_at"`
+}
+
+// ParkedFilter narrows a parked listing or a redrive. Zero values mean "no
+// constraint"; ID selects exactly one envelope.
+type ParkedFilter struct {
+	EventType string
+	ID        string
+}
+
+func (f ParkedFilter) query() url.Values {
+	q := url.Values{}
+	if f.EventType != "" {
+		q.Set("event_type", f.EventType)
+	}
+	if f.ID != "" {
+		q.Set("id", f.ID)
+	}
+	return q
+}
+
+// ListParkedOutbox pages the tenant's parked outbox envelopes, oldest first.
+// Admin scope. Alert on the flexitype_outbox_parked gauge, inspect the
+// backlog here, and redrive before the parked retention deletes it.
+func (s *AdminService) ListParkedOutbox(ctx context.Context, filter ParkedFilter, opts ...ListOptions) (*Page[ParkedEnvelope], error) {
+	return listPage[ParkedEnvelope](ctx, s.c, "/admin/outbox/parked", filter.query(), firstOpts(opts))
+}
+
+// RedriveOutbox returns the matching parked envelopes to the retry queue and
+// reports how many it moved. Admin scope.
+//
+// The redrive resets each envelope's attempt count — a fresh retry budget,
+// as with the dead-letter redrive — and delivery restarts immediately.
+// Consumers must dedupe on the envelope id, as with every redelivery. An
+// empty filter redrives the tenant's whole parked backlog.
+func (s *AdminService) RedriveOutbox(ctx context.Context, filter ParkedFilter) (int, error) {
+	var out struct {
+		Redriven int `json:"redriven"`
+	}
+	if err := s.c.do(ctx, http.MethodPost, "/admin/outbox/redrive", filter.query(), nil, &out); err != nil {
+		return 0, err
+	}
+	return out.Redriven, nil
 }
 
 // UpsertRoleInput creates or replaces a role. The write replaces the whole

@@ -16,6 +16,7 @@ import (
 	apperasure "github.com/zkrebbekx/flexitype/application/erasure"
 	"github.com/zkrebbekx/flexitype/application/feed"
 	"github.com/zkrebbekx/flexitype/application/fieldacl"
+	appoutbox "github.com/zkrebbekx/flexitype/application/outbox"
 	appquery "github.com/zkrebbekx/flexitype/application/query"
 	apprelationship "github.com/zkrebbekx/flexitype/application/relationship"
 	apprevision "github.com/zkrebbekx/flexitype/application/revision"
@@ -107,6 +108,12 @@ type FactoryConfig struct {
 	// relay after commit.
 	Outbox      uow.EnvelopeSink
 	OutboxNudge func()
+
+	// OutboxOps, when set, enables the parked-envelope recovery surface:
+	// the admin parked listing and the redrive (issue #478). Optional even
+	// with EventDelivery on, so existing direct FactoryConfig wirings keep
+	// building; the facade always wires it with the outbox.
+	OutboxOps appoutbox.OpsStore
 
 	// Subscriptions/Deliveries power webhook-subscription management;
 	// FeedStore/CursorStore power the events feed. All require the outbox.
@@ -280,6 +287,9 @@ func (f *factory) New(context.Context) *Interactors {
 	if f.cfg.Features.EventDelivery {
 		i.webhooks = webhook.NewInteractor(unit, f.cfg.Subscriptions, f.cfg.Deliveries, f.cfg.WebhookURLPolicy)
 		i.feed = feed.NewInteractor(f.cfg.FeedStore, f.cfg.CursorStore, fieldacl.New(repos.Attributes))
+		if f.cfg.OutboxOps != nil {
+			i.outboxOps = appoutbox.NewOps(unit, f.cfg.OutboxOps, f.cfg.OutboxNudge)
+		}
 	}
 	return i
 }

@@ -17,9 +17,10 @@ import (
 
 // fakeFeedStore serves a fixed ordered log.
 type fakeFeedStore struct {
-	events     []Event
-	pruned     int
-	deadPruned int
+	events       []Event
+	pruned       int
+	deadPruned   int
+	parkedPruned int
 }
 
 func (s *fakeFeedStore) List(_ context.Context, _ valueobjects.TenantID, after int64, types []string, limit int) ([]Event, error) {
@@ -62,6 +63,11 @@ func (s *fakeFeedStore) Prune(context.Context, time.Time) (int, error) {
 
 func (s *fakeFeedStore) PruneDeadLetters(context.Context, time.Time) (int, error) {
 	s.deadPruned++
+	return 0, nil
+}
+
+func (s *fakeFeedStore) PruneParked(context.Context, time.Time) (int, error) {
+	s.parkedPruned++
 	return 0, nil
 }
 
@@ -245,13 +251,14 @@ func TestFeedCursorNaming(t *testing.T) {
 // errFeedStore fails Prune a fixed number of times, recording each cutoff it
 // was called with.
 type errFeedStore struct {
-	mu          sync.Mutex
-	cutoffs     []time.Time
-	deadCutoffs []time.Time
-	err         error
-	floorErr    error
-	listErr     error
-	floor       int64
+	mu            sync.Mutex
+	cutoffs       []time.Time
+	deadCutoffs   []time.Time
+	parkedCutoffs []time.Time
+	err           error
+	floorErr      error
+	listErr       error
+	floor         int64
 	// lastLimit records the limit List was called with, so limit clamping is
 	// observable.
 	lastLimit int
@@ -280,6 +287,22 @@ func (s *errFeedStore) PruneDeadLetters(_ context.Context, cutoff time.Time) (in
 	defer s.mu.Unlock()
 	s.deadCutoffs = append(s.deadCutoffs, cutoff)
 	return 0, s.err
+}
+
+func (s *errFeedStore) PruneParked(_ context.Context, cutoff time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parkedCutoffs = append(s.parkedCutoffs, cutoff)
+	return 0, s.err
+}
+
+// parkedCalls returns the cutoffs the parked prune was called with.
+func (s *errFeedStore) parkedCalls() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]time.Time, len(s.parkedCutoffs))
+	copy(out, s.parkedCutoffs)
+	return out
 }
 
 // deadLetterCalls returns the cutoffs the dead-letter prune was called with.
@@ -477,6 +500,59 @@ func TestPrunerBoundsDeadLetters(t *testing.T) {
 
 			Convey("Then the default stands rather than pruning everything", func() {
 				So(store.deadLetterCalls()[0], ShouldEqual, now.Add(-DefaultDeadLetterRetention))
+			})
+		})
+	})
+}
+
+// TestPrunerBoundsParked covers the bound parked envelopes needed (#478).
+//
+// A parked envelope has no feed_seq, so the envelope prune never reached it
+// and nothing else deleted it: one poisonous event type grew the outbox for
+// ever. The parked prune is deliberate data loss — the event was never
+// delivered — so it runs under its own long retention, not the event one.
+func TestPrunerBoundsParked(t *testing.T) {
+	Convey("Given a pruner over a store that records its cutoffs", t, func() {
+		store := &errFeedStore{}
+		now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+		p := NewPruner(store, 7*24*time.Hour, nil)
+		p.now = func() time.Time { return now }
+
+		Convey("When a pass runs", func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // one pass, then stop
+			p.Run(ctx)
+
+			Convey("Then parked envelopes are pruned as well as expanded ones", func() {
+				So(store.calls(), ShouldHaveLength, 1)
+				So(store.parkedCalls(), ShouldHaveLength, 1)
+			})
+
+			Convey("Then the parked cutoff is the long default, not the event retention", func() {
+				So(store.parkedCalls()[0], ShouldHappenBefore, store.calls()[0])
+				So(store.parkedCalls()[0], ShouldEqual, now.Add(-DefaultParkedRetention))
+			})
+		})
+
+		Convey("When a shorter parked retention is configured", func() {
+			p.WithParkedRetention(48 * time.Hour)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			p.Run(ctx)
+
+			Convey("Then that bound is used", func() {
+				So(store.parkedCalls()[0], ShouldEqual, now.Add(-48*time.Hour))
+			})
+		})
+
+		Convey("When a non-positive parked retention is configured", func() {
+			p.WithParkedRetention(0)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			p.Run(ctx)
+
+			Convey("Then the default stands rather than pruning everything", func() {
+				So(store.parkedCalls()[0], ShouldEqual, now.Add(-DefaultParkedRetention))
 			})
 		})
 	})

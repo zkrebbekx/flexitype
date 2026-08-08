@@ -324,6 +324,111 @@ func (s *outboxStore) expand(ctx context.Context, q db.QueryExecer, done []strin
 	return nil
 }
 
+// Compile-time check: the outbox adapter also serves the parked-envelope
+// recovery surface (issue #478). The facade asserts to outbox.OpsStore when
+// wiring, so a drift here must fail the build, not the boot.
+var _ outbox.OpsStore = (*outboxStore)(nil)
+
+// parkedWhere builds the WHERE clause selecting the filter's parked rows.
+// Every predicate keeps the partial parked index applicable: tenant_id and id
+// are its key columns and parked_at IS NOT NULL is its predicate.
+func parkedWhere(filter outbox.ParkedFilter) ([]string, []any) {
+	where := []string{"tenant_id = ?", "parked_at IS NOT NULL"}
+	args := []any{filter.TenantID.String()}
+	if filter.EventType != "" {
+		where = append(where, "event_type = ?")
+		args = append(args, filter.EventType)
+	}
+	if filter.ID != "" {
+		where = append(where, "id = ?")
+		args = append(args, filter.ID)
+	}
+	return where, args
+}
+
+// ListParked returns one keyset page of the tenant's parked envelopes in id
+// order (ULIDs, so oldest first), plus the filtered total when asked for.
+func (s *outboxStore) ListParked(ctx context.Context, filter outbox.ParkedFilter, page db.Page) ([]outbox.ParkedEnvelope, int, error) {
+	where, args := parkedWhere(filter)
+	filterClause := strings.Join(where, " AND ")
+	filterArgs := append([]any(nil), args...)
+
+	where, args = keysetWhere(where, args, idKeyset, page.Cursor)
+	args = append(args, page.FetchLimit())
+
+	var rows []struct {
+		ID            ulid.ID   `db:"id"`
+		EventType     string    `db:"event_type"`
+		AggregateType string    `db:"aggregate_type"`
+		AggregateID   string    `db:"aggregate_id"`
+		Attempts      int       `db:"attempts"`
+		LastError     string    `db:"last_error"`
+		RecordedAt    time.Time `db:"recorded_at"`
+		ParkedAt      time.Time `db:"parked_at"`
+	}
+	query := `SELECT id, event_type, aggregate_type, aggregate_id, attempts,
+	        COALESCE(last_error, '') AS last_error, recorded_at, parked_at
+	 FROM flexitype_event_outbox
+	 WHERE ` + strings.Join(where, " AND ") + `
+	 ORDER BY id
+	 LIMIT ?`
+	if err := txExecer(s.tx).SelectContext(ctx, &rows, bind(query), args...); err != nil {
+		return nil, 0, fmt.Errorf("list parked envelopes: %w", err)
+	}
+
+	out := make([]outbox.ParkedEnvelope, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, outbox.ParkedEnvelope{
+			ID:            r.ID.String(),
+			EventType:     r.EventType,
+			AggregateType: r.AggregateType,
+			AggregateID:   r.AggregateID,
+			Attempts:      r.Attempts,
+			LastError:     r.LastError,
+			RecordedAt:    r.RecordedAt,
+			ParkedAt:      r.ParkedAt,
+		})
+	}
+
+	total, err := countIf(ctx, txExecer(s.tx), page.WantTotal, func() (string, []any) {
+		return `SELECT count(*) FROM flexitype_event_outbox WHERE ` + filterClause, filterArgs
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("count parked envelopes: %w", err)
+	}
+	return out, total, nil
+}
+
+// Redrive returns the filter's parked envelopes to the retry queue inside the
+// caller's transaction: the park flag and the lease clear, attempts resets to
+// zero (a fresh retry budget, mirroring the dead-letter redrive) and the row
+// is due immediately. last_error is kept as evidence until the next outcome
+// overwrites it. The dispatched_at IS NULL guard is belt-and-braces: parking
+// only ever happens on the undispatched failure path.
+//
+// No batching: unlike the dead-letter redrive, the parked set is bounded by
+// the failure window (25 attempts spanning hours per envelope), not by fanout,
+// and each redriven row is one small in-place update.
+func (s *outboxStore) Redrive(ctx context.Context, tx db.Transactor, filter outbox.ParkedFilter) (int, error) {
+	where, args := parkedWhere(filter)
+	res, err := txExecer(tx).ExecContext(ctx, bind(
+		`UPDATE flexitype_event_outbox
+		 SET parked_at = NULL,
+		     attempts = 0,
+		     next_attempt_at = now(),
+		     claimed_at = NULL,
+		     claimed_by = NULL
+		 WHERE `+strings.Join(where, " AND ")+` AND dispatched_at IS NULL`), args...)
+	if err != nil {
+		return 0, fmt.Errorf("redrive parked envelopes: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("redrive parked envelopes: %w", err)
+	}
+	return int(n), nil
+}
+
 // matchingSubscription is the projection expansion needs: which subscription,
 // for which tenant, and which event types it wants. The subscription's URL and
 // signing secrets are deliberately absent — the delivery worker loads those

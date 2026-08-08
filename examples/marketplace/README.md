@@ -280,19 +280,21 @@ burst per entity; and no response or log line carries a merchant token.
 
 Honest notes from building this, for whoever works on flexitype next.
 
-1. **`client.WebhooksService.Update` cannot succeed.** It PATCHes a
-   `SubscriptionInput`, whose `name` field has no `omitempty`, but
-   `PATCH /webhook-subscriptions/{id}` decodes with `DisallowUnknownFields`
-   into `{url, event_types, active, rotate_secret}`. Every call fails with
-   `VALIDATION: invalid request body`. The two shapes also disagree on
-   secrets: the input has `secret`, the endpoint wants `rotate_secret`. This
-   example deletes and recreates the subscription instead.
+Each one is filed, so it can be tracked rather than only recorded here.
+
+1. ~~**`client.WebhooksService.Update` cannot succeed.**~~ **Fixed.** It
+   PATCHed a `SubscriptionInput`, whose `name` field has no `omitempty`, into
+   an endpoint that decodes with `DisallowUnknownFields` and reads
+   `{url, event_types, active, rotate_secret}`, so every call failed with
+   `VALIDATION: invalid request body`. The method now sends only those four
+   fields and maps `Secret` to `rotate_secret`. This example still deletes and
+   recreates the subscription, which is also a valid way to do it.
 
 2. **No supported way to inject a known admin credential.** In provisioning
    mode the bootstrap token is printed to stdout once, and the image is
    distroless, so an orchestrated stack cannot capture it. A
    `FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN` (caller-supplied, hashed at boot) would
-   make a provisioning-mode deployment reproducible.
+   make a provisioning-mode deployment reproducible. ([#547])
 
 3. **`FLEXITYPE_DEV_INSECURE` conflates two things.** It is the only opt-out
    from the unencrypted-database guard, and it also reads as "authentication
@@ -300,30 +302,30 @@ Honest notes from building this, for whoever works on flexitype next.
    needs plaintext Postgres has to set a variable whose name and log warning
    both say the opposite of what it is doing. A separate
    `FLEXITYPE_DB_ALLOW_PLAINTEXT` would let this compose file keep
-   authentication on without looking reckless.
+   authentication on without looking reckless. ([#548])
 
 4. **The projector needs one credential per tenant.** It holds every
    merchant's token purely to re-read entities. A read-only, cross-tenant
    consumer credential — or an event payload that carried the entity's full
    value set — would let a projection service hold no merchant credential at
-   all. That is the single biggest security cost of this architecture.
+   all. That is the single biggest security cost of this architecture. ([#549])
 
 5. **An event does not say which entity changed without a payload parse.** The
    envelope's `aggregate_id` is the attribute VALUE id, so a subscriber that
    only wants "entity E changed" has to decode the payload for
    `type_definition_id` and `entity_id`. Putting the entity's coordinates on
-   the envelope would let a router work without knowing any payload schema.
+   the envelope would let a router work without knowing any payload schema. ([#550])
 
 6. **There is no data type for long text.** `description` is a `string` with a
    large `max_length`, which is fine but tells a UI nothing about how to
-   render it. A `text` type, or a `multiline` hint, would.
+   render it. A `text` type, or a `multiline` hint, would. ([#551])
 
 7. **A media value's bytes are only reachable with a tenant credential.** That
    is right, but it means every public-facing surface has to proxy images.
-   Signed, expiring media URLs would remove a whole proxy path.
+   Signed, expiring media URLs would remove a whole proxy path. ([#552])
 
 8. **Blob storage needs a writable directory the distroless image cannot
    create.** A named volume mounts as root, the image runs as `nonroot`, and
    the failure surfaces only on the first upload — long after the stack came
    up healthy. `FLEXITYPE_BLOB_DIR` could be checked for writability at
-   startup and refuse to boot.
+   startup and refuse to boot. ([#553])

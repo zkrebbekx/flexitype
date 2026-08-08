@@ -457,3 +457,104 @@ func TestErasureAndValuesConformance(t *testing.T) {
 		})
 	})
 }
+
+// TestWebhookSubscriptionUpdateConformance drives the update path end to end.
+//
+// Update sent SubscriptionInput, the CREATE body. Its name field carries no
+// omitempty, and its secret field is named secret; PATCH
+// /webhook-subscriptions/{id} decodes with DisallowUnknownFields and knows
+// neither key. Every call therefore returned VALIDATION "invalid request
+// body" — the method could not succeed, whatever it was given.
+func TestWebhookSubscriptionUpdateConformance(t *testing.T) {
+	// Subscriptions live behind the outbox, which only the Postgres backend
+	// implements, so this case skips without a DSN. CI provides one.
+	dsn := os.Getenv("FLEXITYPE_TEST_DSN")
+	if dsn == "" {
+		t.Skip("FLEXITYPE_TEST_DSN not set; skipping the webhook-update conformance case")
+	}
+
+	Convey("Given a standalone service with delivery enabled, and its Go client", t, func() {
+		pool, err := sqlx.Connect("postgres", dsn)
+		So(err, ShouldBeNil)
+		Reset(func() { _ = pool.Close() })
+
+		svc := flexitype.New(pool, flexitype.WithOutbox(), flexitype.WithWebhookAllowPrivate())
+		So(svc.Migrate(context.Background()), ShouldBeNil)
+		pool.MustExec(`TRUNCATE flexitype_webhook_subscription CASCADE`)
+
+		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{AllowAnonymous: true}))
+		Reset(ts.Close)
+
+		c, err := client.New(ts.URL)
+		So(err, ShouldBeNil)
+		ctx := context.Background()
+
+		sub, err := c.Webhooks().Create(ctx, client.SubscriptionInput{
+			Name:       "orders",
+			URL:        "http://127.0.0.1:9/first",
+			Secret:     "s3cret-one",
+			EventTypes: []string{"value.set"},
+		})
+		So(err, ShouldBeNil)
+		So(sub.ID, ShouldNotBeEmpty)
+
+		Convey("When the URL and the event types are updated", func() {
+			out, uerr := c.Webhooks().Update(ctx, sub.ID, client.SubscriptionInput{
+				URL:        "http://127.0.0.1:9/second",
+				EventTypes: []string{"value.set", "entity.erased"},
+			})
+
+			Convey("Then the update applies, rather than failing validation", func() {
+				So(uerr, ShouldBeNil)
+				So(out.URL, ShouldEqual, "http://127.0.0.1:9/second")
+				So(out.EventTypes, ShouldResemble, []string{"value.set", "entity.erased"})
+				So(out.Name, ShouldEqual, "orders")
+				So(out.Active, ShouldBeTrue)
+			})
+		})
+
+		Convey("When only the active flag is turned off", func() {
+			off := false
+			out, uerr := c.Webhooks().Update(ctx, sub.ID, client.SubscriptionInput{Active: &off})
+
+			Convey("Then it is deactivated and nothing else moves", func() {
+				So(uerr, ShouldBeNil)
+				So(out.Active, ShouldBeFalse)
+				So(out.URL, ShouldEqual, "http://127.0.0.1:9/first")
+				So(out.EventTypes, ShouldResemble, []string{"value.set"})
+			})
+		})
+
+		Convey("When the secret is rotated", func() {
+			out, uerr := c.Webhooks().Update(ctx, sub.ID, client.SubscriptionInput{Secret: "s3cret-two"})
+
+			Convey("Then the call succeeds and the secret is never echoed back", func() {
+				So(uerr, ShouldBeNil)
+				So(out.ID, ShouldEqual, sub.ID)
+				raw, merr := json.Marshal(out)
+				So(merr, ShouldBeNil)
+				So(string(raw), ShouldNotContainSubstring, "s3cret-two")
+			})
+		})
+
+		Convey("When a name is passed", func() {
+			_, uerr := c.Webhooks().Update(ctx, sub.ID, client.SubscriptionInput{
+				Name: "renamed", URL: "http://127.0.0.1:9/third",
+			})
+
+			Convey("Then it is refused: the API cannot rename a subscription", func() {
+				So(uerr, ShouldNotBeNil)
+				So(uerr.Error(), ShouldContainSubstring, "renamed")
+				var apiErr *client.APIError
+				So(errors.As(uerr, &apiErr), ShouldBeTrue)
+				So(apiErr.Code, ShouldEqual, client.CodeValidation)
+			})
+
+			Convey("And the URL it was sent with did not take effect", func() {
+				got, gerr := c.Webhooks().Get(ctx, sub.ID)
+				So(gerr, ShouldBeNil)
+				So(got.URL, ShouldEqual, "http://127.0.0.1:9/first")
+			})
+		})
+	})
+}

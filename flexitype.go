@@ -58,6 +58,11 @@ type Service struct {
 	blobs        blob.Store
 	graphql      *gql.Engine
 	onBgError    func(err error)
+	// adminUnit is the unit of work the provisioning usecases run in. It
+	// carries the activity log, so a credential or a role change leaves an
+	// audit row in the same transaction as the change. Nil for in-memory
+	// services, which have no control plane.
+	adminUnit uow.UnitOfWork
 }
 
 type options struct {
@@ -454,10 +459,29 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	graphqlEngine := gql.NewEngine(gqlOptions(o)...)
 	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
 
+	// The provisioning usecases get their own unit of work. It shares the
+	// pool transactor and the activity log with the request factory, but it
+	// carries an EMPTY dispatcher and no projections: an admin operation
+	// emits no domain event, so there is nothing for a subscriber or a
+	// projection to see, and an admin operation must not be able to fan work
+	// out to consumer hooks. WithoutActivityLog nils the log here exactly as
+	// it does for the factory, so the deployment-wide switch keeps one
+	// meaning.
+	adminActivity := cfg.ActivityLog
+	if o.features.DisableActivity {
+		adminActivity = nil
+	}
+	var adminUnitOpts []uow.Option
+	if o.onRollback != nil {
+		adminUnitOpts = append(adminUnitOpts, uow.WithRollbackObserver(o.onRollback))
+	}
+	adminUnit := uow.New(transactor, events.NewDispatcher(), adminActivity, adminUnitOpts...)
+
 	return &Service{
 		pool:         pool,
 		transactor:   transactor,
 		dispatcher:   o.dispatcher,
+		adminUnit:    adminUnit,
 		factory:      factory,
 		relay:        relay,
 		indexer:      indexer,
@@ -837,6 +861,10 @@ func (s *Service) NewAccountLookup(ttl time.Duration) serviceaccount.Authenticat
 // AdminInteractor returns the provisioning usecases over this service's
 // pool, or nil for in-memory services.
 //
+// Every mutating usecase runs in one transaction and writes an activity entry
+// in it, stamped with the AFFECTED tenant. The entry never carries a secret,
+// a secret hash or a minted token.
+//
 // opts are passed through; APIHandler wires admin.WithAuthCache when the
 // deployment authenticates through a caching authenticator, so a rotation or a
 // revocation takes effect at once rather than at the end of the cache TTL.
@@ -844,6 +872,9 @@ func (s *Service) AdminInteractor(opts ...admin.Option) *admin.Interactor {
 	if s.pool == nil {
 		return nil
 	}
+	// The unit of work goes first, so a caller's own WithUnitOfWork still
+	// wins.
+	opts = append([]admin.Option{admin.WithUnitOfWork(s.adminUnit)}, opts...)
 	return admin.NewInteractor(postgres.NewAdminStore(s.pool), opts...)
 }
 

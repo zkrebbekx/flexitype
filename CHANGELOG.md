@@ -7,6 +7,39 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Added — A TypeScript client and React hooks ([client-ts/](client-ts/))
+
+`client-ts/` holds `@flexitype/client`, a TypeScript client for the REST API
+with a second entry point, `@flexitype/client/react`, for React hooks. It is
+**not published to npm**: it lives in this repository and moves with the API,
+so the client that ships in a release matches that release. See
+[client-ts/README.md](client-ts/README.md).
+
+The core entry point is framework-agnostic, has no runtime dependencies and
+imports no React, so the Vue console can adopt it. It carries typed errors
+with the same machine codes as the Go client, keyset pagination as both a
+single page and an async iterator, a retry policy that mirrors
+`client/retry.go`, and soft-type helpers: effective-attribute resolution, a
+form descriptor, per-data-type value coercion and formatting, and scoped
+(locale and channel) value addressing.
+
+Its data shapes are generated from `api/openapi.yaml`; a test regenerates them
+and fails when the checked-in output is stale. `TestErrorCodeContract` now
+holds four lists equal rather than three, the fourth being the TypeScript
+`ERROR_CODES` array.
+
+### Fixed — The OpenAPI document now describes fields the API already accepted
+
+The document omitted attribute fields the service reads and writes —
+`localizable`, `scopable`, `unit_family_id`, `display_unit` and `computed` —
+and the `locale` and `channel` of a value, which is how a scoped value is
+addressed. Constraints, defaults and dependency operands were typed as a bare
+object, which a code generator renders as a field that cannot be filled. The
+`TypedValue`, `Constraint`, `DynamicValue`, `DefaultValue`, `Computed`,
+`Rollup`, `CreateDependency` and `UpdateDependency` schemas are now declared
+and referenced. The change is additive; `TestResponseContract` validates the
+live handler against the tightened schemas.
+
 ## [1.5.0] — 2026-08-08
 
 A defect-review release. An evaluating team read the 1.4.0 tree and filed 40

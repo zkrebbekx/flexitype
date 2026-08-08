@@ -224,6 +224,7 @@ pkg/             Reusable primitives: ulid, db (Transactor + commit hooks,
 cmd/flexitype    Composition root for the standalone service (+ -wasm playground)
 flexitype.go     Embedding facade
 client/          First-party Go REST client (separate, stdlib-only module)
+client-ts/       TypeScript client + React hooks (in-repo, not published)
 ```
 
 Every write flows through the **unit of work**: the usecase opens the

@@ -5,7 +5,6 @@ import { paginate } from '../pagination.js'
 import type {
   ActivityEntry,
   CreateUnitFamily,
-  MatchRule,
   Revision,
   RevisionDiff,
   SavedView,
@@ -136,9 +135,6 @@ export class MatchRulesService extends Service {
     return this.http.request<void>('DELETE', `/match-rules/${segment(ruleId)}`, {}, options)
   }
 }
-
-/** Re-exported so a caller can type a rule without reaching into models. */
-export type { MatchRule }
 
 /** Entity-revision operations. List and create them through `entities`. */
 export class RevisionsService extends Service {

@@ -665,10 +665,21 @@ func (r *relationshipRepository) windowGroup(ctx context.Context, g relWindowGro
 	// The keyset predicate is applied INSIDE the window subquery (in the arms)
 	// so row_number restarts at 1 at the first row after the cursor; taking
 	// rn <= limit+1 yields one page plus the sentinel that drives hasNextPage.
+	// DISTINCT on (self, other) before the window numbers the rows.
+	//
+	// A window returns COUNTERPART IDS, not links, and one pair can produce
+	// several rows: a symmetric relationship holding both A->B and B->A
+	// yields other=B from each arm, and two links between one pair do the
+	// same on any side. The cursor is the opposite id alone, so those rows
+	// broke paging in both directions at once — B appeared twice inside a
+	// page, and when the pair straddled a page boundary the `other > cursor`
+	// predicate skipped the second B entirely, dropping a counterpart that
+	// was never listed. Collapsing to one row per pair makes the id unique
+	// per self, which is what the single-column cursor already assumed.
 	query := bind(`SELECT self, other FROM (
 	   SELECT self, other,
-	          row_number() OVER (PARTITION BY self ORDER BY other, link_id) AS rn
-	   FROM (` + arms + `) n
+	          row_number() OVER (PARTITION BY self ORDER BY other) AS rn
+	   FROM (SELECT DISTINCT self, other FROM (` + arms + `) a) n
 	 ) w
 	 WHERE rn <= ?
 	 ORDER BY self, rn`)
@@ -712,7 +723,10 @@ func (r *relationshipRepository) windowTotals(ctx context.Context, g relWindowGr
 	if err != nil {
 		return err
 	}
-	query := bind(`SELECT self, count(*) AS total FROM (` + arms + `) n GROUP BY self`)
+	// count(DISTINCT other), matching the page: the window lists each
+	// counterpart once, so a total that counted the underlying links reported
+	// more than the pages can ever return.
+	query := bind(`SELECT self, count(DISTINCT other) AS total FROM (` + arms + `) n GROUP BY self`)
 	var rows []struct {
 		Self  string `db:"self"`
 		Total int    `db:"total"`

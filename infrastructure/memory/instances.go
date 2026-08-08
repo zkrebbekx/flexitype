@@ -733,6 +733,19 @@ func (r *relRepo) WindowedLinks(_ context.Context, w domainrelationship.LinkWind
 
 	for self, os := range others {
 		sort.Slice(os, func(i, j int) bool { return os[i] < os[j] })
+		// One row per COUNTERPART, matching the SQL window's DISTINCT. A
+		// symmetric relationship holding both A->B and B->A adds B twice, and
+		// so do two links between one pair on any side. The cursor is the
+		// opposite id alone, so a repeat both duplicated the counterpart
+		// inside a page and, across a page boundary, let the `> cursor`
+		// predicate skip it entirely.
+		deduped := os[:0]
+		for i, other := range os {
+			if i == 0 || other != os[i-1] {
+				deduped = append(deduped, other)
+			}
+		}
+		os = deduped
 		var total *int
 		if w.Page.WantTotal { // the full fan-out, independent of the cursor
 			t := len(os)

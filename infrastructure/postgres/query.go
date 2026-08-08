@@ -254,6 +254,22 @@ func (r *queryRepository) compile(c *compiler, node query.BoundNode, e entityRef
 
 	case *query.BoundMatches:
 		s := c.alias("s")
+		// A principal that reads everything searches the entity-level
+		// vector: one row, one GIN probe. A RESTRICTED one searches the
+		// per-attribute vectors, limited to the names it may read — the
+		// entity-level vector is a flattening with no attribute identity, so
+		// searching it would recover restricted content word by word.
+		//
+		// The empty attribute name holds the entity id, which no policy
+		// hides, so finding an entity by id keeps working for everyone.
+		if n.Attrs != nil {
+			names := append([]string{""}, n.Attrs...)
+			return fmt.Sprintf(`EXISTS (SELECT 1 FROM flexitype_entity_search_attr %s
+		 WHERE %s.tenant_id = %s AND %s.entity_id = %s
+		   AND %s.attribute_name = ANY(%s)
+		   AND %s.text_vector @@ plainto_tsquery('simple', %s))`,
+				s, s, e.tenant, s, e.entity, s, c.arg(pq.Array(names)), s, c.arg(n.Query)), nil
+		}
 		return fmt.Sprintf(`EXISTS (SELECT 1 FROM flexitype_entity_search %s
 		 WHERE %s.tenant_id = %s AND %s.entity_id = %s
 		   AND %s.text_vector @@ plainto_tsquery('simple', %s))`,

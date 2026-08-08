@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+
+	"github.com/lib/pq"
 
 	"github.com/zkrebbekx/flexitype/application/search"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -41,6 +44,42 @@ func (s *searchStore) Upsert(ctx context.Context, doc search.EntityDocument) err
 	if err != nil {
 		return fmt.Errorf("upsert search document: %w", err)
 	}
+	return s.upsertAttrVectors(ctx, doc)
+}
+
+// upsertAttrVectors rewrites the entity's per-attribute vectors.
+//
+// It replaces rather than merges: an attribute whose last value was removed
+// must lose its row, or a search would keep finding a value the entity no
+// longer holds. The delete and the insert are two statements in the caller's
+// transaction, so a reader never sees the entity half-indexed.
+//
+// The entity id goes in under the empty attribute name. It is not an
+// attribute and no policy hides it, so every principal can still find an
+// entity by id — which is what the flattened document allowed.
+func (s *searchStore) upsertAttrVectors(ctx context.Context, doc search.EntityDocument) error {
+	if _, err := s.q.ExecContext(ctx, bind(
+		`DELETE FROM flexitype_entity_search_attr WHERE tenant_id = ? AND entity_id = ?`),
+		doc.TenantID.String(), doc.EntityID.String()); err != nil {
+		return fmt.Errorf("clear search attribute vectors: %w", err)
+	}
+
+	names := make([]string, 0, len(doc.Values)+1)
+	texts := make([]string, 0, len(doc.Values)+1)
+	names = append(names, "")
+	texts = append(texts, doc.EntityID.String())
+	for name, values := range doc.Values {
+		names = append(names, name)
+		texts = append(texts, strings.Join(values, " "))
+	}
+
+	if _, err := s.q.ExecContext(ctx, bind(
+		`INSERT INTO flexitype_entity_search_attr (tenant_id, entity_id, attribute_name, text_vector)
+		 SELECT ?, ?, n.name, to_tsvector('simple', n.text)
+		   FROM unnest(?::text[], ?::text[]) AS n(name, text)`),
+		doc.TenantID.String(), doc.EntityID.String(), pq.Array(names), pq.Array(texts)); err != nil {
+		return fmt.Errorf("upsert search attribute vectors: %w", err)
+	}
 	return nil
 }
 
@@ -51,6 +90,11 @@ func (s *searchStore) Remove(ctx context.Context, tenant valueobjects.TenantID, 
 	if err != nil {
 		return fmt.Errorf("remove search document: %w", err)
 	}
+	if _, err := s.q.ExecContext(ctx, bind(
+		`DELETE FROM flexitype_entity_search_attr WHERE tenant_id = ? AND entity_id = ?`),
+		tenant.String(), entityID.String()); err != nil {
+		return fmt.Errorf("remove search attribute vectors: %w", err)
+	}
 	return nil
 }
 
@@ -59,6 +103,10 @@ func (s *searchStore) PurgeTenant(ctx context.Context, tenant valueobjects.Tenan
 		`DELETE FROM flexitype_entity_search WHERE tenant_id = ?`), tenant.String())
 	if err != nil {
 		return 0, fmt.Errorf("purge tenant search documents: %w", err)
+	}
+	if _, derr := s.q.ExecContext(ctx, bind(
+		`DELETE FROM flexitype_entity_search_attr WHERE tenant_id = ?`), tenant.String()); derr != nil {
+		return 0, fmt.Errorf("purge tenant search attribute vectors: %w", derr)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil

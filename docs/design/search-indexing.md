@@ -97,6 +97,35 @@ actually hits the wall; C stays an adapter example, never a core dependency.
 No trigram migration — see option A for why the one that shipped was
 reverted.
 
+## `matches()` and the field ACL
+
+The projection carries **two** vectors per entity: one over the whole
+document, and one per attribute.
+
+A principal that reads everything searches the entity-level vector — one row,
+one index probe. A principal whose policy hides an attribute searches the
+per-attribute vectors, restricted to the names it may read, plus the entity
+id (an id is not an attribute and no policy hides it).
+
+The split exists because the entity-level document is a flattening of every
+textual value with no attribute identity. A search over it could not be
+filtered the way a named condition is, so a principal denied an attribute
+recovered its content one word at a time: `contains(internal_notes, …)` was
+refused as unknown while `matches("recall")` returned the entity. The first
+fix refused `matches()` for any restricted principal, which closed the leak
+and removed the feature from the deployments that use field permissions; the
+per-attribute vectors restore it.
+
+**Cost.** An entity with N textual attributes carries N+1 index rows instead
+of one, and a write rewrites that entity's rows. The restricted query reads a
+GIN index and filters by attribute name.
+
+Entities indexed before the split are carried over by the
+`000037_entity_search_attr` backfill, which derives the rows from the
+document already stored beside them. Until it completes, a restricted
+principal finds nothing for an entity not yet carried over — the safe
+direction — and an unrestricted principal is unaffected.
+
 ## Backend parity of `matches()`
 
 `matches("free text")` is full-text search over the entity's searchable

@@ -109,6 +109,7 @@ type attrListFilter struct {
 	TypeDefinitionID string   `json:"type_definition_id,omitempty"`
 	InternalNames    []string `json:"internal_names,omitempty"`
 	DataTypes        []string `json:"data_types,omitempty"`
+	UnitFamilyID     string   `json:"unit_family_id,omitempty"`
 	IncludeArchived  bool     `json:"include_archived,omitempty"`
 	Limit            int      `json:"limit"`
 	Cursor           string   `json:"cursor,omitempty"`
@@ -138,6 +139,10 @@ func (f attrListFilter) where() ([]string, []any) {
 	if len(f.DataTypes) > 0 {
 		where = append(where, "data_type = ANY(?)")
 		args = append(args, pq.Array(f.DataTypes))
+	}
+	if f.UnitFamilyID != "" {
+		where = append(where, "unit_family_id = ?")
+		args = append(args, f.UnitFamilyID)
 	}
 	return where, args
 }
@@ -464,6 +469,7 @@ func (r *attributeDefinitionRepository) List(ctx context.Context, filter domaina
 		Tenant:          filter.TenantID.String(),
 		InternalNames:   filter.InternalNames,
 		DataTypes:       dataTypes,
+		UnitFamilyID:    filter.UnitFamilyID,
 		IncludeArchived: filter.IncludeArchived,
 		Limit:           page.Limit,
 		Cursor:          page.Cursor,

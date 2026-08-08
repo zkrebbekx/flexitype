@@ -13,7 +13,11 @@ type Filter struct {
 	TypeDefinitionID valueobjects.TypeDefinitionID
 	InternalNames    []string
 	DataTypes        []valueobjects.DataType
-	IncludeArchived  bool
+	// UnitFamilyID selects the quantity attributes pinned to one unit
+	// family. It answers "is anything still using this family", which is
+	// what stops a delete from stranding the values that reference it.
+	UnitFamilyID    string
+	IncludeArchived bool
 }
 
 // Repository is the persistence port for attribute definitions. Reads are

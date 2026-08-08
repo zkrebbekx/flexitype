@@ -204,6 +204,12 @@ func (r *attributeValueRepository) batchByDefinitionPage(ctx context.Context, ke
 	for group, parents := range pageKeyGroups(keys) {
 		limit, _ := strconv.Atoi(group[0])
 		cursor := group[1]
+		// WantTotal is part of the group key (pageKeyGroups), so it has to
+		// come back into the key this loop writes. Rebuilding the key without
+		// it defaulted it to false, and a WantTotal:true request would then
+		// map to no entry at all — an empty page with no error. Nothing sets
+		// it on this path today, which is why it stayed latent.
+		wantTotal := group[2] == "true"
 		inner := []string{"attribute_definition_id = ANY(?)", "archived_at IS NULL"}
 		qargs := []any{pq.Array(parents)}
 		inner, qargs = keysetWhere(inner, qargs, idKeyset, cursor)
@@ -237,7 +243,7 @@ func (r *attributeValueRepository) batchByDefinitionPage(ctx context.Context, ke
 			results[parent] = pr
 		}
 		for _, parent := range parents {
-			out[pageKey{Parent: parent, Limit: limit, Cursor: cursor}] = results[parent]
+			out[pageKey{Parent: parent, Limit: limit, Cursor: cursor, WantTotal: wantTotal}] = results[parent]
 		}
 	}
 	return out, nil

@@ -141,14 +141,25 @@ export function buildCondition(row: ConditionRow, sourceType: DataType): Conditi
       c = { kind: 'in', values: row.values.map((v) => typedValue(dt, v)) }
       break
     case 'range': {
+      // Each bound is set only when its own input carries something.
+      // 'between' is the default comparator, so an untouched row called
+      // typedValue on an empty string and threw a bare "a value is
+      // required" that pointed at no field. A range with neither bound is
+      // reported against the row instead, which is the thing the author can
+      // actually fix.
       c = { kind: 'range' }
-      if (row.cmp === 'between' || row.cmp === 'gt' || row.cmp === 'gte') {
+      const wantsMin = row.cmp === 'between' || row.cmp === 'gt' || row.cmp === 'gte'
+      const wantsMax = row.cmp === 'between' || row.cmp === 'lt' || row.cmp === 'lte'
+      if (wantsMin && row.min !== '') {
         c.min = typedValue(dt, row.min)
         if (row.cmp === 'gt' || (row.cmp === 'between' && row.minExclusive)) c.min_exclusive = true
       }
-      if (row.cmp === 'between' || row.cmp === 'lt' || row.cmp === 'lte') {
+      if (wantsMax && row.max !== '') {
         c.max = typedValue(dt, row.max)
         if (row.cmp === 'lt' || (row.cmp === 'between' && row.maxExclusive)) c.max_exclusive = true
+      }
+      if (c.min === undefined && c.max === undefined) {
+        throw new Error('a range condition needs at least one bound')
       }
       break
     }

@@ -49,6 +49,28 @@ CREATE STATISTICS IF NOT EXISTS st_flexitype_attribute_value_text (mcv, dependen
 CREATE STATISTICS IF NOT EXISTS st_flexitype_attribute_value_time (mcv, dependencies)
     ON attribute_definition_id, value_time FROM flexitype_attribute_value;
 
+-- DECIMAL IS A KNOWN RESIDUAL, deliberately.
+--
+-- A decimal lives in value_text but is COMPARED as (value_text)::numeric, so
+-- the plain-column statistic above cannot serve it: a decimal equality keeps
+-- the blended selectivity of every attribute stored as text. The obvious
+-- repair — expression statistics on ((value_text)::numeric) — is UNSAFE
+-- here. Extended statistics take no WHERE clause, so ANALYZE evaluates the
+-- expression over every sampled row of the table, and the first string value
+-- fails the cast:
+--
+--     ERROR: invalid input syntax for type numeric: "Widget"
+--
+-- That would break ANALYZE for the whole table, autovacuum included, on any
+-- deployment holding one non-numeric text value. A CASE guarded by data_type
+-- analyzes safely but never matches the query's expression, so it buys
+-- nothing.
+--
+-- Decimal equality still seeks: the partial index on
+-- (attribute_definition_id, (value_text::numeric)) over decimal rows serves
+-- the probe. Only the ESTIMATE stays blended. Closing that needs decimals in
+-- a column of their own, which is a storage change, not a statistics one.
+
 -- The statistics objects hold no data until the next ANALYZE. Run one now so
 -- the better estimates apply from this upgrade rather than from whenever
 -- autovacuum next samples the table.

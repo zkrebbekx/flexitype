@@ -142,15 +142,25 @@ func TestMediaAdoptionGCRacePostgres(t *testing.T) {
 		transactor := db.NewTransactor(pool)
 		adoptTx, err := transactor.Begin(ctx)
 		So(err, ShouldBeNil)
+		// Roll back on every exit. A failed assertion below would otherwise
+		// leave this transaction open on a pooled connection, holding its
+		// row locks until the pool closes — which stalls every later test in
+		// the package rather than failing this one. Rollback after the
+		// explicit Commit is a no-op whose error is discarded.
+		defer func() { _ = adoptTx.Rollback(ctx) }()
 		exec, ok := adoptTx.(db.QueryExecer)
 		So(ok, ShouldBeTrue)
 		meta, _ := json.Marshal(map[string]any{"object_key": key, "mime": "text/plain", "size": 5})
+		// string, not []byte: with binary_parameters=yes (the pooled CI job)
+		// lib/pq sends a []byte as a binary bytea, and Postgres then reads
+		// its first byte as the jsonb version — "unsupported jsonb version
+		// number 123", 123 being '{'.
 		_, err = exec.ExecContext(ctx,
 			`INSERT INTO flexitype_attribute_value
 			   (id, tenant_id, type_definition_id, attribute_definition_id, entity_id,
 			    data_type, value_json, definition_version, created_at, updated_at)
 			 VALUES ($1, 'tenant-a', $2, $3, 'e2', 'media', $4, 1, now(), now())`,
-			ulid.New().String(), typeID, attrID, meta)
+			ulid.New().String(), typeID, attrID, string(meta))
 		So(err, ShouldBeNil)
 		_, err = exec.ExecContext(ctx,
 			`SELECT pg_advisory_xact_lock(hashtextextended('flexitype:media-key:' || $1, 0))`, key)

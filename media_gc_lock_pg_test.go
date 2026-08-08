@@ -50,12 +50,16 @@ func TestMediaKeyRefCountsPostgres(t *testing.T) {
 			if archived {
 				archivedAt = "now()"
 			}
+			// string, not []byte: with binary_parameters=yes (the pooled CI
+			// job) lib/pq sends a []byte as a binary bytea, and Postgres
+			// then reads its first byte as the jsonb version — "unsupported
+			// jsonb version number 123", 123 being '{'.
 			_, ierr := pool.ExecContext(ctx,
 				`INSERT INTO flexitype_attribute_value
 				   (id, tenant_id, type_definition_id, attribute_definition_id, entity_id,
 				    data_type, value_json, definition_version, created_at, updated_at, archived_at)
 				 VALUES ($1, $2, $3, $4, $5, 'media', $6, 1, now(), now(), `+archivedAt+`)`,
-				ulid.New().String(), tenant, doc.ID.String(), file.ID.String(), ulid.New().String(), meta)
+				ulid.New().String(), tenant, doc.ID.String(), file.ID.String(), ulid.New().String(), string(meta))
 			So(ierr, ShouldBeNil)
 		}
 		insert("tenant-a", "k1", false)

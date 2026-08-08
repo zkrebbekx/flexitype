@@ -515,6 +515,58 @@ func (v Value) Equal(other Value) bool {
 	}
 }
 
+// EqualityKey returns a string with the property that two values of the same
+// data type are Equal if and only if their keys are identical. A caller that
+// must GROUP values — counting how many entities share one value, say —
+// groups by this instead of comparing every pair with Equal.
+//
+// It exists because the obvious key, String(), is a RENDERING rather than an
+// identity. String() keeps a decimal's trailing zeros ("1.5" against "1.50")
+// and a quantity's authored unit ("5 kg" against "5000 g"), so two values
+// that Equal treats as one counted as two. The make-unique guard grouped on
+// the rendering while the write path compared with Equal, so the guard
+// admitted a flip whose data the write path then rejected forever.
+//
+// The data type prefixes the key, because Equal is false across types.
+func (v Value) EqualityKey() string {
+	prefix := string(v.dataType) + "\x1f"
+	switch v.dataType {
+	case DataTypeDecimal:
+		// Numeric identity, matching Compare: 1.5, 1.50 and 1.500 share one
+		// key. A decimal that does not parse cannot be compared either, so
+		// its raw text stands in and it groups only with itself.
+		if r, ok := new(big.Rat).SetString(v.textVal); ok {
+			return prefix + r.RatString()
+		}
+		return prefix + v.textVal
+	case DataTypeJSON:
+		if c, err := canonicalJSON(v.jsonVal); err == nil {
+			return prefix + string(c)
+		}
+		return prefix + string(v.jsonVal)
+	case DataTypeMedia:
+		return prefix + string(v.jsonVal)
+	case DataTypeDate, DataTypeTime, DataTypeDateTime:
+		// The instant, normalized to UTC: Equal compares instants, and a
+		// format applied to one instant is one string.
+		return prefix + v.timeVal.UTC().Format(time.RFC3339Nano)
+	case DataTypeBool:
+		return prefix + strconv.FormatBool(v.boolVal)
+	case DataTypeInteger:
+		return prefix + strconv.FormatInt(v.intVal, 10)
+	case DataTypeFloat, DataTypeQuantity:
+		// A quantity's base magnitude, so 5 kg and 5000 g share one key.
+		// The hexadecimal form is exact, so two float64 that compare equal
+		// render identically — except for negative zero, normalized here.
+		if v.floatVal == 0 {
+			return prefix + "0"
+		}
+		return prefix + strconv.FormatFloat(v.floatVal, 'x', -1, 64)
+	default:
+		return prefix + v.textVal
+	}
+}
+
 // equalJSON reports structural JSON equality: two documents that differ only
 // in key order or whitespace are equal (matching Postgres jsonb). It falls
 // back to a byte comparison when either side is not valid JSON.

@@ -368,16 +368,20 @@ func (r *valueRepo) AttributeDataShape(_ context.Context, tenant valueobjects.Te
 		if snap.Locale != "" || snap.Channel != "" {
 			out.ScopedValues++
 		}
-		// Key duplicates on the value's OWN rendering, not on Text(): Text()
-		// is "" for integer, float, bool, date, json, media and quantity, so
-		// three distinct integers read as three copies of the same value and
-		// a unique flag was refused. Postgres compares the stored rendering,
-		// whichever typed column holds it.
-		rendered := snap.Value.String()
-		if perValue[rendered] == nil {
-			perValue[rendered] = map[string]bool{}
+		// Key duplicates on the value's EQUALITY key, and per scope.
+		//
+		// The rendering was the key before, but a rendering is not an
+		// identity: it keeps a decimal's trailing zeros and a quantity's
+		// authored unit, so "1.5" against "1.50" and "5 kg" against
+		// "5000 g" counted as distinct — while the write path compares them
+		// with Value.Equal and calls them duplicates. Uniqueness is also
+		// per (locale, channel), so one value held in two locales is not a
+		// duplicate of itself.
+		vkey := snap.Value.EqualityKey() + "\x1f" + snap.Locale + "\x1f" + snap.Channel
+		if perValue[vkey] == nil {
+			perValue[vkey] = map[string]bool{}
 		}
-		perValue[rendered][entity] = true
+		perValue[vkey][entity] = true
 	}
 	out.EntitiesWithMany = len(manyEntities)
 	for _, entities := range perValue {

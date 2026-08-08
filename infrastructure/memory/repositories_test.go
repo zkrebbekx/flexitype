@@ -286,13 +286,17 @@ func TestTypeDefinitionRepositoryList(t *testing.T) {
 		})
 
 		Convey("When the cursor is malformed", func() {
+			// It used to page from the start, which quietly re-served page 1
+			// to a client that believed it was advancing. A cursor that does
+			// not decode cannot address a row, so it is a bad request.
 			page, _, err := repos.TypeDefinitions.List(ctx,
 				domaintypedef.Filter{TenantID: tenantA},
 				db.Page{Limit: 10, Cursor: "not-base64!!"})
-			So(err, ShouldBeNil)
 
-			Convey("Then it pages from the start rather than failing", func() {
-				So(typeNames(page), ShouldResemble, []string{"product", "supplier"})
+			Convey("Then it is a validation error and no page comes back", func() {
+				So(err, ShouldNotBeNil)
+				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeValidation)
+				So(page, ShouldBeEmpty)
 			})
 		})
 
@@ -569,18 +573,18 @@ func TestEntitySummaryKeysetOrdering(t *testing.T) {
 		})
 
 		Convey("When the cursor carries fewer columns than the ordering key", func() {
-			// A truncated cursor supplies only the timestamp; the tiebreaker
-			// column has no counterpart to compare against, so a row whose
-			// timestamp matches must not be treated as strictly after it.
+			// A truncated cursor supplies only the timestamp, so the
+			// tiebreaker column has no counterpart to compare against. The
+			// cursor cannot address a row, and the Postgres backend rejects
+			// it, so this backend rejects it too.
 			cursor := db.EncodeKeyset(db.KeysetTime(fixedTime.Add(2 * time.Hour)))
 			got, _, err := repos.ValueReader.ListEntities(ctx, tenantA, typeIDs,
 				db.Page{Limit: 10, Cursor: cursor})
-			So(err, ShouldBeNil)
 
-			Convey("Then paging resumes deterministically after the equal-timestamp row", func() {
-				So(got, ShouldHaveLength, 2)
-				So(got[0].EntityID.String(), ShouldEqual, "middle")
-				So(got[1].EntityID.String(), ShouldEqual, "oldest")
+			Convey("Then it is a validation error and no page comes back", func() {
+				So(err, ShouldNotBeNil)
+				So(domainerrors.CodeOf(err), ShouldEqual, domainerrors.CodeValidation)
+				So(got, ShouldBeEmpty)
 			})
 		})
 	})

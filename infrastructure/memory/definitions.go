@@ -71,7 +71,10 @@ func (r *typeDefRepo) List(_ context.Context, filter domaintypedef.Filter, page 
 	r.s.mu.RUnlock()
 
 	sortByID(snaps, func(s domaintypedef.Snapshot) string { return s.ID.String() })
-	pageItems, total := paginate(snaps, page, func(s domaintypedef.Snapshot) []string { return idKey(s.ID.String()) })
+	pageItems, total, err := paginate(snaps, page, idKeyset, func(s domaintypedef.Snapshot) []string { return idKey(s.ID.String()) })
+	if err != nil {
+		return nil, 0, err
+	}
 
 	out := make([]*domaintypedef.TypeDefinition, 0, len(pageItems))
 	for _, snap := range pageItems {
@@ -165,7 +168,10 @@ func (r *attrRepo) ListByTypeDefinition(_ context.Context, typeDefID valueobject
 	r.s.mu.RUnlock()
 
 	sortByID(snaps, func(s domainattribute.Snapshot) string { return s.ID.String() })
-	pageItems, total := paginate(snaps, page, func(s domainattribute.Snapshot) []string { return idKey(s.ID.String()) })
+	pageItems, total, err := paginate(snaps, page, idKeyset, func(s domainattribute.Snapshot) []string { return idKey(s.ID.String()) })
+	if err != nil {
+		return nil, 0, err
+	}
 
 	out := make([]*domainattribute.Definition, 0, len(pageItems))
 	for _, snap := range pageItems {
@@ -210,7 +216,10 @@ func (r *attrRepo) List(_ context.Context, filter domainattribute.Filter, page d
 	r.s.mu.RUnlock()
 
 	sortByID(snaps, func(s domainattribute.Snapshot) string { return s.ID.String() })
-	pageItems, total := paginate(snaps, page, func(s domainattribute.Snapshot) []string { return idKey(s.ID.String()) })
+	pageItems, total, err := paginate(snaps, page, idKeyset, func(s domainattribute.Snapshot) []string { return idKey(s.ID.String()) })
+	if err != nil {
+		return nil, 0, err
+	}
 
 	out := make([]*domainattribute.Definition, 0, len(pageItems))
 	for _, snap := range pageItems {
@@ -272,7 +281,10 @@ func (l *activityLog) List(_ context.Context, filter activity.Filter, page db.Pa
 		}
 		return out[i].ID.String() > out[j].ID.String()
 	})
-	pageItems, total := paginate(out, page, entryKey, true, true)
+	pageItems, total, err := paginate(out, page, activityKeyset, entryKey)
+	if err != nil {
+		return nil, 0, err
+	}
 	return pageItems, total, nil
 }
 

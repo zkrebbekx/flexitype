@@ -72,7 +72,10 @@ func (l *activityLog) List(ctx context.Context, filter activity.Filter, page db.
 	filterClause := strings.Join(where, " AND ")
 	filterArgs := append([]any(nil), args...)
 
-	pageWhere, pageArgs := keysetWhere(where, args, activityKeyset, page.Cursor)
+	pageWhere, pageArgs, err := keysetWhere(where, args, activityKeyset, page.Cursor)
+	if err != nil {
+		return nil, 0, err
+	}
 	pageArgs = append(pageArgs, page.FetchLimit())
 
 	// NULL jsonb cannot scan into json.RawMessage; coalesce to empty text.

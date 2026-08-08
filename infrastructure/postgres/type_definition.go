@@ -102,10 +102,13 @@ func (f typeDefListFilter) where() ([]string, []any) {
 // arm renders this filter as one keyset UNION ALL arm with ? placeholders; the
 // loader key rides along as a column so rows demultiplex after one round trip.
 // It over-fetches one row so the caller can detect a next page.
-func (f typeDefListFilter) arm(key string) (string, []any) {
+func (f typeDefListFilter) arm(key string) (string, []any, error) {
 	where, filterArgs := f.where()
 	args := append([]any{key}, filterArgs...)
-	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	where, args, err := keysetWhere(where, args, idKeyset, f.Cursor)
+	if err != nil {
+		return "", nil, err
+	}
 	args = append(args, f.Limit+1)
 
 	query := `(SELECT ?::text AS loader_key, ` + typeDefColumns + `
@@ -113,7 +116,7 @@ func (f typeDefListFilter) arm(key string) (string, []any) {
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
 	 LIMIT ?)`
-	return query, args
+	return query, args, nil
 }
 
 // countQuery counts the full filtered set, ignoring the keyset cursor.
@@ -191,7 +194,10 @@ func (r *typeDefinitionRepository) batchList(ctx context.Context, keys []string)
 		if err := json.Unmarshal([]byte(key), &f); err != nil {
 			return nil, fmt.Errorf("decode list key: %w", err)
 		}
-		arm, armArgs := f.arm(key)
+		arm, armArgs, err := f.arm(key)
+		if err != nil {
+			return nil, err
+		}
 		arms = append(arms, arm)
 		args = append(args, armArgs...)
 	}

@@ -356,7 +356,10 @@ func (s *deliveryStore) List(ctx context.Context, filter webhook.DeliveryFilter,
 	filterClause := where
 	filterArgs := append([]any(nil), args...)
 
-	whereParts, args := keysetWhere([]string{where}, args, []db.KeysetColumn{{Expr: "id", Desc: true}}, page.Cursor)
+	whereParts, args, err := keysetWhere([]string{where}, args, []db.KeysetColumn{{Expr: "id", Desc: true}}, page.Cursor)
+	if err != nil {
+		return nil, 0, err
+	}
 	args = append(args, page.FetchLimit())
 
 	var rows []deliveryRow

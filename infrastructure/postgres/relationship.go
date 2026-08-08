@@ -112,10 +112,13 @@ func (f relDefListFilter) where() ([]string, []any) {
 	return where, args
 }
 
-func (f relDefListFilter) arm(key string) (string, []any) {
+func (f relDefListFilter) arm(key string) (string, []any, error) {
 	where, filterArgs := f.where()
 	args := append([]any{key}, filterArgs...)
-	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	where, args, err := keysetWhere(where, args, idKeyset, f.Cursor)
+	if err != nil {
+		return "", nil, err
+	}
 	args = append(args, f.Limit+1)
 
 	query := `(SELECT ?::text AS loader_key, ` + relDefColumns + `
@@ -123,7 +126,7 @@ func (f relDefListFilter) arm(key string) (string, []any) {
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
 	 LIMIT ?)`
-	return query, args
+	return query, args, nil
 }
 
 func (f relDefListFilter) countQuery() (string, []any) {
@@ -173,7 +176,10 @@ func (r *relationshipDefinitionRepository) batchList(ctx context.Context, keys [
 		if err := json.Unmarshal([]byte(key), &f); err != nil {
 			return nil, fmt.Errorf("decode list key: %w", err)
 		}
-		arm, armArgs := f.arm(key)
+		arm, armArgs, err := f.arm(key)
+		if err != nil {
+			return nil, err
+		}
 		arms = append(arms, arm)
 		args = append(args, armArgs...)
 	}
@@ -401,10 +407,13 @@ func (f relListFilter) where() ([]string, []any) {
 	return where, args
 }
 
-func (f relListFilter) arm(key string) (string, []any) {
+func (f relListFilter) arm(key string) (string, []any, error) {
 	where, filterArgs := f.where()
 	args := append([]any{key}, filterArgs...)
-	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	where, args, err := keysetWhere(where, args, idKeyset, f.Cursor)
+	if err != nil {
+		return "", nil, err
+	}
 	args = append(args, f.Limit+1)
 
 	query := `(SELECT ?::text AS loader_key, ` + relColumns + `
@@ -412,7 +421,7 @@ func (f relListFilter) arm(key string) (string, []any) {
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
 	 LIMIT ?)`
-	return query, args
+	return query, args, nil
 }
 
 func (f relListFilter) countQuery() (string, []any) {
@@ -516,7 +525,10 @@ func (r *relationshipRepository) batchList(ctx context.Context, keys []string) (
 		if err := json.Unmarshal([]byte(key), &f); err != nil {
 			return nil, fmt.Errorf("decode list key: %w", err)
 		}
-		arm, armArgs := f.arm(key)
+		arm, armArgs, err := f.arm(key)
+		if err != nil {
+			return nil, err
+		}
 		arms = append(arms, arm)
 		args = append(args, armArgs...)
 	}
@@ -586,8 +598,8 @@ func relWindowGroups(keys []relWindowKey) map[relWindowGroup][]string {
 // self-related entity is not counted twice. withKeyset appends the per-arm
 // keyset predicate (opposite id > cursor) so the window numbers rows starting
 // after the cursor; the count arm omits it to total the full fan-out.
-func relWindowArms(g relWindowGroup, selves []string, withKeyset bool) (string, []any) {
-	arm := func(selfCol, otherCol string, excludeLoops bool) (string, []any) {
+func relWindowArms(g relWindowGroup, selves []string, withKeyset bool) (string, []any, error) {
+	arm := func(selfCol, otherCol string, excludeLoops bool) (string, []any, error) {
 		where := []string{"tenant_id = ?", "relationship_definition_id = ?", "archived_at IS NULL", selfCol + " = ANY(?)"}
 		args := []any{g.Tenant, g.DefID, pq.Array(selves)}
 		if excludeLoops {
@@ -596,20 +608,30 @@ func relWindowArms(g relWindowGroup, selves []string, withKeyset bool) (string, 
 		if withKeyset {
 			// The opposite endpoint is the cursor column, matching the ORDER BY
 			// the window (and the top-level connections) page on.
-			where, args = keysetWhere(where, args, []db.KeysetColumn{{Expr: otherCol}}, g.Cursor)
+			var err error
+			where, args, err = keysetWhere(where, args, []db.KeysetColumn{{Expr: otherCol}}, g.Cursor)
+			if err != nil {
+				return "", nil, err
+			}
 		}
 		q := `SELECT ` + selfCol + ` AS self, ` + otherCol + ` AS other, id AS link_id
 		 FROM flexitype_relationship
 		 WHERE ` + strings.Join(where, " AND ")
-		return q, args
+		return q, args, nil
 	}
 	switch g.Side {
 	case domainrelationship.ChildSide:
 		return arm("child_entity_id", "parent_entity_id", false)
 	case domainrelationship.EitherSide:
-		a1, args1 := arm("parent_entity_id", "child_entity_id", false)
-		a2, args2 := arm("child_entity_id", "parent_entity_id", true)
-		return a1 + "\nUNION ALL\n" + a2, append(args1, args2...)
+		a1, args1, err := arm("parent_entity_id", "child_entity_id", false)
+		if err != nil {
+			return "", nil, err
+		}
+		a2, args2, err := arm("child_entity_id", "parent_entity_id", true)
+		if err != nil {
+			return "", nil, err
+		}
+		return a1 + "\nUNION ALL\n" + a2, append(args1, args2...), nil
 	default: // ParentSide
 		return arm("parent_entity_id", "child_entity_id", false)
 	}
@@ -636,7 +658,10 @@ func (r *relationshipRepository) batchWindowLinks(ctx context.Context, keys []re
 // windowGroup runs one group's windowed page (and, when requested, a grouped
 // count for totals) and returns each self's page.
 func (r *relationshipRepository) windowGroup(ctx context.Context, g relWindowGroup, selves []string) (map[string]domainrelationship.LinkPage, error) {
-	arms, args := relWindowArms(g, selves, true)
+	arms, args, err := relWindowArms(g, selves, true)
+	if err != nil {
+		return nil, err
+	}
 	// The keyset predicate is applied INSIDE the window subquery (in the arms)
 	// so row_number restarts at 1 at the first row after the cursor; taking
 	// rn <= limit+1 yields one page plus the sentinel that drives hasNextPage.
@@ -683,7 +708,10 @@ func (r *relationshipRepository) windowGroup(ctx context.Context, g relWindowGro
 // windowTotals fills each self's full fan-out count (ignoring the cursor) with
 // one grouped count query — run only when the caller selected totalCount.
 func (r *relationshipRepository) windowTotals(ctx context.Context, g relWindowGroup, selves []string, pages map[string]domainrelationship.LinkPage) error {
-	arms, args := relWindowArms(g, selves, false)
+	arms, args, err := relWindowArms(g, selves, false)
+	if err != nil {
+		return err
+	}
 	query := bind(`SELECT self, count(*) AS total FROM (` + arms + `) n GROUP BY self`)
 	var rows []struct {
 		Self  string `db:"self"`

@@ -4,8 +4,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 )
 
 const (
@@ -55,7 +58,9 @@ type PageArgs struct {
 // Resolve validates and clamps client args. A limit that is present but not a
 // positive integer is rejected (callers surface it as a 422) rather than
 // silently defaulted; a limit above the maximum is clamped. The cursor is
-// passed through opaquely and validated when a repository decodes it.
+// checked for shape only here, because the ordering columns are not known at
+// this layer; a repository checks its arity and its value types against its
+// own ordering (see ValidateKeyset).
 func (a PageArgs) Resolve() (Page, error) {
 	limit := defaultPageSize
 	if a.Limit != nil {
@@ -142,16 +147,22 @@ func EncodeKeyset(values ...string) string {
 	return base64.StdEncoding.EncodeToString(b)
 }
 
+// ErrInvalidCursor is the error every cursor rejection carries. It is a
+// domain validation error, so an interface layer maps it onto a 4xx (the HTTP
+// layer answers 422) instead of an internal error. The message never repeats
+// the cursor's contents, because the cursor is attacker-controlled input.
+func ErrInvalidCursor() error { return domainerrors.NewValidation("invalid cursor") }
+
 // DecodeKeyset parses a keyset cursor back into its column values, erroring on
 // a malformed cursor so callers can reject it as a bad request.
 func DecodeKeyset(cursor string) ([]string, error) {
 	raw, err := base64.StdEncoding.DecodeString(cursor)
 	if err != nil {
-		return nil, fmt.Errorf("invalid cursor")
+		return nil, ErrInvalidCursor()
 	}
 	var values []string
 	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, fmt.Errorf("invalid cursor")
+		return nil, ErrInvalidCursor()
 	}
 	return values, nil
 }
@@ -165,6 +176,87 @@ type KeysetColumn struct {
 	Cast string
 }
 
+// castKind is the value type a column's cast implies, for cursor validation.
+type castKind int
+
+const (
+	castText castKind = iota // no cast, or a cast this package does not check
+	castTime
+	castNumber
+)
+
+// kind classifies the column's cast. An empty or unknown cast is text, and a
+// text column accepts any string, so this package does not check it.
+func (c KeysetColumn) kind() castKind {
+	switch strings.ToLower(strings.TrimPrefix(strings.TrimSpace(c.Cast), "::")) {
+	case "timestamptz", "timestamp", "timestamp with time zone", "timestamp without time zone", "date":
+		return castTime
+	case "int", "int2", "int4", "int8", "smallint", "integer", "bigint",
+		"numeric", "decimal", "real", "float4", "float8", "double precision":
+		return castNumber
+	default:
+		return castText
+	}
+}
+
+// keysetTimeFormats are the timestamp spellings a cursor value may use.
+// KeysetTime emits the first one. The others accept a cursor that a client
+// built by hand from an RFC 3339 timestamp, and a date-only value for a
+// "::date" column.
+var keysetTimeFormats = []string{keysetTimeLayout, time.RFC3339Nano, time.RFC3339, "2006-01-02"}
+
+// ValidateKeyset decodes a cursor and checks it against the ordering columns
+// it will be compared with, then returns the decoded column values.
+//
+// It rejects two cursors that the shape check in PageArgs.Resolve accepts:
+//
+//   - A cursor whose value count differs from the column count. Such a cursor
+//     cannot address a row, so a caller must not page from the top with it.
+//   - A cursor whose value does not parse as the type its column's cast
+//     implies. Without this check, PostgreSQL evaluates the cast and fails
+//     with SQLSTATE 22007 ("invalid datetime format"), which the service
+//     reports as an internal error.
+//
+// A column with no cast (or a cast this package does not classify) holds
+// text, which accepts any string, so ValidateKeyset does not check it.
+//
+// The cost is one parse for each cast column, once for each query, and only
+// when the request carries a cursor.
+func ValidateKeyset(cols []KeysetColumn, cursor string) ([]string, error) {
+	values, err := DecodeKeyset(cursor)
+	if err != nil {
+		return nil, err
+	}
+	if len(values) != len(cols) {
+		return nil, ErrInvalidCursor()
+	}
+	for i, col := range cols {
+		switch col.kind() {
+		case castTime:
+			if !parsesAsTime(values[i]) {
+				return nil, ErrInvalidCursor()
+			}
+		case castNumber:
+			if _, err := strconv.ParseFloat(strings.TrimSpace(values[i]), 64); err != nil {
+				return nil, ErrInvalidCursor()
+			}
+		case castText:
+		}
+	}
+	return values, nil
+}
+
+// parsesAsTime reports whether the value is a timestamp a keyset cursor may
+// carry.
+func parsesAsTime(v string) bool {
+	for _, layout := range keysetTimeFormats {
+		if _, err := time.Parse(layout, v); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // KeysetPredicate builds the row-tuple comparison selecting rows strictly after
 // the cursor for the given ORDER BY columns, using `?` placeholders. It returns
 // the empty string when the cursor is empty (first page). For ascending columns
@@ -173,16 +265,17 @@ type KeysetColumn struct {
 //	(c1 > v1) OR (c1 = v1 AND c2 > v2)
 //
 // A descending column flips its final comparison to `<`.
+//
+// It validates the cursor with ValidateKeyset first, so a cursor that carries
+// the wrong number of values, or a value the column's cast cannot parse, is a
+// validation error rather than a database error.
 func KeysetPredicate(cols []KeysetColumn, cursor string) (string, []any, error) {
 	if cursor == "" {
 		return "", nil, nil
 	}
-	values, err := DecodeKeyset(cursor)
+	values, err := ValidateKeyset(cols, cursor)
 	if err != nil {
 		return "", nil, err
-	}
-	if len(values) != len(cols) {
-		return "", nil, fmt.Errorf("invalid cursor")
 	}
 	var ors []string
 	var args []any

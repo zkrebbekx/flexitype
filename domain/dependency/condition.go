@@ -41,12 +41,21 @@ const (
 // Condition is one predicate over a source attribute's value. All of a
 // dependency's conditions must match for its effect to apply.
 type Condition struct {
-	Kind    ConditionKind        `json:"kind"`
-	Value   *valueobjects.Value  `json:"-"`
-	Values  []valueobjects.Value `json:"-"`
-	Min     *valueobjects.Value  `json:"-"`
-	Max     *valueobjects.Value  `json:"-"`
-	Pattern string               `json:"pattern,omitempty"`
+	Kind   ConditionKind        `json:"kind"`
+	Value  *valueobjects.Value  `json:"-"`
+	Values []valueobjects.Value `json:"-"`
+	Min    *valueobjects.Value  `json:"-"`
+	Max    *valueobjects.Value  `json:"-"`
+	// MinExclusive/MaxExclusive are v1.4 payload keys (strict range bounds).
+	// This release does NOT evaluate them — a range stays inclusive — but it
+	// preserves them through decode and re-encode, so an Update, a clone or
+	// an export by this binary cannot strip a v1.4 rule's strictness during
+	// a rollback. Shipping the keys one release ahead of their behavior is
+	// what keeps "release N-1 runs correctly against release N's data" true
+	// for stored payloads, not only for columns.
+	MinExclusive bool   `json:"min_exclusive,omitempty"`
+	MaxExclusive bool   `json:"max_exclusive,omitempty"`
+	Pattern      string `json:"pattern,omitempty"`
 	// PatternSubstring opts a pattern condition out of anchoring, matching
 	// attribute.Pattern.Substring. The zero value keeps the safe semantics.
 	PatternSubstring bool                       `json:"pattern_substring,omitempty"`
@@ -75,6 +84,8 @@ type conditionJSON struct {
 	Values           []json.RawMessage          `json:"values,omitempty"`
 	Min              json.RawMessage            `json:"min,omitempty"`
 	Max              json.RawMessage            `json:"max,omitempty"`
+	MinExclusive     bool                       `json:"min_exclusive,omitempty"`
+	MaxExclusive     bool                       `json:"max_exclusive,omitempty"`
 	Pattern          string                     `json:"pattern,omitempty"`
 	PatternSubstring bool                       `json:"pattern_substring,omitempty"`
 	Dynamic          *valueobjects.DynamicValue `json:"dynamic,omitempty"`
@@ -84,6 +95,7 @@ type conditionJSON struct {
 // MarshalJSON encodes value operands in their self-describing typed form.
 func (c Condition) MarshalJSON() ([]byte, error) {
 	out := conditionJSON{Kind: c.Kind, Pattern: c.Pattern, PatternSubstring: c.PatternSubstring,
+		MinExclusive: c.MinExclusive, MaxExclusive: c.MaxExclusive,
 		Dynamic: c.Dynamic, Op: c.Op, ContextKey: c.ContextKey}
 
 	marshal := func(v *valueobjects.Value) (json.RawMessage, error) {
@@ -122,6 +134,8 @@ func (c *Condition) UnmarshalJSON(b []byte) error {
 	c.Kind = in.Kind
 	c.Pattern = in.Pattern
 	c.PatternSubstring = in.PatternSubstring
+	c.MinExclusive = in.MinExclusive
+	c.MaxExclusive = in.MaxExclusive
 	c.Dynamic = in.Dynamic
 	c.Op = in.Op
 	c.ContextKey = in.ContextKey

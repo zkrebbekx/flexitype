@@ -30,6 +30,14 @@ type scope struct {
 	linkAttrs map[string]domainattribute.Snapshot
 	rels      map[string]domainrelationship.DefinitionSnapshot
 	depth     int
+	// ambiguous names a linked() scope's attributes that BOTH endpoints
+	// declare separately. The union kept the parent's entry, and a bound
+	// field carries one attribute id, so a condition on such a name silently
+	// matched the parent's attribute only: from the parent side of a
+	// directed relationship the far end is the child, whose same-named
+	// attribute has a different id, so the traversal matched nothing at all
+	// and reported no error. Resolving one of these names is refused instead.
+	ambiguous map[string]bool
 }
 
 // binder resolves parsed queries against the schema.
@@ -238,6 +246,11 @@ func (b *binder) resolveField(f fql.Field, s *scope) (domainattribute.Snapshot, 
 		}
 		return attr, true, nil
 	default:
+		if s.ambiguous[f.Name] {
+			return domainattribute.Snapshot{}, false, positioned(f.Pos,
+				"%q is declared on both endpoints of this relationship, so linked() cannot tell which one you mean; "+
+					"traverse with child() or parent() to pick a side", f.Name)
+		}
 		attr, ok := s.attrs[f.Name]
 		if !ok {
 			return domainattribute.Snapshot{}, false, positioned(f.Pos, "unknown attribute %q", f.Name)
@@ -414,9 +427,11 @@ func (b *binder) bindTraversal(ctx context.Context, n *fql.Traversal, s *scope) 
 }
 
 // traversalScope builds the binding scope for a traversal's counterpart.
-// child()/parent() scope one endpoint; linked() can land on either end,
-// so its scope is the union of both endpoint schemas (on a name clash the
-// parent endpoint's attribute wins).
+// child()/parent() scope one endpoint; linked() can land on either end, so
+// its scope is the union of both endpoint schemas. A name each endpoint
+// declares SEPARATELY is marked ambiguous rather than resolved to one of
+// them: a bound field carries a single attribute id, so silently picking the
+// parent's made the condition match nothing from the parent side.
 func (b *binder) traversalScope(ctx context.Context, n *fql.Traversal, def domainrelationship.DefinitionSnapshot, depth int) (*scope, error) {
 	scopeOf := func(id valueobjects.TypeDefinitionID) (*scope, error) {
 		t, err := b.typeDefs.Get(ctx, id)
@@ -447,8 +462,20 @@ func (b *binder) traversalScope(ctx context.Context, n *fql.Traversal, def domai
 		return nil, err
 	}
 	for name, a := range other.attrs {
-		if _, exists := merged.attrs[name]; !exists {
+		existing, exists := merged.attrs[name]
+		if !exists {
 			merged.attrs[name] = a
+			continue
+		}
+		// Same name, DIFFERENT declaration: the two endpoints each declare
+		// it. Keeping the parent's silently made the condition unmatchable
+		// from the parent side. A name both endpoints inherit from one
+		// ancestor has the same id and stays usable.
+		if !existing.ID.Equals(a.ID) {
+			if merged.ambiguous == nil {
+				merged.ambiguous = map[string]bool{}
+			}
+			merged.ambiguous[name] = true
 		}
 	}
 	for name, r := range other.rels {

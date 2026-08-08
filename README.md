@@ -566,8 +566,11 @@ GET|PUT    /api/v1/event-cursors/{consumer}
 
 Lists paginate with `?limit=` and an opaque, keyset **`?cursor=`** (stable
 under concurrent writes); the total count is computed only when asked
-(`?total=true`). Bad pagination params (a non-positive limit, a malformed
-cursor) return `422` uniformly. Errors carry stable machine codes
+(`?total=true`). Bad pagination params return `422` uniformly: a non-positive
+limit, a cursor that does not decode, a cursor that carries the wrong number
+of values for the list's ordering, and a cursor whose value the ordering
+column cannot parse (for example a non-timestamp where the list orders on a
+timestamp). A rejected cursor never falls back to page 1. Errors carry stable machine codes
 (`VALIDATION`, `NOT_FOUND`, `CONFLICT`, `ARCHIVED`, `DEPENDENCY_VIOLATION`,
 `FORBIDDEN`, `RATE_LIMITED`).
 

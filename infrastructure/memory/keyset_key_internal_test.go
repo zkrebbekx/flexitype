@@ -38,6 +38,7 @@ func TestEntityKeyAfterIsMonotonic(t *testing.T) {
 			{"e1", at(365800)}, // trailing-zero microseconds — the poison value
 		}
 		desc := []bool{true, false} // last_updated DESC, entity_id ASC
+		cols := entityKeyset        // the same ordering, as a keyset spec
 		keyOf := func(r row) []string { return entityKey(r.ts, r.id) }
 
 		Convey("The rows are already in list order", func() {
@@ -67,7 +68,8 @@ func TestEntityKeyAfterIsMonotonic(t *testing.T) {
 		Convey("And paging from each cursor yields exactly the rows after it — none skipped", func() {
 			for c := range rows {
 				cursor := db.EncodeKeyset(keyOf(rows[c])...)
-				page, _ := paginate(rows, db.Page{Limit: 10, Cursor: cursor}, keyOf, desc...)
+				page, _, err := paginate(rows, db.Page{Limit: 10, Cursor: cursor}, cols, keyOf)
+				So(err, ShouldBeNil)
 
 				var got []string
 				for _, r := range page {

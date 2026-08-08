@@ -62,7 +62,10 @@ func (r *valueRepo) ListByDefinition(_ context.Context, defID valueobjects.Attri
 	}
 	r.s.mu.RUnlock()
 	sortByID(out, func(v *domainvalue.AttributeValue) string { return v.ID().String() })
-	pageItems, total := paginate(out, page, func(v *domainvalue.AttributeValue) []string { return idKey(v.ID().String()) })
+	pageItems, total, err := paginate(out, page, idKeyset, func(v *domainvalue.AttributeValue) []string { return idKey(v.ID().String()) })
+	if err != nil {
+		return nil, 0, err
+	}
 	return pageItems, total, nil
 }
 
@@ -133,7 +136,10 @@ func (r *valueRepo) List(_ context.Context, filter domainvalue.Filter, page db.P
 	}
 	r.s.mu.RUnlock()
 	sortByID(out, func(v *domainvalue.AttributeValue) string { return v.ID().String() })
-	pageItems, total := paginate(out, page, func(v *domainvalue.AttributeValue) []string { return idKey(v.ID().String()) })
+	pageItems, total, err := paginate(out, page, idKeyset, func(v *domainvalue.AttributeValue) []string { return idKey(v.ID().String()) })
+	if err != nil {
+		return nil, 0, err
+	}
 	return pageItems, total, nil
 }
 
@@ -176,8 +182,11 @@ func (r *valueRepo) ListEntities(_ context.Context, tenant valueobjects.TenantID
 		sort.Slice(out, func(i, j int) bool {
 			return out[i].EntityID.String() < out[j].EntityID.String()
 		})
-		pageItems, total := paginate(out, page,
-			func(e domainvalue.EntitySummary) []string { return []string{e.EntityID.String()} }, false, false)
+		pageItems, total, err := paginate(out, page, entityIDKeyset,
+			func(e domainvalue.EntitySummary) []string { return []string{e.EntityID.String()} })
+		if err != nil {
+			return nil, 0, err
+		}
 		return pageItems, total, nil
 	}
 
@@ -188,7 +197,10 @@ func (r *valueRepo) ListEntities(_ context.Context, tenant valueobjects.TenantID
 		}
 		return out[i].EntityID.String() < out[j].EntityID.String()
 	})
-	pageItems, total := paginate(out, page, func(e domainvalue.EntitySummary) []string { return entityKey(e.LastUpdatedAt, e.EntityID.String()) }, true, false)
+	pageItems, total, err := paginate(out, page, entityKeyset, func(e domainvalue.EntitySummary) []string { return entityKey(e.LastUpdatedAt, e.EntityID.String()) })
+	if err != nil {
+		return nil, 0, err
+	}
 	return pageItems, total, nil
 }
 
@@ -502,7 +514,10 @@ func (r *depRepo) List(_ context.Context, filter domaindependency.Filter, page d
 	}
 	r.s.mu.RUnlock()
 	sortByID(out, func(d *domaindependency.Dependency) string { return d.ID().String() })
-	pageItems, total := paginate(out, page, func(d *domaindependency.Dependency) []string { return idKey(d.ID().String()) })
+	pageItems, total, err := paginate(out, page, idKeyset, func(d *domaindependency.Dependency) []string { return idKey(d.ID().String()) })
+	if err != nil {
+		return nil, 0, err
+	}
 	return pageItems, total, nil
 }
 
@@ -573,7 +588,10 @@ func (r *relDefRepo) List(_ context.Context, filter domainrelationship.Definitio
 	}
 	r.s.mu.RUnlock()
 	sortByID(out, func(d *domainrelationship.Definition) string { return d.ID().String() })
-	pageItems, total := paginate(out, page, func(d *domainrelationship.Definition) []string { return idKey(d.ID().String()) })
+	pageItems, total, err := paginate(out, page, idKeyset, func(d *domainrelationship.Definition) []string { return idKey(d.ID().String()) })
+	if err != nil {
+		return nil, 0, err
+	}
 	return pageItems, total, nil
 }
 
@@ -674,13 +692,17 @@ func (r *relRepo) WindowedLinks(_ context.Context, w domainrelationship.LinkWind
 	}
 
 	// The nested-connection cursor is a single-value keyset of the opposite
-	// entity id; a malformed cursor pages from the start (matching Postgres,
-	// whose keyset predicate treats a bad cursor as absent).
+	// entity id. A cursor that carries any other number of values cannot
+	// address a link, so this rejects it as a validation error — the same
+	// answer the Postgres window gives, which builds its arm predicate with
+	// db.KeysetPredicate.
 	afterID := ""
 	if w.Page.Cursor != "" {
-		if vals, err := db.DecodeKeyset(w.Page.Cursor); err == nil && len(vals) == 1 {
-			afterID = vals[0]
+		vals, err := db.ValidateKeyset(idKeyset, w.Page.Cursor)
+		if err != nil {
+			return nil, err
 		}
+		afterID = vals[0]
 	}
 
 	r.s.mu.RLock()
@@ -770,7 +792,10 @@ func (r *relRepo) List(_ context.Context, filter domainrelationship.Filter, page
 	}
 	r.s.mu.RUnlock()
 	sortByID(out, func(rel *domainrelationship.Relationship) string { return rel.ID().String() })
-	pageItems, total := paginate(out, page, func(rel *domainrelationship.Relationship) []string { return idKey(rel.ID().String()) })
+	pageItems, total, err := paginate(out, page, idKeyset, func(rel *domainrelationship.Relationship) []string { return idKey(rel.ID().String()) })
+	if err != nil {
+		return nil, 0, err
+	}
 	return pageItems, total, nil
 }
 

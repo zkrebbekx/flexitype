@@ -105,10 +105,13 @@ func (f valueListFilter) where() ([]string, []any) {
 	return where, args
 }
 
-func (f valueListFilter) arm(key string) (string, []any) {
+func (f valueListFilter) arm(key string) (string, []any, error) {
 	where, filterArgs := f.where()
 	args := append([]any{key}, filterArgs...)
-	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	where, args, err := keysetWhere(where, args, idKeyset, f.Cursor)
+	if err != nil {
+		return "", nil, err
+	}
 	args = append(args, f.Limit+1)
 
 	query := `(SELECT ?::text AS loader_key, ` + valueColumnList + `
@@ -116,7 +119,7 @@ func (f valueListFilter) arm(key string) (string, []any) {
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
 	 LIMIT ?)`
-	return query, args
+	return query, args, nil
 }
 
 func (f valueListFilter) countQuery() (string, []any) {
@@ -212,7 +215,10 @@ func (r *attributeValueRepository) batchByDefinitionPage(ctx context.Context, ke
 		wantTotal := group[2] == "true"
 		inner := []string{"attribute_definition_id = ANY(?)", "archived_at IS NULL"}
 		qargs := []any{pq.Array(parents)}
-		inner, qargs = keysetWhere(inner, qargs, idKeyset, cursor)
+		inner, qargs, err := keysetWhere(inner, qargs, idKeyset, cursor)
+		if err != nil {
+			return nil, err
+		}
 		query := bind(`SELECT * FROM (
 		   SELECT ` + valueColumnList + `,
 		          row_number() OVER (PARTITION BY attribute_definition_id ORDER BY id) AS rn
@@ -258,7 +264,10 @@ func (r *attributeValueRepository) batchList(ctx context.Context, keys []string)
 		if err := json.Unmarshal([]byte(key), &f); err != nil {
 			return nil, fmt.Errorf("decode list key: %w", err)
 		}
-		arm, armArgs := f.arm(key)
+		arm, armArgs, err := f.arm(key)
+		if err != nil {
+			return nil, err
+		}
 		arms = append(arms, arm)
 		args = append(args, armArgs...)
 	}
@@ -539,7 +548,7 @@ func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valu
 	// is skipped, silently. entity_id never changes, and it is the trailing
 	// column of the table's primary key, so this ordering is an index scan
 	// too.
-	entityKeyset := []db.KeysetColumn{{Expr: "last_updated_at", Desc: true, Cast: "::timestamptz"}, {Expr: "entity_id"}}
+	entityKeyset := entitySummaryKeyset
 	orderBy := "last_updated_at DESC, entity_id"
 	if page.Stable {
 		entityKeyset = []db.KeysetColumn{{Expr: "entity_id"}}
@@ -547,7 +556,10 @@ func (r *attributeValueRepository) ListEntities(ctx context.Context, tenant valu
 	}
 	where := []string{"tenant_id = ?", typePred}
 	args := []any{tenant.String(), typeArg}
-	where, args = keysetWhere(where, args, entityKeyset, page.Cursor)
+	where, args, kerr := keysetWhere(where, args, entityKeyset, page.Cursor)
+	if kerr != nil {
+		return nil, 0, kerr
+	}
 	args = append(args, page.FetchLimit())
 	err := r.q.SelectContext(ctx, &rows, bind(
 		`SELECT entity_id, type_definition_id, value_count, last_updated_at

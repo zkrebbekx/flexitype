@@ -96,10 +96,13 @@ func (f dependencyListFilter) where() ([]string, []any) {
 	return where, args
 }
 
-func (f dependencyListFilter) arm(key string) (string, []any) {
+func (f dependencyListFilter) arm(key string) (string, []any, error) {
 	where, filterArgs := f.where()
 	args := append([]any{key}, filterArgs...)
-	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	where, args, err := keysetWhere(where, args, idKeyset, f.Cursor)
+	if err != nil {
+		return "", nil, err
+	}
 	args = append(args, f.Limit+1)
 
 	query := `(SELECT ?::text AS loader_key, ` + dependencyColumns + `
@@ -107,7 +110,7 @@ func (f dependencyListFilter) arm(key string) (string, []any) {
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
 	 LIMIT ?)`
-	return query, args
+	return query, args, nil
 }
 
 func (f dependencyListFilter) countQuery() (string, []any) {
@@ -194,7 +197,10 @@ func (r *dependencyRepository) batchList(ctx context.Context, keys []string) (ma
 		if err := json.Unmarshal([]byte(key), &f); err != nil {
 			return nil, fmt.Errorf("decode list key: %w", err)
 		}
-		arm, armArgs := f.arm(key)
+		arm, armArgs, err := f.arm(key)
+		if err != nil {
+			return nil, err
+		}
 		arms = append(arms, arm)
 		args = append(args, armArgs...)
 	}

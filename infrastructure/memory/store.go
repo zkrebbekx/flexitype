@@ -278,32 +278,44 @@ func (s *Store) rollback(j *undoJournal) {
 
 // paginate returns the keyset page of a result set already sorted in the
 // list's order: the items strictly after the cursor, over-fetched by one so
-// the caller can detect a next page. keyOf extracts an item's ORDER BY column
-// values and desc flags the descending columns. The cursor is compared by
-// decoded key VALUE (not exact row identity), so a page stays correct even when
-// the cursor row was updated or deleted between requests — matching the
-// Postgres row-tuple predicate. The total is always returned; the application
-// layer drops it unless requested.
-func paginate[T any](items []T, page db.Page, keyOf func(T) []string, desc ...bool) ([]T, int) {
+// the caller can detect a next page. cols is the ORDER BY spec the list pages
+// on, and keyOf extracts an item's values for those columns. The cursor is
+// compared by decoded key VALUE (not exact row identity), so a page stays
+// correct even when the cursor row was updated or deleted between requests —
+// matching the Postgres row-tuple predicate. The total is always returned; the
+// application layer drops it unless requested.
+//
+// db.ValidateKeyset checks the cursor against cols, and paginate returns its
+// error. The two backends therefore reject the same cursors: this one used to
+// page from the top when the cursor decoded to the wrong number of values,
+// while PostgreSQL failed on the cast, so the parity suites saw two different
+// answers for one bad cursor.
+func paginate[T any](items []T, page db.Page, cols []db.KeysetColumn, keyOf func(T) []string) ([]T, int, error) {
 	total := len(items)
 	start := 0
 	if page.Cursor != "" {
-		if cur, err := db.DecodeKeyset(page.Cursor); err == nil {
-			// items are sorted in list order, so keyAfter is monotonic: find
-			// the first item strictly after the cursor key.
-			start = sort.Search(total, func(i int) bool {
-				return keyAfter(keyOf(items[i]), cur, desc)
-			})
+		cur, err := db.ValidateKeyset(cols, page.Cursor)
+		if err != nil {
+			return nil, 0, err
 		}
+		desc := make([]bool, len(cols))
+		for i, c := range cols {
+			desc[i] = c.Desc
+		}
+		// items are sorted in list order, so keyAfter is monotonic: find
+		// the first item strictly after the cursor key.
+		start = sort.Search(total, func(i int) bool {
+			return keyAfter(keyOf(items[i]), cur, desc)
+		})
 	}
 	if start >= total {
-		return nil, total
+		return nil, total, nil
 	}
 	end := start + page.Limit + 1 // over-fetch by one (keyset sentinel)
 	if page.Limit <= 0 || end > total {
 		end = total
 	}
-	return items[start:end], total
+	return items[start:end], total, nil
 }
 
 // keyAfter reports whether row key a sorts strictly after cursor key b in the
@@ -322,6 +334,30 @@ func keyAfter(a, b []string, desc []bool) bool {
 	}
 	return false // equal (or a is a prefix of b) → not strictly after
 }
+
+// The keyset specs below mirror the PostgreSQL backend's ORDER BY specs, so
+// both backends validate a cursor against the same column count and the same
+// value types. The Expr names are documentation only — this backend compares
+// the decoded values in Go — but the Cast fields drive db.ValidateKeyset and
+// must stay equal to the SQL casts.
+var (
+	// idKeyset is the single-column ascending keyset of every id-ordered list.
+	idKeyset = []db.KeysetColumn{{Expr: "id"}}
+	// entityKeyset orders entity lists newest-first, with the entity id as the
+	// ascending tiebreaker.
+	entityKeyset = []db.KeysetColumn{
+		{Expr: "last_updated_at", Desc: true, Cast: "::timestamptz"},
+		{Expr: "entity_id"},
+	}
+	// entityIDKeyset orders a stable full sweep on the immutable entity id.
+	entityIDKeyset = []db.KeysetColumn{{Expr: "entity_id"}}
+	// activityKeyset orders the activity log newest-first, with the id as the
+	// descending tiebreaker.
+	activityKeyset = []db.KeysetColumn{
+		{Expr: "occurred_at", Desc: true, Cast: "::timestamptz"},
+		{Expr: "id", Desc: true},
+	}
+)
 
 // idKey is the keyset key for an id-ordered (ascending) list.
 func idKey(id string) []string { return []string{id} }

@@ -585,7 +585,11 @@ paths:
     post:
       tags: [dependencies]
       summary: Create a dependency
-      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateDependency" }
       responses:
         "201":
           description: Created dependency
@@ -610,7 +614,11 @@ paths:
     patch:
       tags: [dependencies]
       summary: Update a dependency
-      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateDependency" }
       responses:
         "200":
           description: The updated dependency
@@ -2068,11 +2076,16 @@ components:
         required: { type: boolean }
         multi_valued: { type: boolean }
         unique: { type: boolean }
+        localizable: { type: boolean, description: The value is addressed by locale as well as by attribute. }
+        scopable: { type: boolean, description: The value is addressed by channel as well as by attribute. }
+        unit_family_id: { type: string, description: The unit family a quantity attribute draws its units from. }
+        display_unit: { type: string, description: The unit a quantity attribute prefers for display. }
+        computed: { $ref: "#/components/schemas/Computed" }
         group: { type: string }
         sort_order: { type: integer }
         help_text: { type: string }
-        constraints: { type: array, items: { type: object } }
-        default_value: {}
+        constraints: { type: array, items: { $ref: "#/components/schemas/Constraint" } }
+        default_value: { $ref: "#/components/schemas/DefaultValue" }
         version: { type: integer }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -2089,11 +2102,16 @@ components:
         required: { type: boolean }
         multi_valued: { type: boolean }
         unique: { type: boolean }
+        localizable: { type: boolean }
+        scopable: { type: boolean }
+        unit_family_id: { type: string }
+        display_unit: { type: string }
+        computed: { $ref: "#/components/schemas/Computed" }
         group: { type: string }
         sort_order: { type: integer }
         help_text: { type: string }
-        constraints: { type: array, items: { type: object } }
-        default_value: {}
+        constraints: { type: array, items: { $ref: "#/components/schemas/Constraint" } }
+        default_value: { $ref: "#/components/schemas/DefaultValue" }
     UpdateAttribute:
       type: object
       required: [display_name]
@@ -2103,11 +2121,80 @@ components:
         required: { type: boolean }
         multi_valued: { type: boolean }
         unique: { type: boolean }
+        localizable: { type: boolean }
+        scopable: { type: boolean }
+        unit_family_id: { type: string }
+        display_unit: { type: string }
+        computed: { $ref: "#/components/schemas/Computed" }
         group: { type: string }
         sort_order: { type: integer }
         help_text: { type: string }
-        constraints: { type: array, items: { type: object } }
-        default_value: {}
+        constraints: { type: array, items: { $ref: "#/components/schemas/Constraint" } }
+        default_value: { $ref: "#/components/schemas/DefaultValue" }
+    TypedValue:
+      type: object
+      description: >-
+        A value that carries its own data type, so it decodes without the
+        attribute definition. Constraint operands, dependency operands and
+        allowed values all use this form.
+      required: [type, value]
+      properties:
+        type: { $ref: "#/components/schemas/DataType" }
+        value: { description: The value in its natural JSON form for `type`. }
+    Constraint:
+      type: object
+      description: >-
+        One validation rule on an attribute. `kind` selects which of the other
+        fields apply.
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [min_length, max_length, min_value, max_value, pattern, one_of, media] }
+        n: { type: integer, description: The bound for min_length and max_length. }
+        value: { $ref: "#/components/schemas/TypedValue" }
+        expr: { type: string, description: The regular expression for a pattern constraint. }
+        substring:
+          type: boolean
+          description: >-
+            Opts a pattern out of anchoring, so the expression matches anywhere
+            in the value instead of the whole value.
+        values:
+          type: array
+          items: { $ref: "#/components/schemas/TypedValue" }
+          description: The allowed members of a one_of constraint. An enum attribute requires one.
+        mime: { type: array, items: { type: string }, description: The MIME types a media constraint allows. }
+        max_size: { type: integer, format: int64, description: The maximum media size in bytes; 0 is unbounded. }
+    DynamicValue:
+      type: object
+      description: A value computed at evaluation time — now, today, or now plus an offset.
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [now, today, relative_time] }
+        period: { type: string, enum: [seconds, minutes, hours, days, weeks] }
+        amount: { type: integer }
+    DefaultValue:
+      type: object
+      description: The value an attribute takes when the entity supplies none.
+      properties:
+        static: { $ref: "#/components/schemas/TypedValue" }
+        dynamic: { $ref: "#/components/schemas/DynamicValue" }
+    Rollup:
+      type: object
+      description: A relationship aggregate, e.g. count(child(uses)) or sum(child(uses).weight).
+      properties:
+        relationship: { type: string, description: The relationship definition's internal name. }
+        direction: { type: string, enum: [child, parent, linked] }
+        aggregate: { type: string, enum: [count, sum, min, max] }
+        target: { type: string, description: The counterpart attribute aggregated; empty for count. }
+    Computed:
+      type: object
+      description: >-
+        A read-only attribute's derivation. The service materializes the value;
+        the values API refuses a write to it.
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [formula, rollup] }
+        formula: { type: string }
+        rollup: { $ref: "#/components/schemas/Rollup" }
     Value:
       type: object
       example:
@@ -2124,6 +2211,8 @@ components:
         type_definition_id: { type: string }
         attribute_definition_id: { type: string }
         entity_id: { type: string }
+        locale: { type: string, description: The locale this value belongs to; absent for the base scope. }
+        channel: { type: string, description: The channel this value belongs to; absent for the base scope. }
         value: {}
         definition_version: { type: integer }
         created_at: { type: string, format: date-time }
@@ -2136,6 +2225,8 @@ components:
         attribute_definition_id: { type: string }
         entity_id: { type: string }
         type_definition_id: { type: string, description: Entity's declared type; defaults to the attribute's type }
+        locale: { type: string, description: Write one locale of a localizable attribute. A non-localizable attribute refuses it. }
+        channel: { type: string, description: Write one channel of a scopable attribute. A non-scopable attribute refuses it. }
         value:
           description: The value; typed per the attribute's data_type
     EntitySummary:
@@ -2206,25 +2297,43 @@ components:
       description: One condition on a rule's source attribute.
       properties:
         kind: { type: string, enum: [equals, in, range, pattern, dynamic] }
-        value: {}
-        values: { type: array, items: {} }
-        min: {}
-        max: {}
+        value: { $ref: "#/components/schemas/TypedValue" }
+        values: { type: array, items: { $ref: "#/components/schemas/TypedValue" } }
+        min: { $ref: "#/components/schemas/TypedValue" }
+        max: { $ref: "#/components/schemas/TypedValue" }
         min_exclusive: { type: boolean, description: Makes the min bound strict (greater than). }
         max_exclusive: { type: boolean, description: Makes the max bound strict (less than). }
         pattern: { type: string }
         pattern_substring: { type: boolean, description: Opts the pattern out of anchoring. }
-        dynamic: {}
-        op: { type: string }
+        dynamic: { $ref: "#/components/schemas/DynamicValue" }
+        op: { type: string, enum: [before, after, on_or_before, on_or_after] }
         context_key: { type: string, description: Tests a caller-supplied fact instead of the source value. }
         context_type: { type: string, description: The data type of the caller-supplied fact. Required with context_key. Operands validate against this type. A fact of a different runtime type does not match. }
     DependencyEffect:
       type: object
       description: What a matched rule does to the target attribute.
       properties:
-        allowed_values: { type: array, items: {} }
-        constraints: { type: array, items: {} }
+        allowed_values: { type: array, items: { $ref: "#/components/schemas/TypedValue" } }
+        constraints: { type: array, items: { $ref: "#/components/schemas/Constraint" } }
         required: { type: boolean, nullable: true }
+    CreateDependency:
+      type: object
+      description: A new conditional-validation rule.
+      required: [source_attribute_id, target_attribute_id, conditions, effect]
+      properties:
+        source_attribute_id: { type: string }
+        target_attribute_id: { type: string }
+        conditions: { type: array, items: { $ref: "#/components/schemas/DependencyCondition" } }
+        effect: { $ref: "#/components/schemas/DependencyEffect" }
+        description: { type: string }
+    UpdateDependency:
+      type: object
+      description: The replacement conditions and effect of a rule.
+      required: [conditions, effect]
+      properties:
+        conditions: { type: array, items: { $ref: "#/components/schemas/DependencyCondition" } }
+        effect: { $ref: "#/components/schemas/DependencyEffect" }
+        description: { type: string }
     EffectiveSchema:
       type: object
       description: An attribute's dependency-resolved state for one entity.

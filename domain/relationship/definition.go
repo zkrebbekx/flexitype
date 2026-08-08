@@ -155,6 +155,16 @@ func NewDefinition(in NewDefinitionInput, now time.Time) (*Definition, []events.
 		if in.ParentLabel != "" || in.ChildLabel != "" {
 			return nil, nil, domainerrors.NewValidation("symmetric relationships do not take side labels")
 		}
+		// A symmetric link has no parent side, so a parents bound could
+		// never be enforced: enforceCardinality and RelationshipRequirements
+		// read the CHILDREN bounds for a symmetric kind. Storing one made a
+		// declared cap invisible — a symmetric spouse_of with max_parents 1
+		// accepted a-b, a-c and a-d — so it is refused rather than ignored.
+		if in.MinParents != nil || in.MaxParents != nil {
+			return nil, nil, domainerrors.NewValidation(
+				"symmetric relationships take min_children/max_children only: the pair is unordered, so a " +
+					"parents bound is never enforced. Express the limit with min_children/max_children")
+		}
 	}
 
 	var extendsID *valueobjects.RelationshipDefinitionID
@@ -248,6 +258,11 @@ func (d *Definition) Update(in UpdateDefinitionInput, now time.Time) ([]events.E
 		}
 		if in.ParentLabel != "" || in.ChildLabel != "" {
 			return nil, domainerrors.NewValidation("symmetric relationships do not take side labels")
+		}
+		if in.MinParents != nil || in.MaxParents != nil {
+			return nil, domainerrors.NewValidation(
+				"symmetric relationships take min_children/max_children only: the pair is unordered, so a " +
+					"parents bound is never enforced. Express the limit with min_children/max_children")
 		}
 	}
 	if d.displayName == in.DisplayName && d.description == in.Description &&

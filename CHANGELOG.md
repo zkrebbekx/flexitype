@@ -7,6 +7,80 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-08-09
+
+Two releases' worth of work in one: a defect-review release, and the release
+that gives the API a TypeScript client.
+
+An evaluating team read the 1.4.0 tree and filed 40 issues; all of them are
+fixed here, together with the two patch releases the rollback contract needed
+(v1.3.1, v1.4.1). Four were field-permission disclosures, and several were
+silent data loss.
+
+Building a full example on top of the result — a multi-tenant marketplace, in
+[examples/marketplace/](examples/marketplace/) — then found eight more things,
+of which the four that are deployment defects are fixed here too. The rest are
+filed: [#549], [#550], [#551], [#552].
+
+### BREAKING — check before upgrading
+
+Ten behaviour changes are visible from outside. Each is the documented
+contract being honoured, and most refuse a request that previously succeeded
+— the carve-out `docs/api-stability.md` states. No supported Go signature
+changed: the ports that gained methods (`admin.Store`) or arguments are the
+store and repository ports that page names internal.
+
+- **A context condition must declare `context_type`.** *(Refuses what
+  previously succeeded.)* A `context_key` condition was validated against the
+  SOURCE attribute's type while its subject at evaluation is the
+  caller-supplied fact, so a range over a numeric fact was unbuildable unless
+  the unrelated source attribute happened to match, and a fact arriving as
+  another type turned every write to the target into a 500. Declare the
+  fact's type; a fact whose runtime type differs no longer matches, rather
+  than erroring. ([#514])
+- **A computed attribute may not be multi-valued.** *(Refuses what previously
+  succeeded.)* The materializer writes one result per entity and a
+  multi-valued write appends, so results accumulated with nothing able to
+  clear them. An attribute already carrying both is refused on its next
+  update until the combination is resolved. ([#529])
+- **A symmetric relationship may not declare `min_parents`/`max_parents`.**
+  *(Refuses what previously succeeded.)* Both were accepted and then ignored:
+  a symmetric `spouse_of` capped at one parent admitted three links. Migration
+  000035 folds a stored parents bound into the children bound — the side that
+  IS enforced — keeping the tighter of the two. ([#530])
+- **`min_exclusive`/`max_exclusive` apply to a range condition only.**
+  *(Refuses what previously succeeded.)* On `equals`, `in`, `pattern` and
+  `dynamic` they validated, stored and did nothing, while the OpenAPI schema
+  documented them on the shared condition object. ([#531])
+- **A quantity attribute's unit family cannot be cleared or deleted while
+  values reference it.** *(Refuses what previously succeeded.)* A REST `PUT`
+  omitting the `omitempty` `unit_family_id` cleared the family, and deleting
+  one checked only that it existed; either left values readable and never
+  writable. ([#527])
+- **`linked()` refuses a name both endpoints declare.** *(Refuses what
+  previously returned an empty page.)* The union kept the parent's attribute,
+  so from the parent side the condition tested the wrong one and matched
+  nothing. Use `child()`/`parent()` to pick a side. ([#536])
+- **CSV import no longer reads the legacy in-band multi-value forms.** A cell
+  is multi-valued only when it carries the `#flexitype-values:` prefix. Both
+  legacy forms are shapes an ordinary value can have, so a `string` value
+  holding the literal `[{"value":"a"},{"value":"b"}]` imported as TWO values
+  — this tool's own export did not round-trip. Set
+  `allow_legacy_multi_value_cells` on the import to read a file an earlier
+  release wrote. ([#528])
+- **A deactivated webhook subscription stops its queued backlog.** Turning
+  one off previously stopped new fan-out only, so the endpoint kept being
+  called. The backlog RESTS rather than dies: rows stay pending, reactivating
+  resumes them, and the retention pruner bounds them. ([#531])
+- **Single-row `Redeliver` resets the attempt budget and refuses an inflight
+  delivery.** It left `attempts` at the cap, so a redriven delivery died
+  again on its first failure, and its unguarded `UPDATE` could rewind a
+  delivery a worker had just claimed, sending it twice. ([#531], [#524])
+- **`matches()` searches only what the caller may read.** For a
+  field-restricted principal it now searches the attributes that principal
+  can read, and returns fewer rows than it did in 1.4.0 — where it searched
+  every value and leaked restricted content word by word. ([#511], [#541])
+
 ### Added — A TypeScript client and React hooks ([client-ts/](client-ts/))
 
 `client-ts/` holds `@flexitype/client`, a TypeScript client for the REST API
@@ -103,72 +177,6 @@ caller exists to break.
 
 A conformance case drives the method against the real handler, so it cannot
 regress to silence.
-
-## [1.5.0] — 2026-08-08
-
-A defect-review release. An evaluating team read the 1.4.0 tree and filed 40
-issues; all of them are fixed here, together with the two patch releases the
-rollback contract needed (v1.3.1, v1.4.1). Four were field-permission
-disclosures, and several were silent data loss.
-
-### BREAKING — check before upgrading
-
-Ten behaviour changes are visible from outside. Each is the documented
-contract being honoured, and most refuse a request that previously succeeded
-— the carve-out `docs/api-stability.md` states. No supported Go signature
-changed: the ports that gained methods (`admin.Store`) or arguments are the
-store and repository ports that page names internal.
-
-- **A context condition must declare `context_type`.** *(Refuses what
-  previously succeeded.)* A `context_key` condition was validated against the
-  SOURCE attribute's type while its subject at evaluation is the
-  caller-supplied fact, so a range over a numeric fact was unbuildable unless
-  the unrelated source attribute happened to match, and a fact arriving as
-  another type turned every write to the target into a 500. Declare the
-  fact's type; a fact whose runtime type differs no longer matches, rather
-  than erroring. ([#514])
-- **A computed attribute may not be multi-valued.** *(Refuses what previously
-  succeeded.)* The materializer writes one result per entity and a
-  multi-valued write appends, so results accumulated with nothing able to
-  clear them. An attribute already carrying both is refused on its next
-  update until the combination is resolved. ([#529])
-- **A symmetric relationship may not declare `min_parents`/`max_parents`.**
-  *(Refuses what previously succeeded.)* Both were accepted and then ignored:
-  a symmetric `spouse_of` capped at one parent admitted three links. Migration
-  000035 folds a stored parents bound into the children bound — the side that
-  IS enforced — keeping the tighter of the two. ([#530])
-- **`min_exclusive`/`max_exclusive` apply to a range condition only.**
-  *(Refuses what previously succeeded.)* On `equals`, `in`, `pattern` and
-  `dynamic` they validated, stored and did nothing, while the OpenAPI schema
-  documented them on the shared condition object. ([#531])
-- **A quantity attribute's unit family cannot be cleared or deleted while
-  values reference it.** *(Refuses what previously succeeded.)* A REST `PUT`
-  omitting the `omitempty` `unit_family_id` cleared the family, and deleting
-  one checked only that it existed; either left values readable and never
-  writable. ([#527])
-- **`linked()` refuses a name both endpoints declare.** *(Refuses what
-  previously returned an empty page.)* The union kept the parent's attribute,
-  so from the parent side the condition tested the wrong one and matched
-  nothing. Use `child()`/`parent()` to pick a side. ([#536])
-- **CSV import no longer reads the legacy in-band multi-value forms.** A cell
-  is multi-valued only when it carries the `#flexitype-values:` prefix. Both
-  legacy forms are shapes an ordinary value can have, so a `string` value
-  holding the literal `[{"value":"a"},{"value":"b"}]` imported as TWO values
-  — this tool's own export did not round-trip. Set
-  `allow_legacy_multi_value_cells` on the import to read a file an earlier
-  release wrote. ([#528])
-- **A deactivated webhook subscription stops its queued backlog.** Turning
-  one off previously stopped new fan-out only, so the endpoint kept being
-  called. The backlog RESTS rather than dies: rows stay pending, reactivating
-  resumes them, and the retention pruner bounds them. ([#531])
-- **Single-row `Redeliver` resets the attempt budget and refuses an inflight
-  delivery.** It left `attempts` at the cap, so a redriven delivery died
-  again on its first failure, and its unguarded `UPDATE` could rewind a
-  delivery a worker had just claimed, sending it twice. ([#531], [#524])
-- **`matches()` searches only what the caller may read.** For a
-  field-restricted principal it now searches the attributes that principal
-  can read, and returns fewer rows than it did in 1.4.0 — where it searched
-  every value and leaked restricted content word by word. ([#511], [#541])
 
 ### Security
 
@@ -2015,6 +2023,13 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 [#539]: https://github.com/zkrebbekx/flexitype/pull/539
 [#540]: https://github.com/zkrebbekx/flexitype/pull/540
 [#541]: https://github.com/zkrebbekx/flexitype/pull/541
+[#547]: https://github.com/zkrebbekx/flexitype/issues/547
+[#548]: https://github.com/zkrebbekx/flexitype/issues/548
+[#549]: https://github.com/zkrebbekx/flexitype/issues/549
+[#550]: https://github.com/zkrebbekx/flexitype/issues/550
+[#551]: https://github.com/zkrebbekx/flexitype/issues/551
+[#552]: https://github.com/zkrebbekx/flexitype/issues/552
+[#553]: https://github.com/zkrebbekx/flexitype/issues/553
 [1.5.0]: https://github.com/zkrebbekx/flexitype/compare/v1.4.0...v1.5.0
 [1.3.0]: https://github.com/zkrebbekx/flexitype/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/zkrebbekx/flexitype/compare/v1.1.0...v1.2.0

@@ -7,6 +7,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — Stored payloads join the rollback contract; patch releases v1.3.1 and v1.4.1 ([#497])
+
+The "release N-1 runs correctly against release N's data" guarantee covered
+columns but not JSON payloads: v1.3.0's condition decoder dropped v1.4.0's
+`min_exclusive`/`max_exclusive` keys, so any rule update, clone or export by
+a v1.3.0 binary during a rollback silently and permanently rewrote a strict
+bound as inclusive. v1.3.1 preserves those keys, and v1.4.1 preserves the
+upcoming `context_type` key, both as decode-and-re-encode passthrough with
+no behavior change. Roll back to the patch release of the previous line,
+never to its .0. The payload rule is now stated in
+[docs/upgrades.md](docs/upgrades.md).
+
 ### Fixed — A query with both locale and channel skipped single-dimension attributes ([#474])
 
 The FQL compiler pinned both `locale` and `channel` on any localizable or
@@ -1666,6 +1678,7 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 [#466]: https://github.com/zkrebbekx/flexitype/pull/466
 [#467]: https://github.com/zkrebbekx/flexitype/pull/467
 [#474]: https://github.com/zkrebbekx/flexitype/issues/474
+[#497]: https://github.com/zkrebbekx/flexitype/issues/497
 [#475]: https://github.com/zkrebbekx/flexitype/issues/475
 [1.3.0]: https://github.com/zkrebbekx/flexitype/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/zkrebbekx/flexitype/compare/v1.1.0...v1.2.0

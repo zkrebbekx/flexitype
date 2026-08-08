@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -75,19 +76,23 @@ func (s *outboxStore) Write(ctx context.Context, tx db.Tx, envs []events.Envelop
 	}
 	q := txExecer(tx)
 
-	const cols = 9
+	const cols = 11
 	rows := make([]string, 0, len(envs))
 	args := make([]any, 0, len(envs)*cols)
 	for _, env := range envs {
-		rows = append(rows, "(?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		rows = append(rows, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 		args = append(args,
 			env.ID, env.TenantID, env.Actor, env.Type.String(), env.AggregateType,
 			env.AggregateID, jsonbParam(env.Payload), env.OccurredAt, env.RecordedAt,
+			// Empty rather than NULL for an event that concerns no single
+			// entity, so a read never has to handle both.
+			env.TypeDefinitionID, env.EntityID,
 		)
 	}
 
 	query := bind(`INSERT INTO flexitype_event_outbox
-	   (id, tenant_id, actor, event_type, aggregate_type, aggregate_id, payload, occurred_at, recorded_at)
+	   (id, tenant_id, actor, event_type, aggregate_type, aggregate_id, payload, occurred_at, recorded_at,
+	    type_definition_id, entity_id)
 	 VALUES ` + strings.Join(rows, ", "))
 	if _, err := q.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("write outbox: %w", err)
@@ -105,6 +110,28 @@ type outboxRow struct {
 	Payload       string    `db:"payload"`
 	OccurredAt    time.Time `db:"occurred_at"`
 	RecordedAt    time.Time `db:"recorded_at"`
+	// A row written before migration 000038 has these NULL, so they read
+	// through a nullable string.
+	TypeDefinitionID sql.NullString `db:"type_definition_id"`
+	EntityID         sql.NullString `db:"entity_id"`
+}
+
+// envelopeFrom rebuilds the wire envelope from a stored row.
+func envelopeFrom(r outboxRow) events.Envelope {
+	return events.Envelope{
+		ID:               r.ID.String(),
+		Type:             events.Type(r.EventType),
+		AggregateType:    r.AggregateType,
+		AggregateID:      r.AggregateID,
+		TenantID:         r.TenantID,
+		TypeDefinitionID: r.TypeDefinitionID.String,
+		EntityID:         r.EntityID.String,
+		Actor:            r.Actor,
+		OccurredAt:       r.OccurredAt,
+		RecordedAt:       r.RecordedAt,
+		SchemaVersion:    events.SchemaVersion,
+		Payload:          json.RawMessage(r.Payload),
+	}
 }
 
 // Claim leases a batch of pending envelopes to relayID and returns them.
@@ -136,25 +163,15 @@ func (s *outboxStore) Claim(ctx context.Context, relayID string, limit int, leas
 		     FOR UPDATE SKIP LOCKED
 		 )
 		 RETURNING id, tenant_id, actor, event_type, aggregate_type, aggregate_id,
-		           payload::text AS payload, occurred_at, recorded_at`)
+		           payload::text AS payload, occurred_at, recorded_at,
+		           type_definition_id, entity_id`)
 	if err := txExecer(s.tx).SelectContext(ctx, &rows, query, relayID, leaseTTL.Seconds(), limit); err != nil {
 		return nil, fmt.Errorf("claim outbox rows: %w", err)
 	}
 
 	envs := make([]events.Envelope, 0, len(rows))
 	for _, row := range rows {
-		envs = append(envs, events.Envelope{
-			ID:            row.ID.String(),
-			Type:          events.Type(row.EventType),
-			AggregateType: row.AggregateType,
-			AggregateID:   row.AggregateID,
-			TenantID:      row.TenantID,
-			Actor:         row.Actor,
-			OccurredAt:    row.OccurredAt,
-			RecordedAt:    row.RecordedAt,
-			SchemaVersion: events.SchemaVersion,
-			Payload:       json.RawMessage(row.Payload),
-		})
+		envs = append(envs, envelopeFrom(row))
 	}
 	return envs, nil
 }

@@ -47,9 +47,12 @@ func NewIngest(store *Store, debouncer *Debouncer, log Logger) *Ingest {
 	}
 }
 
-// valueEventPayload is the part of a value event the projector needs. Only the
-// entity's coordinates are read; the value itself is deliberately ignored,
-// because the projector re-reads it (see Projector).
+// valueEventPayload is the FALLBACK route: the entity coordinates read out of
+// the payload of a value event.
+//
+// The envelope carries them directly (flexitype 1.6), so this is only used for
+// an event recorded by an older service. The value itself is deliberately
+// ignored either way, because the projector re-reads it (see Projector).
 type valueEventPayload struct {
 	TypeDefinitionID string `json:"type_definition_id"`
 	EntityID         string `json:"entity_id"`
@@ -106,9 +109,13 @@ func (i *Ingest) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only value events move a product. A type or attribute definition change
-	// alters the schema, not the catalog, and the schema cache picks it up.
-	if env.AggregateType == "attribute_value" {
+	// Which entity changed comes from the ENVELOPE. A router that had to
+	// decode the payload knew the payload schema of every event type it
+	// routed, which is what an envelope exists to avoid.
+	typeID, entityID := env.TypeDefinitionID, env.EntityID
+	if entityID == "" && env.AggregateType == "attribute_value" {
+		// An event recorded before the service carried coordinates. The
+		// fallback keeps a mid-upgrade delivery from being dropped.
 		var payload valueEventPayload
 		if err := json.Unmarshal(env.Payload, &payload); err != nil || payload.EntityID == "" {
 			i.log.Error("unreadable value event payload", "event", env.ID)
@@ -118,7 +125,12 @@ func (i *Ingest) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		i.debouncer.Trigger(entityKey{Tenant: tenant, TypeID: payload.TypeDefinitionID, EntityID: payload.EntityID})
+		typeID, entityID = payload.TypeDefinitionID, payload.EntityID
+	}
+	// An event that names no entity changes the schema, not the catalog, and
+	// the schema cache picks that up on its own.
+	if entityID != "" {
+		i.debouncer.Trigger(entityKey{Tenant: tenant, TypeID: typeID, EntityID: entityID})
 	}
 
 	// Acknowledge fast. The projection runs after the debounce window, off

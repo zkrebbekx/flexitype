@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/zkrebbekx/flexitype/application/feed"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/db"
-	"github.com/zkrebbekx/flexitype/pkg/events"
 )
 
 // feedStore reads the expanded event log for pull consumers.
@@ -26,7 +24,7 @@ func NewFeedStore(q db.QueryExecer) feed.Store {
 
 func (s *feedStore) List(ctx context.Context, tenant valueobjects.TenantID, after int64, types []string, limit int) ([]feed.Event, error) {
 	query := `SELECT feed_seq, id, tenant_id, actor, event_type, aggregate_type, aggregate_id,
-	        payload::text AS payload, occurred_at, recorded_at
+	        payload::text AS payload, occurred_at, recorded_at, type_definition_id, entity_id
 	 FROM flexitype_event_outbox
 	 WHERE tenant_id = ? AND feed_seq > ?`
 	args := []any{tenant.String(), after}
@@ -47,21 +45,7 @@ func (s *feedStore) List(ctx context.Context, tenant valueobjects.TenantID, afte
 
 	out := make([]feed.Event, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, feed.Event{
-			Seq: r.FeedSeq,
-			Envelope: events.Envelope{
-				ID:            r.ID.String(),
-				Type:          events.Type(r.EventType),
-				AggregateType: r.AggregateType,
-				AggregateID:   r.AggregateID,
-				TenantID:      r.TenantID,
-				Actor:         r.Actor,
-				OccurredAt:    r.OccurredAt,
-				RecordedAt:    r.RecordedAt,
-				SchemaVersion: events.SchemaVersion,
-				Payload:       json.RawMessage(r.Payload),
-			},
-		})
+		out = append(out, feed.Event{Seq: r.FeedSeq, Envelope: envelopeFrom(r.outboxRow)})
 	}
 	return out, nil
 }

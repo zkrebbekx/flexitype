@@ -17,8 +17,19 @@
       "pattern": "^flexitype\\.[a-z_]+\\.[a-z_]+$"
     },
     "aggregate_type": { "type": "string" },
-    "aggregate_id": { "type": "string" },
+    "aggregate_id": {
+      "type": "string",
+      "description": "The aggregate that EMITTED the event. For a value event this is the attribute value, not the entity — see entity_id."
+    },
     "tenant_id": { "type": "string" },
+    "type_definition_id": {
+      "type": "string",
+      "description": "The type of the entity this event concerns. Present when the event concerns exactly one entity; absent for an event that concerns none (a schema change) or more than one (a relationship link, which names two endpoints)."
+    },
+    "entity_id": {
+      "type": "string",
+      "description": "The entity this event concerns, so a router never has to decode the payload to learn what changed. Absent under the same rules as type_definition_id."
+    },
     "actor": { "type": "string" },
     "occurred_at": {
       "type": "string", "format": "date-time",

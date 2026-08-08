@@ -546,17 +546,25 @@ type WebhookDelivery struct {
 // form onto these fields so callers keep one flat struct.
 type FeedEvent struct {
 	// Seq is the feed position. Pass the last one you processed as After.
-	Seq           int64           `json:"seq"`
-	ID            string          `json:"id"`
-	Type          string          `json:"type"`
-	AggregateType string          `json:"aggregate_type,omitempty"`
-	AggregateID   string          `json:"aggregate_id,omitempty"`
-	TenantID      string          `json:"tenant_id,omitempty"`
-	Actor         string          `json:"actor,omitempty"`
-	OccurredAt    time.Time       `json:"occurred_at"`
-	RecordedAt    time.Time       `json:"recorded_at,omitempty"`
-	SchemaVersion int             `json:"schema_version,omitempty"`
-	Payload       json.RawMessage `json:"payload,omitempty"`
+	Seq           int64  `json:"seq"`
+	ID            string `json:"id"`
+	Type          string `json:"type"`
+	AggregateType string `json:"aggregate_type,omitempty"`
+	AggregateID   string `json:"aggregate_id,omitempty"`
+	TenantID      string `json:"tenant_id,omitempty"`
+	// TypeDefinitionID and EntityID address the entity the event concerns, so
+	// a consumer routes on "entity E changed" without decoding Payload.
+	//
+	// They are empty for an event that concerns no entity (a schema change) or
+	// more than one (a relationship link, which names two endpoints), and for
+	// an event recorded before the server carried them.
+	TypeDefinitionID string          `json:"type_definition_id,omitempty"`
+	EntityID         string          `json:"entity_id,omitempty"`
+	Actor            string          `json:"actor,omitempty"`
+	OccurredAt       time.Time       `json:"occurred_at"`
+	RecordedAt       time.Time       `json:"recorded_at,omitempty"`
+	SchemaVersion    int             `json:"schema_version,omitempty"`
+	Payload          json.RawMessage `json:"payload,omitempty"`
 }
 
 // UnmarshalJSON decodes the server's {"seq":…,"envelope":{…}} shape.
@@ -564,16 +572,18 @@ func (e *FeedEvent) UnmarshalJSON(data []byte) error {
 	var wire struct {
 		Seq      int64 `json:"seq"`
 		Envelope struct {
-			ID            string          `json:"id"`
-			Type          string          `json:"type"`
-			AggregateType string          `json:"aggregate_type"`
-			AggregateID   string          `json:"aggregate_id"`
-			TenantID      string          `json:"tenant_id"`
-			Actor         string          `json:"actor"`
-			OccurredAt    time.Time       `json:"occurred_at"`
-			RecordedAt    time.Time       `json:"recorded_at"`
-			SchemaVersion int             `json:"schema_version"`
-			Payload       json.RawMessage `json:"payload"`
+			ID               string          `json:"id"`
+			Type             string          `json:"type"`
+			AggregateType    string          `json:"aggregate_type"`
+			AggregateID      string          `json:"aggregate_id"`
+			TenantID         string          `json:"tenant_id"`
+			TypeDefinitionID string          `json:"type_definition_id"`
+			EntityID         string          `json:"entity_id"`
+			Actor            string          `json:"actor"`
+			OccurredAt       time.Time       `json:"occurred_at"`
+			RecordedAt       time.Time       `json:"recorded_at"`
+			SchemaVersion    int             `json:"schema_version"`
+			Payload          json.RawMessage `json:"payload"`
 		} `json:"envelope"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -585,6 +595,8 @@ func (e *FeedEvent) UnmarshalJSON(data []byte) error {
 	e.AggregateType = wire.Envelope.AggregateType
 	e.AggregateID = wire.Envelope.AggregateID
 	e.TenantID = wire.Envelope.TenantID
+	e.TypeDefinitionID = wire.Envelope.TypeDefinitionID
+	e.EntityID = wire.Envelope.EntityID
 	e.Actor = wire.Envelope.Actor
 	e.OccurredAt = wire.Envelope.OccurredAt
 	e.RecordedAt = wire.Envelope.RecordedAt

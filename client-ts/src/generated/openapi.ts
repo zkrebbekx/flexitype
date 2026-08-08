@@ -5101,6 +5101,8 @@ export interface components {
         /** @description One event on the ordered feed. */
         FeedEvent: {
             actor?: string;
+            /** @description The entity this event concerns, so a router never has to decode the payload to learn what changed. Absent under the same rules as type_definition_id. */
+            entity_id?: string;
             /** Format: int64 */
             feed_seq?: number;
             id?: string;
@@ -5109,6 +5111,8 @@ export interface components {
             payload?: unknown;
             tenant_id?: string;
             type?: string;
+            /** @description The type of the entity this event concerns. Present when the event concerns exactly one entity; absent for a schema change (which concerns none) and for a relationship link (which names two). */
+            type_definition_id?: string;
         };
         /** @description Maps an attribute internal name to none, read or write. An attribute that is not listed stays fully accessible. */
         FieldPermissions: {

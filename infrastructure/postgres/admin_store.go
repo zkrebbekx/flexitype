@@ -26,6 +26,13 @@ func NewAdminStore(q db.QueryExecer) admin.Store {
 	return &adminStore{q: q}
 }
 
+// WithTx binds the store to an open transaction, so a provisioning usecase's
+// reads, its writes, its row locks and its activity entry share one
+// transaction.
+func (s *adminStore) WithTx(tx db.Tx) admin.Store {
+	return &adminStore{q: txExecer(tx)}
+}
+
 type tenantRow struct {
 	ID        ulid.ID   `db:"id"`
 	Name      string    `db:"name"`
@@ -216,36 +223,100 @@ func (s *adminStore) CountAccountsWithRole(ctx context.Context, tenant, name str
 	return n, nil
 }
 
+// roleColumns is the role projection every role read shares.
+const roleColumns = `id, tenant_id, name, description, scopes, field_permissions, created_at, updated_at`
+
+type roleRow struct {
+	ID          ulid.ID        `db:"id"`
+	TenantID    string         `db:"tenant_id"`
+	Name        string         `db:"name"`
+	Description string         `db:"description"`
+	Scopes      pq.StringArray `db:"scopes"`
+	FieldPerms  []byte         `db:"field_permissions"`
+	CreatedAt   time.Time      `db:"created_at"`
+	UpdatedAt   time.Time      `db:"updated_at"`
+}
+
+func (r roleRow) toRole() (admin.Role, error) {
+	role := admin.Role{
+		ID: r.ID, TenantID: r.TenantID, Name: r.Name, Description: r.Description,
+		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+	}
+	for _, sc := range r.Scopes {
+		role.Scopes = append(role.Scopes, serviceaccount.Scope(sc))
+	}
+	if err := json.Unmarshal(nonEmptyJSON(r.FieldPerms), &role.FieldPermissions); err != nil {
+		return admin.Role{}, fmt.Errorf("decode role %q field permissions: %w", r.Name, err)
+	}
+	return role, nil
+}
+
 // ListRoles returns a tenant's roles, by name.
 func (s *adminStore) ListRoles(ctx context.Context, tenant string) ([]admin.Role, error) {
-	var rows []struct {
-		ID          ulid.ID        `db:"id"`
-		TenantID    string         `db:"tenant_id"`
-		Name        string         `db:"name"`
-		Description string         `db:"description"`
-		Scopes      pq.StringArray `db:"scopes"`
-		FieldPerms  []byte         `db:"field_permissions"`
-		CreatedAt   time.Time      `db:"created_at"`
-		UpdatedAt   time.Time      `db:"updated_at"`
-	}
+	var rows []roleRow
 	if err := s.q.SelectContext(ctx, &rows, bind(
-		`SELECT id, tenant_id, name, description, scopes, field_permissions, created_at, updated_at
+		`SELECT `+roleColumns+`
 		   FROM flexitype_role WHERE tenant_id = ? ORDER BY name`), tenant); err != nil {
 		return nil, fmt.Errorf("list roles: %w", err)
 	}
 	out := make([]admin.Role, 0, len(rows))
 	for _, r := range rows {
-		role := admin.Role{
-			ID: r.ID, TenantID: r.TenantID, Name: r.Name, Description: r.Description,
-			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
-		}
-		for _, sc := range r.Scopes {
-			role.Scopes = append(role.Scopes, serviceaccount.Scope(sc))
-		}
-		if err := json.Unmarshal(nonEmptyJSON(r.FieldPerms), &role.FieldPermissions); err != nil {
-			return nil, fmt.Errorf("decode role %q field permissions: %w", r.Name, err)
+		role, err := r.toRole()
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, role)
+	}
+	return out, nil
+}
+
+// LockRole reads one role and holds an EXCLUSIVE row lock on it until the
+// transaction ends.
+//
+// DeleteRole takes it before it counts the accounts that hold the role. The
+// count and the delete were two unlocked statements, so an assignment could
+// commit between them and leave an account naming a role that no longer
+// exists — the unresolved-role state the count exists to prevent.
+//
+// The lock conflicts with the SHARED lock LockRolesShared takes, and with
+// nothing else. It therefore serializes exactly the racing pair, one role row
+// at a time; readers of the role (authentication, the listing) are untouched.
+func (s *adminStore) LockRole(ctx context.Context, tenant, name string) (admin.Role, error) {
+	var row roleRow
+	err := s.q.GetContext(ctx, &row, bind(
+		`SELECT `+roleColumns+`
+		   FROM flexitype_role WHERE tenant_id = ? AND name = ? FOR UPDATE`), tenant, name)
+	if isNoRows(err) {
+		return admin.Role{}, domainerrors.NewNotFound("role", name)
+	}
+	if err != nil {
+		return admin.Role{}, fmt.Errorf("lock role: %w", err)
+	}
+	return row.toRole()
+}
+
+// LockRolesShared reports which of names the tenant has, holding a SHARED row
+// lock on each until the transaction ends.
+//
+// An assignment takes it before it writes the account row. A DeleteRole for
+// one of those roles wants the EXCLUSIVE lock, so it waits for this
+// transaction to commit and then counts this account as a holder. In the
+// other order, the delete commits first and the name no longer resolves here,
+// which the caller reports as a 404.
+//
+// Rows are locked in name order, so two assignments naming overlapping role
+// sets cannot deadlock. Shared locks do not conflict with each other, so
+// concurrent assignments still run in parallel.
+func (s *adminStore) LockRolesShared(ctx context.Context, tenant string, names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	var out []string
+	if err := s.q.SelectContext(ctx, &out, bind(
+		`SELECT name FROM flexitype_role
+		  WHERE tenant_id = ? AND name = ANY(?) ORDER BY name FOR SHARE`),
+		tenant, pq.Array(names)); err != nil {
+		return nil, fmt.Errorf("lock roles: %w", err)
 	}
 	return out, nil
 }

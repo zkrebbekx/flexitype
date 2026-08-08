@@ -7,6 +7,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — The admin control plane records every credential and role change ([#507])
+
+`CreateTenant`, `SetTenantActive`, `CreateAccount`, `RotateSecret`, `Revoke`,
+`UpsertRole`, `DeleteRole` and `AssignRoles` took no unit of work and wrote no
+activity entry, so a leaked token had no provenance: "who created this account,
+and who rotated it since?" had no answer. Each of them now runs as one
+transaction and writes exactly one entry in it, stamped with the AFFECTED
+tenant. The entry records that a secret changed, never the secret, its hash or
+the minted token. Two check-then-act races close with it: `DeleteRole` locks
+the role row exclusively before it counts the holders, and an assignment locks
+the roles it names in shared mode before it writes the account row, so a grant
+can no longer land between the count and the delete. See
+[docs/design/identity.md](docs/design/identity.md).
+
 ### Fixed — Stored payloads join the rollback contract; patch releases v1.3.1 and v1.4.1 ([#497])
 
 The "release N-1 runs correctly against release N's data" guarantee covered
@@ -1680,6 +1694,7 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 [#474]: https://github.com/zkrebbekx/flexitype/issues/474
 [#497]: https://github.com/zkrebbekx/flexitype/issues/497
 [#475]: https://github.com/zkrebbekx/flexitype/issues/475
+[#507]: https://github.com/zkrebbekx/flexitype/issues/507
 [1.3.0]: https://github.com/zkrebbekx/flexitype/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/zkrebbekx/flexitype/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/zkrebbekx/flexitype/compare/v1.0.0...v1.1.0

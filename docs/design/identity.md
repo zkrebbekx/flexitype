@@ -20,7 +20,9 @@ token (`ft_<account>_<secret>`):
   tenant-scoped.
 - **Provisioning** — accounts and tenants are managed at runtime through the
   admin API (or a static file). Tokens are shown once and can be rotated or
-  revoked; a database-backed auth cache bounds revocation latency.
+  revoked; a database-backed auth cache bounds revocation latency. Every
+  provisioning change writes an audit entry; see [The provisioning audit
+  trail](#the-provisioning-audit-trail).
 
 This is sufficient for service-to-service integration and for a UI that signs
 in with a service-account token. Change-set approval enforces separation of
@@ -43,6 +45,43 @@ person, not shared) if you need per-person attribution, and give each one a
 (an authenticating proxy) if your deployment requires it. These additions are
 intended to be **additive** — the service-account model, roles and the field
 ACL remain the substrate.
+
+## The provisioning audit trail
+
+Every provisioning change writes one entry to the activity log. The entry and
+the change commit in the same transaction. An entry therefore exists if and
+only if the change committed. A refused or failed call leaves nothing behind.
+
+The entry carries the **affected** tenant, not the caller's. An admin request
+acts across tenants and carries no tenant of its own, so the control plane
+stamps the tenant of the tenant, the account or the role that it changed. A
+tenant's own operators read their own provisioning history at
+`GET /api/v1/activity`.
+
+| Usecase | Entity | Action | Recorded state |
+|---|---|---|---|
+| Create a tenant | `tenant` | `created` | the tenant |
+| Enable or disable a tenant | `tenant` | `updated` | the active flag, before and after |
+| Create a service account | `service_account` | `created` | the account as stored |
+| Rotate a secret | `service_account` | `updated` | `{"secret_rotated": true}` |
+| Revoke an account | `service_account` | `updated` | the active flag, before and after |
+| Create or replace a role | `role` | `created` / `updated` | the role as stored |
+| Delete a role | `role` | `removed` | the deleted role |
+| Assign roles | `service_account` | `updated` | the roles and the overrides, before and after |
+
+**The log never holds a credential.** A rotation records that the secret
+changed. It never records the secret, the stored hash or the minted token. A
+token is still shown exactly once, by the call that mints it.
+
+**The log does hold the field-permission map.** The map names attributes. The
+field ACL governs attribute *values*, not attribute definitions, so a
+principal that can read the activity log can already list the same names
+through the schema API. The map is also the substance of a permission change,
+so an entry without it would prove nothing.
+
+Turn the whole audit log off with `WithoutActivityLog()` (library) or
+`FLEXITYPE_FEATURE_ACTIVITY=0` (service). The switch removes the provisioning
+entries too.
 
 ## Roles
 
@@ -106,6 +145,14 @@ role list, which is the record an auditor reads.
   (`PUT /service-accounts/{id}/roles`). To retire a role's grants without
   touching every account, upsert it with an empty scope set and the
   restrictions you want to keep.
+- **A concurrent assignment cannot defeat that refusal.** The delete locks the
+  role row exclusively, then counts the accounts that hold it, then deletes
+  it — all in one transaction. An assignment locks the roles it names in
+  shared mode before it writes the account row. The two lock modes conflict,
+  so one of the two orders always happens: the delete waits and then counts
+  the new holder (409), or the delete commits first and the assignment then
+  reports the role as missing (404). The lock covers one role row, so it
+  serializes only the racing pair.
 - **A principal naming a role that does not exist is denied every
   attribute.** The API refuses the delete that would create that state; this
   is the second line, covering a row edited directly in the database. Read

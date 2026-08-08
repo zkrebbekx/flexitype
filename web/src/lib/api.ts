@@ -99,6 +99,9 @@ export interface Constraint {
   n?: number
   value?: TypedValue
   expr?: string
+  // Opts a pattern out of anchoring: the expression matches anywhere in
+  // the value instead of the whole value.
+  substring?: boolean
   values?: TypedValue[]
   mime?: string[]
   max_size?: number
@@ -182,6 +185,11 @@ export interface Condition {
   pattern_substring?: boolean
   dynamic?: { kind: 'now' | 'today' | 'relative_time'; period?: string; amount?: number }
   op?: 'before' | 'after' | 'on_or_before' | 'on_or_after'
+  // Tests a caller-supplied fact instead of the source value. context_type
+  // declares the fact's data type; the API requires it with context_key,
+  // and the condition's operands validate against it.
+  context_key?: string
+  context_type?: DataType
 }
 
 export interface Effect {

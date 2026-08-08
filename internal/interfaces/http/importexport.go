@@ -181,10 +181,14 @@ func (s *server) exportRowSet(r *http.Request, typeID string) ([]string, error) 
 	var cursor *string
 	limit := 500
 	for {
+		// A filtered export is a sweep: stable ordering, so a row written
+		// mid-export is not silently missing from the file. Nothing asks for
+		// a total here, so a dropped row left no trace at all.
 		out, err := app.Query().Execute(r.Context(), appquery.ExecuteInput{
-			Type:  t.InternalName,
-			Query: q,
-			Page:  db.PageArgs{Limit: &limit, Cursor: cursor},
+			Type:   t.InternalName,
+			Query:  q,
+			Stable: true,
+			Page:   db.PageArgs{Limit: &limit, Cursor: cursor},
 		})
 		if err != nil {
 			return nil, err

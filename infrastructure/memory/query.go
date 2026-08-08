@@ -80,6 +80,22 @@ func (r *queryRepo) Search(_ context.Context, tenant valueobjects.TenantID, root
 		}
 	}
 
+	// A SWEEP orders on the IMMUTABLE key, matching ListEntities and the SQL
+	// implementation: last_updated_at changes on every write, so an entity
+	// written mid-sweep jumps ahead of a newest-first cursor and is dropped.
+	// The facet counts and a filtered CSV export are sweeps.
+	if page.Stable {
+		sort.Slice(matched, func(i, j int) bool {
+			return matched[i].EntityID.String() < matched[j].EntityID.String()
+		})
+		pageItems, total, err := paginate(matched, page, entityIDKeyset,
+			func(e domainvalue.EntitySummary) []string { return []string{e.EntityID.String()} })
+		if err != nil {
+			return nil, 0, err
+		}
+		return pageItems, total, nil
+	}
+
 	sort.Slice(matched, func(i, j int) bool {
 		if !matched[i].LastUpdatedAt.Equal(matched[j].LastUpdatedAt) {
 			return matched[i].LastUpdatedAt.After(matched[j].LastUpdatedAt)

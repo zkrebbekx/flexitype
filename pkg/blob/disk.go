@@ -19,9 +19,32 @@ type diskStore struct {
 
 // NewDiskStore builds a disk-backed blob store rooted at dir, creating it if
 // necessary.
+//
+// It also PROVES the root is writable, by creating a temporary file under it
+// and removing it again. MkdirAll succeeds for a directory that already
+// exists whatever its ownership, so a root the process cannot write to used to
+// build a store that reported itself ready and failed on the first upload —
+// which is a container-orchestrated deployment's normal shape: a named volume
+// mounts owned by root, and the image runs as a non-root user. The service
+// then came up healthy and lost the first image somebody uploaded, hours
+// later. A configuration error must stop the service at start-up instead.
 func NewDiskStore(dir string) (Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create blob root %q: %w", dir, err)
+	}
+	probe, err := os.CreateTemp(dir, ".writable-*")
+	if err != nil {
+		return nil, fmt.Errorf(
+			"blob root %q is not writable by this process (uid %d): %w",
+			dir, os.Getuid(), err)
+	}
+	name := probe.Name()
+	if err := probe.Close(); err != nil {
+		_ = os.Remove(name)
+		return nil, fmt.Errorf("blob root %q is not writable: %w", dir, err)
+	}
+	if err := os.Remove(name); err != nil {
+		return nil, fmt.Errorf("blob root %q does not allow a file to be removed: %w", dir, err)
 	}
 	return &diskStore{root: dir}, nil
 }

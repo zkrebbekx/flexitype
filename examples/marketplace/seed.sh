@@ -25,35 +25,18 @@ FLEXITYPE="${FLEXITYPE:-http://localhost:8080}"
 PLATFORM="${PLATFORM:-http://localhost:9300}"
 STOREFRONT="${STOREFRONT:-http://localhost:9200}"
 CONSOLE_TOKEN="${PLATFORM_API_TOKEN:-platform-console-demo-token}"
-TOKEN_FILE="$DIR/.admin/admin-token"
-
 api() { curl -sS -H "Authorization: Bearer $CONSOLE_TOKEN" -H 'Content-Type: application/json' "$@"; }
 
-# --- 1. Hand the platform the flexitype admin credential ---------------------
+# --- 1. The flexitype admin credential ---------------------------------------
 #
-# flexitype prints its bootstrap admin token to STDOUT once, and its image is
-# distroless, so the compose stack cannot capture it into an environment
-# variable. It is read out of the container log here and written to the file
-# the platform waits for. A real deployment mounts a secret instead.
-echo "==> Capturing the flexitype bootstrap admin token"
-mkdir -p "$DIR/.admin"
-# The secret half of a token is base64url, so it can contain '-' and '_'.
-# A character class without the hyphen truncated the token at the first one,
-# and the platform then failed every admin call with "invalid credentials".
-printed=$(docker compose logs --no-color flexitype 2>/dev/null |
-  grep -A1 'bootstrap admin account created' | tail -n1 | tr -d '\r' | grep -o 'ft_[A-Za-z0-9_-]*' || true)
-if [ -n "$printed" ]; then
-  printf '%s' "$printed" > "$TOKEN_FILE"
-  echo "    captured a freshly printed token"
-elif [ -s "$TOKEN_FILE" ]; then
-  echo "    reusing the token captured by an earlier run"
-else
-  echo "seed.sh found no admin token. flexitype prints it only on a FIRST start." >&2
-  echo "Run 'docker compose down --volumes' and 'docker compose up --build --wait' to get a new one." >&2
-  exit 1
-fi
+# The compose file DECIDES the bootstrap admin token and hands the same value
+# to flexitype (FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN) and to the platform
+# (FLEXITYPE_ADMIN_TOKEN), so nothing has to be captured from a log at all.
+# A real deployment generates one with `flexitype bootstrap-token` and keeps
+# it in a secret manager.
+echo "==> The admin credential comes from the compose file, not from a log"
 
-echo "==> Waiting for the platform to pick the token up"
+echo "==> Waiting for the platform"
 for _ in $(seq 1 60); do
   if curl -fs "$PLATFORM/healthz" > /dev/null 2>&1; then break; fi
   sleep 1

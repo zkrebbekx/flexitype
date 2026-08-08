@@ -6,6 +6,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
@@ -29,6 +31,7 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/metrics"
 	"github.com/zkrebbekx/flexitype/pkg/ratelimit"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
+	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
 // version is the service's reported version (health + traces). It is
@@ -42,6 +45,20 @@ func main() {
 	// subcommand the image could declare no health check at all, and an
 	// orchestrator reading image metadata treated a process that was up but
 	// not serving as healthy.
+	// A valid bootstrap token, printed for a manifest author to store in a
+	// secret manager. It is generated here rather than by hand because a token
+	// is `ft_<ULID>_<secret>`: both halves have a form, and a hand-written one
+	// is refused at boot rather than at first use.
+	if len(os.Args) > 1 && os.Args[1] == "bootstrap-token" {
+		token, err := mintBootstrapToken()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(token)
+		return
+	}
+
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		if err := healthcheck(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -57,6 +74,16 @@ func main() {
 	if err := run(log); err != nil {
 		log.Fatal().Err(err).Msg("application error")
 	}
+}
+
+// mintBootstrapToken builds a credential in the same form the service mints,
+// so FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN can be generated before anything runs.
+func mintBootstrapToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate secret: %w", err)
+	}
+	return serviceaccount.MintToken(ulid.New().String(), base64.RawURLEncoding.EncodeToString(buf)), nil
 }
 
 // healthcheck probes the local /readyz endpoint and reports failure through
@@ -93,6 +120,14 @@ func run(log *logger.Logger) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	if cfg.DBAllowPlaintext {
+		// Said separately from the authentication warning below, because the
+		// two are separate decisions. A deployment that allows plaintext
+		// Postgres over a container network still authenticates every request.
+		log.Warn().Msg("unencrypted database connections to a non-loopback host are permitted " +
+			"(FLEXITYPE_DB_ALLOW_PLAINTEXT or FLEXITYPE_DEV_INSECURE): credentials and data " +
+			"cross that network in the clear")
 	}
 
 	// Tracing first so the handlers below pick up the global provider.
@@ -287,12 +322,27 @@ func run(log *logger.Logger) error {
 		// once — never through the structured logger, which fans out to
 		// journald / log aggregation where it would be retained and searchable.
 		if cfg.BootstrapAdmin {
-			token, berr := svc.BootstrapAdmin(ctx, "default", "bootstrap-admin")
-			if berr != nil {
-				return fmt.Errorf("bootstrap admin: %w", berr)
-			}
-			if token != "" {
-				_, _ = fmt.Fprintf(os.Stdout, "bootstrap admin account created — store this token now, it will not be shown again:\n%s\n", token)
+			if cfg.BootstrapAdminToken != "" {
+				// The deployment supplied the credential, so nothing is
+				// printed: the operator already has it, and repeating it here
+				// would put a permanent superuser token into container logs.
+				created, berr := svc.BootstrapAdminWithToken(ctx, "default", "bootstrap-admin", cfg.BootstrapAdminToken)
+				if berr != nil {
+					return fmt.Errorf("bootstrap admin from FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN: %w", berr)
+				}
+				if created {
+					log.Info().Msg("bootstrap admin account created with the supplied FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN")
+				} else {
+					log.Info().Msg("bootstrap admin account already exists; FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN was not applied")
+				}
+			} else {
+				token, berr := svc.BootstrapAdmin(ctx, "default", "bootstrap-admin")
+				if berr != nil {
+					return fmt.Errorf("bootstrap admin: %w", berr)
+				}
+				if token != "" {
+					_, _ = fmt.Fprintf(os.Stdout, "bootstrap admin account created — store this token now, it will not be shown again:\n%s\n", token)
+				}
 			}
 		}
 	case cfg.ServiceAccountsPath != "":

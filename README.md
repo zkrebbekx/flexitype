@@ -430,9 +430,13 @@ a tenant. Database-backed deployments assign those permissions through
 **Authentication is required by default**: with no account source configured
 the service refuses to boot. To run without it — which serves the whole API,
 including the irreversible admin purge, to anonymous callers — set
-`FLEXITYPE_DEV_INSECURE=true` explicitly. That flag also permits an
-unencrypted database connection to a non-loopback host, which is what the
-compose quickstart needs.
+`FLEXITYPE_DEV_INSECURE=true` explicitly.
+
+A stack that only needs an unencrypted database connection to a non-loopback
+host — a container-network hostname, which is what the compose quickstart
+connects to — sets `FLEXITYPE_DB_ALLOW_PLAINTEXT=true` instead. It permits that
+and nothing else; authentication stays on. `FLEXITYPE_DEV_INSECURE` implies
+it.
 
 #### Field permissions
 
@@ -496,8 +500,11 @@ POST/DELETE     /api/v1/service-accounts/{id}/rotate|revoke
 ```
 
 All of these require the `admin` scope. Bootstrap the first admin credential
-with `FLEXITYPE_BOOTSTRAP_ADMIN=true` — its token is logged **once** at startup;
-capture it. See [docs/configuration.md](docs/configuration.md) for the full
+with `FLEXITYPE_BOOTSTRAP_ADMIN=true` — its token is printed to stdout **once**
+at startup; capture it. An orchestrated stack cannot capture a printed token,
+so it decides the credential instead: generate one with
+`flexitype bootstrap-token` and pass it as `FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN`.
+See [docs/configuration.md](docs/configuration.md) for the full
 env-var reference and [docs/getting-started.md](docs/getting-started.md) for a
 first-run walkthrough.
 

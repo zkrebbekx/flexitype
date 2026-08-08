@@ -52,23 +52,59 @@ of correct operation was present: health checks passed, the console worked, and
 the only signal was one warning line at startup. A configuration error must
 cause the service to refuse traffic, not to serve it with maximum privilege.
 
-The flag also permits `FLEXITYPE_DB_SSLMODE=disable` against a non-loopback
-host, which is what the compose quickstart needs to reach a container-network
-hostname. Never set it in a deployment reachable by anything but you.
+Never set it in a deployment reachable by anything but you.
+
+`FLEXITYPE_DB_ALLOW_PLAINTEXT=true` is a SEPARATE opt-out, and it permits one
+thing: `FLEXITYPE_DB_SSLMODE=disable` against a non-loopback host, which is
+what a container-network hostname is. Use it when a stack needs plaintext
+Postgres and still authenticates every request — the compose quickstart is
+exactly that. `FLEXITYPE_DEV_INSECURE` implies it, so an older manifest keeps
+working.
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `FLEXITYPE_SERVICE_ACCOUNTS` | _(unset)_ | Path to the service-account JSON file (file mode). |
 | `FLEXITYPE_PROVISIONING` | `false` | Enable database-backed auth and the admin-scoped tenant/service-account API. |
-| `FLEXITYPE_DEV_INSECURE` | `false` | Run with authentication disabled, and permit an unencrypted database connection to a non-loopback host. Local development only. |
+| `FLEXITYPE_DEV_INSECURE` | `false` | Run with authentication disabled. It also implies `FLEXITYPE_DB_ALLOW_PLAINTEXT`. Local development only. |
+| `FLEXITYPE_DB_ALLOW_PLAINTEXT` | `false` | Permit an unencrypted database connection to a non-loopback host, and nothing else. Authentication is unaffected. |
 | `FLEXITYPE_REQUIRE_AUTH` | `true` | Reports that an account source is required. **Setting it to `false` does not disable authentication** — `FLEXITYPE_DEV_INSECURE` is the only opt-out, so a manifest carried over from an older release cannot boot open by omission. |
 | `FLEXITYPE_BOOTSTRAP_ADMIN` | `false` | On startup, if no accounts exist, seed a `default` tenant and `bootstrap-admin` admin account. Its token is printed to **stdout once** (never to the structured log) — capture it. |
+| `FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN` | _(unset)_ | The credential that account takes, decided by the deployment instead of minted by the service. Nothing is printed when it is set. Generate one with `flexitype bootstrap-token`. |
 | `FLEXITYPE_AUTH_CACHE_TTL` | `30s` | How long a successful authentication is cached. Rotation, revocation, a role write or delete, and a tenant deactivation evict the affected entries in the process that served the call — the cache is per-process, with no cross-replica signal. A multi-replica deployment therefore converges over this TTL, so it bounds both a change made directly in the database and the tail of a change made through the API. |
 
 Deactivating a tenant (`PATCH /api/v1/tenants/{name}` with `{"active": false}`)
 suspends **every service account under it**, in one action. Authentication joins
 the tenant's own flag, so this is a real suspension rather than control-plane
 metadata.
+
+### A bootstrap credential a manifest can know
+
+A minted bootstrap token is printed once, and the shipped image is distroless.
+An orchestrated stack cannot capture it: every service starts at the same
+moment, and the service that needs the admin credential needs it before the log
+line exists. Scraping the container log is not an interface.
+
+Set the token instead:
+
+```bash
+flexitype bootstrap-token          # ft_01J…_kZ8…  — store this in your secret manager
+```
+
+```yaml
+environment:
+  FLEXITYPE_PROVISIONING: "true"
+  FLEXITYPE_BOOTSTRAP_ADMIN: "true"
+  FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN: "${FLEXITYPE_ADMIN_TOKEN}"   # from the secret manager
+```
+
+Rules the service keeps:
+
+- The token must be one flexitype would have minted: `ft_<ULID>_<secret>`, with
+  a secret of at least 32 characters. A hand-written or weak value is refused
+  at startup, not at first use.
+- It applies on FIRST boot only. A tenant that already has an account is left
+  alone, so an environment variable cannot re-key a live deployment.
+- It is never logged and never returned. The operator already has it.
 
 ### Provisioning API
 

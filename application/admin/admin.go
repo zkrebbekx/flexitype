@@ -348,7 +348,30 @@ type CreateAccountInput struct {
 	Roles []string
 	// FieldPermissions are per-account overrides; roles are the normal way.
 	FieldPermissions map[string]string
+
+	// ID sets the account's identifier instead of generating one. It must be
+	// a ULID.
+	//
+	// Together with Secret it makes a caller-supplied credential possible: a
+	// token is `ft_<id>_<secret>`, so a deployment that wants to know the
+	// bootstrap token BEFORE the service starts has to fix both halves. Leave
+	// both empty for the normal path, where the service mints the credential
+	// and returns it once.
+	ID string
+	// Secret sets the account's secret instead of generating one. It must be
+	// at least MinSuppliedSecretLength characters, so a weak literal in a
+	// manifest fails at creation rather than at exploitation.
+	//
+	// It is never logged and never returned; only the token built from it is,
+	// and only once.
+	Secret string
 }
+
+// MinSuppliedSecretLength is the shortest secret CreateAccountInput.Secret
+// accepts. A generated secret is 32 random bytes in base64url, which is 43
+// characters; this floor is lower so an operator can use a different
+// generator, and high enough that a guessable literal is refused.
+const MinSuppliedSecretLength = 32
 
 // CreateAccount provisions a service account under an existing tenant and
 // returns its bearer token once.
@@ -366,7 +389,7 @@ func (i *Interactor) CreateAccount(ctx context.Context, in CreateAccountInput) (
 	if len(scopes) == 0 && len(in.Roles) == 0 {
 		return nil, domainerrors.NewValidation("at least one scope or role is required")
 	}
-	secret, err := generateSecret()
+	acctID, secret, err := identityFor(in)
 	if err != nil {
 		return nil, err
 	}
@@ -391,7 +414,7 @@ func (i *Interactor) CreateAccount(ctx context.Context, in CreateAccountInput) (
 			return err
 		}
 		acct := ServiceAccount{
-			ID:               ulid.New(),
+			ID:               acctID,
 			TenantID:         tenant.Name,
 			Name:             in.Name,
 			Scopes:           scopes,
@@ -540,6 +563,35 @@ func parseScopesAllowEmpty(raw []string) ([]serviceaccount.Scope, error) {
 }
 
 // generateSecret returns a 256-bit URL-safe random secret.
+// identityFor resolves the account id and secret: generated, or supplied by
+// the caller and validated here.
+//
+// Both halves must be supplied together. Supplying one would produce a token
+// the caller cannot predict while looking as though it could, which is the
+// failure this feature exists to remove.
+func identityFor(in CreateAccountInput) (ulid.ID, string, error) {
+	if in.ID == "" && in.Secret == "" {
+		secret, err := generateSecret()
+		if err != nil {
+			return ulid.ID{}, "", err
+		}
+		return ulid.New(), secret, nil
+	}
+	if in.ID == "" || in.Secret == "" {
+		return ulid.ID{}, "", domainerrors.NewValidation(
+			"a supplied credential needs both an id and a secret: a token is ft_<id>_<secret>")
+	}
+	id, err := ulid.Parse(in.ID)
+	if err != nil {
+		return ulid.ID{}, "", domainerrors.NewValidation("the supplied account id is not a ULID")
+	}
+	if len(in.Secret) < MinSuppliedSecretLength {
+		return ulid.ID{}, "", domainerrors.NewValidation(fmt.Sprintf(
+			"a supplied secret must be at least %d characters", MinSuppliedSecretLength))
+	}
+	return id, in.Secret, nil
+}
+
 func generateSecret() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {

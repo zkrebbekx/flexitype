@@ -30,6 +30,8 @@ var allKeys = []string{
 	"FLEXITYPE_PROVISIONING",
 	"FLEXITYPE_AUTH_CACHE_TTL",
 	"FLEXITYPE_BOOTSTRAP_ADMIN",
+	"FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN",
+	"FLEXITYPE_DB_ALLOW_PLAINTEXT",
 	"FLEXITYPE_RATE_LIMIT_RPS",
 	"FLEXITYPE_RATE_LIMIT_BURST",
 	"FLEXITYPE_PUBSUB_PROJECT",
@@ -461,6 +463,110 @@ func TestDatabaseDSN(t *testing.T) {
 
 			Convey("Then every key is still present, with empty values", func() {
 				So(dsn, ShouldEqual, "host= port=0 user= password= dbname= sslmode=")
+			})
+		})
+	})
+}
+
+// TestPlaintextDatabaseOptOut covers the split between the two opt-outs.
+//
+// FLEXITYPE_DEV_INSECURE used to be the only way past the unencrypted-database
+// guard, and it ALSO turns authentication off. A stack that needs plaintext
+// Postgres over a container network — the compose quickstart connects to a
+// host called "postgres" — had to set the variable that disables
+// authentication, in a deployment where authentication stays on.
+func TestPlaintextDatabaseOptOut(t *testing.T) {
+	Convey("Given a non-loopback database host with TLS off", t, func() {
+		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
+		t.Setenv("FLEXITYPE_DB_HOST", "postgres")
+		t.Setenv("FLEXITYPE_DB_SSLMODE", "disable")
+
+		Convey("When nothing opts out", func() {
+			_, err := config.Load()
+
+			Convey("Then it is refused, and names the variable that means only this", func() {
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "FLEXITYPE_DB_ALLOW_PLAINTEXT")
+			})
+		})
+
+		Convey("When only the plaintext opt-out is set", func() {
+			t.Setenv("FLEXITYPE_DB_ALLOW_PLAINTEXT", "true")
+			cfg, err := config.Load()
+
+			Convey("Then the connection is allowed", func() {
+				So(err, ShouldBeNil)
+				So(cfg.DBAllowPlaintext, ShouldBeTrue)
+			})
+
+			Convey("And authentication stays ON: it opts out of one thing", func() {
+				So(err, ShouldBeNil)
+				So(cfg.DevInsecure, ShouldBeFalse)
+				So(cfg.RequireAuth, ShouldBeTrue)
+			})
+		})
+
+		Convey("When the old FLEXITYPE_DEV_INSECURE is set instead", func() {
+			t.Setenv("FLEXITYPE_DEV_INSECURE", "true")
+			cfg, err := config.Load()
+
+			Convey("Then it still allows the connection: no manifest breaks", func() {
+				So(err, ShouldBeNil)
+				So(cfg.DBAllowPlaintext, ShouldBeTrue)
+			})
+		})
+	})
+
+	Convey("Given a loopback host with TLS off", t, func() {
+		clearEnv(t)
+		t.Setenv("FLEXITYPE_SERVICE_ACCOUNTS", "/etc/flexitype/accounts.json")
+		t.Setenv("FLEXITYPE_DB_HOST", "127.0.0.1")
+		t.Setenv("FLEXITYPE_DB_SSLMODE", "disable")
+
+		Convey("When nothing opts out", func() {
+			cfg, err := config.Load()
+
+			Convey("Then no opt-out is needed, and none is recorded", func() {
+				So(err, ShouldBeNil)
+				So(cfg.DBAllowPlaintext, ShouldBeFalse)
+			})
+		})
+	})
+}
+
+// TestBootstrapAdminTokenConfig covers the caller-supplied bootstrap
+// credential arriving from the environment.
+func TestBootstrapAdminTokenConfig(t *testing.T) {
+	Convey("Given provisioning with a supplied bootstrap token", t, func() {
+		clearEnv(t)
+		t.Setenv("FLEXITYPE_PROVISIONING", "true")
+		t.Setenv("FLEXITYPE_BOOTSTRAP_ADMIN", "true")
+		t.Setenv("FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN", "ft_01ARZ3NDEKTSV4RRFFQ69G5FAV_"+
+			"0123456789abcdef0123456789abcdef0123456789a")
+
+		Convey("When configuration is loaded", func() {
+			cfg, err := config.Load()
+
+			Convey("Then the token is carried through untouched", func() {
+				So(err, ShouldBeNil)
+				So(cfg.BootstrapAdmin, ShouldBeTrue)
+				So(cfg.BootstrapAdminToken, ShouldStartWith, "ft_01ARZ3NDEKTSV4RRFFQ69G5FAV_")
+			})
+		})
+	})
+
+	Convey("Given provisioning with no supplied token", t, func() {
+		clearEnv(t)
+		t.Setenv("FLEXITYPE_PROVISIONING", "true")
+		t.Setenv("FLEXITYPE_BOOTSTRAP_ADMIN", "true")
+
+		Convey("When configuration is loaded", func() {
+			cfg, err := config.Load()
+
+			Convey("Then the service mints one, as it always did", func() {
+				So(err, ShouldBeNil)
+				So(cfg.BootstrapAdminToken, ShouldEqual, "")
 			})
 		})
 	})

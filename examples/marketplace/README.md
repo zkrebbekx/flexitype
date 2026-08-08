@@ -48,7 +48,7 @@ docker compose up --build --wait      # postgres, flexitype, platform, storefron
 | Merchant API | <http://localhost:9300/api/merchants> |
 
 `seed.sh` is safe to re-run. To start over: `docker compose down --volumes`,
-then `rm -f .admin/admin-token`, then bring the stack up again.
+then bring the stack up again.
 
 Then open <http://localhost:8082> to shop, or <http://localhost:8081> to model
 a merchant's schema and edit its products. The same data over curl:
@@ -231,12 +231,17 @@ handler has to remember, and there is a test for it.
 runnable. A real deployment authenticates a merchant USER and derives the
 merchant id from the session, so one merchant cannot reach another's endpoints.
 
-The admin token arrives through a **file**: flexitype prints its bootstrap
-admin token to stdout once, and its image is distroless, so a compose stack
-cannot capture it into an environment variable. `seed.sh` reads it out of the
-container log and writes `.admin/admin-token`, which the platform mounts. The
-platform re-reads that file when it changes, so a rotated credential is picked
-up without a restart.
+The flexitype admin token is **decided by the compose file**, not captured from
+a log. The same value goes to the flexitype service
+(`FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN`) and to the platform
+(`FLEXITYPE_ADMIN_TOKEN`), so the stack needs no capture step at all. A minted
+token is printed to stdout once and this image is distroless, so no other
+container could ever read it — which is why the service accepts a supplied one.
+
+A real deployment generates the token with `flexitype bootstrap-token`, keeps
+it in a secret manager and hands it to both services. The platform also accepts
+`FLEXITYPE_ADMIN_TOKEN_FILE` and re-reads that file when it changes, so a
+rotation is picked up without a restart.
 
 ## The webhook path
 
@@ -350,19 +355,16 @@ Each one is filed, so it can be tracked rather than only recorded here.
    fields and maps `Secret` to `rotate_secret`. This example still deletes and
    recreates the subscription, which is also a valid way to do it.
 
-2. **No supported way to inject a known admin credential.** In provisioning
-   mode the bootstrap token is printed to stdout once, and the image is
-   distroless, so an orchestrated stack cannot capture it. A
-   `FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN` (caller-supplied, hashed at boot) would
-   make a provisioning-mode deployment reproducible. ([#547])
+2. ~~**No supported way to inject a known admin credential.**~~ **Fixed.**
+   `FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN` now takes a caller-supplied credential,
+   and `flexitype bootstrap-token` prints a valid one. This stack uses it, so
+   nothing reads the token out of a container log any more. ([#547])
 
-3. **`FLEXITYPE_DEV_INSECURE` conflates two things.** It is the only opt-out
-   from the unencrypted-database guard, and it also reads as "authentication
-   off". It is not, when an account source is configured — but a stack that
-   needs plaintext Postgres has to set a variable whose name and log warning
-   both say the opposite of what it is doing. A separate
-   `FLEXITYPE_DB_ALLOW_PLAINTEXT` would let this compose file keep
-   authentication on without looking reckless. ([#548])
+3. ~~**`FLEXITYPE_DEV_INSECURE` conflates two things.**~~ **Fixed.**
+   `FLEXITYPE_DB_ALLOW_PLAINTEXT` now permits an unencrypted database
+   connection to a non-loopback host and nothing else, so this compose file
+   keeps authentication on without setting the variable that turns it off.
+   `FLEXITYPE_DEV_INSECURE` still implies it. ([#548])
 
 4. **The projector needs one credential per tenant.** It holds every
    merchant's token purely to re-read entities. A read-only, cross-tenant
@@ -384,8 +386,9 @@ Each one is filed, so it can be tracked rather than only recorded here.
    is right, but it means every public-facing surface has to proxy images.
    Signed, expiring media URLs would remove a whole proxy path. ([#552])
 
-8. **Blob storage needs a writable directory the distroless image cannot
-   create.** A named volume mounts as root, the image runs as `nonroot`, and
-   the failure surfaces only on the first upload — long after the stack came
-   up healthy. `FLEXITYPE_BLOB_DIR` could be checked for writability at
-   startup and refuse to boot. ([#553])
+8. ~~**Blob storage needs a writable directory the distroless image cannot
+   create.**~~ **Fixed.** The disk store now proves the root is writable when
+   it is built, so a non-writable `FLEXITYPE_BLOB_DIR` stops the service at
+   start-up instead of losing the first upload hours later. The `blob-init`
+   container below still chowns the volume, which is what makes the root
+   writable in the first place. ([#553])

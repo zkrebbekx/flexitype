@@ -214,15 +214,22 @@ func (o *Onboarder) ensureSubscription(ctx context.Context, c *client.Client, te
 		return fmt.Errorf("list webhook subscriptions of %q: %w", tenant, err)
 	}
 	for _, sub := range existing {
-		if sub.Name == subscriptionName {
-			// Update rather than skip: the storefront's URL or the secret can
-			// change between deployments, and a stale subscription silently
-			// stops feeding the projection.
-			if _, err := c.Webhooks().Update(ctx, sub.ID, in); err != nil {
-				return fmt.Errorf("update webhook subscription of %q: %w", tenant, err)
-			}
-			return nil
+		if sub.Name != subscriptionName {
+			continue
 		}
+		if sub.URL == in.URL {
+			return nil // already pointing at this storefront
+		}
+		// The storefront moved. The subscription is replaced rather than
+		// patched: client.WebhooksService.Update sends a `name` field that
+		// PATCH /webhook-subscriptions/{id} rejects, so every Update call
+		// fails with VALIDATION "invalid request body" (see README, "What the
+		// API made awkward"). Replacing loses the delivery history of a
+		// subscription that was pointing somewhere else anyway.
+		if err := c.Webhooks().Delete(ctx, sub.ID); err != nil {
+			return fmt.Errorf("replace webhook subscription of %q: %w", tenant, err)
+		}
+		break
 	}
 	if _, err := c.Webhooks().Create(ctx, in); err != nil {
 		return fmt.Errorf("create webhook subscription in %q: %w", tenant, err)

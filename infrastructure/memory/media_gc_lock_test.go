@@ -8,7 +8,6 @@ import (
 
 	. "github.com/smartystreets/goconvey/convey"
 
-	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/infrastructure/memory"
 )
 
@@ -20,8 +19,7 @@ func TestMediaKeyLockMemory(t *testing.T) {
 	Convey("Given the in-memory value repository", t, func() {
 		ctx := context.Background()
 		store := memory.NewStore()
-		repo, ok := store.Repositories().Values.(domainvalue.Repository)
-		So(ok, ShouldBeTrue)
+		repo := store.Repositories().Values
 		transactor := store.Transactor()
 
 		Convey("When the lock is taken outside a transaction", func() {

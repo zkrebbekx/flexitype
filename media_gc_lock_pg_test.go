@@ -10,8 +10,8 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 
 	"github.com/zkrebbekx/flexitype"
-	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
+	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"

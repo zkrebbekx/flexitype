@@ -126,7 +126,12 @@ func (s *server) resolveEntitySet(r *http.Request, typeID string) ([]string, err
 			if err != nil {
 				return nil, err
 			}
-			out, err := app.Query().Execute(r.Context(), appquery.ExecuteInput{Type: t.InternalName, Query: q, Page: db.PageArgs{Limit: &limit, Cursor: cursor}})
+			// A facet count is a sweep: stable ordering, so an entity written
+			// mid-count is not dropped from the totals shown beside the grid.
+			out, err := app.Query().Execute(r.Context(), appquery.ExecuteInput{
+				Type: t.InternalName, Query: q, Stable: true,
+				Page: db.PageArgs{Limit: &limit, Cursor: cursor},
+			})
 			if err != nil {
 				return nil, err
 			}

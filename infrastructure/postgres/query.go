@@ -107,22 +107,43 @@ func (r *queryRepository) Search(ctx context.Context, tenant valueobjects.Tenant
 	// that "::timestamptz" cannot parse, as a validation error. Before that
 	// check, a wrong-arity cursor served page 1 again and a bad timestamp
 	// failed inside PostgreSQL with SQLSTATE 22007.
+	// A SWEEP pages on the immutable key instead. last_updated_at is
+	// rewritten by the summary trigger on every value write, so an entity the
+	// sweep has not reached yet, written mid-sweep, jumps ahead of the
+	// newest-first cursor and can never satisfy the "strictly older"
+	// predicate again — it is dropped, silently. Facet counts and a filtered
+	// CSV export are exactly such sweeps, and only the unfiltered branch
+	// could ask for stable ordering before this: the FQL path had no way to,
+	// so its counts disagreed with the grid and its exports lost rows with
+	// no total to reveal it. entity_id never changes, and it is the trailing
+	// column of the summary's primary key, so this ordering is an index scan
+	// too.
+	keysetCols := entitySummaryKeyset
+	orderBy := "e.last_updated_at DESC, e.entity_id"
+	if page.Stable {
+		keysetCols = []db.KeysetColumn{{Expr: "entity_id"}}
+		orderBy = "e.entity_id"
+	}
 	keyset := ""
 	if page.Cursor != "" {
-		vals, verr := db.ValidateKeyset(entitySummaryKeyset, page.Cursor)
+		vals, verr := db.ValidateKeyset(keysetCols, page.Cursor)
 		if verr != nil {
 			return nil, 0, verr
 		}
-		keyset = fmt.Sprintf(` AND ((e.last_updated_at < %s::timestamptz) OR (e.last_updated_at = %s::timestamptz AND e.entity_id > %s))`,
-			c.arg(vals[0]), c.arg(vals[0]), c.arg(vals[1]))
+		if page.Stable {
+			keyset = fmt.Sprintf(` AND e.entity_id > %s`, c.arg(vals[0]))
+		} else {
+			keyset = fmt.Sprintf(` AND ((e.last_updated_at < %s::timestamptz) OR (e.last_updated_at = %s::timestamptz AND e.entity_id > %s))`,
+				c.arg(vals[0]), c.arg(vals[0]), c.arg(vals[1]))
+		}
 	}
 
 	sql := fmt.Sprintf(`SELECT e.entity_id, e.type_definition_id, e.value_count, e.last_updated_at
 	 FROM (%s) e
 	 WHERE %s%s
-	 ORDER BY e.last_updated_at DESC, e.entity_id
+	 ORDER BY %s
 	 LIMIT %s`,
-		base, where, keyset, c.arg(page.FetchLimit()))
+		base, where, keyset, orderBy, c.arg(page.FetchLimit()))
 
 	var rows []struct {
 		EntityID         string    `db:"entity_id"`

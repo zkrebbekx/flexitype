@@ -15,7 +15,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -79,12 +78,18 @@ func run(log Logger) error {
 		return err
 	}
 
-	adminToken, err := adminToken(ctx, log)
+	adminTokens, err := newAdminTokenSource(ctx, log)
 	if err != nil {
 		return err
 	}
+	// The admin credential is presented per request rather than captured once,
+	// so a rotated secret is picked up without a restart.
 	admin, err := client.New(flexitypeURL,
-		client.WithToken(adminToken), client.WithUserAgent("marketplace-platform-admin"))
+		client.WithUserAgent("marketplace-platform-admin"),
+		client.WithHTTPClient(&http.Client{
+			Timeout:   60 * time.Second,
+			Transport: &bearerTransport{source: adminTokens},
+		}))
 	if err != nil {
 		return err
 	}
@@ -107,41 +112,6 @@ func run(log Logger) error {
 	}
 	log.Info("platform stopped cleanly")
 	return nil
-}
-
-// adminToken reads the flexitype admin credential.
-//
-// flexitype prints its bootstrap admin token to stdout ONCE, and its image is
-// distroless, so a compose stack has no way to capture it into an environment
-// variable. FLEXITYPE_ADMIN_TOKEN_FILE therefore names a file this service
-// waits for; seed.sh writes it. In a real deployment the same file is a
-// mounted secret.
-func adminToken(ctx context.Context, log Logger) (string, error) {
-	if token := os.Getenv("FLEXITYPE_ADMIN_TOKEN"); token != "" {
-		return token, nil
-	}
-	path := os.Getenv("FLEXITYPE_ADMIN_TOKEN_FILE")
-	if path == "" {
-		return "", errors.New("set FLEXITYPE_ADMIN_TOKEN or FLEXITYPE_ADMIN_TOKEN_FILE")
-	}
-	logged := false
-	for {
-		raw, err := os.ReadFile(path) //nolint:gosec // an operator-supplied secret path
-		if err == nil {
-			if token := strings.TrimSpace(string(raw)); token != "" {
-				return token, nil
-			}
-		}
-		if !logged {
-			log.Info("waiting for the flexitype admin token", "file", path)
-			logged = true
-		}
-		select {
-		case <-ctx.Done():
-			return "", fmt.Errorf("no admin token at %s: %w", path, ctx.Err())
-		case <-time.After(time.Second):
-		}
-	}
 }
 
 // clientCache holds one flexitype client per merchant.

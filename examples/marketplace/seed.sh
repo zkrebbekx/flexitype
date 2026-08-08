@@ -37,8 +37,11 @@ api() { curl -sS -H "Authorization: Bearer $CONSOLE_TOKEN" -H 'Content-Type: app
 # the platform waits for. A real deployment mounts a secret instead.
 echo "==> Capturing the flexitype bootstrap admin token"
 mkdir -p "$DIR/.admin"
+# The secret half of a token is base64url, so it can contain '-' and '_'.
+# A character class without the hyphen truncated the token at the first one,
+# and the platform then failed every admin call with "invalid credentials".
 printed=$(docker compose logs --no-color flexitype 2>/dev/null |
-  grep -A1 'bootstrap admin account created' | tail -n1 | tr -d '\r' | grep -o 'ft_[A-Za-z0-9_]*' || true)
+  grep -A1 'bootstrap admin account created' | tail -n1 | tr -d '\r' | grep -o 'ft_[A-Za-z0-9_-]*' || true)
 if [ -n "$printed" ]; then
   printf '%s' "$printed" > "$TOKEN_FILE"
   echo "    captured a freshly printed token"

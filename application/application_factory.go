@@ -241,6 +241,7 @@ func (f *factory) New(context.Context) *Interactors {
 		attrs:    appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, f.cfg.UnitFamilies),
 		values: appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.ValueReader, repos.Dependencies, repos.Relationships, appvalue.Config{
 			Blobs:          f.cfg.BlobStore,
+			Transactor:     f.cfg.Transactor,
 			UnitFamilies:   f.cfg.UnitFamilies,
 			OnCleanupError: f.cfg.OnCleanupError,
 		}),
@@ -251,6 +252,7 @@ func (f *factory) New(context.Context) *Interactors {
 		// setters to leave it half-wired.
 		erasure: apperasure.NewInteractor(apperasure.Config{
 			UnitOfWork:     unit,
+			Transactor:     f.cfg.Transactor,
 			Values:         repos.Values,
 			Links:          repos.Relationships,
 			Revisions:      f.cfg.Revisions,

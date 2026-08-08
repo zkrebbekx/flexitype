@@ -125,6 +125,32 @@ type Repository interface {
 	// rather than a corner case.
 	MediaKeyRefCount(ctx context.Context, objectKey string, excludeValueID valueobjects.AttributeValueID) (int, error)
 
+	// MediaKeyRefCounts is the batched form of MediaKeyRefCount, minus the
+	// exclusion: it counts the LIVE value rows, in any tenant, per object key.
+	// A key with no live rows is absent from the result; the caller reads an
+	// absent key as zero.
+	//
+	// The erasure blob GC calls it once per chunk of purged keys. The per-key
+	// form made a large erasure run one count query per key inside the shared
+	// post-commit budget, so the budget expired and the receipt reported the
+	// remaining bytes unpurged.
+	MediaKeyRefCounts(ctx context.Context, objectKeys []string) (map[string]int, error)
+
+	// LockMediaKey serializes the writers of one media object key. It blocks
+	// until the lock is free, and the transaction holds the lock until it
+	// commits or rolls back. It is re-entrant inside one transaction, and it
+	// is only valid on a transaction-bound repository.
+	//
+	// Two paths take this lock, and both must, or the race returns:
+	//  - Adoption takes it before it checks that the key's bytes still exist,
+	//    and keeps it until the adopting transaction commits.
+	//  - Blob GC takes it in a short transaction around its reference recount
+	//    and the blob delete.
+	// Without the lock, a reference count under READ COMMITTED cannot see an
+	// uncommitted adoption, so GC deleted bytes that a value committed a
+	// moment later still references.
+	LockMediaKey(ctx context.Context, objectKey string) error
+
 	// MediaKeyAttributes returns the distinct attribute definitions of every
 	// value row in the tenant, live or archived, that references the object
 	// key. An empty result means the tenant holds no such value.

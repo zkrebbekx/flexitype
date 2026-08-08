@@ -47,7 +47,12 @@ type Interactor struct {
 	links domainrelationship.Repository
 	blobs blobStore
 	units unitStore
-	now   func() time.Time
+	// transactor opens the SHORT post-commit transaction media-blob GC runs
+	// in: the per-key lock, the reference recount and the blob delete are one
+	// locked unit, so the recount cannot race an in-flight adoption. Nil
+	// disables blob GC (with nil blobs there is nothing to delete anyway).
+	transactor db.Transactor
+	now        func() time.Time
 	// onCleanupError surfaces a swallowed media-GC cleanup failure (a blob that
 	// could not be deleted after an archived, overwritten or rejected-upload
 	// value). Nil-safe: wired from the factory like the other observers.
@@ -70,9 +75,11 @@ type unitStore interface {
 }
 
 // blobStore is the subset of the object-storage port the value interactor
-// needs for media uploads and archival cleanup. Nil disables media.
+// needs for media uploads, archival cleanup and the adoption liveness probe.
+// Nil disables media.
 type blobStore interface {
 	Put(ctx context.Context, key string, r io.Reader, mime string) error
+	Open(ctx context.Context, key string) (io.ReadCloser, string, error)
 	Delete(ctx context.Context, key string) error
 }
 
@@ -83,6 +90,9 @@ type blobStore interface {
 type Config struct {
 	// Blobs is the object store backing media attributes; nil disables media.
 	Blobs blobStore
+	// Transactor opens the short locked transaction post-commit blob GC runs
+	// in (see Interactor.gcMediaKey). Nil disables blob GC.
+	Transactor db.Transactor
 	// UnitFamilies backs quantity attributes; nil disables quantity writes.
 	UnitFamilies unitStore
 	// OnCleanupError surfaces a swallowed media-GC cleanup failure. Nil-safe.
@@ -102,6 +112,7 @@ func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs do
 		deps:           deps,
 		links:          links,
 		blobs:          cfg.Blobs,
+		transactor:     cfg.Transactor,
 		units:          cfg.UnitFamilies,
 		onCleanupError: cfg.OnCleanupError,
 		now:            uow.UTCNow,
@@ -847,6 +858,38 @@ func (i *Interactor) adoptMediaValue(ctx context.Context, values domainvalue.Rep
 		// attribute learns nothing about whether the key exists.
 		return valueobjects.Value{}, unknownKey
 	}
+
+	// The bytes must still exist before this write mints a live reference to
+	// them. MediaValueForKey counts archived rows (ownership survives
+	// archival), but blob GC counts only LIVE rows — so a key whose every
+	// reference is archived may have had its blob deleted already, and
+	// adopting it minted a live value whose download 404s.
+	//
+	// The check has to be race-free against GC, so it runs under the per-key
+	// lock, held from here to this transaction's commit. GC recounts under the
+	// same lock: either it waits for this adoption to commit and then sees the
+	// new live row, or it deletes first and the probe below sees the bytes
+	// gone. Skipped when no blob store is wired: without one no GC ever
+	// deletes, so there is nothing to probe.
+	if i.blobs != nil {
+		if err := values.LockMediaKey(ctx, key); err != nil {
+			return valueobjects.Value{}, fmt.Errorf("lock media key: %w", err)
+		}
+		refs, err := values.MediaKeyRefCount(ctx, key, valueobjects.AttributeValueID{})
+		if err != nil {
+			return valueobjects.Value{}, fmt.Errorf("count media references: %w", err)
+		}
+		if refs == 0 {
+			// Only archived rows reference the key. The blob may survive (a
+			// GC delete can fail), so probe storage rather than assume.
+			rc, _, oerr := i.blobs.Open(ctx, key)
+			if oerr != nil {
+				return valueobjects.Value{}, domainerrors.NewValidation(
+					"media object key has no stored bytes; upload the file again", "object_key", key)
+			}
+			_ = rc.Close()
+		}
+	}
 	return stored.Value, nil
 }
 
@@ -861,7 +904,7 @@ func (i *Interactor) adoptMediaValue(ctx context.Context, values domainvalue.Rep
 // keeps its bytes. Without the count, two values sharing an object key meant
 // removing either one deleted the blob out from under the other.
 func (i *Interactor) gcMediaAfterCommit(tx db.Transactor, valueID valueobjects.AttributeValueID, v valueobjects.Value) {
-	if i.blobs == nil || v.DataType() != valueobjects.DataTypeMedia {
+	if i.blobs == nil || i.transactor == nil || v.DataType() != valueobjects.DataTypeMedia {
 		return
 	}
 	key := v.Media().ObjectKey
@@ -869,18 +912,37 @@ func (i *Interactor) gcMediaAfterCommit(tx db.Transactor, valueID valueobjects.A
 		return
 	}
 	tx.OnPostCommit(func(ctx context.Context) error {
-		refs, err := i.values.MediaKeyRefCount(ctx, key, valueID)
+		if err := i.gcMediaKey(ctx, key, valueID); err != nil {
+			// Never fail a committed write on a GC bookkeeping error.
+			i.observeCleanup(fmt.Errorf("gc media blob %s: %w", key, err))
+		}
+		return nil
+	})
+}
+
+// gcMediaKey deletes the blob behind key when no live value row other than
+// exclude references it. The recount and the delete run in one SHORT
+// transaction that holds the per-key media lock, so the count cannot miss an
+// adoption in flight: the adopting transaction takes the same lock at its
+// liveness check and holds it to its commit, so this recount either waits for
+// that commit (and then sees the new live row) or completes before the
+// adoption's probe (which then sees the bytes gone and rejects). An unlocked
+// recount under READ COMMITTED deleted bytes a committed value referenced.
+func (i *Interactor) gcMediaKey(ctx context.Context, key string, exclude valueobjects.AttributeValueID) error {
+	return i.transactor.InTransaction(ctx, func(gcTx db.Transactor) error {
+		values := i.values.WithTx(gcTx)
+		if err := values.LockMediaKey(ctx, key); err != nil {
+			return fmt.Errorf("lock media key: %w", err)
+		}
+		refs, err := values.MediaKeyRefCount(ctx, key, exclude)
 		if err != nil {
-			i.observeCleanup(fmt.Errorf("count media references for %s: %w", key, err))
-			return nil // never fail a committed write on a GC bookkeeping error
+			return fmt.Errorf("count media references: %w", err)
 		}
 		if refs > 0 {
 			return nil // another value still points at these bytes
 		}
-		if err := i.blobs.Delete(ctx, key); err != nil {
-			i.observeCleanup(fmt.Errorf("gc media blob %s: %w", key, err))
-		}
-		return nil
+		// Delete while the lock is still held: the commit below releases it.
+		return i.blobs.Delete(ctx, key)
 	})
 }
 

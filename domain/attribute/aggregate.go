@@ -93,7 +93,7 @@ func New(in NewInput, now time.Time) (*Definition, []events.Event, error) {
 	if _, err := valueobjects.ParseDataType(in.DataType.String()); err != nil {
 		return nil, nil, domainerrors.NewValidation(err.Error())
 	}
-	if err := validateRules(in.DataType, in.MultiValued, in.Unique, in.Constraints, in.DefaultValue); err != nil {
+	if err := validateRules(in.DataType, in.MultiValued, in.Unique, in.Constraints, in.DefaultValue, in.Computed); err != nil {
 		return nil, nil, err
 	}
 	if in.Computed != nil {
@@ -169,7 +169,7 @@ func (a *Definition) Update(in UpdateInput, now time.Time) ([]events.Event, erro
 	if in.DisplayName == "" {
 		return nil, domainerrors.NewValidation("display name is required")
 	}
-	if err := validateRules(a.dataType, in.MultiValued, in.Unique, in.Constraints, in.DefaultValue); err != nil {
+	if err := validateRules(a.dataType, in.MultiValued, in.Unique, in.Constraints, in.DefaultValue, in.Computed); err != nil {
 		return nil, err
 	}
 	if in.Computed != nil {
@@ -267,9 +267,20 @@ func (a *Definition) DefaultFor(now time.Time) (valueobjects.Value, error) {
 	return a.defaultValue.Resolve(a.dataType, now)
 }
 
-func validateRules(dt valueobjects.DataType, multiValued, unique bool, cs Constraints, def *valueobjects.Default) error {
+func validateRules(dt valueobjects.DataType, multiValued, unique bool, cs Constraints, def *valueobjects.Default, computed *Computed) error {
 	if multiValued && unique {
 		return domainerrors.NewValidation("an attribute cannot be both multi-valued and unique")
+	}
+	// A computed attribute cannot be multi-valued. The materializer writes one
+	// result per entity, and the write path APPENDS on a multi-valued
+	// attribute rather than replacing, so every recompute added a member and
+	// the stale ones stayed: total = qty * 2 went to [2, 4, 6] as qty moved
+	// 1, 2, 3, and the clear-stale path tracks one value id, so it could not
+	// remove them either. Nothing reported the combination at creation.
+	if multiValued && computed != nil {
+		return domainerrors.NewValidation(
+			"a computed attribute cannot be multi-valued: each recompute writes one result, and a " +
+				"multi-valued write appends, so earlier results would accumulate with nothing able to clear them")
 	}
 	if dt == valueobjects.DataTypeEnum && !hasOneOf(cs) {
 		return domainerrors.NewValidation("enum attributes require a one_of constraint")

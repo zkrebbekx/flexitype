@@ -58,7 +58,7 @@ func TestEcommerceTemplate(t *testing.T) {
 
 				Convey("And the subtype inherits every product field", func() {
 					names := map[string]bool{}
-					for _, raw := range a.get("/api/v1/type-definitions/"+sub.str(t, "id")+"/effective-attributes").items(t) {
+					for _, raw := range a.get("/api/v1/type-definitions/" + sub.str(t, "id") + "/effective-attributes").items(t) {
 						entry := raw.(map[string]any)["attribute"].(map[string]any)
 						names[entry["internal_name"].(string)] = true
 					}

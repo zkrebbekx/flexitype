@@ -101,6 +101,14 @@ func TestOnboardingIsIdempotent(t *testing.T) {
 					})
 					So(err, ShouldBeNil)
 					So(types.Items, ShouldHaveLength, 1)
+
+					// The storefront is re-registered on every run. That is
+					// deliberate: the registration is a PUT, so it repairs a
+					// storefront that lost its merchant row.
+					So(sf.registrationCount(), ShouldEqual, 2)
+					reg, ok := sf.lastRegistration()
+					So(ok, ShouldBeTrue)
+					So(reg.Token, ShouldEqual, first.Token)
 				})
 			})
 

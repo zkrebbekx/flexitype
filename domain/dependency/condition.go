@@ -75,11 +75,20 @@ type Condition struct {
 	// (uow.WithContextValues), so it is the host's fact at evaluation time
 	// and is never stored here.
 	ContextKey string `json:"context_key,omitempty"`
+	// ContextType is a v1.5 payload key: the declared data type of the
+	// caller-supplied fact. This release does NOT evaluate it, but it
+	// preserves the key through decode and re-encode, so an Update, a clone
+	// or an export by this binary cannot strip it from a v1.5 rule during a
+	// rollback. Shipping the key one release ahead of its behavior keeps
+	// "release N-1 runs correctly against release N's data" true for stored
+	// payloads, not only for columns.
+	ContextType string `json:"context_type,omitempty"`
 }
 
 type conditionJSON struct {
 	Kind             ConditionKind              `json:"kind"`
 	ContextKey       string                     `json:"context_key,omitempty"`
+	ContextType      string                     `json:"context_type,omitempty"`
 	Value            json.RawMessage            `json:"value,omitempty"`
 	Values           []json.RawMessage          `json:"values,omitempty"`
 	Min              json.RawMessage            `json:"min,omitempty"`
@@ -96,7 +105,7 @@ type conditionJSON struct {
 func (c Condition) MarshalJSON() ([]byte, error) {
 	out := conditionJSON{Kind: c.Kind, Pattern: c.Pattern, PatternSubstring: c.PatternSubstring,
 		MinExclusive: c.MinExclusive, MaxExclusive: c.MaxExclusive,
-		Dynamic: c.Dynamic, Op: c.Op, ContextKey: c.ContextKey}
+		Dynamic: c.Dynamic, Op: c.Op, ContextKey: c.ContextKey, ContextType: c.ContextType}
 
 	marshal := func(v *valueobjects.Value) (json.RawMessage, error) {
 		if v == nil {
@@ -139,6 +148,7 @@ func (c *Condition) UnmarshalJSON(b []byte) error {
 	c.Dynamic = in.Dynamic
 	c.Op = in.Op
 	c.ContextKey = in.ContextKey
+	c.ContextType = in.ContextType
 	c.Value, c.Min, c.Max, c.Values = nil, nil, nil, nil
 
 	unmarshal := func(raw json.RawMessage) (*valueobjects.Value, error) {

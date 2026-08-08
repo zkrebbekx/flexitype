@@ -255,10 +255,10 @@ type errFeedStore struct {
 	cutoffs       []time.Time
 	deadCutoffs   []time.Time
 	parkedCutoffs []time.Time
-	err         error
-	floorErr    error
-	listErr     error
-	floor       int64
+	err           error
+	floorErr      error
+	listErr       error
+	floor         int64
 	// lastLimit records the limit List was called with, so limit clamping is
 	// observable.
 	lastLimit int

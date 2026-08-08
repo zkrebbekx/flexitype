@@ -1047,6 +1047,74 @@ paths:
                 $ref: "#/components/schemas/EventCursor"
         "409": { $ref: "#/components/responses/Error" }
 
+  /admin/outbox/parked:
+    get:
+      tags: [event-delivery]
+      summary: List parked outbox envelopes (admin scope)
+      description: >-
+        A parked envelope exhausted its dispatch retry budget. It is a
+        committed change that no consumer has seen: it is off the feed, has
+        no webhook deliveries, and the relay skips it. This listing is the
+        visibility half of the recovery surface; alert on the
+        flexitype_outbox_parked gauge and redrive before the parked
+        retention deletes the envelopes.
+      parameters:
+        - name: event_type
+          in: query
+          description: Narrow to one event type.
+          schema: { type: string }
+        - name: id
+          in: query
+          description: Narrow to one envelope id.
+          schema: { type: string }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Parked envelopes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ParkedEnvelope" }
+                  page_info: { $ref: "#/components/schemas/PageInfo" }
+        "403": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+
+  /admin/outbox/redrive:
+    post:
+      tags: [event-delivery]
+      summary: Return parked outbox envelopes to the retry queue (admin scope)
+      description: >-
+        Bulk unpark. Clears the park flag and the lease, resets the attempt
+        count (a fresh retry budget, as with the dead-letter redrive) and
+        makes the envelopes due at once; the relay is nudged so delivery
+        restarts immediately. The action is recorded in the activity log.
+        Consumers must dedupe on the envelope id.
+      parameters:
+        - name: event_type
+          in: query
+          description: Narrow the redrive to one event type.
+          schema: { type: string }
+        - name: id
+          in: query
+          description: Narrow the redrive to one envelope.
+          schema: { type: string }
+      responses:
+        "200":
+          description: How many envelopes returned to the retry queue
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  redriven: { type: integer }
+        "403": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+
   /admin/purge:
     post:
       tags: [provisioning]
@@ -2216,6 +2284,20 @@ components:
         actor: { type: string }
         occurred_at: { type: string, format: date-time }
         payload: {}
+    ParkedEnvelope:
+      type: object
+      description: >-
+        One outbox envelope that exhausted its dispatch retry budget and
+        waits for an operator redrive.
+      properties:
+        id: { type: string }
+        event_type: { type: string }
+        aggregate_type: { type: string }
+        aggregate_id: { type: string }
+        attempts: { type: integer }
+        last_error: { type: string }
+        recorded_at: { type: string, format: date-time }
+        parked_at: { type: string, format: date-time }
     EventCursor:
       type: object
       description: A named consumer's committed feed position.

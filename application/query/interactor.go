@@ -53,6 +53,14 @@ type ExecuteInput struct {
 	// Scope restricts scoped-attribute predicates to one locale/channel;
 	// zero matches base (unscoped) values.
 	Scope valueobjects.Scope
+	// Stable asks for an ordering on an IMMUTABLE key, for a caller that
+	// must see every matching entity exactly once — a facet count, a
+	// filtered export. The default newest-first ordering pages on
+	// last_updated_at, which a concurrent write rewrites, so an entity
+	// written mid-sweep jumps ahead of the cursor and is dropped. It trades
+	// presentation order for coverage, so a caller RENDERING a page should
+	// leave it off.
+	Stable bool
 }
 
 // ResultRow is one matched entity.
@@ -75,6 +83,7 @@ func (i *Interactor) Execute(ctx context.Context, in ExecuteInput) (*ExecuteOutp
 	if err != nil {
 		return nil, domainerrors.NewValidation(err.Error())
 	}
+	page.Stable = in.Stable
 
 	rootTypes, bound, err := i.prepare(ctx, in.Type, in.Query)
 	if err != nil {
@@ -86,7 +95,13 @@ func (i *Interactor) Execute(ctx context.Context, in ExecuteInput) (*ExecuteOutp
 		return nil, err
 	}
 
+	// The cursor has to carry exactly the columns the next page will page
+	// on, or the arity check rejects it: a stable page orders on the entity
+	// id alone, an ordinary one on (last update, entity id).
 	items, info := db.KeysetPage(page, items, db.KeysetTotal(page, total), func(e domainvalue.EntitySummary) string {
+		if page.Stable {
+			return db.EncodeKeyset(e.EntityID.String())
+		}
 		return db.EncodeKeyset(db.KeysetTime(e.LastUpdatedAt), e.EntityID.String())
 	})
 	out := &ExecuteOutput{

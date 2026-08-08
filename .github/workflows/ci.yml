@@ -280,6 +280,37 @@ jobs:
       - name: Test
         run: npm test
 
+  marketplace-ui:
+    name: marketplace ui
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      # The console consumes the TypeScript SDK as a file dependency, so the
+      # SDK has to be built before the console installs against it. That is
+      # also how the Dockerfile does it.
+      - name: Build the TypeScript SDK
+        working-directory: client-ts
+        run: npm ci && npm run build
+      - name: Merchant console (typecheck, test, build)
+        working-directory: examples/marketplace/console
+        run: |
+          npm ci
+          npx tsc -b --force
+          npm test
+          npm run build
+      - name: Shopper storefront (typecheck, test, build)
+        working-directory: examples/marketplace/shop
+        run: |
+          npm ci
+          npx tsc -b --force
+          npm test
+          npm run build
+
   vuln:
     name: vuln
     runs-on: ubuntu-latest

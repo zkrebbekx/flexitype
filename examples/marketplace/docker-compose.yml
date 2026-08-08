@@ -122,5 +122,36 @@ services:
     ports:
       - "9300:9300"
 
+  # The merchant console: React on the TypeScript SDK, served by nginx.
+  #
+  # nginx adds the console credential to every proxied request, so the browser
+  # holds no token — not a merchant's, and not the console's own.
+  console:
+    build:
+      context: ../..
+      dockerfile: examples/marketplace/console/Dockerfile
+    depends_on:
+      platform:
+        condition: service_started
+    environment:
+      PLATFORM_URL: http://platform:9300
+      PLATFORM_API_TOKEN: platform-console-demo-token
+    ports:
+      - "8081:8081"
+
+  # The shopper storefront: React over the storefront's own catalog. It needs
+  # no credential at all, because the shopper API is public.
+  shop:
+    build:
+      context: ../..
+      dockerfile: examples/marketplace/shop/Dockerfile
+    depends_on:
+      storefront:
+        condition: service_started
+    environment:
+      STOREFRONT_URL: http://storefront:9200
+    ports:
+      - "8082:8082"
+
 volumes:
   blobs:

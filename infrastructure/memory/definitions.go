@@ -202,6 +202,9 @@ func (r *attrRepo) List(_ context.Context, filter domainattribute.Filter, page d
 				continue
 			}
 		}
+		if filter.UnitFamilyID != "" && snap.UnitFamilyID != filter.UnitFamilyID {
+			continue
+		}
 		snaps = append(snaps, snap)
 	}
 	r.s.mu.RUnlock()

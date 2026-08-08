@@ -64,8 +64,15 @@ func (i *Interactor) assertStructuralChangeIsSafe(
 	// family's base (2000 g read as 2000 m), and the stored display unit is
 	// not a member of the new family — so those rows could never be rewritten
 	// through the API either.
-	changingFamily := before.UnitFamilyID != "" && in.UnitFamilyID != "" &&
-		before.UnitFamilyID != in.UnitFamilyID
+	//
+	// CLEARING the family counts as changing it. The guard used to require a
+	// non-empty new family, so it never saw a clear — and a REST PUT that
+	// omits the omitempty unit_family_id field sends the empty string, which
+	// makes an ordinary "rename the attribute" round trip unpin the family.
+	// The next write then failed with "quantity attribute has no unit
+	// family" while the stored value still read "2 kg": readable forever,
+	// writable never.
+	changingFamily := before.UnitFamilyID != "" && before.UnitFamilyID != in.UnitFamilyID
 	if !losingMulti && !gainingUnique && !losingLocale && !losingChannel &&
 		!gainingComputed && !changingFamily {
 		return nil
@@ -98,6 +105,14 @@ func (i *Interactor) assertStructuralChangeIsSafe(
 				"remove the scoped values first",
 			"attribute", before.InternalName, "scoped_values", shape.ScopedValues)
 	case changingFamily && shape.LiveValues > 0:
+		if in.UnitFamilyID == "" {
+			return domainerrors.NewConflict(
+				"cannot clear the unit family: stored quantities hold a magnitude in its base unit, and a "+
+					"quantity attribute with no family cannot be written at all; remove the values first, "+
+					"or resend the unit family you meant to keep",
+				"attribute", before.InternalName, "values", shape.LiveValues,
+				"unit_family", before.UnitFamilyID)
+		}
 		return domainerrors.NewConflict(
 			"cannot change the unit family: stored quantities hold a magnitude in the current family's "+
 				"base unit, so they would read as the new family's base and could not be rewritten; "+

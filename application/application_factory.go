@@ -281,7 +281,7 @@ func (f *factory) New(context.Context) *Interactors {
 		i.changesets = appchangeset.NewInteractor(f.cfg.ChangeSets, i.values, repos.Attributes, f.cfg.Now)
 	}
 	if f.cfg.UnitFamilies != nil {
-		i.units = appunit.NewInteractor(f.cfg.UnitFamilies)
+		i.units = appunit.NewInteractor(f.cfg.UnitFamilies, appunit.WithAttributeReferences(repos.Attributes))
 	}
 	// Schema orchestrates the aggregate interactors; built after units so
 	// bundle export/import and clone carry quantity families.

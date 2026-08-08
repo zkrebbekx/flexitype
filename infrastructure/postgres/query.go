@@ -402,10 +402,16 @@ func (r *queryRepository) compileTraversal(c *compiler, n *query.BoundTraversal,
 }
 
 // counterpartType resolves the counterpart entity's declared type as a
-// scalar subquery over its value rows (any row carries it). farExpr is a
-// full SQL expression for the counterpart entity id.
+// scalar subquery over its value rows. farExpr is a full SQL expression for
+// the counterpart entity id.
+//
+// ORDER BY created_at, id, matching EntityAnchor: mid-reanchor the value
+// rows transiently carry mixed type_definition_id, and an unordered LIMIT 1
+// let the same `is type(...)` traversal match or not match across
+// executions of one query.
 func (r *queryRepository) counterpartType(rel, farExpr string) string {
 	return fmt.Sprintf(`(SELECT tv.type_definition_id FROM flexitype_attribute_value tv
 	 WHERE tv.tenant_id = %s.tenant_id AND tv.entity_id = %s AND tv.archived_at IS NULL
+	 ORDER BY tv.created_at, tv.id
 	 LIMIT 1)`, rel, farExpr)
 }

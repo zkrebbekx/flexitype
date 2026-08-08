@@ -43,8 +43,9 @@ depend on `main`.
   `CONFLICT`, `ARCHIVED`, `DEPENDENCY_VIOLATION`, `FEATURE_DISABLED`,
   `CURSOR_CONFLICT`, `CURSOR_EXPIRED`, `UNAUTHENTICATED`, `FORBIDDEN`,
   `RATE_LIMITED`, `INTERNAL`). New codes may be added; existing codes keep
-  their meaning. This list, the `Error.code` enum in `api/openapi.yaml` and
-  the `ErrorCode` constants in the Go client are held equal by a test.
+  their meaning. This list, the `Error.code` enum in `api/openapi.yaml`, the
+  `ErrorCode` constants in the Go client and the `ERROR_CODES` array in the
+  TypeScript client are held equal by a test.
 - The event envelope has a `schema_version` field; a bump signals a
   breaking payload change and is called out in the changelog.
 
@@ -113,6 +114,19 @@ through `Service.Interactors(ctx)` and configure behaviour through the facade's
   as it shipped in that release.
 - Its exported surface follows SemVer from 1.0, tracking the REST API's
   compatibility guarantees. It depends only on the standard library.
+
+## TypeScript client
+
+`client-ts/` holds `@flexitype/client`, a TypeScript client with a second
+entry point for React hooks. It is **not published to npm**. It lives in this
+repository and moves with the REST API, so the version that ships in a release
+is the version that matches that release's API. Consume it from a checkout, a
+workspace or a git dependency.
+
+Its types are generated from `api/openapi.yaml` by `npm run generate`, and the
+generated file is checked in. A test regenerates it and fails when the
+checked-in output is stale, so the client cannot describe a shape the document
+does not.
 
 ## Module layout
 

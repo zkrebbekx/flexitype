@@ -353,7 +353,10 @@ func (s *outboxStore) ListParked(ctx context.Context, filter outbox.ParkedFilter
 	filterClause := strings.Join(where, " AND ")
 	filterArgs := append([]any(nil), args...)
 
-	where, args = keysetWhere(where, args, idKeyset, page.Cursor)
+	where, args, err := keysetWhere(where, args, idKeyset, page.Cursor)
+	if err != nil {
+		return nil, 0, err
+	}
 	args = append(args, page.FetchLimit())
 
 	var rows []struct {

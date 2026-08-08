@@ -147,10 +147,13 @@ func (f attrListFilter) where() ([]string, []any) {
 	return where, args
 }
 
-func (f attrListFilter) arm(key string) (string, []any) {
+func (f attrListFilter) arm(key string) (string, []any, error) {
 	where, filterArgs := f.where()
 	args := append([]any{key}, filterArgs...)
-	where, args = keysetWhere(where, args, idKeyset, f.Cursor)
+	where, args, err := keysetWhere(where, args, idKeyset, f.Cursor)
+	if err != nil {
+		return "", nil, err
+	}
 	args = append(args, f.Limit+1)
 
 	query := `(SELECT ?::text AS loader_key, ` + attrColumns + `
@@ -158,7 +161,7 @@ func (f attrListFilter) arm(key string) (string, []any) {
 	 WHERE ` + strings.Join(where, " AND ") + `
 	 ORDER BY id
 	 LIMIT ?)`
-	return query, args
+	return query, args, nil
 }
 
 func (f attrListFilter) countQuery() (string, []any) {
@@ -244,7 +247,10 @@ func (r *attributeDefinitionRepository) batchByTypePage(ctx context.Context, key
 		wantTotal := group[2] == "true"
 		inner := []string{"type_definition_id = ANY(?)", "archived_at IS NULL"}
 		qargs := []any{pq.Array(parents)}
-		inner, qargs = keysetWhere(inner, qargs, idKeyset, cursor)
+		inner, qargs, err := keysetWhere(inner, qargs, idKeyset, cursor)
+		if err != nil {
+			return nil, err
+		}
 		query := bind(`SELECT * FROM (
 		   SELECT ` + attrColumns + `,
 		          row_number() OVER (PARTITION BY type_definition_id ORDER BY id) AS rn
@@ -311,7 +317,10 @@ func (r *attributeDefinitionRepository) batchList(ctx context.Context, keys []st
 		if err := json.Unmarshal([]byte(key), &f); err != nil {
 			return nil, fmt.Errorf("decode list key: %w", err)
 		}
-		arm, armArgs := f.arm(key)
+		arm, armArgs, err := f.arm(key)
+		if err != nil {
+			return nil, err
+		}
 		arms = append(arms, arm)
 		args = append(args, armArgs...)
 	}

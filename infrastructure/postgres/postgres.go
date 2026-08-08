@@ -46,15 +46,38 @@ func txExecer(tx db.Tx) db.QueryExecer { return tx.(db.QueryExecer) }
 // idKeyset is the single-column ascending keyset used by every id-ordered list.
 var idKeyset = []db.KeysetColumn{{Expr: "id"}}
 
+// entitySummaryKeyset is the newest-first ordering every entity-summary list
+// pages on: last_updated_at descending, with entity_id ascending as the unique
+// tiebreaker. The "::timestamptz" cast is what db.ValidateKeyset checks the
+// cursor's first value against, so a value that is not a timestamp is a
+// validation error and never reaches the cast in the query.
+//
+// The entity browser and the FQL entity query share this spec so both reject
+// the same cursors, even though the FQL query builds its own SQL with
+// table-qualified expressions.
+var entitySummaryKeyset = []db.KeysetColumn{
+	{Expr: "last_updated_at", Desc: true, Cast: "::timestamptz"},
+	{Expr: "entity_id"},
+}
+
 // keysetWhere appends the keyset predicate for the given ordering and cursor to
-// a WHERE slice and its args. The cursor is validated at the application layer
-// (PageArgs.Resolve), so a decode error here is treated as "no predicate".
-func keysetWhere(where []string, args []any, cols []db.KeysetColumn, cursor string) ([]string, []any) {
+// a WHERE slice and its args.
+//
+// It returns the error from db.KeysetPredicate unchanged, and the caller must
+// return it. The error is a domain validation error, so the request fails with
+// a 422. An earlier version discarded it and returned the WHERE slice
+// unchanged, which served page 1 again for a cursor of the wrong arity and let
+// an unparseable timestamp reach the "::timestamptz" cast, where PostgreSQL
+// failed with SQLSTATE 22007 and the service reported an internal error.
+func keysetWhere(where []string, args []any, cols []db.KeysetColumn, cursor string) ([]string, []any, error) {
 	pred, pargs, err := db.KeysetPredicate(cols, cursor)
-	if err != nil || pred == "" {
-		return where, args
+	if err != nil {
+		return nil, nil, err
 	}
-	return append(where, pred), append(args, pargs...)
+	if pred == "" {
+		return where, args, nil
+	}
+	return append(where, pred), append(args, pargs...), nil
 }
 
 // countIf runs a count query and returns its result, but only when the caller

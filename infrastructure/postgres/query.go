@@ -103,12 +103,18 @@ func (r *queryRepository) Search(ctx context.Context, tenant valueobjects.Tenant
 
 	// Keyset on the ordered (last update, entity id) so a page is stable under
 	// concurrent writes: newest-first, entity_id as the unique tiebreaker.
+	// ValidateKeyset rejects a cursor of the wrong arity, and a first value
+	// that "::timestamptz" cannot parse, as a validation error. Before that
+	// check, a wrong-arity cursor served page 1 again and a bad timestamp
+	// failed inside PostgreSQL with SQLSTATE 22007.
 	keyset := ""
 	if page.Cursor != "" {
-		if vals, derr := db.DecodeKeyset(page.Cursor); derr == nil && len(vals) == 2 {
-			keyset = fmt.Sprintf(` AND ((e.last_updated_at < %s::timestamptz) OR (e.last_updated_at = %s::timestamptz AND e.entity_id > %s))`,
-				c.arg(vals[0]), c.arg(vals[0]), c.arg(vals[1]))
+		vals, verr := db.ValidateKeyset(entitySummaryKeyset, page.Cursor)
+		if verr != nil {
+			return nil, 0, verr
 		}
+		keyset = fmt.Sprintf(` AND ((e.last_updated_at < %s::timestamptz) OR (e.last_updated_at = %s::timestamptz AND e.entity_id > %s))`,
+			c.arg(vals[0]), c.arg(vals[0]), c.arg(vals[1]))
 	}
 
 	sql := fmt.Sprintf(`SELECT e.entity_id, e.type_definition_id, e.value_count, e.last_updated_at

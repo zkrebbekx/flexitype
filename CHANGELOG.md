@@ -7,6 +7,35 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Fixed — An unusable pagination cursor is now a 422, not a 500 or a silent restart ([#502])
+
+`PageArgs.Resolve` checked the cursor's shape only: base64 that decodes to
+a JSON string array. It did not know the ordering columns, so two
+well-formed cursors carrying unusable values went wrong further down.
+
+- A cursor whose value the column's cast cannot parse reached the cast in
+  the compiled query. PostgreSQL failed with SQLSTATE 22007 and the API
+  answered **500 INTERNAL**, with the cursor's contents in the message. It
+  now answers **422 VALIDATION**.
+- A cursor with the wrong number of values was discarded, so the query ran
+  with no keyset predicate and re-served page 1 to a client that believed
+  it was advancing. It is now rejected with **422 VALIDATION**.
+
+`db.ValidateKeyset` performs the check. It parses each cursor value against
+the type the column's cast implies: a timestamp cast accepts what
+`db.KeysetTime` emits, plus RFC 3339 and a date-only value; a numeric cast
+must parse as a number; a column with no cast holds text and accepts any
+string. The error message never repeats the cursor's contents. Both
+backends now reject the same cursors — the in-memory backend used to
+compare a bad timestamp as a plain string and answer a page.
+
+The cost is one parse for each cast column, once for each query, and only
+when the request carries a cursor. A request with no cursor is unchanged.
+
+This is the documented carve-out in [API stability](docs/api-stability.md):
+a request that previously succeeded (the silent restart), or failed as a
+500, now fails as a 422.
+
 ### Fixed — The admin control plane records every credential and role change ([#507])
 
 `CreateTenant`, `SetTenantActive`, `CreateAccount`, `RotateSecret`, `Revoke`,
@@ -1695,6 +1724,7 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 [#497]: https://github.com/zkrebbekx/flexitype/issues/497
 [#475]: https://github.com/zkrebbekx/flexitype/issues/475
 [#507]: https://github.com/zkrebbekx/flexitype/issues/507
+[#502]: https://github.com/zkrebbekx/flexitype/issues/502
 [1.3.0]: https://github.com/zkrebbekx/flexitype/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/zkrebbekx/flexitype/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/zkrebbekx/flexitype/compare/v1.0.0...v1.1.0

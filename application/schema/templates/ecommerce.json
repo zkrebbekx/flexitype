@@ -1,0 +1,31 @@
+{
+  "name": "ecommerce",
+  "title": "Ecommerce (storefront product)",
+  "description": "A root product type with the core commerce fields — name, description, SKU, status, price, currency, stock and a product image — plus a brand type and a made_by relationship. Merchants extend product with their own subtypes.",
+  "bundle": {
+    "version": 1,
+    "types": [
+      { "internal_name": "product", "display_name": "Product", "description": "The root product type. A merchant extends it with subtypes (apparel, electronics) and never edits it." },
+      { "internal_name": "brand", "display_name": "Brand", "description": "The maker of a product." }
+    ],
+    "attributes": [
+      { "type": "product", "internal_name": "name", "display_name": "Name", "data_type": "string", "required": true, "localizable": true, "constraints": [{ "kind": "max_length", "n": 200 }], "sort_order": 10, "help_text": "The shopper-facing title. Localizable, so one product carries one title per locale." },
+      { "type": "product", "internal_name": "description", "display_name": "Description", "data_type": "string", "localizable": true, "constraints": [{ "kind": "max_length", "n": 4000 }], "sort_order": 20, "help_text": "Long-form copy. flexitype has no separate text data type, so this is a string with a large max_length." },
+      { "type": "product", "internal_name": "sku", "display_name": "SKU", "data_type": "string", "unique": true, "constraints": [{ "kind": "max_length", "n": 64 }], "sort_order": 30, "help_text": "The merchant's stock-keeping unit. Unique inside the merchant's own tenant." },
+      { "type": "product", "internal_name": "status", "display_name": "Status", "data_type": "enum", "constraints": [{ "kind": "one_of", "values": [{ "type": "enum", "value": "draft" }, { "type": "enum", "value": "active" }, { "type": "enum", "value": "archived" }] }], "sort_order": 40, "help_text": "Only an active product is offered to shoppers." },
+      { "type": "product", "internal_name": "price", "display_name": "Price", "data_type": "decimal", "constraints": [{ "kind": "min_value", "value": { "type": "decimal", "value": "0" } }], "sort_order": 50, "help_text": "A decimal, not a float, so money keeps its exact digits." },
+      { "type": "product", "internal_name": "currency", "display_name": "Currency", "data_type": "enum", "constraints": [{ "kind": "one_of", "values": [{ "type": "enum", "value": "USD" }, { "type": "enum", "value": "EUR" }, { "type": "enum", "value": "GBP" }] }], "sort_order": 60 },
+      { "type": "product", "internal_name": "in_stock", "display_name": "In Stock", "data_type": "bool", "sort_order": 70 },
+      { "type": "product", "internal_name": "image", "display_name": "Image", "data_type": "media", "constraints": [{ "kind": "media", "mime": ["image/png", "image/jpeg", "image/webp"], "max_size": 5242880 }], "sort_order": 80, "help_text": "The product photo. The value holds the object key and MIME type; the bytes live in the blob store." },
+      { "type": "brand", "internal_name": "name", "display_name": "Name", "data_type": "string", "required": true, "constraints": [{ "kind": "max_length", "n": 200 }] },
+      { "type": "brand", "internal_name": "country", "display_name": "Country", "data_type": "string", "constraints": [{ "kind": "max_length", "n": 2 }] }
+    ],
+    "relationship_definitions": [
+      { "internal_name": "made_by", "display_name": "Made by", "kind": "directed", "parent_type": "product", "child_type": "brand", "parent_label": "products", "child_label": "brand", "parent_version_policy": "latest", "child_version_policy": "latest", "max_children": 1 }
+    ],
+    "dependencies": [
+      { "source_type": "product", "source_attribute": "status", "target_type": "product", "target_attribute": "sku", "conditions": [{ "kind": "equals", "value": { "type": "enum", "value": "active" } }], "effect": { "required": true }, "description": "An active product must carry a SKU" },
+      { "source_type": "product", "source_attribute": "status", "target_type": "product", "target_attribute": "price", "conditions": [{ "kind": "equals", "value": { "type": "enum", "value": "active" } }], "effect": { "required": true }, "description": "An active product must carry a price" }
+    ]
+  }
+}

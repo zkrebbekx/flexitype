@@ -68,6 +68,20 @@ jobs:
       - name: Client conformance (client SDK vs the real handler)
         run: |
           cd conformance && go test -race ./...
+      # The marketplace example is two modules of adopter-shaped code against
+      # the client SDK. Its suites drive a real flexitype, so they catch an API
+      # change that compiles but no longer behaves the way an adopter's service
+      # depends on.
+      - name: Marketplace example — platform module
+        env:
+          FLEXITYPE_TEST_DSN: postgres://postgres:postgres@localhost:5432/flexitype?sslmode=disable
+        run: |
+          cd examples/marketplace/platform && go build ./... && go vet ./... && go test -race ./...
+      - name: Marketplace example — storefront module
+        env:
+          FLEXITYPE_TEST_DSN: postgres://postgres:postgres@localhost:5432/flexitype?sslmode=disable
+        run: |
+          cd examples/marketplace/storefront && go build ./... && go vet ./... && go test -race ./...
       # docs/configuration.md states that transaction-mode pooling is
       # supported. That is a contract, so it is tested rather than asserted:
       # the Postgres suites run again through PgBouncer in transaction mode.
@@ -155,6 +169,35 @@ jobs:
         if: always()
         run: docker compose down --volumes
 
+  marketplace:
+    name: marketplace example
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Every command in the example's README and seed.sh is meant to be real.
+      # The only way to keep that true is to run them: the stack comes up, the
+      # seed onboards three merchants and asserts what a shopper sees, and the
+      # seed is then run a second time to prove onboarding is idempotent.
+      - name: Boot the marketplace stack
+        working-directory: examples/marketplace
+        run: docker compose up --build --detach --wait --wait-timeout 300
+      - name: Seed and assert
+        working-directory: examples/marketplace
+        run: ./seed.sh
+      - name: The seed is re-runnable
+        working-directory: examples/marketplace
+        run: ./seed.sh
+      - name: Service logs on failure
+        if: failure()
+        working-directory: examples/marketplace
+        run: docker compose logs --no-color
+      - name: Tear down
+        if: always()
+        working-directory: examples/marketplace
+        run: docker compose down --volumes
+
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -171,6 +214,19 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: latest
+      # The action lints ONE module — the one in the working directory — so a
+      # nested module is only covered by naming it. Both example modules share
+      # the repository's .golangci.yml, which golangci-lint finds by walking up.
+      - name: golangci-lint (marketplace example)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        with:
+          version: latest
+          working-directory: examples/marketplace/platform
+      - name: golangci-lint (marketplace storefront)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        with:
+          version: latest
+          working-directory: examples/marketplace/storefront
 
   web:
     name: web

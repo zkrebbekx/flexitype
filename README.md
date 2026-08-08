@@ -321,6 +321,12 @@ inheritance, a cascading dependency, FQL and a signed webhook consumer —
 see [`examples/catalog`](examples/catalog/) (`docker compose up` + a seed
 script).
 
+For multi-tenancy in anger, see
+[`examples/marketplace`](examples/marketplace/): a tenant per merchant, a
+curated schema template applied into each one, merchants extending the root
+product type with their own subtypes, and a shopper storefront that keeps an
+event-driven projection because flexitype has no cross-tenant query.
+
 ## Standalone service
 
 ```bash

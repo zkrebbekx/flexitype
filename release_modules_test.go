@@ -18,7 +18,10 @@ var firstPartyReplace = regexp.MustCompile(`(?m)^\s*replace\s+github\.com/zkrebb
 var releaseTagged = []string{"client"}
 
 // nestedModules is every module in the repository other than the root.
-var nestedModules = []string{"client", "cmd/flexitype", "conformance", "infrastructure/gcppubsub"}
+var nestedModules = []string{
+	"client", "cmd/flexitype", "conformance", "infrastructure/gcppubsub",
+	"examples/marketplace/platform", "examples/marketplace/storefront",
+}
 
 // TestReleaseTagsOnlyResolvableModules pins the invariant that decides which
 // modules the release workflow may tag.

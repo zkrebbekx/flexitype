@@ -764,13 +764,33 @@ func (r *attributeValueRepository) AttributeDataShape(ctx context.Context, tenan
 		ScopedValues     int `db:"scoped_values"`
 		DuplicateValues  int `db:"duplicate_values"`
 	}
-	// The value comparison mirrors what a unique constraint compares: the
-	// rendered text of the value, whichever typed column holds it.
+	// The value key mirrors what the WRITE PATH compares
+	// (CountByDefinitionAndValue), not how a value renders. A rendering
+	// keeps a decimal's trailing zeros and a quantity's authored unit, so
+	// "1.5" against "1.50" and "5 kg" against "5000 g" grouped apart here
+	// while the write path calls them the same value: the make-unique guard
+	// passed, and every later writer of that value was refused forever.
+	//
+	// Decimals therefore key on the numeric value with its display scale
+	// trimmed — numeric::text keeps trailing zeros, so 1.50 would still key
+	// apart from 1.5 — quantities on their base magnitude in value_float,
+	// and jsonb renders canonically already
+	// (Postgres normalizes key order and whitespace on storage), which is
+	// what jsonb `=` compares. The CASE evaluates the cast only for the
+	// rows of that type. A decimal whose text does not parse would raise
+	// here — the same exposure CountByDefinitionAndValue already carries,
+	// and the write path validates decimals.
 	const q = `
 WITH live AS (
-    SELECT entity_id, locale, channel,
-           COALESCE(value_text, value_json::text, value_int::text,
-                    value_float::text, value_bool::text, value_time::text) AS v
+    SELECT entity_id,
+           COALESCE(locale, '')  AS lc,
+           COALESCE(channel, '') AS ch,
+           CASE data_type
+             WHEN 'decimal'  THEN trim_scale(value_text::numeric)::text
+             WHEN 'quantity' THEN value_float::text
+             ELSE COALESCE(value_text, value_json::text, value_int::text,
+                           value_float::text, value_bool::text, value_time::text)
+           END AS v
       FROM flexitype_attribute_value
      WHERE tenant_id = ? AND attribute_definition_id = ? AND archived_at IS NULL
 ),
@@ -779,13 +799,16 @@ WITH live AS (
 -- value", so making it single-valued was refused for data the new schema can
 -- express perfectly — and the only way through was deleting real data.
 per_entity AS (SELECT entity_id, COUNT(*) AS n FROM live
-                GROUP BY entity_id, COALESCE(locale, ''), COALESCE(channel, '')),
-per_value  AS (SELECT v, COUNT(DISTINCT entity_id) AS n FROM live WHERE v IS NOT NULL GROUP BY v)
+                GROUP BY entity_id, lc, ch),
+-- Grouped by SCOPE as well as value, because uniqueness is per scope: the
+-- same value held in two locales is one value in each, not a duplicate, and
+-- counting it as one blocked the flip for data the new schema accepts.
+per_value  AS (SELECT v, lc, ch, COUNT(DISTINCT entity_id) AS n FROM live
+                WHERE v IS NOT NULL GROUP BY v, lc, ch)
 SELECT
   (SELECT COUNT(*) FROM live)                                        AS live_values,
   (SELECT COUNT(DISTINCT entity_id) FROM per_entity WHERE n > 1)     AS entities_with_many,
-  (SELECT COUNT(*) FROM live WHERE COALESCE(locale, '') <> ''
-                                OR COALESCE(channel, '') <> '')      AS scoped_values,
+  (SELECT COUNT(*) FROM live WHERE lc <> '' OR ch <> '')             AS scoped_values,
   (SELECT COALESCE(SUM(n), 0) FROM per_value WHERE n > 1)            AS duplicate_values`
 	if err := r.q.GetContext(ctx, &row, bind(q), tenant.String(), attrID.String()); err != nil {
 		return domainvalue.DataShape{}, fmt.Errorf("attribute data shape: %w", err)

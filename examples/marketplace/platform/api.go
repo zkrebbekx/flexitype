@@ -27,7 +27,10 @@ type API struct {
 	// the merchant id from the session, so one merchant cannot reach another.
 	apiToken string
 	clients  *clientCache
-	log      Logger
+	// through forwards a READ straight to flexitype with the merchant's own
+	// token, so the console's TypeScript SDK client can speak the real API.
+	through *passthrough
+	log     Logger
 }
 
 // NewAPI wires the merchant-facing API.
@@ -37,6 +40,7 @@ func NewAPI(store *Store, onboarder *Onboarder, apiToken, flexitypeURL string, l
 		onboarder: onboarder,
 		apiToken:  apiToken,
 		clients:   newClientCache(store, flexitypeURL),
+		through:   newPassthrough(store, flexitypeURL, log),
 		log:       log,
 	}
 }
@@ -59,6 +63,12 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("PUT /api/merchants/{id}/products/{entityID}", a.authed(a.putProduct))
 	mux.Handle("DELETE /api/merchants/{id}/products/{entityID}", a.authed(a.deleteProduct))
 	mux.Handle("POST /api/merchants/{id}/products/{entityID}/image", a.authed(a.uploadImage))
+
+	// The read-only flexitype passthrough. The console's SDK client is built
+	// with this as its base URL, so it issues real flexitype paths and this
+	// service attaches the merchant's token. See passthrough.go for why it
+	// refuses a write.
+	mux.Handle("/api/merchants/{id}/flexitype/api/v1/{path...}", a.authed(a.through.handle))
 
 	return mux
 }

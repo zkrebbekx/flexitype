@@ -3,13 +3,17 @@
 Many merchants, one storefront. Each merchant is its OWN flexitype tenant with
 its OWN schema; shoppers browse every merchant's products in one place.
 
-Two Go services, both against a **standalone** flexitype over HTTP with the Go
-SDK (`github.com/zkrebbekx/flexitype/client`). Neither embeds the library.
+Two Go services against a **standalone** flexitype over HTTP with the Go SDK
+(`github.com/zkrebbekx/flexitype/client`), and two React front ends on the
+TypeScript SDK (`@flexitype/client`). Nothing here embeds the library.
 
-- **[`platform/`](platform/)** — onboards a merchant and serves the
-  merchant-facing API a console calls.
+- **[`platform/`](platform/)** — onboards a merchant, serves the merchant API,
+  and forwards a merchant's flexitype READS with its token attached.
 - **[`storefront/`](storefront/)** — receives signed webhooks, keeps its own
   denormalized catalog, and serves shoppers.
+- **[`console/`](console/)** — the merchant console. Its product form is drawn
+  by the SCHEMA: it names no product field.
+- **[`shop/`](shop/)** — the shopper storefront. One catalog, every merchant.
 
 **Prerequisites:** Docker, `curl` and `jq`. `seed.sh` checks for them up front.
 
@@ -31,19 +35,27 @@ SDK (`github.com/zkrebbekx/flexitype/client`). Neither embeds the library.
 
 ```bash
 cd examples/marketplace
-docker compose up --build --wait      # postgres + flexitype + platform + storefront
+docker compose up --build --wait      # postgres, flexitype, platform, storefront, console, shop
 ./seed.sh                             # onboards 3 merchants, seeds products, asserts
 ```
+
+| What | Where |
+| --- | --- |
+| Shopper storefront | <http://localhost:8082> |
+| Merchant console | <http://localhost:8081> |
+| flexitype console | <http://localhost:8080> |
+| Shopper API | <http://localhost:9200/api/products> |
+| Merchant API | <http://localhost:9300/api/merchants> |
 
 `seed.sh` is safe to re-run. To start over: `docker compose down --volumes`,
 then `rm -f .admin/admin-token`, then bring the stack up again.
 
-Then:
+Then open <http://localhost:8082> to shop, or <http://localhost:8081> to model
+a merchant's schema and edit its products. The same data over curl:
 
 ```bash
 curl -s 'http://localhost:9200/api/products' | jq                    # the storefront
 curl -s 'http://localhost:9200/api/products?q=merino' | jq           # full-text search
-open http://localhost:8080                                          # the flexitype console
 ```
 
 ## The tenancy model
@@ -160,6 +172,41 @@ Everything IS projected, including drafts. Only the read path hides them, so a
 merchant publishing a draft becomes visible immediately with no second
 backfill.
 
+## The two front ends
+
+Both are React 19 on Vite, and neither holds a credential in the browser.
+
+### The merchant console ([`console/`](console/))
+
+The form a merchant edits a product with is drawn by the SCHEMA. It reads the
+type's EFFECTIVE attributes with the SDK's `useFormDescriptor` and renders what
+comes back: no product field is named anywhere in the application. A merchant
+that adds `voltage` to its own subtype gets a `voltage` input with no console
+change at all.
+
+The console reads and writes through two different paths, for two reasons:
+
+- **A read** goes to the platform's flexitype PASSTHROUGH, so the SDK issues
+  real flexitype paths and its services, hooks and soft-typing helpers work
+  unchanged. The platform attaches that merchant's service-account token. The
+  passthrough is read-only and refuses a write with 405
+  ([`platform/passthrough.go`](platform/passthrough.go)).
+- **A write** goes to the platform's own endpoints, which batch a whole product
+  into ONE atomic call. Writing value by value would let the storefront project
+  a half-written product.
+
+Values are coerced by the SDK's `toWire` before the request, so a value that
+cannot be its data type is refused with the same `VALIDATION` code the service
+would have answered with, and nothing is sent.
+
+### The shopper storefront ([`shop/`](shop/))
+
+One grid over every merchant, answered from the projection rather than from
+flexitype — a cross-tenant query does not exist. A product page renders
+whatever the merchant added to its own subtype, keyed by internal name, without
+knowing any of those names. A basket line is keyed by tenant AND entity id,
+because two merchants can both call a product `sku-1`.
+
 ## Credentials
 
 There are four in this example, and they are all demo values in
@@ -170,7 +217,7 @@ There are four in this example, and they are all demo values in
 | flexitype admin token | platform | creating tenants and service accounts |
 | merchant service-account token | platform, storefront | one merchant's catalog |
 | `MARKETPLACE_INTERNAL_TOKEN` | platform → storefront | merchant registration, backfill |
-| `PLATFORM_API_TOKEN` | merchant console → platform | the merchant API |
+| `PLATFORM_API_TOKEN` | the console's nginx → platform | the merchant API |
 
 **The merchant token is stored in a table here. A real deployment would not do
 that.** It would keep the token in a secret manager (Vault, AWS Secrets
@@ -262,6 +309,12 @@ non-active product is unreachable because the row was already refused.
 export FLEXITYPE_TEST_DSN='postgres://postgres:postgres@localhost:5432/flexitype?sslmode=disable'
 (cd platform && go test ./...)
 (cd storefront && go test ./...)
+
+# The front ends. The console consumes the SDK as a file dependency, so build
+# the SDK first.
+(cd ../../client-ts && npm ci && npm run build)
+(cd console && npm ci && npm test)
+(cd shop && npm ci && npm test)
 ```
 
 They skip without a DSN, like the repository's other Postgres suites. Each
@@ -269,12 +322,19 @@ suite drives a REAL flexitype — the storefront against an in-memory one with a
 service account per tenant, the platform against a Postgres-backed one with
 provisioning on, because the tenant and service-account API is database-backed.
 
-They cover: onboarding is idempotent and re-runnable after a part-way failure;
-two merchants are isolated; the projector is idempotent and order-independent;
+The front-end suites cover the form the schema draws (including a field the
+console never names), the wire form each data type produces, a value that
+cannot be its type, a localized write, products from two tenants in one grid,
+a withdrawn product, and that no browser request carries a credential.
+
+The Go suites cover: onboarding is idempotent and re-runnable after a part-way
+failure; two merchants are isolated; the projector is idempotent and order-independent;
 a new attribute is picked up; the backfill is re-runnable; a draft or archived
 product is invisible on every shopper path; an unsigned, wrongly signed,
 tampered, stale or cross-tenant delivery is refused; the debouncer coalesces a
-burst per entity; and no response or log line carries a merchant token.
+burst per entity; no response or log line carries a merchant token; and the read-only
+passthrough reaches the right tenant, refuses a write, refuses the admin API
+and never echoes the token.
 
 ## What the API made awkward
 

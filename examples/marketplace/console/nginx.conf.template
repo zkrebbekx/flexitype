@@ -1,0 +1,34 @@
+# The console's origin.
+#
+# It serves the built React app and proxies /api to the platform, ADDING the
+# console credential here. The browser therefore holds no token at all: not a
+# merchant's service-account token (the platform holds that), and not even the
+# console credential.
+#
+# A real deployment authenticates a merchant USER here instead and derives the
+# merchant id from the session, so one merchant cannot reach another's paths.
+server {
+    listen 8081;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # The bytes a merchant uploads are proxied through to flexitype's blob
+    # store, so the body limit has to allow one image.
+    client_max_body_size 12m;
+
+    location /api/ {
+        proxy_pass ${PLATFORM_URL};
+        proxy_set_header Host $host;
+        proxy_set_header Authorization "Bearer ${PLATFORM_API_TOKEN}";
+        proxy_http_version 1.1;
+        # An upload streams rather than buffering the whole image first.
+        proxy_request_buffering off;
+    }
+
+    # A single-page application: an unknown path is a route, not a 404.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

@@ -1,0 +1,22 @@
+# The shopper origin.
+#
+# It serves the built React app and proxies /api to the storefront. No
+# credential is added anywhere: the shopper API is public, and the image
+# endpoint proxies the bytes with the merchant's token on the server side.
+server {
+    listen 8082;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location /api/ {
+        proxy_pass ${STOREFRONT_URL};
+        proxy_set_header Host $host;
+        proxy_http_version 1.1;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

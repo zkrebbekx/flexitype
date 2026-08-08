@@ -29,3 +29,12 @@ web/tsconfig.tsbuildinfo
 # and fails when they are stale.
 client-ts/node_modules/
 client-ts/dist/
+
+# Marketplace example front ends: dependencies and build output. The lockfiles
+# are checked in, so `npm ci` is reproducible.
+examples/marketplace/console/node_modules/
+examples/marketplace/console/dist/
+examples/marketplace/shop/node_modules/
+examples/marketplace/shop/dist/
+examples/marketplace/console/tsconfig.tsbuildinfo
+examples/marketplace/shop/tsconfig.tsbuildinfo

@@ -658,8 +658,10 @@ func (r *attributeValueRepository) MediaValueForKey(ctx context.Context, tenant 
 	return snap, true, nil
 }
 
-// MediaKeyRefCount counts other rows referencing an object key, across tenants
-// and including archived ones.
+// MediaKeyRefCount counts live rows referencing an object key, across tenants,
+// excluding one value id. Served by the cross-tenant partial expression index
+// on (value_json->>'object_key') from migration 000034; the tenant-leading
+// index from 000021 cannot seek for a cross-tenant count.
 func (r *attributeValueRepository) MediaKeyRefCount(ctx context.Context, objectKey string, exclude valueobjects.AttributeValueID) (int, error) {
 	var n int
 	if err := r.q.GetContext(ctx, &n, bind(
@@ -670,6 +672,57 @@ func (r *attributeValueRepository) MediaKeyRefCount(ctx context.Context, objectK
 		return 0, fmt.Errorf("media key reference count: %w", err)
 	}
 	return n, nil
+}
+
+// MediaKeyRefCounts counts live rows per object key, across tenants, in one
+// grouped query. Keys with no live rows are absent from the result. Served by
+// the same 000034 partial expression index as MediaKeyRefCount.
+func (r *attributeValueRepository) MediaKeyRefCounts(ctx context.Context, objectKeys []string) (map[string]int, error) {
+	out := make(map[string]int, len(objectKeys))
+	if len(objectKeys) == 0 {
+		return out, nil
+	}
+	rows, err := r.q.QueryContext(ctx, bind(
+		`SELECT value_json->>'object_key', count(*)
+		   FROM flexitype_attribute_value
+		  WHERE data_type = ? AND value_json->>'object_key' = ANY(?)
+		    AND archived_at IS NULL
+		  GROUP BY 1`),
+		valueobjects.DataTypeMedia.String(), pq.Array(objectKeys))
+	if err != nil {
+		return nil, fmt.Errorf("media key reference counts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var key string
+		var n int
+		if err := rows.Scan(&key, &n); err != nil {
+			return nil, fmt.Errorf("media key reference counts: %w", err)
+		}
+		out[key] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("media key reference counts: %w", err)
+	}
+	return out, nil
+}
+
+// LockMediaKey takes the transaction-scoped advisory lock that serializes
+// adoption and blob GC of one object key. pg_advisory_xact_lock blocks until
+// the lock is free, is re-entrant inside the transaction, and releases at
+// commit or rollback — exactly the hold-until-commit contract the domain port
+// asks for. The 64-bit hash keys the lock; a hash collision only means two
+// unrelated keys briefly serialize, which is safe.
+func (r *attributeValueRepository) LockMediaKey(ctx context.Context, objectKey string) error {
+	if !r.inTx {
+		return fmt.Errorf("attribute value repository: LockMediaKey requires a transaction")
+	}
+	if _, err := r.q.ExecContext(ctx, bind(
+		`SELECT pg_advisory_xact_lock(hashtextextended('flexitype:media-key:' || ?, 0))`),
+		objectKey); err != nil {
+		return fmt.Errorf("lock media key: %w", err)
+	}
+	return nil
 }
 
 // MediaKeyAttributes returns the distinct attributes of the tenant's value rows

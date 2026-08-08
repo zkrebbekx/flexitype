@@ -47,6 +47,16 @@ type Store struct {
 	// definition write leaving the counter advanced only causes a harmless
 	// schema rebuild, never a stale schema.
 	schemaVersions map[string]uint64
+
+	// mediaKeyMu guards mediaKeyHeld, the set of media object keys currently
+	// locked by an open transaction (LockMediaKey). It mirrors the advisory
+	// lock the PostgreSQL backend takes: adoption and blob GC of one object
+	// key serialize on it, and the owning transaction releases it at commit
+	// or rollback — before the post-commit hooks run, so a GC hook of the
+	// same transaction can take the lock (matching pg_advisory_xact_lock,
+	// which releases at COMMIT).
+	mediaKeyMu   sync.Mutex
+	mediaKeyHeld map[string]struct{}
 }
 
 type searchDoc struct {
@@ -68,7 +78,50 @@ func NewStore() *Store {
 		rels:           map[string]domainrelationship.Snapshot{},
 		searchDocs:     map[string]searchDoc{},
 		schemaVersions: map[string]uint64{},
+		mediaKeyHeld:   map[string]struct{}{},
 	}
+}
+
+// tryLockMediaKey claims one media-key lock when it is free.
+func (s *Store) tryLockMediaKey(key string) bool {
+	s.mediaKeyMu.Lock()
+	defer s.mediaKeyMu.Unlock()
+	if _, held := s.mediaKeyHeld[key]; held {
+		return false
+	}
+	s.mediaKeyHeld[key] = struct{}{}
+	return true
+}
+
+// lockMediaKey blocks until the media-key lock for key is claimed or ctx
+// ends. Polling instead of parking keeps the wait cancellable: the PostgreSQL
+// backend resolves a cross-transaction deadlock with the server's deadlock
+// detector, and here the context deadline plays that role — a waiter never
+// hangs past its context.
+func (s *Store) lockMediaKey(ctx context.Context, key string) error {
+	for {
+		if s.tryLockMediaKey(key) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+// releaseMediaKeys frees the media-key locks a finished transaction holds.
+func (s *Store) releaseMediaKeys(j *undoJournal) {
+	if j == nil || len(j.heldMediaKeys) == 0 {
+		return
+	}
+	s.mediaKeyMu.Lock()
+	defer s.mediaKeyMu.Unlock()
+	for _, key := range j.heldMediaKeys {
+		delete(s.mediaKeyHeld, key)
+	}
+	j.heldMediaKeys = nil
 }
 
 // bumpSchemaVersion advances a tenant's schema version. The definition-repo
@@ -150,6 +203,22 @@ type journalKey struct {
 type undoJournal struct {
 	seen  map[journalKey]struct{} // keys already captured (first-write-wins)
 	undos []func()                // restore closures, replayed in reverse
+	// heldMediaKeys lists the media object keys this transaction locked via
+	// LockMediaKey. The transactor releases them at commit or rollback,
+	// mirroring pg_advisory_xact_lock. A transaction is single-goroutine (like
+	// the journal itself), so the slice needs no lock of its own.
+	heldMediaKeys []string
+}
+
+// holdsMediaKey reports whether this transaction already locked key, making
+// LockMediaKey re-entrant inside one transaction (as pg_advisory_xact_lock is).
+func (j *undoJournal) holdsMediaKey(key string) bool {
+	for _, held := range j.heldMediaKeys {
+		if held == key {
+			return true
+		}
+	}
+	return false
 }
 
 func newUndoJournal() *undoJournal {

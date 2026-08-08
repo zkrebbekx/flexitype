@@ -12,6 +12,7 @@ package erasure
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/zkrebbekx/flexitype/application/activity"
 	"github.com/zkrebbekx/flexitype/application/appctx"
@@ -40,6 +41,11 @@ type Config struct {
 	// UnitOfWork runs the atomic value/relationship/revision deletes and the
 	// audit entry as one transaction, with the post-commit cleanup hooks.
 	UnitOfWork uow.UnitOfWork
+	// Transactor opens the short locked transactions post-commit blob GC runs
+	// in: per key, the media-key lock, the reference recount and the blob
+	// delete are one unit, so the recount cannot race an in-flight adoption.
+	// Nil disables blob GC (like a nil Blobs).
+	Transactor db.Transactor
 	// Values hard-deletes attribute values (returning purged media keys) and is
 	// tx-bindable via WithTx.
 	Values domainvalue.Repository
@@ -66,12 +72,13 @@ type Config struct {
 
 // Interactor owns the entity- and tenant-level erasure usecases.
 type Interactor struct {
-	uow       uow.UnitOfWork
-	values    domainvalue.Repository
-	links     domainrelationship.Repository
-	revisions apprevision.Store
-	search    appctx.SearchStore
-	blobs     blobStore
+	uow        uow.UnitOfWork
+	transactor db.Transactor
+	values     domainvalue.Repository
+	links      domainrelationship.Repository
+	revisions  apprevision.Store
+	search     appctx.SearchStore
+	blobs      blobStore
 	// onCleanupError surfaces a swallowed post-erasure cleanup failure (a blob
 	// GC or search-projection removal that could not be completed). Nil-safe.
 	onCleanupError func(error)
@@ -83,6 +90,7 @@ type Interactor struct {
 func NewInteractor(cfg Config) *Interactor {
 	return &Interactor{
 		uow:            cfg.UnitOfWork,
+		transactor:     cfg.Transactor,
 		values:         cfg.Values,
 		links:          cfg.Links,
 		revisions:      cfg.Revisions,
@@ -355,39 +363,111 @@ func (i *Interactor) PurgeTenant(ctx context.Context) (*PurgeReport, error) {
 // A retained key is reported in RetainedBlobKeys rather than silently
 // skipped: for a right-to-erasure caller, "these bytes survive because
 // another entity still points at them" is a fact they have to be told.
+//
+// The keys are processed in chunks. Each chunk takes ONE batched reference
+// count (MediaKeyRefCounts) and re-arms its own deadline: with the old per-key
+// count inside the shared post-commit budget, a purge of thousands of media
+// values spent the whole budget on serial counts and reported the remaining
+// bytes unpurged. A key the batch shows still referenced is retained without a
+// lock — a concurrent removal of that last reference runs its own locked GC.
+// A key the batch shows unreferenced is deleted through the same locked
+// recount-and-delete the write path uses (gcBlobKey), so the delete cannot
+// race an in-flight adoption of the key (#484).
 func (i *Interactor) gcErasedBlobs(tx db.Transactor, keys []string, report *PurgeReport) {
-	if i.blobs == nil || len(keys) == 0 {
+	if i.blobs == nil || i.transactor == nil || len(keys) == 0 {
 		return
 	}
 	keys = append([]string(nil), keys...) // capture: the caller may reuse the slice
 	tx.OnPostCommit(func(ctx context.Context) error {
-		for _, key := range keys {
-			if key == "" {
-				continue
-			}
-			// The purged rows are gone by now, so any remaining reference is
-			// another value's. zeroValueID excludes nothing.
-			refs, cerr := i.values.MediaKeyRefCount(ctx, key, valueobjects.AttributeValueID{})
-			if cerr != nil {
-				report.MediaBlobsFailed++
-				report.UnpurgedBlobKeys = append(report.UnpurgedBlobKeys, key)
-				i.observeCleanup(fmt.Errorf("count media references for %s: %w", key, cerr))
-				continue
-			}
-			if refs > 0 {
-				report.RetainedBlobKeys = append(report.RetainedBlobKeys, key)
-				continue
-			}
-			if err := i.blobs.Delete(ctx, key); err != nil {
-				report.MediaBlobsFailed++
-				report.UnpurgedBlobKeys = append(report.UnpurgedBlobKeys, key)
-				i.observeCleanup(fmt.Errorf("purge media blob %s: %w", key, err))
-				continue
-			}
-			report.MediaBlobsPurged++
+		for start := 0; start < len(keys); start += gcChunkSize {
+			end := min(start+gcChunkSize, len(keys))
+			i.gcBlobChunk(ctx, keys[start:end], report)
 		}
 		return nil
 	})
+}
+
+const (
+	// gcChunkSize bounds one batched reference-count query and the work one
+	// re-armed deadline covers.
+	gcChunkSize = 256
+	// gcChunkTimeout is the fresh deadline each chunk gets. The total GC time
+	// is bounded per chunk (keys/gcChunkSize × gcChunkTimeout), not by the
+	// transactor's one shared post-commit budget.
+	gcChunkTimeout = 30 * time.Second
+)
+
+// gcBlobChunk garbage-collects one chunk of purged keys, recording the true
+// per-key outcome on the report.
+func (i *Interactor) gcBlobChunk(parent context.Context, chunk []string, report *PurgeReport) {
+	// A detached, re-armed deadline: the parent post-commit context carries
+	// one shared budget, and a large erasure must not report bytes unpurged
+	// merely because earlier chunks used up the clock.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), gcChunkTimeout)
+	defer cancel()
+
+	live := make([]string, 0, len(chunk))
+	for _, key := range chunk {
+		if key != "" {
+			live = append(live, key)
+		}
+	}
+	if len(live) == 0 {
+		return
+	}
+
+	// The purged rows are gone by now, so any remaining reference is another
+	// value's. One grouped query answers the whole chunk.
+	counts, err := i.values.MediaKeyRefCounts(ctx, live)
+	if err != nil {
+		report.MediaBlobsFailed += len(live)
+		report.UnpurgedBlobKeys = append(report.UnpurgedBlobKeys, live...)
+		i.observeCleanup(fmt.Errorf("count media references: %w", err))
+		return
+	}
+	for _, key := range live {
+		if counts[key] > 0 {
+			report.RetainedBlobKeys = append(report.RetainedBlobKeys, key)
+			continue
+		}
+		retained, err := i.gcBlobKey(ctx, key)
+		switch {
+		case err != nil:
+			report.MediaBlobsFailed++
+			report.UnpurgedBlobKeys = append(report.UnpurgedBlobKeys, key)
+			i.observeCleanup(fmt.Errorf("purge media blob %s: %w", key, err))
+		case retained:
+			report.RetainedBlobKeys = append(report.RetainedBlobKeys, key)
+		default:
+			report.MediaBlobsPurged++
+		}
+	}
+}
+
+// gcBlobKey deletes one blob unless a live value row references its key. The
+// per-key media lock, the recount and the delete are one short transaction:
+// an adoption holds the same lock from its liveness check to its commit, so
+// this recount either waits for that commit (and then sees the new live row
+// and retains the blob) or deletes first (and the adoption's probe then sees
+// the bytes gone and rejects). It reports whether the blob was retained.
+func (i *Interactor) gcBlobKey(ctx context.Context, key string) (retained bool, err error) {
+	err = i.transactor.InTransaction(ctx, func(gcTx db.Transactor) error {
+		values := i.values.WithTx(gcTx)
+		if err := values.LockMediaKey(ctx, key); err != nil {
+			return fmt.Errorf("lock media key: %w", err)
+		}
+		refs, err := values.MediaKeyRefCount(ctx, key, valueobjects.AttributeValueID{})
+		if err != nil {
+			return fmt.Errorf("count media references: %w", err)
+		}
+		if refs > 0 {
+			retained = true
+			return nil
+		}
+		// Delete while the lock is still held: the commit below releases it.
+		return i.blobs.Delete(ctx, key)
+	})
+	return retained, err
 }
 
 // removeSearchDocAfterCommit drops one entity's search document once the erasure

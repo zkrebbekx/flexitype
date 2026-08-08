@@ -306,6 +306,19 @@ func (r *fakeValueRepo) MediaKeyRefCount(_ context.Context, objectKey string, ex
 	return n, nil
 }
 
+func (r *fakeValueRepo) MediaKeyRefCounts(_ context.Context, objectKeys []string) (map[string]int, error) {
+	out := make(map[string]int, len(objectKeys))
+	for _, key := range objectKeys {
+		n, _ := r.MediaKeyRefCount(context.Background(), key, valueobjects.AttributeValueID{})
+		if n > 0 {
+			out[key] = n
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeValueRepo) LockMediaKey(context.Context, string) error { return nil }
+
 func (r *fakeValueRepo) MediaKeyAttributes(_ context.Context, tenant valueobjects.TenantID, objectKey string) ([]valueobjects.AttributeDefinitionID, error) {
 	var out []valueobjects.AttributeDefinitionID
 	for _, snap := range r.values {

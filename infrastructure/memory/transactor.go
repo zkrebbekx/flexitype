@@ -88,6 +88,12 @@ func (t *memTx) Commit(ctx context.Context) error {
 		}
 	}
 	t.done = true
+	// Release the media-key locks BEFORE the post-commit hooks run, matching
+	// pg_advisory_xact_lock (released at COMMIT). A post-commit blob-GC hook
+	// of this same transaction may need to take a lock this transaction held.
+	if t.store != nil {
+		t.store.releaseMediaKeys(t.journal)
+	}
 	var errs []error
 	for _, h := range t.post {
 		if err := h(ctx); err != nil {
@@ -114,6 +120,11 @@ func (t *memTx) Rollback(ctx context.Context) error {
 	// preserves any writes a concurrently interleaved transaction has committed.
 	if t.store != nil && t.journal != nil {
 		t.store.rollback(t.journal)
+	}
+	// A rolled-back transaction frees its media-key locks too, before its
+	// rollback hooks run — the same release point Commit uses.
+	if t.store != nil {
+		t.store.releaseMediaKeys(t.journal)
 	}
 	var errs []error
 	for _, h := range t.rollback {

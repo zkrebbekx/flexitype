@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	domaindependency "github.com/zkrebbekx/flexitype/domain/dependency"
@@ -278,6 +279,45 @@ func (r *valueRepo) MediaKeyRefCount(_ context.Context, objectKey string, exclud
 		}
 	}
 	return n, nil
+}
+
+// MediaKeyRefCounts is the batched MediaKeyRefCount: live rows per key, any
+// tenant, no exclusion. Keys with no live rows are absent from the result.
+func (r *valueRepo) MediaKeyRefCounts(_ context.Context, objectKeys []string) (map[string]int, error) {
+	wanted := make(map[string]struct{}, len(objectKeys))
+	for _, k := range objectKeys {
+		wanted[k] = struct{}{}
+	}
+	r.s.mu.RLock()
+	defer r.s.mu.RUnlock()
+	out := make(map[string]int, len(objectKeys))
+	for _, snap := range r.s.values {
+		if snap.ArchivedAt != nil || snap.Value.DataType() != valueobjects.DataTypeMedia {
+			continue
+		}
+		if _, ok := wanted[snap.Value.Media().ObjectKey]; ok {
+			out[snap.Value.Media().ObjectKey]++
+		}
+	}
+	return out, nil
+}
+
+// LockMediaKey serializes adoption and blob GC of one object key, mirroring
+// the PostgreSQL advisory lock: it blocks until the lock is free (bounded by
+// ctx), is re-entrant inside the transaction, and the transactor releases it
+// at commit or rollback.
+func (r *valueRepo) LockMediaKey(ctx context.Context, objectKey string) error {
+	if r.j == nil {
+		return fmt.Errorf("memory: LockMediaKey requires a transaction")
+	}
+	if r.j.holdsMediaKey(objectKey) {
+		return nil
+	}
+	if err := r.s.lockMediaKey(ctx, objectKey); err != nil {
+		return err
+	}
+	r.j.heldMediaKeys = append(r.j.heldMediaKeys, objectKey)
+	return nil
 }
 
 func (r *valueRepo) MediaKeyAttributes(_ context.Context, tenant valueobjects.TenantID, objectKey string) ([]valueobjects.AttributeDefinitionID, error) {

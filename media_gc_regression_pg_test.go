@@ -195,7 +195,7 @@ func TestMediaAdoptionGCRacePostgres(t *testing.T) {
 // namespace), but the only object-key index led with tenant_id, so the count
 // could not seek: every media overwrite or remove paid a full scan of the
 // media rows, and a large erasure spent its whole post-commit budget on
-// serial scans and reported the remaining bytes unpurged. Migration 000033
+// serial scans and reported the remaining bytes unpurged. Migration 000034
 // adds the cross-tenant partial expression index the count seeks on.
 func TestMediaGCIndexPostgres(t *testing.T) {
 	pool := openTestDB(t)

@@ -660,7 +660,7 @@ func (r *attributeValueRepository) MediaValueForKey(ctx context.Context, tenant 
 
 // MediaKeyRefCount counts live rows referencing an object key, across tenants,
 // excluding one value id. Served by the cross-tenant partial expression index
-// on (value_json->>'object_key') from migration 000033; the tenant-leading
+// on (value_json->>'object_key') from migration 000034; the tenant-leading
 // index from 000021 cannot seek for a cross-tenant count.
 func (r *attributeValueRepository) MediaKeyRefCount(ctx context.Context, objectKey string, exclude valueobjects.AttributeValueID) (int, error) {
 	var n int
@@ -676,7 +676,7 @@ func (r *attributeValueRepository) MediaKeyRefCount(ctx context.Context, objectK
 
 // MediaKeyRefCounts counts live rows per object key, across tenants, in one
 // grouped query. Keys with no live rows are absent from the result. Served by
-// the same 000033 partial expression index as MediaKeyRefCount.
+// the same 000034 partial expression index as MediaKeyRefCount.
 func (r *attributeValueRepository) MediaKeyRefCounts(ctx context.Context, objectKeys []string) (map[string]int, error) {
 	out := make(map[string]int, len(objectKeys))
 	if len(objectKeys) == 0 {

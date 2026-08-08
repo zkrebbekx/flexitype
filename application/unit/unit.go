@@ -8,10 +8,13 @@ import (
 	"context"
 	"math/big"
 	"strconv"
+	"strings"
 
 	"github.com/zkrebbekx/flexitype/application/uow"
+	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
@@ -67,10 +70,30 @@ type Store interface {
 // Interactor implements the unit-family usecases.
 type Interactor struct {
 	store Store
+	// attrs answers which attributes still pin a family. Nil disables the
+	// reference check in Delete; the service always wires it, and the option
+	// exists so a caller assembling this interactor by hand is not forced to
+	// supply an attribute repository it has no other use for.
+	attrs domainattribute.Repository
+}
+
+// Option customises the unit-family usecases.
+type Option func(*Interactor)
+
+// WithAttributeReferences lets Delete refuse a family that live attributes
+// still pin, rather than stranding their values.
+func WithAttributeReferences(attrs domainattribute.Repository) Option {
+	return func(i *Interactor) { i.attrs = attrs }
 }
 
 // NewInteractor wires the unit-family usecases.
-func NewInteractor(store Store) *Interactor { return &Interactor{store: store} }
+func NewInteractor(store Store, opts ...Option) *Interactor {
+	i := &Interactor{store: store}
+	for _, opt := range opts {
+		opt(i)
+	}
+	return i
+}
 
 // CreateInput carries a new family's fields.
 type CreateInput struct {
@@ -137,10 +160,54 @@ func (i *Interactor) Delete(ctx context.Context, rawID string) error {
 	// is not there reports NotFound like every other by-id operation, rather
 	// than a misleading success. The lookup is tenant-scoped, so another
 	// tenant's family is indistinguishable from a missing one.
-	if _, err := i.store.Get(ctx, uow.TenantFromContext(ctx), id); err != nil {
+	fam, err := i.store.Get(ctx, uow.TenantFromContext(ctx), id)
+	if err != nil {
+		return err
+	}
+	if err := i.assertUnreferenced(ctx, fam); err != nil {
 		return err
 	}
 	return i.store.Delete(ctx, uow.TenantFromContext(ctx), id)
+}
+
+// referenceSample bounds how many referencing attribute names the refusal
+// lists. The count is exact; the names are there to start the cleanup.
+const referenceSample = 10
+
+// assertUnreferenced refuses to delete a family that live attributes pin.
+//
+// Deleting it used to succeed, and every quantity value under those
+// attributes was then stranded: the value still read "2 kg", while the next
+// write failed because the family it names no longer resolves. Nothing
+// reported the break at delete time, which is the only moment an operator
+// could have chosen differently.
+func (i *Interactor) assertUnreferenced(ctx context.Context, fam Family) error {
+	if i.attrs == nil {
+		return nil
+	}
+	attrs, total, err := i.attrs.List(ctx, domainattribute.Filter{
+		TenantID:     uow.TenantFromContext(ctx),
+		UnitFamilyID: fam.ID.String(),
+	}, db.Page{Limit: referenceSample, WantTotal: true})
+	if err != nil {
+		return err
+	}
+	if total == 0 && len(attrs) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(attrs))
+	for _, a := range attrs {
+		names = append(names, a.InternalName())
+	}
+	count := total
+	if count < len(attrs) {
+		count = len(attrs)
+	}
+	return domainerrors.NewConflict(
+		"the unit family is still pinned by quantity attributes; deleting it would strand their stored "+
+			"values, which stay readable but can never be written again. Repoint or remove those "+
+			"attributes first",
+		"unit_family", fam.Name, "attributes", count, "example_attributes", strings.Join(names, ", "))
 }
 
 // Rebase recomputes a quantity value's base magnitude from this family,

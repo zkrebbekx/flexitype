@@ -471,10 +471,26 @@ func (s *deliveryStore) Redeliver(ctx context.Context, tenant valueobjects.Tenan
 		return domainerrors.NewConflict("delivery is already queued", "status", status)
 	}
 
-	if _, err := s.q.ExecContext(ctx, bind(`UPDATE flexitype_webhook_delivery
+	// The status guard is INSIDE the UPDATE, not only in the read above: a
+	// worker can claim the row between the SELECT and the UPDATE, and an
+	// unguarded rewind to pending mid-send makes the endpoint receive the
+	// payload twice. Zero rows affected means the row moved (or vanished)
+	// after the read — report the conflict rather than requeueing.
+	res, err := s.q.ExecContext(ctx, bind(`UPDATE flexitype_webhook_delivery
 	 SET status = 'pending', next_attempt_at = ?, lease_expires_at = NULL, updated_at = ?
-	 WHERE tenant_id = ? AND id = ?`), now, now, tenant.String(), id); err != nil {
+	 WHERE tenant_id = ? AND id = ? AND status NOT IN ('pending', 'inflight')`),
+		now, now, tenant.String(), id)
+	if err != nil {
 		return fmt.Errorf("redeliver: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("redeliver: %w", err)
+	}
+	if n == 0 {
+		return domainerrors.NewConflict(
+			"the delivery was claimed or requeued after it was read; it is already in flight or queued",
+			"id", id.String())
 	}
 	return nil
 }

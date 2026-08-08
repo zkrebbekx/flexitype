@@ -23,6 +23,11 @@ type importMapping struct {
 	Mapping   map[string]string `json:"mapping"`
 	Mode      string            `json:"mode"`
 	DryRun    bool              `json:"dry_run"`
+	// AllowLegacyMultiValueCells opts in to the in-band multi-value cell
+	// forms an earlier release exported. Off by default: those forms are
+	// shapes an ordinary value can have, so reading them unasked corrupted
+	// values that merely looked like them.
+	AllowLegacyMultiValueCells bool `json:"allow_legacy_multi_value_cells"`
 }
 
 // importEntities loads a CSV upload into a type's entities. The multipart
@@ -62,6 +67,8 @@ func (s *server) importEntities(w http.ResponseWriter, r *http.Request) {
 		Rows:             rows,
 		Mode:             appvalue.ImportMode(m.Mode),
 		DryRun:           m.DryRun,
+
+		AllowLegacyMultiValueCells: m.AllowLegacyMultiValueCells,
 	})
 	if err != nil {
 		writeError(w, s.log, err)

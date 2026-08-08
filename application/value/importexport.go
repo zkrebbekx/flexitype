@@ -142,6 +142,21 @@ type ImportInput struct {
 	Mode    ImportMode
 	// DryRun validates every row and writes nothing.
 	DryRun bool
+	// AllowLegacyMultiValueCells re-enables the in-band multi-value cell
+	// forms an earlier release exported: a bare JSON array of members, and
+	// the untagged {"values":[…]} object.
+	//
+	// It defaults to OFF because those forms are shapes an ordinary value can
+	// have. A string attribute holding the literal text
+	// `[{"value":"a"},{"value":"b"}]` exported verbatim and re-imported as
+	// two values — this tool's own output was not round-trip safe, and the
+	// report called it one valid row with no errors. With the flag off, only
+	// the out-of-band "#flexitype-values:" prefix marks a multi-value cell,
+	// and that prefix cannot be forged by a JSON document.
+	//
+	// Turn it on only to load a file an earlier release wrote, and only when
+	// you know its columns hold no value shaped like the legacy forms.
+	AllowLegacyMultiValueCells bool
 }
 
 // ImportError points at one rejected cell (or row).
@@ -219,7 +234,7 @@ func (i *Interactor) Import(ctx context.Context, in ImportInput) (*ImportReport,
 	valid := make([]preparedRow, 0, len(in.Rows))
 	for r, row := range in.Rows {
 		rowNum := r + 1 // 1-based; header is row 0 for humans
-		inputs, cellErrs := i.rowInputs(in.TypeDefinitionID, cols, keyIdx, rowNum, row)
+		inputs, cellErrs := i.rowInputs(in.TypeDefinitionID, cols, keyIdx, rowNum, row, in.AllowLegacyMultiValueCells)
 		if len(cellErrs) > 0 {
 			report.Errors = append(report.Errors, cellErrs...)
 			erroredRows[rowNum] = true
@@ -435,7 +450,7 @@ func (i *Interactor) resolveMapping(ctx context.Context, in ImportInput) ([]mapp
 // rowInputs turns one CSV row into value SetInputs. Empty cells are skipped
 // (no value written). Cell-conversion failures return per-cell errors and no
 // inputs, so the row is reported without a database round-trip.
-func (i *Interactor) rowInputs(typeID string, cols []mappedColumn, keyIdx, rowNum int, row []string) ([]SetInput, []ImportError) {
+func (i *Interactor) rowInputs(typeID string, cols []mappedColumn, keyIdx, rowNum int, row []string, allowLegacy bool) ([]SetInput, []ImportError) {
 	entityID := ""
 	if keyIdx < len(row) {
 		entityID = row[keyIdx]
@@ -463,7 +478,7 @@ func (i *Interactor) rowInputs(typeID string, cols []mappedColumn, keyIdx, rowNu
 		// A cell holding several values — a multi-valued attribute, or scoped
 		// variants — arrives as the JSON array the export writes. Each member
 		// becomes its own write, with its own scope.
-		if entries, ok := scopedCell(cell, c.dataType); ok {
+		if entries, ok := scopedCell(cell, c.dataType, allowLegacy); ok {
 			for _, e := range entries {
 				raw, err := cellToRaw(c.dataType, e.text())
 				if err != nil {
@@ -577,7 +592,7 @@ const multiValueCellPrefix = "#flexitype-values:"
 // NEITHER form is looked for on a json column. See below: that is what makes
 // the exclusion effective, rather than leaving it behind a branch the tagged
 // form never reaches.
-func scopedCell(cell string, dt valueobjects.DataType) ([]cellEntry, bool) {
+func scopedCell(cell string, dt valueobjects.DataType, allowLegacy bool) ([]cellEntry, bool) {
 	// A json cell is ALWAYS exactly one value, so the multi-value format has
 	// no meaning there and is not looked for. Any in-band sentinel drawn from
 	// the JSON grammar can be forged by a JSON payload: the first format was
@@ -591,10 +606,20 @@ func scopedCell(cell string, dt valueobjects.DataType) ([]cellEntry, bool) {
 	if rest, found := strings.CutPrefix(trimmed, multiValueCellPrefix); found {
 		return decodeCellEntries(rest)
 	}
-	// Below here are the LEGACY in-band forms, kept so a file an earlier
-	// release exported still loads. Neither is looked for on a json column:
-	// both are shapes a json document can have, and reading a document as a
-	// member list is the silent corruption this prefix exists to end.
+	// Below here are the LEGACY in-band forms. They are OFF unless the caller
+	// asks for them, because the reasoning that excluded them from a json
+	// column applies to every type: both forms are shapes an ordinary value
+	// can have. A string attribute holding the literal text
+	// `[{"value":"a"},{"value":"b"}]` was read as two values, so this tool's
+	// own export did not round-trip — and the report called it one valid row
+	// with no errors. Only the out-of-band prefix above marks a multi-value
+	// cell now, and no JSON document can carry it.
+	if !allowLegacy {
+		return nil, false
+	}
+	// Even opted in, a json column never takes an in-band form: a json
+	// document IS the value, and reading one as a member list is exactly the
+	// corruption the prefix exists to end.
 	if dt == valueobjects.DataTypeJSON {
 		return nil, false
 	}

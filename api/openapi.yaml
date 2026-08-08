@@ -1589,6 +1589,26 @@ paths:
       responses:
         "200": { description: Completeness for the entity, content: { application/json: { schema: { $ref: "#/components/schemas/Completeness" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /entities/{typeDefinitionID}/{entityID}/apply-defaults:
+    parameters:
+      - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
+      - { name: entityID, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [entities]
+      summary: Seed the declared defaults the entity does not hold
+      description: >-
+        Writes every declared default the entity has no base-scope value for,
+        resolving a dynamic default (now, today, a relative period) at the
+        moment of the call. An attribute that already holds a base-scope value
+        is left alone, and a computed attribute is skipped. Every write takes
+        the ordinary value path, so constraints, dependencies and uniqueness
+        apply.
+      responses:
+        "200":
+          description: What the run seeded
+          content: { application/json: { schema: { $ref: "#/components/schemas/AppliedDefaults" } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /entities/{typeDefinitionID}/{entityID}/relationship-requirements:
     parameters:
       - { name: typeDefinitionID, in: path, required: true, schema: { type: string } }
@@ -2650,6 +2670,20 @@ components:
         value_a: { type: string }
         value_b: { type: string }
         score: { type: number }
+    AppliedDefaults:
+      type: object
+      description: The defaults one apply-defaults run seeded.
+      properties:
+        entity_id: { type: string }
+        applied:
+          type: array
+          items:
+            type: object
+            properties:
+              attribute_definition_id: { type: string }
+              internal_name: { type: string }
+              value: { type: string }
+        skipped: { type: integer, description: Declared defaults the entity already satisfied. }
     Completeness:
       type: object
       description: How much of an entity's dependency-adjusted required schema is filled.

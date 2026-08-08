@@ -1096,3 +1096,18 @@ func (s *server) listActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, listResponse{Items: out.Items, PageInfo: out.PageInfo})
 }
+
+// applyEntityDefaults seeds the declared defaults an entity does not hold.
+//
+// A declared default used to do nothing: it was stored, exported and shown
+// in the console, and no write path ever resolved it. This is the call that
+// applies one, resolving a dynamic default at the moment of the request.
+func (s *server) applyEntityDefaults(w http.ResponseWriter, r *http.Request) {
+	out, err := application.FromContext(r.Context()).Values().ApplyDefaults(
+		r.Context(), chi.URLParam(r, "typeDefinitionID"), chi.URLParam(r, "entityID"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}

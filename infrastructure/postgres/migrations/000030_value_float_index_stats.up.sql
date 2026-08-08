@@ -2,7 +2,10 @@
 --
 -- +flexitype:no-transaction
 --
--- Two findings from the 20M-row SaaS-shape load test (stress_saas_test.go).
+-- Two findings from the SaaS-shape load test (stress_saas_test.go, build tag
+-- `stress`), run at SAAS_ENTITIES=1_000_000 with its 20 attributes — 20M
+-- value rows. The harness defaults to 10M entities (200M rows); the numbers
+-- below are from the 1M-entity run.
 --
 -- 1. value_float was the ONLY storage column without a value index: text,
 --    int, time and decimal all have (attribute_definition_id, value_<col>)

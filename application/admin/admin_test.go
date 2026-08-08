@@ -9,6 +9,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application/admin"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
@@ -28,6 +29,30 @@ func newFakeStore() *fakeStore {
 		hashes:   map[string]string{},
 		roles:    map[string]admin.Role{},
 	}
+}
+
+// WithTx is a no-op: the fake has no transaction, so every call already sees
+// the same maps.
+func (f *fakeStore) WithTx(db.Tx) admin.Store { return f }
+
+// LockRole and LockRolesShared are the row locks the Postgres store takes.
+// The fake is a single-goroutine map, so they only need to report existence.
+func (f *fakeStore) LockRole(_ context.Context, tenant, name string) (admin.Role, error) {
+	r, ok := f.roles[tenant+"/"+name]
+	if !ok {
+		return admin.Role{}, domainerrors.NewNotFound("role", name)
+	}
+	return r, nil
+}
+
+func (f *fakeStore) LockRolesShared(_ context.Context, tenant string, names []string) ([]string, error) {
+	out := []string{}
+	for _, n := range names {
+		if _, ok := f.roles[tenant+"/"+n]; ok {
+			out = append(out, n)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) CreateTenant(_ context.Context, t admin.Tenant) error {

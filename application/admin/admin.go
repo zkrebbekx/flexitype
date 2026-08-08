@@ -14,13 +14,25 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/zkrebbekx/flexitype/application/activity"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
 )
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,63}$`)
+
+// The audit entities the control plane records against. An operator answers
+// "who created this account, and who rotated it since?" by filtering the
+// activity log on these.
+const (
+	EntityTenant         = "tenant"
+	EntityServiceAccount = "service_account"
+	EntityRole           = "role"
+)
 
 // Tenant is one provisioned tenant.
 type Tenant struct {
@@ -75,6 +87,11 @@ type Role struct {
 
 // Store persists tenants and service accounts.
 type Store interface {
+	// WithTx binds the store to an open transaction, so a usecase's reads,
+	// its writes, its row locks and the activity entry the unit of work
+	// writes all commit or roll back together.
+	WithTx(tx db.Tx) Store
+
 	CreateTenant(ctx context.Context, t Tenant) error
 	ListTenants(ctx context.Context) ([]Tenant, error)
 	GetTenantByName(ctx context.Context, name string) (Tenant, error)
@@ -95,11 +112,26 @@ type Store interface {
 	DeleteRole(ctx context.Context, tenant, name string) error
 	// CountAccountsWithRole reports how many accounts still name the role.
 	CountAccountsWithRole(ctx context.Context, tenant, name string) (int, error)
+
+	// LockRole reads one role and holds an EXCLUSIVE row lock on it for the
+	// rest of the transaction. DeleteRole takes it before it counts the
+	// holders, so no assignment can land between the count and the delete.
+	// It reports NotFound when the tenant has no such role.
+	LockRole(ctx context.Context, tenant, name string) (Role, error)
+	// LockRolesShared reports which of names the tenant has, and holds a
+	// SHARED row lock on each for the rest of the transaction. An assignment
+	// takes it before it writes the account row, so a concurrent DeleteRole
+	// — which wants the exclusive lock — waits and then sees the holder.
+	LockRolesShared(ctx context.Context, tenant string, names []string) ([]string, error)
 }
 
 // Interactor implements the provisioning usecases.
 type Interactor struct {
 	store Store
+	// unit runs each mutating usecase as ONE transaction and writes the
+	// activity entry the usecase records in that same transaction. It is
+	// never nil: WithUnitOfWork replaces the direct fallback below.
+	unit uow.UnitOfWork
 	// authCache, when set, is evicted after a rotation or a revocation so the
 	// old credential stops working at once rather than at the end of the cache
 	// TTL. Nil when no caching authenticator is configured.
@@ -108,8 +140,13 @@ type Interactor struct {
 }
 
 // NewInteractor wires the admin usecases.
+//
+// Without WithUnitOfWork the usecases run as bare store calls and record no
+// audit entry — the pre-1.4 behaviour, kept so a caller that builds the
+// interactor over its own store still compiles. Every database-backed
+// deployment gets the real unit of work from Service.AdminInteractor.
 func NewInteractor(store Store, opts ...Option) *Interactor {
-	i := &Interactor{store: store, now: uow.UTCNow}
+	i := &Interactor{store: store, now: uow.UTCNow, unit: directUnitOfWork{}}
 	for _, opt := range opts {
 		opt(i)
 	}
@@ -124,6 +161,75 @@ type Option func(*Interactor)
 // cache entry expires.
 func WithAuthCache(inv serviceaccount.Invalidator) Option {
 	return func(i *Interactor) { i.authCache = inv }
+}
+
+// WithUnitOfWork runs every mutating usecase in one transaction and writes
+// its activity entry in that transaction.
+//
+// A credential or a role change is the change an incident review asks about
+// first, so it must leave a record that exists if and only if the change
+// committed. The transaction also closes two check-then-act races that bare
+// store calls left open: the count-then-delete in DeleteRole and the
+// lookup-then-insert in CreateAccount.
+func WithUnitOfWork(u uow.UnitOfWork) Option {
+	return func(i *Interactor) {
+		if u != nil {
+			i.unit = u
+		}
+	}
+}
+
+// directUnitOfWork runs a usecase body with no transaction and drops the
+// audit changes it records. It keeps an interactor built without
+// WithUnitOfWork working exactly as it did before, for a caller that has no
+// transactor to give.
+type directUnitOfWork struct{}
+
+func (directUnitOfWork) Execute(_ context.Context, fn func(tx db.Transactor, c *uow.Collector) error) error {
+	return fn(nil, &uow.Collector{})
+}
+
+// storeFor binds the store to the unit of work's transaction. A nil tx comes
+// from directUnitOfWork, which has none.
+func (i *Interactor) storeFor(tx db.Transactor) Store {
+	if tx == nil {
+		return i.store
+	}
+	return i.store.WithTx(tx)
+}
+
+// forTenant stamps the AFFECTED tenant onto the context.
+//
+// The unit of work takes an activity entry's tenant from the context, and an
+// admin request carries no tenant of its own — it acts across tenants. Without
+// this stamp every provisioning entry would land under the default tenant,
+// where the affected tenant's own operators cannot read it.
+func forTenant(ctx context.Context, tenant string) context.Context {
+	return uow.WithTenant(ctx, valueobjects.TenantID(tenant))
+}
+
+// activeState is the audit descriptor for an enable/disable flip.
+type activeState struct {
+	Active bool `json:"active"`
+}
+
+// secretRotation is the audit descriptor for a credential rotation. It
+// records THAT the secret changed. The secret, its hash and the minted token
+// are never written to the activity log.
+type secretRotation struct {
+	SecretRotated bool `json:"secret_rotated"`
+}
+
+// roleAssignment is the audit descriptor for an account's roles and its own
+// per-attribute overrides.
+type roleAssignment struct {
+	Roles []string `json:"roles"`
+	// FieldPermissions names attributes. It is recorded in full: the field
+	// ACL governs attribute VALUES, not attribute definitions, so a principal
+	// that can read the activity log can already list the same names through
+	// the schema API. What a permission change grants or removes is the
+	// substance of the entry, so redacting it would leave nothing to audit.
+	FieldPermissions map[string]string `json:"field_permissions,omitempty"`
 }
 
 // invalidate drops an account's cached authentications, if a cache is wired.
@@ -155,15 +261,29 @@ func (i *Interactor) CreateTenant(ctx context.Context, name string) (*Tenant, er
 	if !namePattern.MatchString(name) {
 		return nil, domainerrors.NewValidation("tenant name must be lowercase alphanumeric with _ or -, 2-64 chars")
 	}
-	if _, err := i.store.GetTenantByName(ctx, name); err == nil {
-		return nil, domainerrors.NewConflict("a tenant with this name already exists", "name", name)
-	} else if !domainerrors.IsNotFound(err) {
-		return nil, err
-	}
 
 	now := i.now()
 	t := Tenant{ID: ulid.New(), Name: name, Active: true, CreatedAt: now, UpdatedAt: now}
-	if err := i.store.CreateTenant(ctx, t); err != nil {
+	tctx := forTenant(ctx, name)
+	err := i.unit.Execute(tctx, func(tx db.Transactor, c *uow.Collector) error {
+		s := i.storeFor(tx)
+		if _, err := s.GetTenantByName(tctx, name); err == nil {
+			return domainerrors.NewConflict("a tenant with this name already exists", "name", name)
+		} else if !domainerrors.IsNotFound(err) {
+			return err
+		}
+		if err := s.CreateTenant(tctx, t); err != nil {
+			return err
+		}
+		c.RecordChange(activity.Change{
+			Entity:   EntityTenant,
+			EntityID: t.ID.String(),
+			Action:   activity.ActionCreated,
+			After:    t,
+		})
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &t, nil
@@ -181,12 +301,31 @@ func (i *Interactor) ListTenants(ctx context.Context) ([]Tenant, error) {
 // cached authentications are dropped, or a suspension would not take effect
 // until the cache TTL expired on every replica.
 func (i *Interactor) SetTenantActive(ctx context.Context, name string, active bool) error {
-	if _, err := i.store.GetTenantByName(ctx, name); err != nil {
+	tctx := forTenant(ctx, name)
+	err := i.unit.Execute(tctx, func(tx db.Transactor, c *uow.Collector) error {
+		s := i.storeFor(tx)
+		before, err := s.GetTenantByName(tctx, name)
+		if err != nil {
+			return err
+		}
+		if err := s.SetTenantActive(tctx, name, active, i.now()); err != nil {
+			return err
+		}
+		c.RecordChange(activity.Change{
+			Entity:   EntityTenant,
+			EntityID: before.ID.String(),
+			Action:   activity.ActionUpdated,
+			Before:   activeState{Active: before.Active},
+			After:    activeState{Active: active},
+		})
+		return nil
+	})
+	if err != nil {
 		return err
 	}
-	if err := i.store.SetTenantActive(ctx, name, active, i.now()); err != nil {
-		return err
-	}
+	// The cache eviction runs only after the commit. Evicting inside the
+	// transaction would drop live authentications for a change that then
+	// rolled back.
 	i.invalidateTenant(name)
 	return nil
 }
@@ -227,37 +366,60 @@ func (i *Interactor) CreateAccount(ctx context.Context, in CreateAccountInput) (
 	if len(scopes) == 0 && len(in.Roles) == 0 {
 		return nil, domainerrors.NewValidation("at least one scope or role is required")
 	}
-	tenant, err := i.store.GetTenantByName(ctx, in.TenantName)
-	if err != nil {
-		return nil, err
-	}
-
 	secret, err := generateSecret()
 	if err != nil {
 		return nil, err
 	}
 	now := i.now()
-	if err := validateFieldPermissions(in.FieldPermissions); err != nil {
+
+	var out AccountWithToken
+	tctx := forTenant(ctx, in.TenantName)
+	err = i.unit.Execute(tctx, func(tx db.Transactor, c *uow.Collector) error {
+		s := i.storeFor(tx)
+		tenant, err := s.GetTenantByName(tctx, in.TenantName)
+		if err != nil {
+			return err
+		}
+		if err := validateFieldPermissions(in.FieldPermissions); err != nil {
+			return err
+		}
+		// The shared role lock is taken inside this transaction, so a
+		// DeleteRole running concurrently either waits and then sees this
+		// account as a holder, or completes first and makes the name
+		// resolve to NotFound here.
+		if err := i.checkRolesExist(tctx, s, tenant.Name, in.Roles); err != nil {
+			return err
+		}
+		acct := ServiceAccount{
+			ID:               ulid.New(),
+			TenantID:         tenant.Name,
+			Name:             in.Name,
+			Scopes:           scopes,
+			Roles:            in.Roles,
+			FieldPermissions: in.FieldPermissions,
+			Active:           true,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}
+		if err := s.CreateAccount(tctx, acct, serviceaccount.HashSecret(secret)); err != nil {
+			return err
+		}
+		// ServiceAccount carries no secret field, so the stored struct is
+		// already a safe descriptor. The secret, its hash and the token are
+		// never recorded.
+		c.RecordChange(activity.Change{
+			Entity:   EntityServiceAccount,
+			EntityID: acct.ID.String(),
+			Action:   activity.ActionCreated,
+			After:    acct,
+		})
+		out = AccountWithToken{Account: acct, Token: serviceaccount.MintToken(acct.ID.String(), secret)}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	if err := i.checkRolesExist(ctx, tenant.Name, in.Roles); err != nil {
-		return nil, err
-	}
-	acct := ServiceAccount{
-		ID:               ulid.New(),
-		TenantID:         tenant.Name,
-		Name:             in.Name,
-		Scopes:           scopes,
-		Roles:            in.Roles,
-		FieldPermissions: in.FieldPermissions,
-		Active:           true,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}
-	if err := i.store.CreateAccount(ctx, acct, serviceaccount.HashSecret(secret)); err != nil {
-		return nil, err
-	}
-	return &AccountWithToken{Account: acct, Token: serviceaccount.MintToken(acct.ID.String(), secret)}, nil
+	return &out, nil
 }
 
 // ListAccounts returns a tenant's service accounts (no secrets).
@@ -279,7 +441,10 @@ func (i *Interactor) RotateSecret(ctx context.Context, rawID string) (*AccountWi
 	if err != nil {
 		return nil, domainerrors.NewValidation(err.Error())
 	}
-	acct, err := i.store.GetAccount(ctx, id)
+	// The account is read once outside the transaction to learn which tenant
+	// the audit entry belongs to; the transaction reads it again so the
+	// recorded state is the state the write replaced.
+	owner, err := i.store.GetAccount(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -287,11 +452,35 @@ func (i *Interactor) RotateSecret(ctx context.Context, rawID string) (*AccountWi
 	if err != nil {
 		return nil, err
 	}
-	if err := i.store.UpdateSecret(ctx, id, serviceaccount.HashSecret(secret), i.now()); err != nil {
+
+	var out AccountWithToken
+	tctx := forTenant(ctx, owner.TenantID)
+	err = i.unit.Execute(tctx, func(tx db.Transactor, c *uow.Collector) error {
+		s := i.storeFor(tx)
+		acct, err := s.GetAccount(tctx, id)
+		if err != nil {
+			return err
+		}
+		if err := s.UpdateSecret(tctx, id, serviceaccount.HashSecret(secret), i.now()); err != nil {
+			return err
+		}
+		// Record THAT the credential changed. Recording the secret, its hash
+		// or the token would put the credential in a table the tenant's own
+		// readers can list.
+		c.RecordChange(activity.Change{
+			Entity:   EntityServiceAccount,
+			EntityID: id.String(),
+			Action:   activity.ActionUpdated,
+			After:    secretRotation{SecretRotated: true},
+		})
+		out = AccountWithToken{Account: acct, Token: serviceaccount.MintToken(id.String(), secret)}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	i.invalidate(id)
-	return &AccountWithToken{Account: acct, Token: serviceaccount.MintToken(id.String(), secret)}, nil
+	return &out, nil
 }
 
 // Revoke deactivates a service account. Its token stops working immediately
@@ -302,10 +491,30 @@ func (i *Interactor) Revoke(ctx context.Context, rawID string) error {
 	if err != nil {
 		return domainerrors.NewValidation(err.Error())
 	}
-	if _, err := i.store.GetAccount(ctx, id); err != nil {
+	owner, err := i.store.GetAccount(ctx, id)
+	if err != nil {
 		return err
 	}
-	if err := i.store.SetAccountActive(ctx, id, false, i.now()); err != nil {
+	tctx := forTenant(ctx, owner.TenantID)
+	err = i.unit.Execute(tctx, func(tx db.Transactor, c *uow.Collector) error {
+		s := i.storeFor(tx)
+		before, err := s.GetAccount(tctx, id)
+		if err != nil {
+			return err
+		}
+		if err := s.SetAccountActive(tctx, id, false, i.now()); err != nil {
+			return err
+		}
+		c.RecordChange(activity.Change{
+			Entity:   EntityServiceAccount,
+			EntityID: id.String(),
+			Action:   activity.ActionUpdated,
+			Before:   activeState{Active: before.Active},
+			After:    activeState{Active: false},
+		})
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	i.invalidate(id)
@@ -379,31 +588,60 @@ func (i *Interactor) UpsertRole(ctx context.Context, in UpsertRoleInput) (*Role,
 	if err := validateFieldPermissions(in.FieldPermissions); err != nil {
 		return nil, err
 	}
-	tenant, err := i.store.GetTenantByName(ctx, in.TenantName)
-	if err != nil {
-		return nil, err
-	}
 	now := i.now()
-	role := Role{
-		ID:               ulid.New(),
-		TenantID:         tenant.Name,
-		Name:             in.Name,
-		Description:      in.Description,
-		Scopes:           scopes,
-		FieldPermissions: in.FieldPermissions,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}
-	// The store returns what is STORED. An update keeps the existing id and
-	// created_at, so returning the proposed struct described a row that does
-	// not exist: a provisioning script that stores the returned id as its
-	// handle, or logs it for audit, recorded a different non-existent id on
-	// every idempotent re-run.
-	stored, err := i.store.UpsertRole(ctx, role)
+
+	var stored Role
+	tctx := forTenant(ctx, in.TenantName)
+	err = i.unit.Execute(tctx, func(tx db.Transactor, c *uow.Collector) error {
+		s := i.storeFor(tx)
+		tenant, err := s.GetTenantByName(tctx, in.TenantName)
+		if err != nil {
+			return err
+		}
+		// Lock the row this upsert replaces, if there is one. It gives the
+		// entry an accurate before-state and it serializes the upsert against
+		// a concurrent delete of the same role.
+		before, err := s.LockRole(tctx, tenant.Name, in.Name)
+		replaced := err == nil
+		if err != nil && !domainerrors.IsNotFound(err) {
+			return err
+		}
+		role := Role{
+			ID:               ulid.New(),
+			TenantID:         tenant.Name,
+			Name:             in.Name,
+			Description:      in.Description,
+			Scopes:           scopes,
+			FieldPermissions: in.FieldPermissions,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}
+		// The store returns what is STORED. An update keeps the existing id
+		// and created_at, so returning the proposed struct described a row
+		// that does not exist: a provisioning script that stores the returned
+		// id as its handle, or logs it for audit, recorded a different
+		// non-existent id on every idempotent re-run.
+		stored, err = s.UpsertRole(tctx, role)
+		if err != nil {
+			return err
+		}
+		ch := activity.Change{
+			Entity:   EntityRole,
+			EntityID: stored.ID.String(),
+			Action:   activity.ActionCreated,
+			After:    stored,
+		}
+		if replaced {
+			ch.Action = activity.ActionUpdated
+			ch.Before = before
+		}
+		c.RecordChange(ch)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	i.invalidateTenant(tenant.Name)
+	i.invalidateTenant(in.TenantName)
 	return &stored, nil
 }
 
@@ -426,17 +664,42 @@ func (i *Interactor) ListRoles(ctx context.Context, tenant string) ([]Role, erro
 // Reassign the accounts first (PUT /service-accounts/{id}/roles). To retire a
 // role's grants without touching every account, upsert it with an empty scope
 // set and the restrictions you want to keep.
+// The count and the delete run in ONE transaction, and the role row is locked
+// EXCLUSIVELY before the count. Without the lock the guard was
+// check-then-act: an assignment naming the role could commit between the
+// count of zero and the delete, and the account was left holding a role that
+// no longer existed.
 func (i *Interactor) DeleteRole(ctx context.Context, tenant, name string) error {
-	held, err := i.store.CountAccountsWithRole(ctx, tenant, name)
+	tctx := forTenant(ctx, tenant)
+	err := i.unit.Execute(tctx, func(tx db.Transactor, c *uow.Collector) error {
+		s := i.storeFor(tx)
+		// Lock FIRST, count SECOND. An assignment holds the shared lock on
+		// the same row until it commits, so this waits and then counts it.
+		role, err := s.LockRole(tctx, tenant, name)
+		if err != nil && !domainerrors.IsNotFound(err) {
+			return err
+		}
+		held, cerr := s.CountAccountsWithRole(tctx, tenant, name)
+		if cerr != nil {
+			return cerr
+		}
+		if held > 0 {
+			return domainerrors.NewConflict(
+				"the role is still assigned; reassign those accounts before deleting it",
+				"role", name, "accounts", held)
+		}
+		if derr := s.DeleteRole(tctx, tenant, name); derr != nil {
+			return derr
+		}
+		c.RecordChange(activity.Change{
+			Entity:   EntityRole,
+			EntityID: role.ID.String(),
+			Action:   activity.ActionRemoved,
+			Before:   role,
+		})
+		return nil
+	})
 	if err != nil {
-		return err
-	}
-	if held > 0 {
-		return domainerrors.NewConflict(
-			"the role is still assigned; reassign those accounts before deleting it",
-			"role", name, "accounts", held)
-	}
-	if err := i.store.DeleteRole(ctx, tenant, name); err != nil {
 		return err
 	}
 	i.invalidateTenant(tenant)
@@ -555,14 +818,36 @@ func (i *Interactor) AssignRoles(ctx context.Context, in AssignRolesInput) error
 	if err := validateFieldPermissions(in.FieldPermissions); err != nil {
 		return err
 	}
-	acct, err := i.store.GetAccount(ctx, id)
+	owner, err := i.store.GetAccount(ctx, id)
 	if err != nil {
 		return err
 	}
-	if err := i.checkRolesExist(ctx, acct.TenantID, in.Roles); err != nil {
-		return err
-	}
-	if err := i.store.SetAccountRoles(ctx, id, in.Roles, in.FieldPermissions, i.now()); err != nil {
+	tctx := forTenant(ctx, owner.TenantID)
+	err = i.unit.Execute(tctx, func(tx db.Transactor, c *uow.Collector) error {
+		s := i.storeFor(tx)
+		acct, err := s.GetAccount(tctx, id)
+		if err != nil {
+			return err
+		}
+		// The shared role lock is held until this transaction commits, so a
+		// concurrent DeleteRole cannot remove a role this account is being
+		// given.
+		if err := i.checkRolesExist(tctx, s, acct.TenantID, in.Roles); err != nil {
+			return err
+		}
+		if err := s.SetAccountRoles(tctx, id, in.Roles, in.FieldPermissions, i.now()); err != nil {
+			return err
+		}
+		c.RecordChange(activity.Change{
+			Entity:   EntityServiceAccount,
+			EntityID: id.String(),
+			Action:   activity.ActionUpdated,
+			Before:   roleAssignment{Roles: acct.Roles, FieldPermissions: acct.FieldPermissions},
+			After:    roleAssignment{Roles: in.Roles, FieldPermissions: in.FieldPermissions},
+		})
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	i.invalidate(id)
@@ -576,17 +861,21 @@ func (i *Interactor) AssignRoles(ctx context.Context, in AssignRolesInput) error
 // would look exactly like a role that grants nothing. The operator would see
 // the name on the account and believe the grant was in place. The check turns
 // that into a 422 at the moment of the mistake.
-func (i *Interactor) checkRolesExist(ctx context.Context, tenant string, roles []string) error {
+//
+// It reads the roles under a SHARED row lock, held until the caller's
+// transaction ends. The check and the account write are then one atomic step
+// against DeleteRole, which wants the EXCLUSIVE lock on the same rows.
+func (i *Interactor) checkRolesExist(ctx context.Context, s Store, tenant string, roles []string) error {
 	if len(roles) == 0 {
 		return nil
 	}
-	existing, err := i.store.ListRoles(ctx, tenant)
+	existing, err := s.LockRolesShared(ctx, tenant, roles)
 	if err != nil {
 		return err
 	}
 	have := make(map[string]bool, len(existing))
-	for _, r := range existing {
-		have[r.Name] = true
+	for _, name := range existing {
+		have[name] = true
 	}
 	for _, name := range roles {
 		if !have[name] {

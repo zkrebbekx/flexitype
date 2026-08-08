@@ -17,6 +17,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/infrastructure/memory"
+	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
@@ -45,6 +46,34 @@ func newAdminStore() *adminStore {
 		hashes:   map[ulid.ID]string{},
 		roles:    map[string]admin.Role{},
 	}
+}
+
+// WithTx is a no-op: the fake holds its state in maps under one mutex, so a
+// tx-bound view is the same store.
+func (s *adminStore) WithTx(db.Tx) admin.Store { return s }
+
+// LockRole and LockRolesShared stand in for the Postgres row locks. The fake
+// serializes on its own mutex, so they only report existence.
+func (s *adminStore) LockRole(_ context.Context, tenant, name string) (admin.Role, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.roles[tenant+"/"+name]
+	if !ok {
+		return admin.Role{}, domainerrors.NewNotFound("role", name)
+	}
+	return r, nil
+}
+
+func (s *adminStore) LockRolesShared(_ context.Context, tenant string, names []string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []string{}
+	for _, n := range names {
+		if _, ok := s.roles[tenant+"/"+n]; ok {
+			out = append(out, n)
+		}
+	}
+	return out, nil
 }
 
 func (s *adminStore) CreateTenant(_ context.Context, t admin.Tenant) error {

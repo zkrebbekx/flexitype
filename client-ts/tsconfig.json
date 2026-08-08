@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": false,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "noEmit": true,
+    "types": ["vitest/globals"],
+    // The README's examples import the package by name. The mapping lets
+    // `tsc --noEmit` compile them exactly as a consumer would write them.
+    "baseUrl": ".",
+    "paths": {
+      "@flexitype/client": ["./src/index.ts"],
+      "@flexitype/client/react": ["./src/react/index.ts"]
+    }
+  },
+  "include": ["src", "test", "examples", "*.config.ts", "eslint.config.js"]
+}

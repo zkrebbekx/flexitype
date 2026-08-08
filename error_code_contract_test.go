@@ -10,9 +10,10 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-// TestErrorCodeContract holds the three published lists of error codes equal:
-// the OpenAPI `Error.code` enum, the Go client's `ErrorCode` constants, and
-// the table in docs/api-stability.md.
+// TestErrorCodeContract holds the four published lists of error codes equal:
+// the OpenAPI `Error.code` enum, the Go client's `ErrorCode` constants, the
+// TypeScript client's `ERROR_CODES` array, and the table in
+// docs/api-stability.md.
 //
 // They had drifted three ways at once. The client declared 9 codes where the
 // server emits 12, omitting FEATURE_DISABLED, CURSOR_CONFLICT and
@@ -26,9 +27,10 @@ import (
 // importing it. That is the point: the test belongs to the repository that
 // publishes all three lists.
 func TestErrorCodeContract(t *testing.T) {
-	Convey("Given the three published lists of error codes", t, func() {
+	Convey("Given the four published lists of error codes", t, func() {
 		spec := openAPIErrorCodes(t)
 		client := clientErrorCodes(t)
+		tsClient := tsClientErrorCodes(t)
 		doc := stabilityDocErrorCodes(t)
 
 		Convey("Then the spec enum is not empty, so the parse is meaningful", func() {
@@ -37,6 +39,10 @@ func TestErrorCodeContract(t *testing.T) {
 
 		Convey("Then the Go client declares exactly the codes the spec enumerates", func() {
 			So(client, ShouldResemble, spec)
+		})
+
+		Convey("Then the TypeScript client declares exactly the same codes", func() {
+			So(tsClient, ShouldResemble, spec)
 		})
 
 		Convey("Then the stability document lists exactly the same codes", func() {
@@ -67,6 +73,32 @@ func clientErrorCodes(t *testing.T) []string {
 	}
 	if len(out) == 0 {
 		t.Fatal("client/errors.go: found no ErrorCode constants")
+	}
+	return sorted(out)
+}
+
+// tsClientErrorCodes reads the ERROR_CODES array from the TypeScript client's
+// source. That package has its own vitest check of the same equality; this one
+// exists so a Go-only contributor who adds a code to the service cannot leave
+// the TypeScript client behind without CI saying so.
+func tsClientErrorCodes(t *testing.T) []string {
+	t.Helper()
+	body := readRepoFile(t, "client-ts/src/errors.ts")
+	const marker = "export const ERROR_CODES = ["
+	start := strings.Index(body, marker)
+	if start < 0 {
+		t.Fatalf("client-ts/src/errors.ts: could not find %q", marker)
+	}
+	end := strings.Index(body[start:], "] as const")
+	if end < 0 {
+		t.Fatal("client-ts/src/errors.ts: could not find the end of ERROR_CODES")
+	}
+	var out []string
+	for _, m := range regexp.MustCompile(`'([A-Z_]+)'`).FindAllStringSubmatch(body[start:start+end], -1) {
+		out = append(out, m[1])
+	}
+	if len(out) == 0 {
+		t.Fatal("client-ts/src/errors.ts: found no codes in ERROR_CODES")
 	}
 	return sorted(out)
 }

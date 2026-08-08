@@ -194,6 +194,36 @@ jobs:
       - name: Test
         run: npm test
 
+  client-ts:
+    name: client-ts
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client-ts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: client-ts/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
+      # The suite includes two contract gates: the error codes must match the
+      # OpenAPI enum, the Go client and docs/api-stability.md, and the checked-in
+      # generated types must match a fresh run of the generator. A change to
+      # api/openapi.yaml that nobody regenerated fails here.
+      - name: Test
+        run: npm test
+
   vuln:
     name: vuln
     runs-on: ubuntu-latest

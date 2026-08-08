@@ -21,6 +21,16 @@ For the API compatibility policy, see [api-stability.md](api-stability.md).
   will drop what the reverted migrations created.
 - **Removing something takes two releases.** Release N stops reading the
   column; release N+1 drops it. That way a rollback from N+1 to N still works.
+- **The contract covers stored payloads, not only columns.** A JSON payload
+  the store round-trips (a dependency condition, an effect, a constraint
+  list) is schema too. A decoder that drops unknown keys makes the PREVIOUS
+  release strip the next release's keys on every re-save — silently, and
+  permanently once the stripped form is written back. So a release that adds
+  a payload key ships the key one release EARLIER as a decode-and-re-encode
+  passthrough field, with no behavior. The patch releases v1.3.1
+  (`min_exclusive`/`max_exclusive`) and v1.4.1 (`context_type`) retrofit
+  this for the released lines: **roll back to the patch release of the
+  previous line, never to its .0**.
 
 ## Rolling deploys
 

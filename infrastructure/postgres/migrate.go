@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lib/pq"
@@ -86,6 +87,13 @@ func Migrate(ctx context.Context, tx db.Transactor) error {
 		lease, err := acquireMigrationLease(ctx, q)
 		if err != nil {
 			return err
+		}
+		// The mid-statement heartbeat renews on the POOL, because a running
+		// statement occupies the pinned connection. The concrete pool-level
+		// transactor is itself a QueryExecer; a transactor that is not gets
+		// no heartbeat and keeps the between-statement renewals only.
+		if pool, ok := tx.(db.QueryExecer); ok {
+			lease.pool = pool
 		}
 		defer lease.release(ctx)
 
@@ -216,6 +224,14 @@ const (
 	leaseWait     = leaseTTL + 2*time.Minute
 	leasePoll     = 250 * time.Millisecond
 	leaseRenewGap = time.Minute
+	// leaseHeartbeat is how often the mid-statement heartbeat renews the
+	// lease while a no-transaction statement runs (see execWithHeartbeat).
+	// INVARIANT: leaseHeartbeat must stay comfortably below leaseTTL. At one
+	// minute against the fifteen-minute TTL, the heartbeat gets about
+	// fourteen renewal attempts before the lease can expire, so a transient
+	// renewal failure retries on the next tick instead of killing a long
+	// index build. TestMigrationLeaseHeartbeatIntegration pins the margin.
+	leaseHeartbeat = time.Minute
 	// leaseReleaseTimeout bounds the write that frees the lease. It runs on a
 	// context detached from the caller's, because releasing on a cancelled
 	// startup context was a no-op and stranded the lease for the full TTL
@@ -239,10 +255,36 @@ const (
 // carries an expiry, so a runner that dies frees it without an operator having
 // to find and terminate a connection by hand.
 type migrateLease struct {
-	q         db.QueryExecer
-	holder    string
+	q      db.QueryExecer // the pinned migration connection
+	holder string
+	now    func() time.Time
+
+	// pool is a second, POOLED executor for the mid-statement heartbeat. The
+	// pinned connection is occupied while a statement runs, so a renewal
+	// issued during one must travel on another connection. nil disables the
+	// heartbeat and keeps only the between-statement renewals.
+	pool db.QueryExecer
+
+	// heartbeatEvery overrides leaseHeartbeat in tests; zero means the
+	// default.
+	heartbeatEvery time.Duration
+
+	mu        sync.Mutex // guards renewedAt against the heartbeat goroutine
 	renewedAt time.Time
-	now       func() time.Time
+}
+
+// markRenewed records a successful acquisition or renewal.
+func (l *migrateLease) markRenewed() {
+	l.mu.Lock()
+	l.renewedAt = l.now()
+	l.mu.Unlock()
+}
+
+// sinceRenewed reports how long ago the last renewal succeeded.
+func (l *migrateLease) sinceRenewed() time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.now().Sub(l.renewedAt)
 }
 
 // acquireMigrationLease takes the lease, waiting for a live holder to finish
@@ -289,7 +331,7 @@ func (l *migrateLease) tryAcquire(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("acquire migration lease: %w", err)
 	}
 	if taken {
-		l.renewedAt = l.now()
+		l.markRenewed()
 	}
 	return taken, nil
 }
@@ -301,11 +343,26 @@ func (l *migrateLease) tryAcquire(ctx context.Context) (bool, error) {
 // statement outlasted the TTL and another runner took over, so continuing
 // would apply DDL alongside them.
 func (l *migrateLease) renew(ctx context.Context) error {
-	if l.now().Sub(l.renewedAt) < leaseRenewGap {
+	if l.sinceRenewed() < leaseRenewGap {
 		return nil
 	}
+	held, err := l.renewOn(ctx, l.q)
+	if err != nil {
+		return fmt.Errorf("renew migration lease: %w", err)
+	}
+	if !held {
+		return fmt.Errorf("lost the migration lease: a statement outlasted the %s lease and another runner took over", leaseTTL)
+	}
+	return nil
+}
+
+// renewOn runs one renewal on the given executor and reports whether this
+// runner still holds the lease. It carries no rate limit of its own: renew
+// applies the between-statement gap, and the heartbeat's ticker is its own
+// rate limit.
+func (l *migrateLease) renewOn(ctx context.Context, q db.QueryExecer) (bool, error) {
 	var held bool
-	if err := l.q.GetContext(ctx, &held,
+	if err := q.GetContext(ctx, &held,
 		`WITH renew AS (
 		   UPDATE flexitype_schema_lock
 		      SET expires_at = now() + $2::interval
@@ -314,13 +371,91 @@ func (l *migrateLease) renew(ctx context.Context) error {
 		 )
 		 SELECT EXISTS (SELECT 1 FROM renew)`,
 		l.holder, leaseTTL.String()); err != nil {
-		return fmt.Errorf("renew migration lease: %w", err)
+		return false, err
 	}
-	if !held {
-		return fmt.Errorf("lost the migration lease: a statement outlasted the %s lease and another runner took over", leaseTTL)
+	if held {
+		l.markRenewed()
 	}
-	l.renewedAt = l.now()
-	return nil
+	return held, nil
+}
+
+// execWithHeartbeat runs one no-transaction statement on the pinned
+// connection while a goroutine renews the lease on the pooled executor.
+//
+// The pinned connection is busy for the whole statement, so a renewal cannot
+// travel on it — which is why renew alone was not enough. A statement longer
+// than leaseTTL — a CREATE INDEX CONCURRENTLY over a large value table — let
+// the lease expire mid-build. The next replica then took the lease, replayed
+// the file, and its invalid-index reap issued a DROP INDEX CONCURRENTLY
+// against the in-flight build; the two runners undid each other's work for
+// the length of the deploy.
+//
+// The heartbeat separates two failures:
+//   - Another runner HOLDS the lease: the heartbeat cancels the statement's
+//     context at once, because finishing would apply DDL alongside the new
+//     holder.
+//   - The renewal QUERY fails: the lease row is untouched and stays valid
+//     until expires_at, so the heartbeat retries on later ticks. It gives up
+//     only after a full leaseTTL passes with no successful renewal, because
+//     at that point the lease may genuinely have expired.
+func (l *migrateLease) execWithHeartbeat(ctx context.Context, q db.QueryExecer, stmt string) error {
+	if l.pool == nil {
+		// No second executor is available. Keep the between-statement
+		// renewals, which is the pre-heartbeat behaviour.
+		_, err := q.ExecContext(ctx, stmt)
+		return err
+	}
+
+	stmtCtx, cancelStmt := context.WithCancel(ctx)
+	defer cancelStmt()
+	stop := make(chan struct{})
+	beat := make(chan error, 1)
+	go func() { beat <- l.heartbeat(ctx, stop, cancelStmt) }()
+
+	_, execErr := q.ExecContext(stmtCtx, stmt)
+	close(stop)
+	if hbErr := <-beat; hbErr != nil {
+		// The heartbeat cancelled the statement. Name the cause rather than
+		// returning the driver's bare cancellation error.
+		return hbErr
+	}
+	return execErr
+}
+
+// heartbeat renews the lease on the pooled executor until stop closes. It
+// returns nil on a clean stop. On a lost lease, or after a full leaseTTL with
+// no successful renewal, it cancels the running statement and returns the
+// reason.
+func (l *migrateLease) heartbeat(ctx context.Context, stop <-chan struct{}, cancelStmt context.CancelFunc) error {
+	every := l.heartbeatEvery
+	if every <= 0 {
+		every = leaseHeartbeat
+	}
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-stop:
+			return nil
+		case <-ctx.Done():
+			// The caller's context ended. The statement dies with it and
+			// reports that itself.
+			return nil
+		case <-tick.C:
+		}
+		held, err := l.renewOn(ctx, l.pool)
+		switch {
+		case err != nil && l.sinceRenewed() < leaseTTL:
+			// Transient: the lease row still holds until expires_at.
+			continue
+		case err != nil:
+			cancelStmt()
+			return fmt.Errorf("cancelled the running migration statement: no lease renewal succeeded for %s, so the lease may have expired: %w", leaseTTL, err)
+		case !held:
+			cancelStmt()
+			return fmt.Errorf("lost the migration lease mid-statement: another runner holds it, so the statement was cancelled rather than finishing alongside it")
+		}
+	}
 }
 
 // release frees the lease. A failure here is not fatal: the lease expires.
@@ -506,12 +641,15 @@ func applyOutsideTransaction(ctx context.Context, q db.QueryExecer, m migration,
 		}
 		// A statement here can run for a long time — CREATE INDEX
 		// CONCURRENTLY over a large table is the reason this path exists — so
-		// the lease is refreshed between statements rather than only once per
-		// migration.
+		// the lease is refreshed between statements, and a heartbeat renews
+		// it DURING each statement on a second connection (the statement
+		// occupies this one). A build longer than the lease TTL would
+		// otherwise lose the lease mid-flight, and the runner that took over
+		// would reap the half-built index out from under it.
 		if err := lease.renew(ctx); err != nil {
 			return err
 		}
-		if _, err := q.ExecContext(ctx, stmt); err != nil {
+		if err := lease.execWithHeartbeat(ctx, q, stmt); err != nil {
 			return fmt.Errorf("apply migration %s: %w", m.name, err)
 		}
 	}

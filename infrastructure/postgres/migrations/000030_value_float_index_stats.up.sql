@@ -23,17 +23,16 @@
 --    PostgreSQL keeps no per-group histograms — which is a documented
 --    residual, not something more DDL can fix.
 --
--- CONCURRENTLY (and hence the no-transaction directive), the invalid-index
--- drop guard and statement idempotence all follow migration 000018's
--- pattern.
+-- CONCURRENTLY (and hence the no-transaction directive) and statement
+-- idempotence follow migration 000018's pattern. The runner reaps an INVALID
+-- namesake before it replays this file (reapInvalidIndexes in migrate.go),
+-- scoped to current_schema(). This file must not carry its own catalogue
+-- guard: an earlier in-file DO block matched pg_class.relname without a
+-- pg_namespace join, so an invalid index in ANY schema of the database made
+-- it fire, and its unqualified DROP INDEX resolved through search_path —
+-- into a missing index (error 42704, a boot loop) or into this schema's
+-- valid index (a write-blocking drop).
 
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
-                WHERE c.relname = 'idx_flexitype_attribute_value_uniq_float' AND NOT i.indisvalid) THEN
-        EXECUTE 'DROP INDEX idx_flexitype_attribute_value_uniq_float';
-    END IF;
-END $$;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_flexitype_attribute_value_uniq_float
     ON flexitype_attribute_value (attribute_definition_id, value_float)
     WHERE archived_at IS NULL AND value_float IS NOT NULL;

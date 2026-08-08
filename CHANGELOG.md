@@ -7,6 +7,170 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-08-08
+
+A defect-review release. An evaluating team read the 1.4.0 tree and filed 40
+issues; all of them are fixed here, together with the two patch releases the
+rollback contract needed (v1.3.1, v1.4.1). Four were field-permission
+disclosures, and several were silent data loss.
+
+### BREAKING — check before upgrading
+
+Ten behaviour changes are visible from outside. Each is the documented
+contract being honoured, and most refuse a request that previously succeeded
+— the carve-out `docs/api-stability.md` states. No supported Go signature
+changed: the ports that gained methods (`admin.Store`) or arguments are the
+store and repository ports that page names internal.
+
+- **A context condition must declare `context_type`.** *(Refuses what
+  previously succeeded.)* A `context_key` condition was validated against the
+  SOURCE attribute's type while its subject at evaluation is the
+  caller-supplied fact, so a range over a numeric fact was unbuildable unless
+  the unrelated source attribute happened to match, and a fact arriving as
+  another type turned every write to the target into a 500. Declare the
+  fact's type; a fact whose runtime type differs no longer matches, rather
+  than erroring. ([#514])
+- **A computed attribute may not be multi-valued.** *(Refuses what previously
+  succeeded.)* The materializer writes one result per entity and a
+  multi-valued write appends, so results accumulated with nothing able to
+  clear them. An attribute already carrying both is refused on its next
+  update until the combination is resolved. ([#529])
+- **A symmetric relationship may not declare `min_parents`/`max_parents`.**
+  *(Refuses what previously succeeded.)* Both were accepted and then ignored:
+  a symmetric `spouse_of` capped at one parent admitted three links. Migration
+  000035 folds a stored parents bound into the children bound — the side that
+  IS enforced — keeping the tighter of the two. ([#530])
+- **`min_exclusive`/`max_exclusive` apply to a range condition only.**
+  *(Refuses what previously succeeded.)* On `equals`, `in`, `pattern` and
+  `dynamic` they validated, stored and did nothing, while the OpenAPI schema
+  documented them on the shared condition object. ([#531])
+- **A quantity attribute's unit family cannot be cleared or deleted while
+  values reference it.** *(Refuses what previously succeeded.)* A REST `PUT`
+  omitting the `omitempty` `unit_family_id` cleared the family, and deleting
+  one checked only that it existed; either left values readable and never
+  writable. ([#527])
+- **`linked()` refuses a name both endpoints declare.** *(Refuses what
+  previously returned an empty page.)* The union kept the parent's attribute,
+  so from the parent side the condition tested the wrong one and matched
+  nothing. Use `child()`/`parent()` to pick a side. ([#536])
+- **CSV import no longer reads the legacy in-band multi-value forms.** A cell
+  is multi-valued only when it carries the `#flexitype-values:` prefix. Both
+  legacy forms are shapes an ordinary value can have, so a `string` value
+  holding the literal `[{"value":"a"},{"value":"b"}]` imported as TWO values
+  — this tool's own export did not round-trip. Set
+  `allow_legacy_multi_value_cells` on the import to read a file an earlier
+  release wrote. ([#528])
+- **A deactivated webhook subscription stops its queued backlog.** Turning
+  one off previously stopped new fan-out only, so the endpoint kept being
+  called. The backlog RESTS rather than dies: rows stay pending, reactivating
+  resumes them, and the retention pruner bounds them. ([#531])
+- **Single-row `Redeliver` resets the attempt budget and refuses an inflight
+  delivery.** It left `attempts` at the cap, so a redriven delivery died
+  again on its first failure, and its unguarded `UPDATE` could rewind a
+  delivery a worker had just claimed, sending it twice. ([#531], [#524])
+- **`matches()` searches only what the caller may read.** For a
+  field-restricted principal it now searches the attributes that principal
+  can read, and returns fewer rows than it did in 1.4.0 — where it searched
+  every value and leaked restricted content word by word. ([#511], [#541])
+
+### Security
+
+- **A computed attribute was a full field-ACL read bypass.** A principal
+  denied an attribute could declare a formula over it and read the exact
+  values back through the derived attribute, which is born unrestricted and
+  materialized under system access. The formula guard now refuses a source
+  the caller cannot read, worded identically to an unresolved reference so
+  the guard is not itself an existence oracle. ([#509])
+- **Computed materialization ran under the writing principal's field ACL.**
+  The post-commit projection dispatch reused the request context, so a
+  restricted input was redacted from the materializer's read and the wrong
+  result — or a deletion of the right one — was written durably for every
+  reader. Projections now dispatch under system access. ([#509])
+- **The dependency surface enforced no field ACL.** `effective-schema`
+  resolved rules over unredacted values, so a rule keyed on a restricted
+  source recovered its exact value by binary search in about twenty requests
+  per entity; `completeness` disclosed restricted attribute names and counted
+  them in the score. ([#510])
+- **`matches()` searched restricted values.** The search document flattened
+  every textual value with no attribute identity, so a denied principal
+  enumerated restricted content word by word. Fixed by failing closed
+  ([#511]), then restored per attribute ([#541]).
+
+### Added
+
+- **Declared default values are applied.** `Values().ApplyDefaults` (REST:
+  `POST /entities/{typeDefinitionID}/{entityID}/apply-defaults`; SDK:
+  `Entities().ApplyDefaults`) writes every declared default the entity does
+  not hold, resolving a dynamic default at the moment of the call. Defaults
+  were previously stored, exported and rendered, and never reached an entity.
+  Base scope only; a computed attribute is skipped. ([#533])
+- **Parked outbox envelopes are visible, redrivable, alarmable and
+  prunable.** `GET /admin/outbox/parked` and `POST /admin/outbox/redrive`,
+  a parked gauge separated from the pending metric, retention for parked
+  rows, and configurable max-attempts and retry ceiling. A parked envelope
+  was previously undeliverable, unprunable and counted as pending forever.
+  ([#523])
+- **An FQL query can page on the immutable key.** `ExecuteInput.Stable`, set
+  by the grid's facet counts and by a filtered CSV export. Both are sweeps,
+  and both silently dropped entities written mid-sweep. ([#539])
+- **`matches()` serves a field-restricted principal again**, through
+  per-attribute search vectors (migration 000037, backfilled from the stored
+  document). ([#541])
+
+### Fixed
+
+- Restoring a revision after an entity's anchor narrowed archived nothing and
+  recorded the entity as empty; the follow-up revision now carries the current
+  anchor. ([#513])
+- `ApplySnapshot` keyed its target on the rendering while the set pass
+  compares with `Equal`, so restoring a snapshot that held decimal `1.5`
+  against a stored `1.50` left the entity with NO value. ([#529])
+- The make-unique guard grouped values by rendering while the write path
+  compares them typed, so `1.5`/`1.50` and `5 kg`/`5000 g` passed the flip and
+  then refused every later writer forever; it also ignored scope. ([#526])
+- A saved view was un-updatable after its first update: `Get`/`List` omitted
+  the `version` column, pinning the compare-and-swap to 1. ([#488])
+- Media-blob GC used a cross-tenant unindexed count in a shared budget, raced
+  an in-flight adoption, and could adopt a key whose bytes were already
+  collected. ([#525])
+- A tenant purge's residual redaction was one unbounded UPDATE over an
+  unindexed JSON path, stalling event delivery fleet-wide while the relay
+  waited holding the global expansion lock. ([#534])
+- Schema import collapsed a cascading picklist: dependencies were keyed on
+  the endpoint pair, so every rule after the first on one pair was skipped as
+  "already present". ([#516])
+- Migration 000030's invalid-index guard was namespace-blind with an
+  unqualified DROP, and the migration lease was never renewed mid-statement,
+  so a long concurrent index build could thrash on a rolling deploy.
+  ([#517])
+- Dependency `Update`/`Archive` did not lock the target attribute, admitting a
+  value the tightened rule forbids, permanently. ([#514])
+- The entity-summary refresh counted before taking the row lock, persisting a
+  stale undercount under concurrent same-entity writes (migration 000032).
+  ([#520])
+- The traversal counterpart-type probe was a `LIMIT 1` with no `ORDER BY`, so
+  an `is type` condition could match or not match across executions. ([#524])
+- A symmetric listing returned one counterpart twice and skipped another at a
+  page boundary; the total counted both. ([#540])
+- The console dependency editor stripped `context_key` on save, the effect
+  editor dropped `one_of` and downgraded substring patterns, and the type page
+  showed "No dependencies" while its query was pending or failed. ([#518])
+- The value grid collapsed a multi-valued attribute to one arbitrary cell
+  while the facet counts beside it counted every member. ([#531])
+- Six further minor defects from the review. Decimal extended statistics are
+  documented as a known residual rather than fixed: expression statistics on
+  `(value_text)::numeric` make `ANALYZE` fail on the first non-numeric text
+  value, which would break autovacuum for the whole table. ([#531])
+
+### Changed
+
+- The SaaS-shape load test migration 000030 cites is committed, behind the
+  `stress` build tag. ([#521])
+
+The rollback-contract change and the v1.3.1/v1.4.1 patch releases have their
+own entry below.
+
+
 ### Fixed — An unusable pagination cursor is now a 422, not a 500 or a silent restart ([#502])
 
 `PageArgs.Resolve` checked the cursor's shape only: base64 that decodes to
@@ -1725,6 +1889,36 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 [#475]: https://github.com/zkrebbekx/flexitype/issues/475
 [#507]: https://github.com/zkrebbekx/flexitype/issues/507
 [#502]: https://github.com/zkrebbekx/flexitype/issues/502
+[#488]: https://github.com/zkrebbekx/flexitype/pull/488
+[#509]: https://github.com/zkrebbekx/flexitype/pull/509
+[#510]: https://github.com/zkrebbekx/flexitype/pull/510
+[#511]: https://github.com/zkrebbekx/flexitype/pull/511
+[#513]: https://github.com/zkrebbekx/flexitype/pull/513
+[#514]: https://github.com/zkrebbekx/flexitype/pull/514
+[#515]: https://github.com/zkrebbekx/flexitype/pull/515
+[#516]: https://github.com/zkrebbekx/flexitype/pull/516
+[#517]: https://github.com/zkrebbekx/flexitype/pull/517
+[#518]: https://github.com/zkrebbekx/flexitype/pull/518
+[#520]: https://github.com/zkrebbekx/flexitype/pull/520
+[#521]: https://github.com/zkrebbekx/flexitype/pull/521
+[#522]: https://github.com/zkrebbekx/flexitype/pull/522
+[#523]: https://github.com/zkrebbekx/flexitype/pull/523
+[#524]: https://github.com/zkrebbekx/flexitype/pull/524
+[#525]: https://github.com/zkrebbekx/flexitype/pull/525
+[#526]: https://github.com/zkrebbekx/flexitype/pull/526
+[#527]: https://github.com/zkrebbekx/flexitype/pull/527
+[#528]: https://github.com/zkrebbekx/flexitype/pull/528
+[#529]: https://github.com/zkrebbekx/flexitype/pull/529
+[#530]: https://github.com/zkrebbekx/flexitype/pull/530
+[#531]: https://github.com/zkrebbekx/flexitype/pull/531
+[#532]: https://github.com/zkrebbekx/flexitype/pull/532
+[#533]: https://github.com/zkrebbekx/flexitype/pull/533
+[#534]: https://github.com/zkrebbekx/flexitype/pull/534
+[#536]: https://github.com/zkrebbekx/flexitype/pull/536
+[#539]: https://github.com/zkrebbekx/flexitype/pull/539
+[#540]: https://github.com/zkrebbekx/flexitype/pull/540
+[#541]: https://github.com/zkrebbekx/flexitype/pull/541
+[1.5.0]: https://github.com/zkrebbekx/flexitype/compare/v1.4.0...v1.5.0
 [1.3.0]: https://github.com/zkrebbekx/flexitype/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/zkrebbekx/flexitype/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/zkrebbekx/flexitype/compare/v1.0.0...v1.1.0

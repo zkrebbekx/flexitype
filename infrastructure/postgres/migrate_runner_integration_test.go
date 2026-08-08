@@ -149,9 +149,22 @@ func TestConcurrentMigrateIntegration(t *testing.T) {
 			// The stranded lock was the part an operator could not recover
 			// from: it sat on an idle pooled backend and blocked every later
 			// migration with no diagnostic.
+			//
+			// The count is scoped to an IDLE backend of this database, which
+			// is that failure exactly. Counting every advisory lock in the
+			// database instead made this assertion fail on a lock it does not
+			// own: the media-blob GC takes pg_advisory_xact_lock per object
+			// key and the relay takes one for outbox expansion, so a
+			// concurrent transaction elsewhere in the suite failed a
+			// migration test. A transaction-scoped lock cannot survive on an
+			// idle backend, so a lock counted here is a stranded one.
 			var held int
-			So(pool.Get(&held,
-				`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'`), ShouldBeNil)
+			So(pool.Get(&held, `
+				SELECT count(*) FROM pg_locks l
+				  JOIN pg_stat_activity a ON a.pid = l.pid
+				 WHERE l.locktype = 'advisory'
+				   AND a.datname = current_database()
+				   AND a.state = 'idle'`), ShouldBeNil)
 			So(held, ShouldEqual, 0)
 		})
 

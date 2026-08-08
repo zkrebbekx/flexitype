@@ -52,6 +52,7 @@ export function toWire(dataType: DataType, input: unknown): unknown {
     case 'bool':
       return toBool(input)
     case 'string':
+    case 'text':
     case 'enum':
     case 'url':
     case 'email':

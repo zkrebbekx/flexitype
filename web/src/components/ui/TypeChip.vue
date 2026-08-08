@@ -6,6 +6,7 @@ const props = defineProps<{ dataType: DataType }>()
 // Glyphs make attribute tables scannable without reading labels.
 const glyphs: Record<DataType, string> = {
   string: 'Aa',
+  text: '¶',
   integer: '#',
   float: '1.0',
   decimal: '1.00',

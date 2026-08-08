@@ -22,6 +22,19 @@ export const productAttributes: EffectiveAttribute[] = [
   },
   {
     attribute: {
+      id: 'attr-description',
+      internal_name: 'description',
+      display_name: 'Description',
+      // Long-form text. A `string` with a big max_length looks identical to a
+      // short one from a form's side; this type says which it is.
+      data_type: 'text',
+      sort_order: 20,
+      constraints: [{ kind: 'max_length', n: 4000 }],
+    },
+    declared_in: { id: 'type-product', internal_name: 'product', display_name: 'Product' },
+  },
+  {
+    attribute: {
       id: 'attr-status',
       internal_name: 'status',
       display_name: 'Status',

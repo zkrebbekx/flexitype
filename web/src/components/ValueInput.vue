@@ -88,6 +88,17 @@ watch(
       :options="[{ value: '', label: 'Select…' }, ...allowedValues.map((v) => ({ value: v, label: v }))]"
     />
     <Toggle v-else-if="kind === 'bool'" v-model="boolModel" :label="label ?? 'Value'" />
+    <label v-else-if="kind === 'textarea'" class="block">
+      <span v-if="label" class="mb-1 block text-[13px] font-medium text-(--text-secondary)">{{ label }}</span>
+      <textarea
+        v-model="model"
+        rows="6"
+        :aria-invalid="error ? 'true' : undefined"
+        :aria-describedby="error ? errorId : undefined"
+        class="w-full rounded-md border bg-(--surface) p-2.5 text-[13px]"
+        :class="error ? 'border-(--danger)' : 'border-(--border-strong)'"
+      />
+    </label>
     <label v-else-if="kind === 'json'" class="block">
       <span v-if="label" class="mb-1 block text-[13px] font-medium text-(--text-secondary)">{{ label }}</span>
       <textarea

@@ -43,6 +43,11 @@ describe('the product form the schema draws', () => {
   it('picks the control from the data type', () => {
     render(<Harness onSubmit={vi.fn()} />)
 
+    // Long-form text gets a text area. A string gets one line. Nothing but
+    // the declared type separates them.
+    expect((screen.getByLabelText(/Description/) as HTMLElement).tagName).toBe('TEXTAREA')
+    expect((screen.getByLabelText(/^Name/) as HTMLInputElement).tagName).toBe('INPUT')
+
     // An enum with a one_of constraint is a select carrying its choices.
     const status = screen.getByLabelText(/Status/) as HTMLSelectElement
     expect(status.tagName).toBe('SELECT')

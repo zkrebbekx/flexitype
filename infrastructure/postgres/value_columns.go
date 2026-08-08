@@ -99,6 +99,8 @@ func valueFromColumns(dt valueobjects.DataType, c valueColumns) (valueobjects.Va
 		return valueobjects.NewFloatValue(c.Float.Float64), nil
 	case valueobjects.DataTypeString:
 		return valueobjects.NewStringValue(c.Text.String), nil
+	case valueobjects.DataTypeText:
+		return valueobjects.NewTextValue(c.Text.String), nil
 	case valueobjects.DataTypeEnum:
 		return valueobjects.NewEnumValue(c.Text.String), nil
 	case valueobjects.DataTypeDecimal:

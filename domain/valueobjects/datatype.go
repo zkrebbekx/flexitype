@@ -7,8 +7,16 @@ type DataType string
 
 // The supported soft data types.
 const (
-	DataTypeBool     DataType = "bool"
-	DataTypeString   DataType = "string"
+	DataTypeBool   DataType = "bool"
+	DataTypeString DataType = "string"
+	// DataTypeText is long-form text. It stores exactly as DataTypeString
+	// does and accepts the same constraints; it differs in ONE declared
+	// thing, which is that the value is long, so a renderer picks a
+	// multi-line control rather than guessing from max_length.
+	//
+	// The distinction is what lets a client draw a correct form from the
+	// schema alone, which is the promise the soft-typing API makes.
+	DataTypeText     DataType = "text"
 	DataTypeInteger  DataType = "integer"
 	DataTypeFloat    DataType = "float"
 	DataTypeDecimal  DataType = "decimal"
@@ -32,6 +40,7 @@ const (
 var dataTypes = map[DataType]struct{}{
 	DataTypeBool:     {},
 	DataTypeString:   {},
+	DataTypeText:     {},
 	DataTypeInteger:  {},
 	DataTypeFloat:    {},
 	DataTypeDecimal:  {},
@@ -62,7 +71,7 @@ func (d DataType) String() string { return string(d) }
 // support length/pattern constraints.
 func (d DataType) IsTextual() bool {
 	switch d {
-	case DataTypeString, DataTypeEnum, DataTypeURL, DataTypeEmail:
+	case DataTypeString, DataTypeText, DataTypeEnum, DataTypeURL, DataTypeEmail:
 		return true
 	default:
 		return false

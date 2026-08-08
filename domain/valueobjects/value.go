@@ -50,6 +50,13 @@ func NewStringValue(s string) Value {
 	return Value{dataType: DataTypeString, textVal: s}
 }
 
+// NewTextValue builds a long-form text value. It is stored and compared
+// exactly as a string; only the declared type differs, which is what tells a
+// renderer to draw a text area.
+func NewTextValue(s string) Value {
+	return Value{dataType: DataTypeText, textVal: s}
+}
+
 // NewEnumValue builds an enum member value. Membership of the allowed set
 // is enforced by the attribute definition's OneOf constraint.
 func NewEnumValue(s string) Value {
@@ -246,6 +253,13 @@ func ParseValue(dt DataType, raw json.RawMessage) (Value, error) {
 			return Value{}, err
 		}
 		return NewStringValue(s), nil
+
+	case DataTypeText:
+		s, err := decodeString(dec)
+		if err != nil {
+			return Value{}, err
+		}
+		return NewTextValue(s), nil
 
 	case DataTypeEnum:
 		s, err := decodeString(dec)

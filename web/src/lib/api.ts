@@ -6,6 +6,7 @@ import { bearerHeader, challenge } from './auth'
 export type DataType =
   | 'bool'
   | 'string'
+  | 'text'
   | 'integer'
   | 'float'
   | 'decimal'
@@ -21,6 +22,7 @@ export type DataType =
 
 export const DATA_TYPES: DataType[] = [
   'string',
+  'text',
   'integer',
   'float',
   'decimal',

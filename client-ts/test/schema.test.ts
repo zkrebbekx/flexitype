@@ -199,6 +199,15 @@ describe('the form descriptor', () => {
     expect(fieldKind('string', true)).toBe('select')
   })
 
+  it('draws a text area for long-form text, and a line for a string', () => {
+    // The one thing a renderer cannot infer from a string with a large
+    // max_length: whether the value is long. `text` declares it.
+    expect(fieldKind('text')).toBe('textarea')
+    expect(fieldKind('string')).toBe('text')
+    // A narrowed text attribute is still a choice, not free text.
+    expect(fieldKind('text', true)).toBe('select')
+  })
+
   it('reads the choices out of a one_of constraint', () => {
     const form = toFormDescriptor(effective)
     expect(form.byName.status?.options).toEqual([

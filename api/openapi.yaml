@@ -1547,7 +1547,7 @@ paths:
               required: [file, mapping]
               properties:
                 file: { type: string, format: binary }
-                mapping: { type: string, description: "JSON: key_column, mapping, mode, dry_run" }
+                mapping: { type: string, description: "JSON: key_column, mapping, mode, dry_run, allow_legacy_multi_value_cells (opt-in to the pre-1.5 in-band multi-value cell forms; off by default, because those forms are shapes an ordinary value can have)" }
       responses:
         "200": { description: Import report, content: { application/json: { schema: { $ref: "#/components/schemas/ImportReport" } } } }
         "422": { $ref: "#/components/responses/Error" }

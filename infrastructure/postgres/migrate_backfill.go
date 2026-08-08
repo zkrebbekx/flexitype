@@ -45,7 +45,7 @@ type backfill struct {
 
 // backfills are the registered steps, run in order. Order matters only when
 // one step depends on another's output; today they are independent.
-var backfills = []backfill{entitySummaryBackfill}
+var backfills = []backfill{entitySummaryBackfill, entitySearchAttrBackfill}
 
 // runBackfills executes every registered step that has not completed. A step
 // runs to exhaustion — it is not spread across boots — but each of its batches
@@ -154,6 +154,60 @@ var entitySummaryBackfill = backfill{
 			    SELECT tenant_id, type_definition_id, entity_id, value_count, last_updated_at
 			      FROM computed
 			    ON CONFLICT (tenant_id, type_definition_id, entity_id) DO NOTHING
+			    RETURNING 1
+			)
+			SELECT count(*) FROM inserted`, limit)
+		if err != nil {
+			return 0, err
+		}
+		return processed, nil
+	},
+}
+
+// entitySearchAttrBackfill populates flexitype_entity_search_attr for
+// entities indexed before migration 000037 split the search vector per
+// attribute.
+//
+// It needs no application pass: flexitype_entity_search.document already
+// holds the per-attribute values the indexer computed, so each row derives
+// from the document beside it. Every write after 000037 maintains its own
+// rows, so this only has to catch up history, and it may run while the fleet
+// serves traffic — until it does, a restricted principal's matches() finds
+// nothing for an entity not yet carried over, which is the safe direction.
+//
+// A document value is a JSON ARRAY of value strings. The typeof guard skips
+// anything else rather than failing the batch on one malformed row, and the
+// empty attribute name carries the entity id, which no policy hides.
+var entitySearchAttrBackfill = backfill{
+	name:            "000037_entity_search_attr",
+	requiresVersion: 37,
+	step: func(ctx context.Context, q db.QueryExecer, limit int) (int, error) {
+		var processed int
+		err := q.GetContext(ctx, &processed, `
+			WITH missing AS (
+			    SELECT s.tenant_id, s.entity_id, s.document
+			      FROM flexitype_entity_search s
+			     WHERE NOT EXISTS (
+			         SELECT 1 FROM flexitype_entity_search_attr a
+			          WHERE a.tenant_id = s.tenant_id
+			            AND a.entity_id = s.entity_id)
+			     LIMIT $1
+			), rows AS (
+			    SELECT m.tenant_id, m.entity_id, '' AS attribute_name,
+			           to_tsvector('simple', m.entity_id) AS text_vector
+			      FROM missing m
+			    UNION ALL
+			    SELECT m.tenant_id, m.entity_id, kv.key,
+			           to_tsvector('simple', COALESCE((
+			               SELECT string_agg(v, ' ')
+			                 FROM jsonb_array_elements_text(kv.value) AS v), ''))
+			      FROM missing m, jsonb_each(m.document) AS kv
+			     WHERE jsonb_typeof(kv.value) = 'array'
+			), inserted AS (
+			    INSERT INTO flexitype_entity_search_attr
+			        (tenant_id, entity_id, attribute_name, text_vector)
+			    SELECT tenant_id, entity_id, attribute_name, text_vector FROM rows
+			    ON CONFLICT (tenant_id, entity_id, attribute_name) DO NOTHING
 			    RETURNING 1
 			)
 			SELECT count(*) FROM inserted`, limit)

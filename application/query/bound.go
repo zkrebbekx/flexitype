@@ -77,6 +77,16 @@ type BoundType struct {
 // BoundMatches is full-text search over the entity's search document.
 type BoundMatches struct {
 	Query string
+	// Attrs names the attributes the principal may read, set ONLY when the
+	// policy hides something. Nil means the principal reads everything, and
+	// the search runs over the whole document.
+	//
+	// It exists because the document is a flattening of every textual value
+	// with no attribute identity, so a search over it could not be filtered
+	// the way a named condition is: a denied principal recovered restricted
+	// content word by word. The search is now per attribute, and this is the
+	// set it may look in.
+	Attrs []string
 }
 
 // BoundTraversal crosses a relationship; Inner evaluates against the

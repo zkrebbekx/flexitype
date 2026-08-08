@@ -238,7 +238,17 @@ func (r *queryRepo) eval(node query.BoundNode, s evalScope) (tri, error) {
 		if !ok {
 			return triFalse, nil
 		}
-		return triOf(matchesText(doc.text, n.Query)), nil
+		// A principal that reads everything searches the whole document. A
+		// restricted one searches ONLY the attributes it may read, plus the
+		// entity id, which is not an attribute and carries no value.
+		if n.Attrs == nil {
+			return triOf(matchesText(doc.text, n.Query)), nil
+		}
+		readable := []string{doc.entity}
+		for _, name := range n.Attrs {
+			readable = append(readable, doc.values[name]...)
+		}
+		return triOf(matchesText(strings.Join(readable, " "), n.Query)), nil
 
 	case *query.BoundTraversal:
 		return r.evalTraversal(n, s)

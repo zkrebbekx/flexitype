@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -554,6 +557,88 @@ func TestWebhookSubscriptionUpdateConformance(t *testing.T) {
 				got, gerr := c.Webhooks().Get(ctx, sub.ID)
 				So(gerr, ShouldBeNil)
 				So(got.URL, ShouldEqual, "http://127.0.0.1:9/first")
+			})
+		})
+	})
+}
+
+// TestSignedMediaURLConformance drives the signed-link path end to end
+// through the Go client.
+//
+// The link is the whole point of the feature: it must be fetchable with NO
+// credential, because the surface that uses it — a storefront, a catalogue
+// page, an email — holds none.
+func TestSignedMediaURLConformance(t *testing.T) {
+	Convey("Given a standalone service that signs media links, and its Go client", t, func() {
+		svc := flexitype.NewInMemory()
+		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{
+			AllowAnonymous: true,
+			MediaURLSecret: "conformance-media-signing-secret-0123456789",
+		}))
+		Reset(ts.Close)
+
+		c, err := client.New(ts.URL)
+		So(err, ShouldBeNil)
+		ctx := context.Background()
+
+		product, err := c.Types().Create(ctx, client.CreateTypeInput{
+			InternalName: "product", DisplayName: "Product",
+		})
+		So(err, ShouldBeNil)
+		photo, err := c.Attributes().Create(ctx, client.CreateAttributeInput{
+			TypeDefinitionID: product.ID, InternalName: "photo",
+			DisplayName: "Photo", DataType: "media",
+		})
+		So(err, ShouldBeNil)
+
+		value, err := c.Entities().UploadMedia(ctx, product.ID, "p-1", photo.ID,
+			"photo.png", "image/png", strings.NewReader("PNGBYTES"))
+		So(err, ShouldBeNil)
+
+		var media struct {
+			ObjectKey string `json:"object_key"`
+		}
+		raw, merr := json.Marshal(value.Value)
+		So(merr, ShouldBeNil)
+		So(json.Unmarshal(raw, &media), ShouldBeNil)
+		So(media.ObjectKey, ShouldNotBeEmpty)
+
+		Convey("When the client mints a link", func() {
+			link, lerr := c.SignMediaURL(ctx, media.ObjectKey, 10*time.Minute)
+
+			Convey("Then it comes back with an expiry", func() {
+				So(lerr, ShouldBeNil)
+				So(link.URL, ShouldStartWith, "/media/signed/")
+				So(link.ExpiresAt.After(time.Now()), ShouldBeTrue)
+			})
+
+			Convey("Then a caller with no credential at all can fetch the bytes", func() {
+				So(lerr, ShouldBeNil)
+				// A bare http.Get: no client, no token, nothing but the link.
+				resp, gerr := http.Get(ts.URL + link.URL)
+				So(gerr, ShouldBeNil)
+				defer func() { _ = resp.Body.Close() }()
+				body, rerr := io.ReadAll(resp.Body)
+				So(rerr, ShouldBeNil)
+				So(resp.StatusCode, ShouldEqual, http.StatusOK)
+				So(string(body), ShouldEqual, "PNGBYTES")
+			})
+		})
+
+		Convey("When a deployment signs nothing", func() {
+			plain := flexitype.NewInMemory()
+			bare := httptest.NewServer(plain.APIHandler(flexitype.APIConfig{AllowAnonymous: true}))
+			Reset(bare.Close)
+			bc, cerr := client.New(bare.URL)
+			So(cerr, ShouldBeNil)
+
+			_, lerr := bc.SignMediaURL(ctx, media.ObjectKey, time.Minute)
+
+			Convey("Then the client reports the capability as disabled", func() {
+				So(lerr, ShouldNotBeNil)
+				var apiErr *client.APIError
+				So(errors.As(lerr, &apiErr), ShouldBeTrue)
+				So(apiErr.Code, ShouldEqual, client.CodeFeatureDisabled)
 			})
 		})
 	})

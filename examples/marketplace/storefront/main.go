@@ -52,6 +52,11 @@ func run(log Logger) error {
 		return errors.New("STOREFRONT_DB_DSN is required")
 	}
 	flexitypeURL := envOr("FLEXITYPE_URL", "http://flexitype:8080")
+	// The address a SHOPPER's browser reaches flexitype on. A signed image
+	// link is redeemed by the browser, so the container-network URL this
+	// process uses would not resolve for it. Empty falls back to proxying the
+	// bytes through this service.
+	mediaBase := envOr("STOREFRONT_MEDIA_PUBLIC_BASE", "")
 	internalToken := os.Getenv("MARKETPLACE_INTERNAL_TOKEN")
 	if internalToken == "" {
 		return errors.New("MARKETPLACE_INTERNAL_TOKEN is required: it gates merchant registration and backfill")
@@ -82,7 +87,7 @@ func run(log Logger) error {
 		return projector.Project(ctx, key.Tenant, key.TypeID, key.EntityID)
 	}, log)
 	ingest := NewIngest(store, debouncer, log)
-	api := NewAPI(store, projector, internalToken, log)
+	api := NewAPI(store, projector, internalToken, mediaBase, log)
 
 	srv := &http.Server{
 		Addr:              addr,

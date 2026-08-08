@@ -3,8 +3,12 @@ package main
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"github.com/zkrebbekx/flexitype/client"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 )
 
 // API serves the shopper-facing catalog and the platform-facing internal
@@ -16,12 +20,20 @@ type API struct {
 	// register a merchant's credential and start a backfill, so they are not
 	// shopper-reachable.
 	internalToken string
-	log           Logger
+	// mediaBase is the address a SHOPPER's browser can reach flexitype on. A
+	// signed link is redeemed by the browser, not by this service, so the
+	// container-network URL this process uses would not resolve for it. Empty
+	// falls back to proxying the bytes.
+	mediaBase string
+	log       Logger
 }
 
 // NewAPI wires the storefront's HTTP surface.
-func NewAPI(store *Store, projector *Projector, internalToken string, log Logger) *API {
-	return &API{store: store, projector: projector, internalToken: internalToken, log: log}
+func NewAPI(store *Store, projector *Projector, internalToken, mediaBase string, log Logger) *API {
+	return &API{
+		store: store, projector: projector, internalToken: internalToken,
+		mediaBase: strings.TrimSuffix(mediaBase, "/"), log: log,
+	}
 }
 
 // Handler builds the route table.
@@ -107,12 +119,19 @@ func (a *API) getProduct(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, product)
 }
 
-// getProductImage streams a product photo.
+// getProductImage points a shopper at a product photo.
 //
-// The bytes live in flexitype's blob store behind that merchant's credential,
-// so the storefront proxies them. A shopper never holds a merchant token, and
-// the image of a non-active product is unreachable because Store.Get already
-// refused the row.
+// The bytes live in flexitype's blob store behind that merchant's credential.
+// This service mints a SIGNED, EXPIRING link with that credential and redirects
+// the browser to it, so the image is fetched straight from flexitype and can be
+// cached at the edge — the bytes never pass through this process at all.
+//
+// A shopper still holds no merchant token: the signature is scoped to one
+// object and one expiry, and the image of a non-active product is unreachable
+// because Store.Get already refused the row.
+//
+// A deployment that sets no signing secret answers FEATURE_DISABLED, and this
+// falls back to proxying the bytes as it used to.
 func (a *API) getProductImage(w http.ResponseWriter, r *http.Request) {
 	tenant := r.PathValue("tenant")
 	product, ok, err := a.store.Get(r.Context(), tenant, r.PathValue("entityID"))
@@ -137,6 +156,24 @@ func (a *API) getProductImage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such image")
 		return
 	}
+	if a.mediaBase != "" {
+		link, serr := c.SignMediaURL(r.Context(), media.ObjectKey, signedImageTTL)
+		switch {
+		case serr == nil:
+			// Cache for the life of the link, and no longer: the redirect
+			// carries a credential with an expiry.
+			w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(int(signedImageTTL.Seconds())))
+			http.Redirect(w, r, a.mediaBase+link.URL, http.StatusFound)
+			return
+		case isFeatureDisabled(serr):
+			// The deployment does not sign links. Fall through and proxy.
+		default:
+			a.log.Error("sign media url", "tenant", tenant, "error", serr)
+			writeError(w, http.StatusNotFound, "no such image")
+			return
+		}
+	}
+
 	body, mime, err := c.DownloadMedia(r.Context(), media.ObjectKey)
 	if err != nil {
 		a.log.Error("download media", "tenant", tenant, "error", err)
@@ -168,6 +205,18 @@ func (a *API) listMerchants(w http.ResponseWriter, r *http.Request) {
 		items = []Merchant{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// signedImageTTL is how long a product-image link lasts. Short: a shopper
+// follows the redirect immediately, and a catalogue page re-mints on its next
+// render.
+const signedImageTTL = 5 * time.Minute
+
+// isFeatureDisabled reports whether flexitype answered "this deployment does
+// not run that optional feature", which is not an error to report to a shopper.
+func isFeatureDisabled(err error) bool {
+	var apiErr *client.APIError
+	return errors.As(err, &apiErr) && apiErr.Code == client.CodeFeatureDisabled
 }
 
 // merchantRegistration is what the platform pushes on onboarding.

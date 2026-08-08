@@ -143,6 +143,16 @@ type Config struct {
 	// BootstrapAdmin seeds a first admin account when provisioning is on
 	// and the account store is empty.
 	BootstrapAdmin bool
+	// MediaURLSecret turns on signed, expiring media links. Media bytes sit
+	// behind the same authentication as everything else, and the token
+	// carries the tenant, so a public surface cannot link to an image without
+	// proxying every request through a credentialed service.
+	//
+	// It must be at least 32 characters, and it must NOT be the webhook
+	// signing key: one leaked secret must not forge both an event and a file
+	// link.
+	MediaURLSecret string
+
 	// BootstrapAdminToken is the credential the first admin account takes,
 	// supplied by the deployment instead of minted by the service.
 	//
@@ -282,6 +292,7 @@ func Load() (Config, error) {
 		AuthCacheTTL:            e.duration("FLEXITYPE_AUTH_CACHE_TTL", 30*time.Second),
 		BootstrapAdmin:          e.bool("FLEXITYPE_BOOTSTRAP_ADMIN", false),
 		BootstrapAdminToken:     os.Getenv("FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN"),
+		MediaURLSecret:          os.Getenv("FLEXITYPE_MEDIA_URL_SECRET"),
 		RateLimitRPS:            e.float("FLEXITYPE_RATE_LIMIT_RPS", 50),
 		RateLimitBurst:          e.int("FLEXITYPE_RATE_LIMIT_BURST", 200),
 		TenantRateLimitRPS:      e.float("FLEXITYPE_TENANT_RATE_LIMIT_RPS", 500),

@@ -69,6 +69,7 @@ working.
 | `FLEXITYPE_DB_ALLOW_PLAINTEXT` | `false` | Permit an unencrypted database connection to a non-loopback host, and nothing else. Authentication is unaffected. |
 | `FLEXITYPE_REQUIRE_AUTH` | `true` | Reports that an account source is required. **Setting it to `false` does not disable authentication** — `FLEXITYPE_DEV_INSECURE` is the only opt-out, so a manifest carried over from an older release cannot boot open by omission. |
 | `FLEXITYPE_BOOTSTRAP_ADMIN` | `false` | On startup, if no accounts exist, seed a `default` tenant and `bootstrap-admin` admin account. Its token is printed to **stdout once** (never to the structured log) — capture it. |
+| `FLEXITYPE_MEDIA_URL_SECRET` | _(unset)_ | Turns on signed, expiring media links. At least 32 characters, and NOT the webhook signing key. Without it, `POST /media/{key}/signed-url` reports the capability as disabled. |
 | `FLEXITYPE_BOOTSTRAP_ADMIN_TOKEN` | _(unset)_ | The credential that account takes, decided by the deployment instead of minted by the service. Nothing is printed when it is set. Generate one with `flexitype bootstrap-token`. |
 | `FLEXITYPE_AUTH_CACHE_TTL` | `30s` | How long a successful authentication is cached. Rotation, revocation, a role write or delete, and a tenant deactivation evict the affected entries in the process that served the call — the cache is per-process, with no cross-replica signal. A multi-replica deployment therefore converges over this TTL, so it bounds both a change made directly in the database and the tail of a change made through the API. |
 
@@ -304,7 +305,53 @@ is mounted. Only non-API paths reach the app shell.
 | `FLEXITYPE_FEATURE_ACTIVITY` | `true` | Enable the audit log (writes and read API). |
 | `FLEXITYPE_FEATURE_SEARCH_INDEX` | `false` | Maintain the entity search projection and unlock FQL `matches()`. |
 | `FLEXITYPE_FEATURE_GRAPHQL_FEDERATION` | `false` | Serve the GraphQL endpoint as an Apollo-Federation subgraph (`_service`, `_entities`, `@key`). See [federation.md](federation.md). |
-| `FLEXITYPE_BLOB_DIR` | _(unset)_ | Directory backing media-attribute uploads (local-disk blob store). Unset disables media uploads. |
+| `FLEXITYPE_BLOB_DIR` | _(unset)_ | Directory backing media-attribute uploads (local-disk blob store). Unset disables media uploads. It is checked for writability at start-up: a directory this process cannot write to stops the service instead of failing the first upload. |
+| `FLEXITYPE_MEDIA_URL_SECRET` | _(unset)_ | Turns on signed, expiring media links (below). |
+
+### Signed media links
+
+Media bytes are served from `GET /api/v1/media/{key}` behind the same
+authentication as everything else, and a token carries one tenant. A public
+surface — a storefront, a catalogue page, an email — therefore cannot link to
+an image: it has to proxy every request through a service holding a tenant
+credential, which carries the whole file through a process with no other reason
+to touch it and defeats any CDN in front of it.
+
+Set `FLEXITYPE_MEDIA_URL_SECRET` and an authenticated caller can mint a link
+anybody may redeem, for a while:
+
+```bash
+curl -sX POST -H "Authorization: Bearer $TOKEN" \
+  -d '{"ttl_seconds":600}' \
+  "$API/media/$OBJECT_KEY/signed-url"
+# {"url":"/media/signed/eyJ2Ijoi…","expires_at":"2026-08-09T12:10:00Z"}
+
+curl -s "$BASE/media/signed/eyJ2Ijoi…" -o photo.png   # no credential at all
+```
+
+What the design holds to:
+
+- The signature covers the **tenant, the object key and the expiry together**.
+  A signature over the key alone could be replayed against another object; one
+  without the expiry could be replayed forever.
+- The tenant is read back **out of the verified token**, never from the
+  request, so a holder cannot point a valid signature at another tenant's
+  object.
+- Minting is gated on the **same check the authenticated download makes** — the
+  caller's tenant must own a value referencing the key, and the caller must be
+  able to read the attribute holding it. A caller who cannot fetch the bytes
+  cannot mint a link that lets anyone else fetch them.
+- Every redemption failure — malformed, forged, expired, unknown key — is the
+  **same 404**. Distinguishing "expired" from "forged" tells a probing holder
+  which half to work on.
+- The default lifetime is 15 minutes and the cap is 24 hours. A longer request
+  is capped rather than refused.
+- The secret must be at least 32 characters, and **must not be the webhook
+  signing key**: one leaked secret must not forge both an event and a file
+  link.
+
+`GET /media/signed/{token}` is served outside `/api/v1`, and takes no
+credential — the signature is the credential.
 
 ## Event delivery (with the outbox)
 

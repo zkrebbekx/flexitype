@@ -175,6 +175,21 @@ describe('the service surface', () => {
     )
   })
 
+  it('mints a signed media link a public page can use with no credential', async () => {
+    const http = mockFetch({ body: { url: '/media/signed/eyJ2IjoidjEifQ.abc', expires_at: '2026-08-09T12:15:00Z' } })
+    const client = createClient({ baseUrl: 'https://example.test', fetch: http.fetch })
+
+    const link = await client.entities.signMediaUrl('tenant/abc.png', { ttlSeconds: 600 })
+
+    expect(http.calls[0]?.method).toBe('POST')
+    expect(http.calls[0]?.url).toBe('https://example.test/api/v1/media/tenant%2Fabc.png/signed-url')
+    expect(JSON.parse(String(http.calls[0]?.body))).toEqual({ ttl_seconds: 600 })
+    // The link is relative to the service root, and the caller redeems it
+    // without a token: the signature is the credential.
+    expect(link.url).toBe('/media/signed/eyJ2IjoidjEifQ.abc')
+    expect(link.expires_at).toBe('2026-08-09T12:15:00Z')
+  })
+
   it('reports a GraphQL query-level error instead of returning a hollow result', async () => {
     // A GraphQL error arrives with a 200 status, so a client that only checks
     // the status hands back data that is missing without saying so.

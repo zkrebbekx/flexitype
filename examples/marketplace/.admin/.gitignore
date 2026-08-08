@@ -1,0 +1,4 @@
+# The admin token seed.sh captures from the flexitype container log. It is a
+# credential, so it is never committed.
+*
+!.gitignore

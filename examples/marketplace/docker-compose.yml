@@ -1,0 +1,126 @@
+# A multi-tenant marketplace on flexitype: Postgres, a standalone flexitype
+# with provisioning and the outbox on, a merchant platform and a shopper
+# storefront.
+#
+#   cd examples/marketplace
+#   docker compose up --build --wait
+#   ./seed.sh                          # onboards merchants, seeds products
+#
+# Both services talk to flexitype over HTTP with the Go SDK. Neither embeds the
+# library.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: flexitype
+      POSTGRES_PASSWORD: flexitype
+      POSTGRES_DB: flexitype
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flexitype"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # A named volume is created owned by root, and the flexitype image runs as
+  # the distroless `nonroot` user (65532). Without this one-shot chown, the
+  # first product-image upload fails with "permission denied" from inside the
+  # blob store — long after the stack has come up healthy.
+  blob-init:
+    image: alpine:3.20
+    command: ["sh", "-c", "mkdir -p /blobs && chown -R 65532:65532 /blobs"]
+    volumes:
+      - blobs:/blobs
+
+  flexitype:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      blob-init:
+        condition: service_completed_successfully
+    environment:
+      FLEXITYPE_DB_HOST: postgres
+      FLEXITYPE_DB_PORT: "5432"
+      FLEXITYPE_DB_USER: flexitype
+      FLEXITYPE_DB_PASSWORD: flexitype
+      FLEXITYPE_DB_NAME: flexitype
+      FLEXITYPE_MIGRATE_ON_START: "true"
+      # This opts out of ONE production guard: an unencrypted connection to a
+      # non-loopback database host, which is what a compose network is. It does
+      # NOT disable authentication here — that only happens when no account
+      # source is configured, and FLEXITYPE_PROVISIONING below is one. Every
+      # request in this stack still presents a service-account token.
+      FLEXITYPE_DEV_INSECURE: "true"
+      # Provisioning creates tenants and service accounts at runtime, which is
+      # what onboarding a merchant means here. It also makes authentication
+      # database-backed, so no service-account file is involved.
+      FLEXITYPE_PROVISIONING: "true"
+      # Seed the first admin account. Its token is printed to STDOUT once;
+      # seed.sh captures it into ./.admin/token, which the platform reads.
+      FLEXITYPE_BOOTSTRAP_ADMIN: "true"
+      # The outbox turns each merchant's webhook subscription into a managed
+      # one (retries, backoff, dead-lettering). The search index powers FQL
+      # matches(), which the merchant console uses.
+      FLEXITYPE_OUTBOX: "true"
+      FLEXITYPE_FEATURE_SEARCH_INDEX: "true"
+      # The storefront runs on a private container-network address.
+      FLEXITYPE_WEBHOOK_ALLOW_PRIVATE: "true"
+      # Product images are stored on disk in this demo. Without it, a media
+      # upload has nowhere to put the bytes.
+      FLEXITYPE_BLOB_DIR: /var/lib/flexitype/blobs
+    volumes:
+      - blobs:/var/lib/flexitype/blobs
+    ports:
+      - "8080:8080"
+
+  storefront:
+    build:
+      context: ../..
+      dockerfile: examples/marketplace/storefront/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      STOREFRONT_ADDR: ":9200"
+      STOREFRONT_DB_DSN: postgres://flexitype:flexitype@postgres:5432/flexitype?sslmode=disable
+      FLEXITYPE_URL: http://flexitype:8080
+      # Gates merchant registration and the backfill. The platform presents it.
+      MARKETPLACE_INTERNAL_TOKEN: marketplace-internal-demo-token
+      # A burst of value events for one product collapses into one projection.
+      STOREFRONT_DEBOUNCE: 250ms
+    ports:
+      - "9200:9200"
+
+  platform:
+    build:
+      context: ../..
+      dockerfile: examples/marketplace/platform/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      flexitype:
+        condition: service_started
+      storefront:
+        condition: service_started
+    environment:
+      PLATFORM_ADDR: ":9300"
+      PLATFORM_DB_DSN: postgres://flexitype:flexitype@postgres:5432/flexitype?sslmode=disable
+      FLEXITYPE_URL: http://flexitype:8080
+      STOREFRONT_URL: http://storefront:9200
+      STOREFRONT_HOOK_BASE: http://storefront:9200/hook
+      MARKETPLACE_INTERNAL_TOKEN: marketplace-internal-demo-token
+      PLATFORM_API_TOKEN: platform-console-demo-token
+      # flexitype prints its bootstrap admin token to stdout once and its image
+      # is distroless, so a compose stack cannot capture it into an environment
+      # variable. The platform waits for this file instead; seed.sh writes it.
+      # In a real deployment the same path is a mounted secret.
+      FLEXITYPE_ADMIN_TOKEN_FILE: /run/marketplace/admin-token
+    volumes:
+      - ./.admin:/run/marketplace:ro
+    ports:
+      - "9300:9300"
+
+volumes:
+  blobs:

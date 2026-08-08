@@ -72,6 +72,9 @@ type options struct {
 	workerOpts          []webhook.WorkerOption
 	retention           time.Duration
 	deadLetterRetention time.Duration
+	parkedRetention     time.Duration
+	outboxMaxAttempts   int
+	outboxRetryCeiling  time.Duration
 	webhookAllowPrivate bool
 	webhookTimeout      time.Duration
 	timeZone            *time.Location
@@ -270,6 +273,39 @@ func WithDeadLetterRetention(d time.Duration) Option {
 	return func(o *options) { o.deadLetterRetention = d }
 }
 
+// WithParkedRetention bounds how long a PARKED envelope is kept before the
+// pruner deletes it (default 30 days). Only meaningful with WithOutbox.
+//
+// A parked envelope is a committed change that exhausted its retry budget and
+// was never delivered. Pruning it is DELIBERATE data loss — after the prune
+// the event can never be redriven — so keep this well past the window in
+// which the flexitype_outbox_parked gauge is alerted on and the envelopes are
+// redriven (POST /admin/outbox/redrive). The bound exists because a parked
+// envelope has no feed_seq, so the event retention never reached it and one
+// poisonous event type could grow the outbox for ever.
+func WithParkedRetention(d time.Duration) Option {
+	return func(o *options) { o.parkedRetention = d }
+}
+
+// WithOutboxMaxAttempts sets how many dispatch failures park an envelope
+// (default 25). Only meaningful with WithOutbox.
+//
+// With the default retry ceiling the default budget spans roughly 5h45m, so
+// a downstream outage longer than that parks every envelope written during
+// it. Size the budget to the longest outage the deployment should ride out
+// unattended; parked envelopes then need an operator redrive.
+func WithOutboxMaxAttempts(n int) Option {
+	return func(o *options) { o.outboxMaxAttempts = n }
+}
+
+// WithOutboxRetryCeiling caps the exponential backoff between outbox
+// dispatch attempts (default 15 minutes). Only meaningful with WithOutbox.
+// Together with WithOutboxMaxAttempts it sets the retry window: attempts
+// back off 1s, 4s, 16s, ... up to this ceiling.
+func WithOutboxRetryCeiling(d time.Duration) Option {
+	return func(o *options) { o.outboxRetryCeiling = d }
+}
+
 // WithWebhookAllowPrivate lets webhook subscriptions target private,
 // loopback and link-local hosts over http — for on-prem deployments whose
 // consumers live on internal networks. Off by default (SSRF guard).
@@ -349,7 +385,14 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		SearchStore:      searchStore, // may be nil; enables entity-data erasure of the projection
 	}
 	if o.outbox {
-		store := postgres.NewOutboxStore(transactor)
+		var storeOpts []postgres.OutboxStoreOption
+		if o.outboxMaxAttempts > 0 {
+			storeOpts = append(storeOpts, postgres.WithOutboxMaxAttempts(o.outboxMaxAttempts))
+		}
+		if o.outboxRetryCeiling > 0 {
+			storeOpts = append(storeOpts, postgres.WithOutboxRetryCeiling(o.outboxRetryCeiling))
+		}
+		store := postgres.NewOutboxStore(transactor, storeOpts...)
 		policy := webhook.URLPolicy{AllowPrivate: o.webhookAllowPrivate}
 		// The delivery client is built here, not supplied, because it is the
 		// SSRF guard: safedial refuses private and link-local destinations
@@ -375,10 +418,15 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 		}
 		feedStore := postgres.NewFeedStore(pool)
 		pruner = feed.NewPruner(feedStore, retention, o.onBgError).
-			WithDeadLetterRetention(o.deadLetterRetention)
+			WithDeadLetterRetention(o.deadLetterRetention).
+			WithParkedRetention(o.parkedRetention)
 
 		cfg.Outbox = store
 		cfg.OutboxNudge = relay.Nudge
+		// The postgres outbox adapter always implements the recovery
+		// surface; the assertion is backed by a compile-time check in the
+		// adapter, so it cannot fail at runtime.
+		cfg.OutboxOps = store.(outbox.OpsStore)
 		cfg.Subscriptions = postgres.NewSubscriptionStore(pool)
 		cfg.WebhookURLPolicy = policy
 		cfg.Deliveries = postgres.NewDeliveryStore(pool)

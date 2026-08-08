@@ -119,6 +119,45 @@ func (s *feedStore) Prune(ctx context.Context, cutoff time.Time) (int, error) {
 	}
 }
 
+// PruneParked deletes envelopes parked before the cutoff, in bounded
+// batches. Parked rows never got a feed_seq, so the envelope prune above
+// never reached them and nothing else bounded them.
+//
+// There is no delivery-row guard: a parked envelope was never expanded, so
+// no flexitype_webhook_delivery row can reference it. The cutoff is on
+// parked_at — the clock starts when retries were exhausted, not when the
+// event happened — so a redriven-then-reparked envelope earns a fresh
+// retention window.
+//
+// This delete is DELIBERATE data loss: the envelope was committed and never
+// delivered, and after this it never will be. The retention default (30
+// days, see feed.DefaultParkedRetention) exists to make that loss a decision
+// an operator had a month of a non-zero flexitype_outbox_parked gauge to
+// prevent.
+func (s *feedStore) PruneParked(ctx context.Context, cutoff time.Time) (int, error) {
+	total := 0
+	for {
+		res, err := s.q.ExecContext(ctx, bind(
+			`DELETE FROM flexitype_event_outbox
+			  WHERE id IN (
+			      SELECT id FROM flexitype_event_outbox
+			       WHERE parked_at IS NOT NULL AND parked_at < ?
+			       ORDER BY id
+			       LIMIT ?)`), cutoff, pruneBatch)
+		if err != nil {
+			return total, fmt.Errorf("prune parked envelopes: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		total += int(n)
+		if int(n) < pruneBatch {
+			return total, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return total, nil
+		}
+	}
+}
+
 // cursorStore persists named feed cursors.
 type cursorStore struct {
 	q db.QueryExecer

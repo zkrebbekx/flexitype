@@ -17,9 +17,10 @@ import (
 
 // fakeFeedStore serves a fixed ordered log.
 type fakeFeedStore struct {
-	events     []Event
-	pruned     int
-	deadPruned int
+	events       []Event
+	pruned       int
+	deadPruned   int
+	parkedPruned int
 }
 
 func (s *fakeFeedStore) List(_ context.Context, _ valueobjects.TenantID, after int64, types []string, limit int) ([]Event, error) {
@@ -62,6 +63,11 @@ func (s *fakeFeedStore) Prune(context.Context, time.Time) (int, error) {
 
 func (s *fakeFeedStore) PruneDeadLetters(context.Context, time.Time) (int, error) {
 	s.deadPruned++
+	return 0, nil
+}
+
+func (s *fakeFeedStore) PruneParked(context.Context, time.Time) (int, error) {
+	s.parkedPruned++
 	return 0, nil
 }
 
@@ -280,6 +286,22 @@ func (s *errFeedStore) PruneDeadLetters(_ context.Context, cutoff time.Time) (in
 	defer s.mu.Unlock()
 	s.deadCutoffs = append(s.deadCutoffs, cutoff)
 	return 0, s.err
+}
+
+func (s *errFeedStore) PruneParked(_ context.Context, cutoff time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parkedCutoffs = append(s.parkedCutoffs, cutoff)
+	return 0, s.err
+}
+
+// parkedCalls returns the cutoffs the parked prune was called with.
+func (s *errFeedStore) parkedCalls() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]time.Time, len(s.parkedCutoffs))
+	copy(out, s.parkedCutoffs)
+	return out
 }
 
 // deadLetterCalls returns the cutoffs the dead-letter prune was called with.

@@ -226,7 +226,15 @@ type deliveryCollector struct {
 
 var (
 	outboxPendingDesc = prometheus.NewDesc(
-		"flexitype_outbox_pending", "Undispatched envelopes awaiting expansion.", nil, nil)
+		"flexitype_outbox_pending",
+		"Undispatched envelopes the relay will still retry. Excludes parked envelopes.", nil, nil)
+	// Parked envelopes are committed changes no external consumer has seen,
+	// waiting for an operator redrive. Alert on non-zero: nothing but
+	// POST /admin/outbox/redrive moves them, and the parked retention
+	// eventually deletes them.
+	outboxParkedDesc = prometheus.NewDesc(
+		"flexitype_outbox_parked",
+		"Envelopes parked after exhausting their retry budget, awaiting an operator redrive.", nil, nil)
 	deliveriesDesc = prometheus.NewDesc(
 		"flexitype_webhook_deliveries", "Webhook deliveries by status.", []string{"status"}, nil)
 	// The expansion lag: how long the oldest undispatched envelope has been
@@ -240,6 +248,7 @@ var (
 
 func (c *deliveryCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- outboxPendingDesc
+	ch <- outboxParkedDesc
 	ch <- deliveriesDesc
 	ch <- oldestPendingDesc
 }
@@ -254,6 +263,7 @@ func (c *deliveryCollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 	ch <- prometheus.MustNewConstMetric(outboxPendingDesc, prometheus.GaugeValue, float64(depth.OutboxPending))
+	ch <- prometheus.MustNewConstMetric(outboxParkedDesc, prometheus.GaugeValue, float64(depth.OutboxParked))
 	ch <- prometheus.MustNewConstMetric(oldestPendingDesc, prometheus.GaugeValue, depth.OldestPendingAge.Seconds())
 	for _, status := range []string{"pending", "inflight", "delivered", "dead"} {
 		ch <- prometheus.MustNewConstMetric(deliveriesDesc, prometheus.GaugeValue,

@@ -150,6 +150,42 @@ double-claimed after a lease expiry is expanded at most once (no duplicate
 order can differ from insert order but remains monotonic and gap-free;
 with a single relay it is identical to insert order.
 
+#### Parked envelopes: the outbox lane's terminal state
+
+A failing envelope retries with the same backoff shape as the delivery
+lane: 1s, 4s, 16s, ... up to a 15-minute ceiling
+(`FLEXITYPE_OUTBOX_RETRY_CEILING`). After
+`FLEXITYPE_OUTBOX_MAX_ATTEMPTS` failures (default 25, a window of
+roughly 5 hours) the relay **parks** the envelope (`parked_at = now()`).
+A parked envelope is out of the claim query, so one undeliverable
+envelope cannot starve the lane. It has no `feed_seq`, so it is not on
+the feed and it has no delivery rows.
+
+A parked envelope is a committed change that no consumer has seen. The
+recovery surface makes that state visible and reversible:
+
+- The `flexitype_outbox_parked` gauge counts parked envelopes. Alert on
+  a non-zero value. `flexitype_outbox_pending` and
+  `flexitype_outbox_oldest_pending_seconds` exclude parked rows, so
+  the live-backlog signal stays clean during an incident.
+- `GET /api/v1/admin/outbox/parked` lists the tenant's parked envelopes
+  with their attempt count and last error (admin scope).
+- `POST /api/v1/admin/outbox/redrive` returns them to the retry queue:
+  it clears `parked_at` and the lease, resets the attempt count (a
+  fresh budget, as with the dead-letter redrive), and makes the rows
+  due at once. Narrow it with `?event_type=` or `?id=`. The call writes
+  an activity entry and nudges the relay, so delivery restarts within
+  milliseconds. Consumers must dedupe on the envelope id, as with every
+  other redelivery.
+- The pruner deletes envelopes that stay parked past
+  `FLEXITYPE_PARKED_RETENTION` (default 30 days). This prune is
+  **deliberate data loss** — the event was never delivered, and after
+  the prune it never will be. The long default gives an operator a
+  month of a non-zero parked gauge to redrive first. The bound exists
+  because a parked envelope has no `feed_seq`, so no other prune ever
+  reaches it, and one poisonous event type would grow the outbox
+  without limit.
+
 ### 2. Delivery workers: claim → HTTP outside any tx → record
 
 Every flexitype replica runs delivery workers that:

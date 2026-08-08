@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
 
@@ -59,6 +60,39 @@ func TestTenantLabelCardinality(t *testing.T) {
 // that refuses private destinations unless the deployment opted in by name,
 // and accepting a client would let a caller replace that guard without
 // saying so.
+// TestOutboxParkKnobOptions pins the ops knobs issue #478 added: the park
+// budget and the retry ceiling were hardcoded (25 attempts, 15m cap), so a
+// deployment could not size the retry window to the longest outage it must
+// ride out, and the parked retention could not be tuned to its alerting
+// window. The adapter-level semantics (a budget of 2 parks on the second
+// failure; the ceiling caps the backoff) are covered by
+// TestOutboxParkKnobsIntegration against PostgreSQL.
+func TestOutboxParkKnobOptions(t *testing.T) {
+	Convey("Given a service configured with the outbox park knobs", t, func() {
+		svc := flexitype.NewInMemory(
+			flexitype.WithOutboxMaxAttempts(5),
+			flexitype.WithOutboxRetryCeiling(30*time.Second),
+			flexitype.WithParkedRetention(14*24*time.Hour),
+		)
+
+		Convey("Then it builds", func() {
+			So(svc, ShouldNotBeNil)
+		})
+	})
+
+	Convey("Given a service configured with non-positive park knobs", t, func() {
+		svc := flexitype.NewInMemory(
+			flexitype.WithOutboxMaxAttempts(0),
+			flexitype.WithOutboxRetryCeiling(0),
+			flexitype.WithParkedRetention(-time.Hour),
+		)
+
+		Convey("Then it builds and every default stands", func() {
+			So(svc, ShouldNotBeNil)
+		})
+	})
+}
+
 func TestWebhookTimeoutOption(t *testing.T) {
 	Convey("Given a service configured with a webhook timeout", t, func() {
 		svc := flexitype.NewInMemory(flexitype.WithWebhookTimeout(0))

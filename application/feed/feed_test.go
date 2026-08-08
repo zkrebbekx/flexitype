@@ -251,9 +251,10 @@ func TestFeedCursorNaming(t *testing.T) {
 // errFeedStore fails Prune a fixed number of times, recording each cutoff it
 // was called with.
 type errFeedStore struct {
-	mu          sync.Mutex
-	cutoffs     []time.Time
-	deadCutoffs []time.Time
+	mu            sync.Mutex
+	cutoffs       []time.Time
+	deadCutoffs   []time.Time
+	parkedCutoffs []time.Time
 	err         error
 	floorErr    error
 	listErr     error
@@ -499,6 +500,59 @@ func TestPrunerBoundsDeadLetters(t *testing.T) {
 
 			Convey("Then the default stands rather than pruning everything", func() {
 				So(store.deadLetterCalls()[0], ShouldEqual, now.Add(-DefaultDeadLetterRetention))
+			})
+		})
+	})
+}
+
+// TestPrunerBoundsParked covers the bound parked envelopes needed (#478).
+//
+// A parked envelope has no feed_seq, so the envelope prune never reached it
+// and nothing else deleted it: one poisonous event type grew the outbox for
+// ever. The parked prune is deliberate data loss — the event was never
+// delivered — so it runs under its own long retention, not the event one.
+func TestPrunerBoundsParked(t *testing.T) {
+	Convey("Given a pruner over a store that records its cutoffs", t, func() {
+		store := &errFeedStore{}
+		now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+		p := NewPruner(store, 7*24*time.Hour, nil)
+		p.now = func() time.Time { return now }
+
+		Convey("When a pass runs", func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // one pass, then stop
+			p.Run(ctx)
+
+			Convey("Then parked envelopes are pruned as well as expanded ones", func() {
+				So(store.calls(), ShouldHaveLength, 1)
+				So(store.parkedCalls(), ShouldHaveLength, 1)
+			})
+
+			Convey("Then the parked cutoff is the long default, not the event retention", func() {
+				So(store.parkedCalls()[0], ShouldHappenBefore, store.calls()[0])
+				So(store.parkedCalls()[0], ShouldEqual, now.Add(-DefaultParkedRetention))
+			})
+		})
+
+		Convey("When a shorter parked retention is configured", func() {
+			p.WithParkedRetention(48 * time.Hour)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			p.Run(ctx)
+
+			Convey("Then that bound is used", func() {
+				So(store.parkedCalls()[0], ShouldEqual, now.Add(-48*time.Hour))
+			})
+		})
+
+		Convey("When a non-positive parked retention is configured", func() {
+			p.WithParkedRetention(0)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			p.Run(ctx)
+
+			Convey("Then the default stands rather than pruning everything", func() {
+				So(store.parkedCalls()[0], ShouldEqual, now.Add(-DefaultParkedRetention))
 			})
 		})
 	})

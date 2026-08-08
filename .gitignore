@@ -12,6 +12,9 @@ web/public/wasm_exec.js
 coverage.out
 coverage.html
 
+# Load-test output (profiles, EXPLAIN captures) from stress_saas_test.go
+stress-out/
+
 # Binaries `go build ./...` drops next to their main package
 /cmd/flexitype/flexitype
 /examples/catalog/consumer/consumer

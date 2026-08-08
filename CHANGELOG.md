@@ -40,6 +40,25 @@ object, which a code generator renders as a field that cannot be filled. The
 and referenced. The change is additive; `TestResponseContract` validates the
 live handler against the tightened schemas.
 
+### Fixed — `client.WebhooksService.Update` can now succeed
+
+The method sent `SubscriptionInput`, the CREATE body, to
+`PATCH /webhook-subscriptions/{id}`. That handler decodes with
+`DisallowUnknownFields` and accepts `url`, `event_types`, `active` and
+`rotate_secret`. `SubscriptionInput` carries a `name` with no `omitempty`,
+and calls its secret `secret`, so the body always held a key the handler
+rejects: every call returned `VALIDATION: invalid request body`, whatever it
+was given. The method now sends only the four fields the API accepts and maps
+`Secret` to `rotate_secret`.
+
+A `Name` is refused with a validation error rather than dropped, because the
+API cannot rename a subscription — reporting success for a rename that did
+not happen is the worse failure. The signature is unchanged, and no working
+caller exists to break.
+
+A conformance case drives the method against the real handler, so it cannot
+regress to silence.
+
 ## [1.5.0] — 2026-08-08
 
 A defect-review release. An evaluating team read the 1.4.0 tree and filed 40

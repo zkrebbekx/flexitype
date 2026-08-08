@@ -589,10 +589,51 @@ func (s *WebhooksService) Create(ctx context.Context, in SubscriptionInput) (*We
 	return &out, nil
 }
 
-// Update mutates a subscription.
+// updateSubscriptionBody is the shape PATCH /webhook-subscriptions/{id}
+// accepts. It decodes with DisallowUnknownFields, so a field it does not name
+// fails the whole request.
+type updateSubscriptionBody struct {
+	URL          *string   `json:"url,omitempty"`
+	EventTypes   *[]string `json:"event_types,omitempty"`
+	Active       *bool     `json:"active,omitempty"`
+	RotateSecret *string   `json:"rotate_secret,omitempty"`
+}
+
+// Update mutates a subscription: its URL, its event types, whether it is
+// active, and its secret.
+//
+// Only those four change. The API cannot rename a subscription, so a Name is
+// REFUSED rather than dropped — silently ignoring it would report success for
+// a rename that did not happen. Secret maps to the API's rotate_secret.
+//
+// This method could not succeed before. It sent SubscriptionInput, whose
+// name field carries no omitempty and whose secret field the API does not
+// know under that name, into a handler that rejects an unknown field: every
+// call returned VALIDATION "invalid request body". The signature is unchanged
+// so no caller has to be edited — there is no working caller to break.
 func (s *WebhooksService) Update(ctx context.Context, id string, in SubscriptionInput) (*WebhookSubscription, error) {
+	if in.Name != "" {
+		return nil, &APIError{
+			Code:    CodeValidation,
+			Message: "a webhook subscription cannot be renamed; leave Name empty when updating one",
+		}
+	}
+	body := updateSubscriptionBody{}
+	if in.URL != "" {
+		body.URL = &in.URL
+	}
+	if in.EventTypes != nil {
+		body.EventTypes = &in.EventTypes
+	}
+	if in.Active != nil {
+		body.Active = in.Active
+	}
+	if in.Secret != "" {
+		body.RotateSecret = &in.Secret
+	}
+
 	var out WebhookSubscription
-	if err := s.c.do(ctx, http.MethodPatch, "/webhook-subscriptions/"+id, nil, in, &out); err != nil {
+	if err := s.c.do(ctx, http.MethodPatch, "/webhook-subscriptions/"+id, nil, body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

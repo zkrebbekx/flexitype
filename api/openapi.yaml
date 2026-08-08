@@ -2410,6 +2410,18 @@ components:
         id: { type: string }
         type: { type: string }
         tenant_id: { type: string }
+        type_definition_id:
+          type: string
+          description: >-
+            The type of the entity this event concerns. Present when the event
+            concerns exactly one entity; absent for a schema change (which
+            concerns none) and for a relationship link (which names two).
+        entity_id:
+          type: string
+          description: >-
+            The entity this event concerns, so a router never has to decode the
+            payload to learn what changed. Absent under the same rules as
+            type_definition_id.
         actor: { type: string }
         occurred_at: { type: string, format: date-time }
         payload: {}

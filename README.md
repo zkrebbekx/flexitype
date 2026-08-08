@@ -289,6 +289,8 @@ webhooks; every subscriber sees the same envelope:
   "aggregate_type": "attribute_value",
   "aggregate_id": "01J...",
   "tenant_id": "acme",
+  "type_definition_id": "01J...",
+  "entity_id": "p-1001",
   "actor": "service_account:ci-importer",
   "occurred_at": "2026-07-11T10:00:00Z",
   "recorded_at": "2026-07-11T10:00:00.003Z",
@@ -296,6 +298,13 @@ webhooks; every subscriber sees the same envelope:
   "payload": { "old_value": "SN-100", "new_value": "SN-200", "...": "..." }
 }
 ```
+
+`aggregate_id` names the aggregate that emitted the event — for a value event,
+the attribute VALUE. `type_definition_id` and `entity_id` name the ENTITY it
+concerns, so a consumer routes on "entity E changed, re-read it" without
+decoding the payload. They are absent for an event that concerns no entity (a
+schema change) or more than one (a relationship link, which names two
+endpoints).
 
 Webhook deliveries carry `X-Flexitype-Signature` (hex HMAC-SHA256 of the
 body); verify with `events.VerifySignature`.

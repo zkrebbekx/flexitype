@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -242,20 +243,25 @@ func (s *deliveryStore) ClaimDue(ctx context.Context, limit int, leaseFor time.D
 
 	var rows []struct {
 		deliveryRow
-		Payload        string    `db:"payload"`
-		Actor          string    `db:"actor"`
-		AggregateType  string    `db:"aggregate_type"`
-		AggregateID    string    `db:"aggregate_id"`
-		OccurredAt     time.Time `db:"occurred_at"`
-		RecordedAt     time.Time `db:"recorded_at"`
-		URL            string    `db:"url"`
-		Secret         string    `db:"secret"`
-		LeaseExpiresAt time.Time `db:"lease_expires_at"`
+		Payload       string    `db:"payload"`
+		Actor         string    `db:"actor"`
+		AggregateType string    `db:"aggregate_type"`
+		AggregateID   string    `db:"aggregate_id"`
+		OccurredAt    time.Time `db:"occurred_at"`
+		RecordedAt    time.Time `db:"recorded_at"`
+		// NULL for an envelope written before migration 000038, and for an
+		// event that concerns no single entity.
+		TypeDefinitionID sql.NullString `db:"type_definition_id"`
+		EntityID         sql.NullString `db:"entity_id"`
+		URL              string         `db:"url"`
+		Secret           string         `db:"secret"`
+		LeaseExpiresAt   time.Time      `db:"lease_expires_at"`
 	}
 	if err := s.q.SelectContext(ctx, &rows, bind(`SELECT
 	    d.id, d.subscription_id, d.envelope_id, d.tenant_id, d.event_type, d.feed_seq, d.status,
 	    d.attempts, d.next_attempt_at, d.last_error, d.response_code, d.created_at, d.updated_at,
 	    o.payload::text AS payload, o.actor, o.aggregate_type, o.aggregate_id, o.occurred_at, o.recorded_at,
+	    o.type_definition_id, o.entity_id,
 	    s.url, s.secret, d.lease_expires_at
 	 FROM flexitype_webhook_delivery d
 	 JOIN flexitype_event_outbox o ON o.id = d.envelope_id
@@ -270,16 +276,18 @@ func (s *deliveryStore) ClaimDue(ctx context.Context, limit int, leaseFor time.D
 		out = append(out, webhook.ClaimedDelivery{
 			Delivery: r.toDelivery(),
 			Envelope: events.Envelope{
-				ID:            r.EnvelopeID,
-				Type:          events.Type(r.EventType),
-				AggregateType: r.AggregateType,
-				AggregateID:   r.AggregateID,
-				TenantID:      r.TenantID,
-				Actor:         r.Actor,
-				OccurredAt:    r.OccurredAt,
-				RecordedAt:    r.RecordedAt,
-				SchemaVersion: events.SchemaVersion,
-				Payload:       json.RawMessage(r.Payload),
+				ID:               r.EnvelopeID,
+				Type:             events.Type(r.EventType),
+				AggregateType:    r.AggregateType,
+				AggregateID:      r.AggregateID,
+				TenantID:         r.TenantID,
+				TypeDefinitionID: r.TypeDefinitionID.String,
+				EntityID:         r.EntityID.String,
+				Actor:            r.Actor,
+				OccurredAt:       r.OccurredAt,
+				RecordedAt:       r.RecordedAt,
+				SchemaVersion:    events.SchemaVersion,
+				Payload:          json.RawMessage(r.Payload),
 			},
 			URL:            r.URL,
 			Secret:         r.Secret,

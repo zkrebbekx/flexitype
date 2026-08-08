@@ -7,6 +7,27 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Added — An event envelope says which entity changed ([#550])
+
+`type_definition_id` and `entity_id` are on the envelope. They name the ENTITY
+an event concerns, so a consumer routes on "entity E changed, re-read it"
+without decoding the payload.
+
+`aggregate_id` names the aggregate that EMITTED the event, which for a value
+event is the attribute value — a different thing. A router that wanted the
+entity therefore had to decode the payload of every event type it routed,
+which couples it to a payload schema it should never have to know. The
+marketplace example decoded three payload types for that one fact.
+
+They are absent for an event that concerns no entity (a schema change) or more
+than one (a relationship link, which names two endpoints): one pair of fields
+cannot honestly describe two.
+
+The change is additive, on the envelope and in both clients. Migration 000038
+adds the two columns to the outbox, so the coordinates survive storage and
+reach a webhook subscriber; a row written before it reads back with them empty,
+and a consumer that falls back to the payload keeps working.
+
 ## [1.5.0] — 2026-08-09
 
 Two releases' worth of work in one: a defect-review release, and the release

@@ -37,6 +37,12 @@ type Set struct {
 // EventType identifies the event on the wire.
 func (e Set) EventType() events.Type { return EventSet }
 
+// EntityCoordinates addresses the entity this event concerns, so a router
+// does not have to decode the payload to learn which entity changed.
+func (e Set) EntityCoordinates() (string, string) {
+	return e.TypeDefinitionID.String(), e.EntityID.String()
+}
+
 // AggregateType names the emitting aggregate.
 func (e Set) AggregateType() string { return AggregateType }
 
@@ -63,6 +69,12 @@ type Updated struct {
 // EventType identifies the event on the wire.
 func (e Updated) EventType() events.Type { return EventUpdated }
 
+// EntityCoordinates addresses the entity this event concerns, so a router
+// does not have to decode the payload to learn which entity changed.
+func (e Updated) EntityCoordinates() (string, string) {
+	return e.TypeDefinitionID.String(), e.EntityID.String()
+}
+
 // AggregateType names the emitting aggregate.
 func (e Updated) AggregateType() string { return AggregateType }
 
@@ -85,6 +97,12 @@ type Removed struct {
 
 // EventType identifies the event on the wire.
 func (e Removed) EventType() events.Type { return EventRemoved }
+
+// EntityCoordinates addresses the entity this event concerns, so a router
+// does not have to decode the payload to learn which entity changed.
+func (e Removed) EntityCoordinates() (string, string) {
+	return e.TypeDefinitionID.String(), e.EntityID.String()
+}
 
 // AggregateType names the emitting aggregate.
 func (e Removed) AggregateType() string { return AggregateType }

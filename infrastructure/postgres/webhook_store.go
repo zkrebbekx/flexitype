@@ -209,12 +209,21 @@ func (s *deliveryStore) ClaimDue(ctx context.Context, limit int, leaseFor time.D
 	// One delivery per subscription (its oldest pending), never while the
 	// subscription has an inflight delivery — per-subscription order in
 	// the happy path. SKIP LOCKED keeps concurrent workers apart.
+	//
+	// An INACTIVE subscription is skipped. Deactivating one used to stop
+	// new fan-out only, so its queued backlog kept being delivered — an
+	// operator turning a subscription off during an incident still saw the
+	// endpoint called. The backlog RESTS rather than dies: the rows stay
+	// pending, so reactivating the subscription resumes them, and the
+	// retention pruner bounds them if it never comes back.
 	var ids []string
 	err := s.q.SelectContext(ctx, &ids, bind(`UPDATE flexitype_webhook_delivery t
 	 SET status = 'inflight', lease_expires_at = ?, updated_at = ?
 	 WHERE t.id IN (
 	     SELECT d.id FROM flexitype_webhook_delivery d
 	     WHERE d.status = 'pending' AND d.next_attempt_at <= ?
+	       AND EXISTS (SELECT 1 FROM flexitype_webhook_subscription s
+	                   WHERE s.id = d.subscription_id AND s.active)
 	       AND NOT EXISTS (SELECT 1 FROM flexitype_webhook_delivery i
 	                       WHERE i.subscription_id = d.subscription_id AND i.status = 'inflight')
 	       AND d.feed_seq = (SELECT min(d2.feed_seq) FROM flexitype_webhook_delivery d2
@@ -476,8 +485,13 @@ func (s *deliveryStore) Redeliver(ctx context.Context, tenant valueobjects.Tenan
 	// unguarded rewind to pending mid-send makes the endpoint receive the
 	// payload twice. Zero rows affected means the row moved (or vanished)
 	// after the read — report the conflict rather than requeueing.
+	// attempts, last_error and response_code reset with the status, matching
+	// RedeliverMatching. Leaving attempts at the cap gave the redriven
+	// delivery no budget: it died again on its first failure, so the action
+	// an operator takes to retry one delivery bought exactly one attempt.
 	res, err := s.q.ExecContext(ctx, bind(`UPDATE flexitype_webhook_delivery
-	 SET status = 'pending', next_attempt_at = ?, lease_expires_at = NULL, updated_at = ?
+	 SET status = 'pending', attempts = 0, last_error = '', response_code = 0,
+	     next_attempt_at = ?, lease_expires_at = NULL, updated_at = ?
 	 WHERE tenant_id = ? AND id = ? AND status NOT IN ('pending', 'inflight')`),
 		now, now, tenant.String(), id)
 	if err != nil {

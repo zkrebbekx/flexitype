@@ -184,3 +184,19 @@ describe('effect round-trip (#495)', () => {
     expect(editableConstraintKinds('media').has('media')).toBe(true)
   })
 })
+
+describe('range bounds with a blank input (#508)', () => {
+  it('sets only the bound that was filled in', () => {
+    // 'between' is the default comparator, so an author who fills one bound
+    // leaves the other blank.
+    const row = conditionFromApi({ kind: 'range', min: { type: 'integer', value: 5 } })
+    const c = buildCondition(row, 'integer')
+    expect(c.min).toBeDefined()
+    expect(c.max).toBeUndefined()
+  })
+
+  it('reports a range with neither bound against the row, not a bare value error', () => {
+    const row = conditionFromApi({ kind: 'range' })
+    expect(() => buildCondition(row, 'integer')).toThrow(/at least one bound/)
+  })
+})

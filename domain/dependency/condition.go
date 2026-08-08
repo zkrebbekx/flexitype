@@ -210,6 +210,17 @@ func (c Condition) Validate(sourceType valueobjects.DataType) error {
 	// keep the source-attribute wording for ordinary conditions; for a
 	// context condition the reported type is the declared context_type.
 	sourceType = subjectType
+	// The strict-bound flags belong to a range and to nothing else. The
+	// "a flag without its bound is an error" check lived inside the range
+	// arm, so min_exclusive on an equals, in, pattern or dynamic condition
+	// validated, stored and was then ignored — while the OpenAPI schema
+	// documents both flags on the shared condition object with no
+	// restriction, so an author had no way to learn it did nothing.
+	if c.Kind != CondRange && (c.MinExclusive || c.MaxExclusive) {
+		return domainerrors.NewValidation(
+			"min_exclusive and max_exclusive apply to a range condition only",
+			"kind", string(c.Kind))
+	}
 	switch c.Kind {
 	case CondEquals:
 		if c.Value == nil {

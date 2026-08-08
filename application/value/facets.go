@@ -3,6 +3,7 @@ package value
 import (
 	"context"
 	"sort"
+	"strings"
 
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -12,6 +13,11 @@ import (
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 )
+
+// gridMemberSeparator joins the members of a multi-valued or scoped
+// attribute into one grid cell. It matches what the CSV export uses for a
+// human-readable rendering, so the two surfaces read alike.
+const gridMemberSeparator = ", "
 
 // maxFacetEntities bounds how many entities a facet computation scans.
 const maxFacetEntities = 5000
@@ -163,23 +169,30 @@ func (i *Interactor) GridRows(ctx context.Context, rawTypeID string, attrNames, 
 	if err != nil {
 		return nil, err
 	}
-	byEntity := make(map[string]map[string]string, len(entityIDs))
+	// Every member of a multi-valued or scoped attribute goes into the cell,
+	// joined the way the CSV export joins them. Assigning made the last row
+	// the cell, so the grid showed ONE arbitrary member while the facet
+	// counts beside it counted them all — the two surfaces disagreed about
+	// the same data, and which member showed could change with an unrelated
+	// write. The order is the repository's, which is stable for one read.
+	byEntity := make(map[string]map[string][]string, len(entityIDs))
 	for _, av := range vals {
 		if name, ok := wanted[av.AttributeDefinitionID()]; ok {
 			cells := byEntity[av.EntityID().String()]
 			if cells == nil {
-				cells = map[string]string{}
+				cells = map[string][]string{}
 				byEntity[av.EntityID().String()] = cells
 			}
-			cells[name] = av.Value().String()
+			cells[name] = append(cells[name], av.Value().String())
 		}
 	}
 
 	out := &GridOutput{Columns: append([]string{"entity_id"}, attrNames...), Rows: make([]GridRow, 0, len(entityIDs))}
 	for _, eid := range entityIDs {
-		cells := byEntity[eid]
-		if cells == nil {
-			cells = map[string]string{}
+		members := byEntity[eid]
+		cells := make(map[string]string, len(members))
+		for name, vs := range members {
+			cells[name] = strings.Join(vs, gridMemberSeparator)
 		}
 		out.Rows = append(out.Rows, GridRow{EntityID: eid, Values: cells})
 	}

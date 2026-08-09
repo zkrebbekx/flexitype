@@ -380,6 +380,15 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 		if err := i.checkDependencies(ctx, tx, def, entityType, entityID, v); err != nil {
 			return err
 		}
+		// A dependency that DEMANDS a value cannot be judged from the value in
+		// hand: what it asks for usually lives on another attribute, and in an
+		// import or a batch that attribute may not be written yet. Record the
+		// entity and let the unit of work check it once every write has landed.
+		i.noteWrite(c, tx, entityRef{
+			tenant: def.TenantID(),
+			typeID: entityType,
+			entity: entityID,
+		}, in.Internal)
 		if def.Unique() {
 			// This is a read followed by a write, which would admit two
 			// concurrent writers of the same value under READ COMMITTED. It is
@@ -796,6 +805,13 @@ func (i *Interactor) Remove(ctx context.Context, rawID string) (*domainvalue.Sna
 		// returned, so a key another value still referenced lost its bytes —
 		// and a rolled-back removal deleted them anyway.
 		i.gcMediaAfterCommit(tx, before.ID, before.Value)
+		// Taking a value away can leave a demand unmet just as failing to write
+		// one can, so a removal is checked on the same terms.
+		i.noteWrite(c, tx, entityRef{
+			tenant: av.TenantID(),
+			typeID: av.TypeDefinitionID(),
+			entity: av.EntityID(),
+		}, def.IsComputed())
 
 		snap = av.Snapshot()
 		c.CollectEvents(evts...)

@@ -104,10 +104,17 @@ number that silently tracks one channel.
 
 ### A dependency describes; publishing decides
 
-`allergens` is required once `contains_allergens` is true. The service enforces
-that when **the attribute itself is written** — setting the flag alone is
-accepted, because the rule describes what the dish needs, not the order a chef
-fills it in.
+`allergens` is required once `contains_allergens` is true, and the rule
+declares `"enforce": "on_read"`. Setting the flag alone is **accepted**: a chef
+ticks the box and then types the list, in that order, so refusing the tick
+would make the form unusable. The rule describes what the dish needs, not the
+order someone fills it in.
+
+That is the default, and it is stated in
+[`api/schema.go`](api/schema.go) because it is a choice. The other mode,
+`"enforce": "on_write"`, refuses the write instead — see
+[docs/dependencies.md](../../docs/dependencies.md#enforcing-a-requirement) for
+when each one fits.
 
 Something has to turn "needs" into "must", and here that is publishing:
 `POST /api/dishes/{id}/publish` reads the service's own **completeness** report

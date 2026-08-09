@@ -1340,3 +1340,101 @@ func TestChangeSetLifecycleOverHTTP(t *testing.T) {
 		})
 	})
 }
+
+// TestHTTPDependencyEnforcement covers the enforcement mode over HTTP: that it
+// round-trips through the API, that it changes the status a write gets, and
+// that the effective schema reports which kind of rule a caller is facing.
+func TestHTTPDependencyEnforcement(t *testing.T) {
+	Convey("Given a rule that blocks a write", t, func() {
+		a := newAPI(t, flexitype.APIConfig{})
+		typeID := a.mustCreateType("dish", "Dish")
+		flagID := a.mustCreateAttr(typeID, "contains_allergens", "bool", nil)
+		listID := a.mustCreateAttr(typeID, "allergens", "string", map[string]any{"multi_valued": true})
+
+		condition := []any{map[string]any{
+			"kind": "equals", "value": map[string]any{"type": "bool", "value": true},
+		}}
+		created := a.post("/api/v1/dependencies", map[string]any{
+			"source_attribute_id": flagID,
+			"target_attribute_id": listID,
+			"conditions":          condition,
+			"effect":              map[string]any{"required": true, "enforce": "on_write"},
+		})
+		So(created.Status, ShouldEqual, http.StatusCreated)
+
+		Convey("Then the mode is stored and returned", func() {
+			// The effect is persisted as a document, so a dropped field here
+			// would silently downgrade the rule to reporting.
+			effect, _ := created.object(t)["effect"].(map[string]any)
+			So(effect["enforce"], ShouldEqual, "on_write")
+		})
+
+		Convey("When the flag is written on its own", func() {
+			resp := a.post("/api/v1/values", map[string]any{
+				"type_definition_id":      typeID,
+				"attribute_definition_id": flagID,
+				"entity_id":               "tart",
+				"value":                   true,
+			})
+
+			Convey("Then it is 422 and names the attribute", func() {
+				So(resp.Status, ShouldEqual, http.StatusUnprocessableEntity)
+				So(string(resp.Body), ShouldContainSubstring, "DEPENDENCY_VIOLATION")
+				So(string(resp.Body), ShouldContainSubstring, "allergens")
+			})
+		})
+
+		Convey("When both values are written in one batch", func() {
+			resp := a.post("/api/v1/values/batch", map[string]any{
+				"items": []any{
+					map[string]any{
+						"type_definition_id": typeID, "attribute_definition_id": flagID,
+						"entity_id": "tart", "value": true,
+					},
+					map[string]any{
+						"type_definition_id": typeID, "attribute_definition_id": listID,
+						"entity_id": "tart", "value": "gluten",
+					},
+				},
+			})
+
+			Convey("Then it is accepted", func() {
+				So(resp.Status, ShouldEqual, http.StatusOK)
+			})
+
+			Convey("Then the effective schema reports the mode", func() {
+				eff := a.get("/api/v1/entities/" + typeID + "/tart/attributes/" + listID + "/effective-schema")
+				So(eff.Status, ShouldEqual, http.StatusOK)
+				body := eff.object(t)
+				So(body["required"], ShouldEqual, true)
+				So(body["required_enforcement"], ShouldEqual, "on_write")
+			})
+		})
+	})
+
+	Convey("Given an effect that sets enforce with no required override", t, func() {
+		a := newAPI(t, flexitype.APIConfig{})
+		typeID := a.mustCreateType("dish", "Dish")
+		flagID := a.mustCreateAttr(typeID, "kind", "string", nil)
+		listID := a.mustCreateAttr(typeID, "sku", "string", nil)
+
+		Convey("When it is submitted", func() {
+			resp := a.post("/api/v1/dependencies", map[string]any{
+				"source_attribute_id": flagID,
+				"target_attribute_id": listID,
+				"conditions": []any{map[string]any{
+					"kind": "equals", "value": map[string]any{"type": "string", "value": "physical"},
+				}},
+				"effect": map[string]any{
+					"allowed_values": []any{map[string]any{"type": "string", "value": "a"}},
+					"enforce":        "on_write",
+				},
+			})
+
+			Convey("Then it is refused rather than stored and ignored", func() {
+				So(resp.Status, ShouldEqual, http.StatusUnprocessableEntity)
+				So(string(resp.Body), ShouldContainSubstring, "required override")
+			})
+		})
+	})
+}

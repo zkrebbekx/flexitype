@@ -144,6 +144,10 @@ type Effect struct {
 	AllowedValues []TypedValue `json:"allowed_values,omitempty"`
 	Constraints   []Constraint `json:"constraints,omitempty"`
 	Required      *bool        `json:"required,omitempty"`
+	// Enforce says when a Required override is enforced: "on_write" refuses a
+	// write that leaves the value absent, "on_read" (the default) reports the
+	// gap through the effective schema and completeness instead.
+	Enforce string `json:"enforce,omitempty"`
 }
 
 // Dependency is a conditional-validation / cascading-picklist rule.

@@ -177,7 +177,7 @@ func schemaAttributes(types map[string]string, massFamily string) []client.Creat
 		{
 			TypeDefinitionID: types[typeDish], InternalName: "allergens", DisplayName: "Allergens",
 			DataType: "string", MultiValued: true, SortOrder: 70,
-			HelpText: "Required once the dish is marked as containing allergens — a dependency enforces that.",
+			HelpText: "Required once the dish is marked as containing allergens. The dish can be saved without them; it cannot reach the menu.",
 		},
 		{
 			TypeDefinitionID: types[typeDish], InternalName: "photo", DisplayName: "Photo",
@@ -208,13 +208,22 @@ func ensureDependencies(ctx context.Context, c *client.Client, types map[string]
 	}
 	// "Marked as containing allergens" with no list is worse than no marking
 	// at all: it looks answered. The dependency makes the list REQUIRED once
-	// the flag is set, so the service refuses the incomplete write rather
-	// than a reviewer catching it later.
+	// the flag is set.
+	//
+	// enforce is on_read, which is the DEFAULT and is stated here because it
+	// is a choice. A chef ticks the box and then types the list, in that
+	// order, so refusing the tick would make the form unusable. The rule
+	// reports the gap instead, and publishing is what turns it into a refusal
+	// — see POST /api/dishes/{id}/publish, which reads the service's own
+	// completeness report.
+	//
+	// A rule that must refuse the write itself declares "on_write"; see
+	// docs/dependencies.md.
 	return ensureDependency(ctx, c, client.CreateDependencyInput{
 		SourceAttributeID: ids["contains_allergens"],
 		TargetAttributeID: ids["allergens"],
 		Conditions:        json.RawMessage(`[{"kind":"equals","value":{"type":"bool","value":true}}]`),
-		Effect:            json.RawMessage(`{"required":true}`),
+		Effect:            json.RawMessage(`{"required":true,"enforce":"on_read"}`),
 		Description:       "A dish that declares allergens must list them.",
 	})
 }

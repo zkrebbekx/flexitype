@@ -16,6 +16,53 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/events"
 )
 
+// Enforcement says WHEN a required override is enforced.
+//
+// It governs the required override alone, because that is the only effect
+// whose subject can be absent. Allowed values and constraints are checked
+// against a value the caller submitted, so there is nothing to defer: they
+// always apply to the write.
+type Enforcement string
+
+const (
+	// EnforceOnWrite refuses a write that leaves the requirement unmet. The
+	// check runs at the END of the write transaction, not on each value, so a
+	// batch or an import row supplying the condition and the required
+	// attribute together passes whatever order its cells are written in.
+	//
+	// Use it when an entity must never be stored in the state the rule
+	// describes as incomplete.
+	EnforceOnWrite Enforcement = "on_write"
+	// EnforceOnRead never refuses a write for an ABSENT value. The requirement
+	// is reported by the effective schema and by completeness, and the host
+	// decides where to gate on it — at publish, at checkout, at submit.
+	//
+	// Use it when a record is filled in over several steps and has to be
+	// allowed to be incomplete in between. This is the default, and the
+	// behaviour every dependency had before enforcement was configurable.
+	EnforceOnRead Enforcement = "on_read"
+	// DefaultEnforcement is what an effect means when it does not say. It is
+	// on_read because that is what the service has always done: a rule
+	// describes what an entity needs, and something else decides when the need
+	// becomes a refusal. Defaulting to on_write would have made every stored
+	// rule start blocking writes on upgrade.
+	DefaultEnforcement = EnforceOnRead
+)
+
+// Valid reports whether e is a known mode. The empty value is valid and means
+// DefaultEnforcement.
+func (e Enforcement) Valid() bool {
+	return e == "" || e == EnforceOnWrite || e == EnforceOnRead
+}
+
+// Or returns e, or fallback when e is empty.
+func (e Enforcement) Or(fallback Enforcement) Enforcement {
+	if e == "" {
+		return fallback
+	}
+	return e
+}
+
 // Effect is what a matched dependency does to its target attribute.
 type Effect struct {
 	// AllowedValues narrows the target to this set when non-empty.
@@ -24,18 +71,29 @@ type Effect struct {
 	Constraints attribute.Constraints
 	// Required overrides the target's required flag when non-nil.
 	Required *bool
+	// Enforce says when a Required override is enforced. Empty means
+	// DefaultEnforcement.
+	Enforce Enforcement
 }
+
+// Enforcement returns the effect's enforcement mode, resolving the empty
+// value to the default.
+func (e Effect) Enforcement() Enforcement { return e.Enforce.Or(DefaultEnforcement) }
+
+// DemandsValue reports whether this effect makes its target required.
+func (e Effect) DemandsValue() bool { return e.Required != nil && *e.Required }
 
 type effectJSON struct {
 	AllowedValues []json.RawMessage     `json:"allowed_values,omitempty"`
 	Constraints   attribute.Constraints `json:"constraints,omitempty"`
 	Required      *bool                 `json:"required,omitempty"`
+	Enforce       Enforcement           `json:"enforce,omitempty"`
 }
 
 // MarshalJSON encodes allowed values in their self-describing typed form so
 // the effect survives storage round-trips.
 func (e Effect) MarshalJSON() ([]byte, error) {
-	out := effectJSON{Constraints: e.Constraints, Required: e.Required}
+	out := effectJSON{Constraints: e.Constraints, Required: e.Required, Enforce: e.Enforce}
 	for _, v := range e.AllowedValues {
 		typed, err := v.MarshalTyped()
 		if err != nil {
@@ -54,6 +112,7 @@ func (e *Effect) UnmarshalJSON(b []byte) error {
 	}
 	e.Constraints = in.Constraints
 	e.Required = in.Required
+	e.Enforce = in.Enforce
 	e.AllowedValues = nil
 	for _, raw := range in.AllowedValues {
 		v, err := valueobjects.UnmarshalTypedValue(raw)
@@ -283,6 +342,15 @@ func validateRule(source, target *attribute.Definition, conditions []Condition, 
 	}
 	if effect.isEmpty() {
 		return domainerrors.NewValidation("effect must narrow values, add constraints or override required")
+	}
+	if !effect.Enforce.Valid() {
+		return domainerrors.NewValidation("enforce must be on_write or on_read", "enforce", string(effect.Enforce))
+	}
+	// enforce says when the REQUIRED override is enforced, so it means nothing
+	// without one. Storing it anyway would read as a configured rule that
+	// changes nothing — the shape of mistake this codebase keeps paying for.
+	if effect.Enforce != "" && effect.Required == nil {
+		return domainerrors.NewValidation("enforce applies to the required override, which this effect does not set")
 	}
 	for _, v := range effect.AllowedValues {
 		if v.DataType() != target.DataType() {

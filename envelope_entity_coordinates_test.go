@@ -187,6 +187,16 @@ func TestEntityCoordinatesSurviveTheOutbox(t *testing.T) {
 		// A short relay interval, because feed_seq is stamped when an
 		// envelope is DISPATCHED: an undispatched row is not on the feed.
 		svc := flexitype.New(pool, flexitype.WithOutbox(appoutbox.WithInterval(20*time.Millisecond)))
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		So(svc.Migrate(context.Background()), ShouldBeNil)
+		truncateAll(t, pool)
+
+		// The relay starts AFTER the truncate, not before it. It polls every
+		// 20ms, and its transaction takes locks on the outbox table while
+		// TRUNCATE ... CASCADE is taking ACCESS EXCLUSIVE on every table — the
+		// two acquire the same locks in opposite orders, and Postgres kills
+		// one of them. It surfaced as `truncate: deadlock detected (40P01)` in
+		// CI, before this test had written anything at all.
 		relayCtx, stopRelay := context.WithCancel(context.Background())
 		relayDone := make(chan struct{})
 		go func() { defer close(relayDone); svc.RunOutboxRelay(relayCtx) }()
@@ -194,9 +204,6 @@ func TestEntityCoordinatesSurviveTheOutbox(t *testing.T) {
 			stopRelay()
 			<-relayDone
 		})
-		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
-		So(svc.Migrate(context.Background()), ShouldBeNil)
-		truncateAll(t, pool)
 
 		ia := svc.Interactors(ctx)
 		product, err := ia.TypeDefinitions().Create(ctx, apptypedef.CreateInput{

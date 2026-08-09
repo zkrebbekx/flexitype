@@ -9,6 +9,7 @@ import (
 
 	"github.com/zkrebbekx/flexitype"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
+	appchangeset "github.com/zkrebbekx/flexitype/application/changeset"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -439,6 +440,100 @@ func TestRequiredEnforcementDuringImport(t *testing.T) {
 				bad, err := f.svc.Interactors(f.ctx).Values().ListByEntity(f.ctx, f.dish, "bad")
 				So(err, ShouldBeNil)
 				So(bad, ShouldBeEmpty)
+			})
+		})
+	})
+}
+
+// TestRequiredEnforcementAcrossWritePaths pins the gate on every path that
+// changes an entity, and OFF the one that must never be blocked.
+//
+// The check hangs off the value write path, and several features write values
+// without going through Set or Remove — a change set publishing mutations, a
+// snapshot restore, an erasure purge. A rule that a change set can step around
+// is not a rule.
+func TestRequiredEnforcementAcrossWritePaths(t *testing.T) {
+	Convey("Given a dish that declares allergens, under a blocking rule", t, func() {
+		svc := flexitype.NewInMemory()
+		f := newEnforcementFixture(t, svc, "on_write")
+		So(f.setBatch(
+			f.item(f.flag, "tart", true),
+			f.item(f.allergens, "tart", "gluten"),
+		), ShouldBeNil)
+
+		ia := f.svc.Interactors(f.ctx)
+
+		Convey("When a change set publishes a removal of the allergens", func() {
+			cs, err := ia.ChangeSets().Create(f.ctx, appchangeset.CreateInput{Name: "drop allergens"})
+			So(err, ShouldBeNil)
+			_, err = ia.ChangeSets().AddMutation(f.ctx, cs.ID.String(), appvalue.Mutation{
+				Kind:                  appvalue.MutationRemove,
+				AttributeDefinitionID: f.allergens,
+				EntityID:              "tart",
+				TypeDefinitionID:      f.dish,
+			})
+			So(err, ShouldBeNil)
+			_, err = ia.ChangeSets().Submit(f.ctx, cs.ID.String())
+			So(err, ShouldBeNil)
+			_, err = ia.ChangeSets().Approve(f.ctx, cs.ID.String())
+			So(err, ShouldBeNil)
+			_, perr := ia.ChangeSets().Publish(f.ctx, cs.ID.String())
+
+			Convey("Then publishing is refused, and the value survives", func() {
+				// A change set is the obvious way around a write rule: stage
+				// the removal, approve it, let the scheduler apply it. It goes
+				// through the same gate.
+				So(perr, ShouldNotBeNil)
+				So(domainerrors.IsDependencyViolation(perr), ShouldBeTrue)
+
+				values, lerr := ia.Values().ListByEntity(f.ctx, f.dish, "tart")
+				So(lerr, ShouldBeNil)
+				So(values, ShouldHaveLength, 2)
+			})
+		})
+
+		Convey("When a change set publishes a complete pair of mutations", func() {
+			cs, err := ia.ChangeSets().Create(f.ctx, appchangeset.CreateInput{Name: "new dish"})
+			So(err, ShouldBeNil)
+			for _, m := range []appvalue.Mutation{
+				{
+					Kind: appvalue.MutationSet, AttributeDefinitionID: f.flag,
+					EntityID: "cake", TypeDefinitionID: f.dish, Value: json.RawMessage(`true`),
+				},
+				{
+					Kind: appvalue.MutationSet, AttributeDefinitionID: f.allergens,
+					EntityID: "cake", TypeDefinitionID: f.dish, Value: json.RawMessage(`"egg"`),
+				},
+			} {
+				_, aerr := ia.ChangeSets().AddMutation(f.ctx, cs.ID.String(), m)
+				So(aerr, ShouldBeNil)
+			}
+			_, err = ia.ChangeSets().Submit(f.ctx, cs.ID.String())
+			So(err, ShouldBeNil)
+			_, err = ia.ChangeSets().Approve(f.ctx, cs.ID.String())
+			So(err, ShouldBeNil)
+			_, perr := ia.ChangeSets().Publish(f.ctx, cs.ID.String())
+
+			Convey("Then it publishes, because the set is judged as a whole", func() {
+				So(perr, ShouldBeNil)
+				values, lerr := ia.Values().ListByEntity(f.ctx, f.dish, "cake")
+				So(lerr, ShouldBeNil)
+				So(values, ShouldHaveLength, 2)
+			})
+		})
+
+		Convey("When the dish is erased", func() {
+			_, err := ia.Erasure().PurgeEntity(f.ctx, f.dish, "tart")
+
+			Convey("Then the purge succeeds", func() {
+				// Erasure answers an obligation that outranks a schema rule.
+				// A tenant that cannot delete a record because a dependency
+				// says it is incomplete has a compliance problem the schema
+				// created, so this path is deliberately NOT gated.
+				So(err, ShouldBeNil)
+				values, lerr := ia.Values().ListByEntity(f.ctx, f.dish, "tart")
+				So(lerr, ShouldBeNil)
+				So(values, ShouldBeEmpty)
 			})
 		})
 	})

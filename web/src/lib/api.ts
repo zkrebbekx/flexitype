@@ -198,6 +198,8 @@ export interface Effect {
   allowed_values?: TypedValue[]
   constraints?: Constraint[]
   required?: boolean
+  // When a required override is enforced. Absent means on_read.
+  enforce?: 'on_write' | 'on_read'
 }
 
 export interface Dependency {

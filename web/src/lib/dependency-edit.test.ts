@@ -200,3 +200,51 @@ describe('range bounds with a blank input (#508)', () => {
     expect(() => buildCondition(row, 'integer')).toThrow(/at least one bound/)
   })
 })
+
+describe('where a required override is enforced', () => {
+  it('loads the mode a rule declares', () => {
+    const effect: Effect = { required: true, enforce: 'on_write' }
+    const { form } = effectFormFromApi(effect, 'string')
+    expect(form.requiredOverride).toBe('true')
+    expect(form.enforce).toBe('on_write')
+  })
+
+  it('reads a rule with no mode as on_read', () => {
+    // Every rule written before the mode existed has none, and the default
+    // is what the service already did.
+    const { form } = effectFormFromApi({ required: true }, 'string')
+    expect(form.enforce).toBe('on_read')
+  })
+
+  it('leaves on_read implicit, so opening and saving a rule does not rewrite it', () => {
+    const effect: Effect = { required: true }
+    const { form, passthrough } = effectFormFromApi(effect, 'string')
+    expect(buildEffect(form, 'string', passthrough)).toEqual(effect)
+  })
+
+  it('sends the mode when the author asks for on_write', () => {
+    const { form, passthrough } = effectFormFromApi({ required: true }, 'string')
+    form.enforce = 'on_write'
+    expect(buildEffect(form, 'string', passthrough)).toEqual({ required: true, enforce: 'on_write' })
+  })
+
+  it('drops the mode when the override is cleared', () => {
+    // The API refuses enforce on an effect with no required override. Left in
+    // the passthrough, it would turn "stop forcing this field" into a 422 the
+    // author cannot see the cause of.
+    const { form, passthrough } = effectFormFromApi({ required: true, enforce: 'on_write' }, 'string')
+    form.requiredOverride = 'none'
+    form.oneOf = ['a']
+    const built = buildEffect(form, 'string', passthrough) as Record<string, unknown>
+    expect(built.enforce).toBeUndefined()
+    expect(built.required).toBeUndefined()
+  })
+
+  it('drops the mode when the override is flipped to optional', () => {
+    const { form, passthrough } = effectFormFromApi({ required: true, enforce: 'on_write' }, 'string')
+    form.requiredOverride = 'false'
+    const built = buildEffect(form, 'string', passthrough) as Record<string, unknown>
+    expect(built.enforce).toBeUndefined()
+    expect(built.required).toBe(false)
+  })
+})

@@ -110,11 +110,11 @@ ticks the box and then types the list, in that order, so refusing the tick
 would make the form unusable. The rule describes what the dish needs, not the
 order someone fills it in.
 
-That is the default, and it is stated in
-[`api/schema.go`](api/schema.go) because it is a choice. The other mode,
-`"enforce": "on_write"`, refuses the write instead — see
-[docs/dependencies.md](../../docs/dependencies.md#enforcing-a-requirement) for
-when each one fits.
+The choice follows from the **condition**. "Contains allergens" is a fact
+somebody is entering, so the rule reports. A condition that is a *lifecycle
+state* — `status = active` — takes the other mode, `"enforce": "on_write"`, and
+refuses the write; the [marketplace example](../marketplace/) does exactly
+that. See [Choosing a mode](../../docs/dependencies.md#choosing-a-mode).
 
 Something has to turn "needs" into "must", and here that is publishing:
 `POST /api/dishes/{id}/publish` reads the service's own **completeness** report

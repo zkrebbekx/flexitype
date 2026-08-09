@@ -68,20 +68,65 @@ func TestEcommerceTemplate(t *testing.T) {
 				})
 			})
 
-			Convey("Then status=active makes the SKU required", func() {
+			Convey("Then a product cannot go active without a SKU", func() {
+				// active is a LIFECYCLE state, so the template's rule blocks
+				// the write rather than reporting the gap. A shopper-visible
+				// product with no SKU is not a product that should exist.
 				typeID := a.typeIDByName("product")
 				statusID := a.attrIDByName(typeID, "status")
 				skuID := a.attrIDByName(typeID, "sku")
 
-				set := a.post("/api/v1/values", map[string]any{
+				refused := a.post("/api/v1/values", map[string]any{
 					"type_definition_id": typeID, "entity_id": "p1",
 					"attribute_definition_id": statusID, "value": "active",
 				})
-				So(set.Status, ShouldEqual, http.StatusOK)
+				So(refused.Status, ShouldEqual, http.StatusUnprocessableEntity)
+				So(string(refused.Body), ShouldContainSubstring, "sku")
 
-				eff := a.get("/api/v1/entities/" + typeID + "/p1/attributes/" + skuID + "/effective-schema")
-				So(eff.Status, ShouldEqual, http.StatusOK)
-				So(eff.object(t)["required"], ShouldEqual, true)
+				Convey("And both written together are accepted", func() {
+					// The check runs at the end of the write, so one batch
+					// carrying the state and what it demands passes.
+					priceID := a.attrIDByName(typeID, "price")
+					ok := a.post("/api/v1/values/batch", map[string]any{
+						"items": []any{
+							map[string]any{
+								"type_definition_id": typeID, "entity_id": "p1",
+								"attribute_definition_id": statusID, "value": "active",
+							},
+							map[string]any{
+								"type_definition_id": typeID, "entity_id": "p1",
+								"attribute_definition_id": skuID, "value": "SKU-1",
+							},
+							map[string]any{
+								"type_definition_id": typeID, "entity_id": "p1",
+								"attribute_definition_id": priceID, "value": "10.00",
+							},
+						},
+					})
+					So(ok.Status, ShouldEqual, http.StatusOK)
+
+					eff := a.get("/api/v1/entities/" + typeID + "/p1/attributes/" + skuID + "/effective-schema")
+					So(eff.Status, ShouldEqual, http.StatusOK)
+					So(eff.object(t)["required"], ShouldEqual, true)
+					So(eff.object(t)["required_enforcement"], ShouldEqual, "on_write")
+				})
+
+				Convey("And the SKU first, then the state, is accepted too", func() {
+					// The order a person would work in anyway.
+					priceID := a.attrIDByName(typeID, "price")
+					So(a.post("/api/v1/values", map[string]any{
+						"type_definition_id": typeID, "entity_id": "p2",
+						"attribute_definition_id": skuID, "value": "SKU-2",
+					}).Status, ShouldEqual, http.StatusOK)
+					So(a.post("/api/v1/values", map[string]any{
+						"type_definition_id": typeID, "entity_id": "p2",
+						"attribute_definition_id": priceID, "value": "12.00",
+					}).Status, ShouldEqual, http.StatusOK)
+					So(a.post("/api/v1/values", map[string]any{
+						"type_definition_id": typeID, "entity_id": "p2",
+						"attribute_definition_id": statusID, "value": "active",
+					}).Status, ShouldEqual, http.StatusOK)
+				})
 			})
 
 			Convey("Then applying it a second time is a safe no-op", func() {

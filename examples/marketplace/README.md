@@ -76,13 +76,22 @@ description, sku, status, price, currency, in_stock, image — a `brand` type, a
 `made_by` relationship, and two dependencies that make `sku` and `price`
 required once `status` is `active`.
 
-Those two rules **report**; they do not block. Setting `status` to `active` on
-a product with no sku is accepted, and the gap is what `GET
-/entities/{type}/{id}/completeness` returns. That is the default, and it is
-deliberate: a rule describes what a record needs, and the storefront decides
-when the need becomes a refusal. A rule that must refuse the write itself
-declares `"enforce": "on_write"` — see
-[Enforcing a requirement](../../docs/dependencies.md#enforcing-a-requirement).
+Those two rules **refuse the write** (`"enforce": "on_write"`), because
+`active` is a lifecycle state rather than a fact someone is typing in: a
+product a shopper can buy with no sku and no price is not a product that should
+exist. Writing the state and what it demands in one batch is accepted, and so
+is writing the sku first — the order a person would work in anyway:
+
+```bash
+# 422: nothing else on the product yet.
+curl -X POST .../values -d '{"attribute_definition_id":"<status>","entity_id":"p1","value":"active"}'
+# {"error":{"code":"DEPENDENCY_VIOLATION",
+#   "message":"an attribute dependency requires a value for \"sku\""}}
+```
+
+That is a deliberate choice, not the default. Most rules **report** instead,
+and the gap comes back from `GET /entities/{type}/{id}/completeness` — see
+[Choosing a mode](../../docs/dependencies.md#choosing-a-mode).
 
 Applying, rather than sharing, is the point: after onboarding, merchant A's
 `product` and merchant B's `product` are different rows with different ids. A

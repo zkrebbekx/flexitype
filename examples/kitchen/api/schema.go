@@ -210,15 +210,16 @@ func ensureDependencies(ctx context.Context, c *client.Client, types map[string]
 	// at all: it looks answered. The dependency makes the list REQUIRED once
 	// the flag is set.
 	//
-	// enforce is on_read, which is the DEFAULT and is stated here because it
-	// is a choice. A chef ticks the box and then types the list, in that
-	// order, so refusing the tick would make the form unusable. The rule
-	// reports the gap instead, and publishing is what turns it into a refusal
-	// — see POST /api/dishes/{id}/publish, which reads the service's own
-	// completeness report.
+	// enforce is on_read, and the choice follows from the CONDITION. "Contains
+	// allergens" is a fact a chef is entering, not a state a dish is entering:
+	// the tick and the list arrive in that order, so refusing the tick would
+	// refuse the truth for being early. The rule reports the gap, and
+	// publishing turns it into a refusal — POST /api/dishes/{id}/publish reads
+	// the service's own completeness report.
 	//
-	// A rule that must refuse the write itself declares "on_write"; see
-	// docs/dependencies.md.
+	// The marketplace example takes the other branch of the same rule of
+	// thumb: its condition is status = active, a lifecycle state, so that rule
+	// declares "on_write" and refuses the write. See docs/dependencies.md.
 	return ensureDependency(ctx, c, client.CreateDependencyInput{
 		SourceAttributeID: ids["contains_allergens"],
 		TargetAttributeID: ids["allergens"],

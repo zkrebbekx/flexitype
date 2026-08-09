@@ -38,6 +38,26 @@ that is not there has to be answered somewhere else, and `enforce` says where.
 | `on_read` (default) | The write is accepted. The gap is reported by the effective schema and by completeness, and the caller decides where to gate on it. |
 | `on_write` | The write is refused while the value is missing. |
 
+### Choosing a mode
+
+Look at the **condition**, not the target.
+
+| The condition is… | Mode | Why |
+| --- | --- | --- |
+| A **lifecycle state** — `status = active`, published, approved | `on_write` | Entering the state is a decision. A decision taken against an incomplete record is the thing worth refusing. |
+| A **fact being entered** — `contains_allergens = true`, `hazardous = yes` | `on_read` | The fact and what it demands arrive in that order. Refusing the fact refuses the truth for being early. |
+
+Both shipped examples follow it:
+
+- [`examples/marketplace`](../examples/marketplace/) uses the `ecommerce`
+  template, whose rules block: a product cannot go `active` without a sku and a
+  price.
+- [`examples/kitchen`](../examples/kitchen/) reports: a chef ticks "contains
+  allergens" and then types the list, and publishing is what turns the gap into
+  a refusal.
+
+`on_read` is the default because most conditions are facts rather than states.
+
 ### on_read: the rule describes, something else decides
 
 This is the default, and it is what every dependency did before `enforce`
@@ -104,6 +124,27 @@ declares it has them leaves exactly the state the write was refused for, so it
 is refused on the same terms. Deleting the whole entity is allowed: an entity
 with nothing left is gone, not incomplete.
 
+### Adding a blocking rule to data that already exists
+
+Adding an `on_write` rule does **not** re-validate what is already stored.
+Nothing is rewritten, nothing is archived, and no read starts failing. Entities
+that already sit in the state the rule forbids stay exactly as they are, and
+completeness reports them the way it always did.
+
+The rule applies from the next write to each entity. A caller that touches such
+an entity — for any attribute — is refused until the gap is filled, so an
+existing violation surfaces when someone next edits that record rather than in
+a sweep.
+
+Two consequences worth planning for:
+
+- Check the population **before** switching a rule to `on_write`. Type
+  completeness (`GET /type-definitions/{id}/completeness`) tells you how many
+  entities the rule will start blocking.
+- The path that must never be blocked is not. **Erasure and purge are not
+  gated**: a tenant that cannot delete a record because a dependency says it is
+  incomplete has a compliance problem the schema created.
+
 ### What is never gated on write
 
 An attribute's **own** `required` flag. It describes the finished record, and
@@ -149,12 +190,17 @@ cannot turn into a block.
 - An effect must do something: narrow values, add constraints, or override
   required.
 
-## Compatibility
+## Why reporting is the default
 
-A rule stored without `enforce` behaves exactly as it did before the field
-existed, and is not rewritten with a mode. Blocking is opt-in per rule: the
-default could not be `on_write` without making every stored rule start refusing
-writes on upgrade.
+A schema here **describes** what an entity needs, completeness **reports** what
+it is missing, and the application **decides** when the gap matters. Entities
+are assembled over time by several hands — a supplier feed, a translator, a
+merchandiser — and a store that refuses a half-assembled record has no use for
+a completeness score.
+
+Blocking is therefore the deliberate exception, declared per rule. A rule
+stored without `enforce` behaves exactly as it did before the field existed and
+is not rewritten with a mode.
 
 ## See also
 

@@ -1,5 +1,28 @@
 ## [Unreleased]
 
+### Fixed — A rollup could read an attribute its author cannot ([#585])
+
+A rollup is materialized under system access, and its result is stored as an
+ordinary attribute born with no restriction of its own. Nothing checked that
+the caller defining it could read the attribute it aggregates — so a principal
+denied `cost` could define `sum(child(has_line).cost)` and read the total.
+`min` and `max` are worse: they republish an exact hidden value verbatim.
+
+This is the read bypass [#509] closed on the formula path, reopened when
+rollups arrived. The fix is the formula path's shape: refuse before the shape
+checks, with the same error an unresolved rollup gets.
+
+`count` is unaffected and still allowed — it aggregates relationship
+cardinality, not a field value.
+
+The resolver was also a schema oracle. It returned four distinguishable
+outcomes — no such relationship, no such target, target not numeric, accepted —
+which let a restricted principal enumerate the counterpart type's attribute
+names and their types. They now collapse into one refusal for a non-admin.
+
+[#585]: https://github.com/zkrebbekx/flexitype/issues/585
+[#509]: https://github.com/zkrebbekx/flexitype/issues/509
+
 ### Fixed — Every test truncate now shares one lock discipline ([#579])
 
 `TruncateAll` gained a deterministic order, a bounded wait and a retry. Most

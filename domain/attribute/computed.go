@@ -65,16 +65,14 @@ func (c *Computed) Validate() ([]string, error) {
 		}
 		return expr.Refs(), nil
 	case ComputedRollup:
-		// No evaluator exists for rollups, so a rollup attribute never
-		// produces a value. Accepting the definition made the schema promise
-		// something that never arrives: the API accepted it, the console
-		// displayed it, FQL filters on it matched nothing, completeness
-		// scoring treated it as permanently absent, and no error appeared at
-		// any point to say the attribute was inert.
+		// A rollup aggregates one attribute across the entities a relationship
+		// reaches: sum(child(has_line).line_cost), count(child(uses)).
 		//
-		// Refusing it is loud and immediate. The spec below is still
-		// validated first, so an author who writes a malformed rollup learns
-		// that too rather than only the headline.
+		// It was refused for a release, because no evaluator materialized one:
+		// the API accepted the definition, the console displayed it, FQL
+		// filters on it matched nothing and completeness treated it as
+		// permanently absent, with no error at any point to say the attribute
+		// was inert. The evaluator exists now (application/computed).
 		if c.Rollup == nil {
 			return nil, domainerrors.NewValidation("computed rollup spec is required")
 		}
@@ -95,11 +93,11 @@ func (c *Computed) Validate() ([]string, error) {
 		default:
 			return nil, domainerrors.NewValidation("unknown rollup aggregate", "aggregate", string(c.Rollup.Aggregate))
 		}
-		return nil, domainerrors.NewValidation(
-			"computed rollups are not implemented: no evaluator materializes them, "+
-				"so the attribute would never hold a value. Use a formula over the "+
-				"entity's own attributes, or aggregate in the caller.",
-			"kind", string(ComputedRollup))
+		// A rollup reads NOTHING on its own entity: its inputs are the target
+		// attribute on the entities the relationship reaches. It therefore
+		// contributes no same-entity dependency edge, and the cycle check over
+		// formulas has nothing to consider here.
+		return nil, nil
 	default:
 		return nil, domainerrors.NewValidation("unknown computed kind", "kind", string(c.Kind))
 	}

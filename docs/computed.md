@@ -9,6 +9,83 @@ completeness.
 {"kind": "formula", "formula": "(price - cost) / price"}
 ```
 
+A **rollup** derives it from the entities a relationship reaches instead:
+
+```json
+{"kind": "rollup",
+ "rollup": {"relationship": "has_line", "direction": "child",
+            "aggregate": "sum", "target": "line_cost"}}
+```
+
+## Rollups
+
+A rollup aggregates ONE attribute across the entities one relationship
+reaches. Where a formula reads the entity's own values, a rollup reads its
+neighbours'.
+
+| Field | Meaning |
+| --- | --- |
+| `relationship` | The relationship definition's internal name. |
+| `direction` | `child` (the entities below this one), `parent` (above), or `linked` (either side). |
+| `aggregate` | `count`, `sum`, `min` or `max`. |
+| `target` | The attribute aggregated on the far side. `count` needs none. |
+
+```
+ingredient.cost_per_kg     plain
+recipe_line.ingredient_cost  rollup   sum(parent(of_ingredient).cost_per_kg)
+recipe_line.line_cost        formula  quantity_kg * ingredient_cost
+dish.food_cost               rollup   sum(child(has_line).line_cost)
+```
+
+A supplier price rises, and the dish's cost follows two relationships away.
+Nothing writes to the line or to the dish: each rollup is recomputed because
+something it reads changed.
+
+### What triggers a recompute
+
+A rollup's inputs are on OTHER entities, so the entity holding it receives no
+value event of its own. Two triggers cover that:
+
+- **A link changes.** Linking, unlinking or re-pinning recomputes both
+  endpoints, so a total follows the links even though no value moved.
+- **A counterpart's value changes.** The entities aggregating the written one
+  are recomputed too, and their own writes cascade further — which is what
+  carries a change along a chain of rollups and formulas.
+
+Convergence is the same as for a formula: re-setting an unchanged value emits
+no event, so the cascade stops. A cascade is bounded at eight hops, for the
+case where convergence does not hold — a cycle of aggregates has to stop
+rather than run for ever.
+
+### What a rollup answers
+
+| Aggregate | No counterparts | A counterpart with no value |
+| --- | --- | --- |
+| `count` | **0** | counted |
+| `sum`, `min`, `max` | **undefined** — the value is cleared | skipped |
+
+`count` answers 0 because "this dish has no lines" is a fact. `sum` of nothing
+is not 0: reporting one would read as a free dish.
+
+Only the BASE scope is aggregated. A localized or scoped member would
+otherwise be counted once per locale, and a total would grow with the number
+of translations.
+
+### A rollup that could never work is refused
+
+Three ways to write one that aggregates an empty set for ever — which looks
+exactly like "no data yet":
+
+- the relationship does not exist;
+- the direction points the wrong way, so this type is never on the side the
+  traversal starts from;
+- the target does not exist on the type the relationship reaches, or is not
+  numeric.
+
+Each is a validation error when the attribute is created or updated. Rollups
+were withheld for a release precisely because an unmaterialized one is
+invisible; a mistyped one must not reintroduce that.
+
 ## The formula language
 
 ```

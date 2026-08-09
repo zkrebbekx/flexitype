@@ -31,27 +31,25 @@ func TestComputedValidate(t *testing.T) {
 		})
 
 		Convey("When it derives from a relationship rollup", func() {
-			// No evaluator materializes a rollup, so a well-formed spec is
-			// still refused rather than accepted into an attribute that can
-			// never hold a value. The spec checks below run first, so a
-			// malformed rollup still reports what is malformed.
-			Convey("Then a well-formed count rollup is refused, not silently inert", func() {
+			// A rollup was refused for a release, because nothing materialized
+			// one. The evaluator exists now, so a well-formed spec is
+			// accepted; a malformed one still reports what is malformed.
+			Convey("Then a well-formed count rollup is accepted", func() {
 				refs, err := (&Computed{Kind: ComputedRollup, Rollup: &Rollup{
 					Relationship: "uses", Direction: "child", Aggregate: RollupCount,
 				}}).Validate()
-				So(err, ShouldNotBeNil)
-				So(domainerrors.IsValidation(err), ShouldBeTrue)
-				So(err.Error(), ShouldContainSubstring, "not implemented")
-				So(refs, ShouldBeEmpty) // rollups declare no formula references
+				So(err, ShouldBeNil)
+				// A rollup reads nothing on its own entity, so it contributes
+				// no same-entity dependency edge.
+				So(refs, ShouldBeEmpty)
 			})
 
-			Convey("Then a well-formed sum, min or max rollup is refused too", func() {
+			Convey("Then a well-formed sum, min or max rollup is accepted too", func() {
 				for _, agg := range []RollupAggregate{RollupSum, RollupMin, RollupMax} {
 					_, err := (&Computed{Kind: ComputedRollup, Rollup: &Rollup{
 						Relationship: "uses", Direction: "parent", Aggregate: agg, Target: "weight",
 					}}).Validate()
-					So(err, ShouldNotBeNil)
-					So(err.Error(), ShouldContainSubstring, "not implemented")
+					So(err, ShouldBeNil)
 				}
 			})
 
@@ -78,13 +76,12 @@ func TestComputedValidate(t *testing.T) {
 				So(err.Error(), ShouldContainSubstring, "relationship")
 			})
 
-			Convey("Then a known direction passes the spec check before the refusal", func() {
+			Convey("Then every supported direction is accepted", func() {
 				for _, dir := range []string{"child", "parent", "linked"} {
 					_, err := (&Computed{Kind: ComputedRollup, Rollup: &Rollup{
 						Relationship: "uses", Direction: dir, Aggregate: RollupCount,
 					}}).Validate()
-					So(err, ShouldNotBeNil)
-					So(err.Error(), ShouldContainSubstring, "not implemented")
+					So(err, ShouldBeNil)
 				}
 			})
 

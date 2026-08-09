@@ -1,5 +1,37 @@
 ## [Unreleased]
 
+### Added — Computed rollups over relationships ([#563])
+
+A rollup aggregates one attribute across the entities a relationship reaches:
+`sum(child(has_line).line_cost)`, `count(child(uses))`,
+`min(parent(supplied_by).lead_time)`. Where a formula reads the entity's own
+values, a rollup reads its neighbours'.
+
+The kind was declared in the API, described in `api/openapi.yaml`, exported by
+both SDKs — and REFUSED by the service, because nothing materialized one.
+Refusing was right: an accepted rollup produced an attribute the schema
+advertised and that never held a value, with FQL filters matching nothing and
+completeness scoring it permanently absent. The evaluator exists now, so the
+definition is accepted.
+
+A rollup's inputs are on other entities, so the entity holding it receives no
+value event of its own. Two triggers cover that: a link change recomputes both
+endpoints, and a value change recomputes whatever aggregates the entity that
+was written. Those recomputes cascade, so a chain — rollup feeding a formula
+feeding a rollup — converges the way a formula chain already did, bounded at
+eight hops so a cycle of aggregates stops rather than running for ever.
+
+`count` answers 0 for an entity with no counterparts, because "no lines" is a
+fact. `sum`, `min` and `max` are undefined there and clear any stale value:
+reporting 0 for the total of nothing would read as a free dish. Only the base
+scope is aggregated, so a total does not grow with the number of translations.
+
+A rollup that could never produce a value is refused when it is defined —
+an unknown relationship, a direction that points the wrong way, or a target
+that is missing or not numeric. Each of those aggregates an empty set for
+ever, which is indistinguishable from "no data yet", and that invisibility is
+why the feature was withheld in the first place.
+
 ## [1.6.0] — 2026-08-09
 
 Four capabilities an evaluating team's own build asked for.
@@ -2149,6 +2181,7 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 [#550]: https://github.com/zkrebbekx/flexitype/issues/550
 [#551]: https://github.com/zkrebbekx/flexitype/issues/551
 [#552]: https://github.com/zkrebbekx/flexitype/issues/552
+[#563]: https://github.com/zkrebbekx/flexitype/issues/563
 [#553]: https://github.com/zkrebbekx/flexitype/issues/553
 [1.5.0]: https://github.com/zkrebbekx/flexitype/compare/v1.4.0...v1.5.0
 [1.3.0]: https://github.com/zkrebbekx/flexitype/compare/v1.2.0...v1.3.0

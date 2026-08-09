@@ -238,7 +238,7 @@ func (f *factory) New(context.Context) *Interactors {
 
 	i := &Interactors{
 		typeDefs: apptypedef.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes),
-		attrs:    appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, f.cfg.UnitFamilies),
+		attrs:    appattribute.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, f.cfg.UnitFamilies, repos.RelationshipDefinitions),
 		values: appvalue.NewInteractor(unit, repos.TypeDefinitions, repos.Attributes, repos.Values, repos.ValueReader, repos.Dependencies, repos.Relationships, appvalue.Config{
 			Blobs:          f.cfg.BlobStore,
 			Transactor:     f.cfg.Transactor,

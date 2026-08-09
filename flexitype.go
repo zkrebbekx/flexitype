@@ -37,6 +37,7 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
+	"github.com/zkrebbekx/flexitype/pkg/mediaurl"
 	"github.com/zkrebbekx/flexitype/pkg/metrics"
 	"github.com/zkrebbekx/flexitype/pkg/ratelimit"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
@@ -846,6 +847,19 @@ type APIConfig struct {
 	MaxImportBytes int64
 	// MaxMediaBytes caps a media upload; 0 uses the 32 MiB default.
 	MaxMediaBytes int64
+	// MediaURLSecret turns on signed, expiring media links.
+	//
+	// Media bytes sit behind the same authentication as everything else, and
+	// the token carries the tenant, so a public surface — a storefront, a
+	// catalogue page, an email — cannot link to an image: it has to proxy
+	// every request through a service holding a tenant credential. A signed
+	// link removes that proxy.
+	//
+	// The secret must be at least mediaurl.MinSecretLength characters, and it
+	// must NOT be the webhook signing key: one leaked secret must not forge
+	// both an event and a file link. Without it, the signing endpoint reports
+	// the capability as disabled rather than pretending to work.
+	MediaURLSecret string
 }
 
 // NewAccountLookup returns a database-backed authenticator over this
@@ -1022,6 +1036,13 @@ func (s *Service) NewAPIHandler(cfg APIConfig) (http.Handler, error) {
 		MaxMediaBytes:     cfg.MaxMediaBytes,
 		TimeZone:          s.timeZone,
 		Clock:             s.clock,
+	}
+	if cfg.MediaURLSecret != "" {
+		signer, err := mediaurl.NewSigner(cfg.MediaURLSecret)
+		if err != nil {
+			return nil, err
+		}
+		server.MediaSigner = signer
 	}
 	if cfg.EnableProvisioning {
 		var adminOpts []admin.Option

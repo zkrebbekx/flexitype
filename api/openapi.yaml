@@ -1723,6 +1723,52 @@ paths:
               schema: { type: string, format: binary }
         "404": { $ref: "#/components/responses/Error" }
 
+  /media/{objectKey}/signed-url:
+    parameters: [{ name: objectKey, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [media]
+      summary: Mint a signed, expiring link to a stored object
+      description: >-
+        Media bytes sit behind the same authentication as the rest of the API,
+        and the token carries the tenant, so a public surface cannot link to an
+        image without proxying every request through a credentialed service. A
+        signed link removes that proxy: it is issued here by an authenticated
+        caller and redeemed by anyone holding it, at
+        `GET /media/signed/{token}` — which is OUTSIDE `/api/v1` and takes no
+        credential, because the signature is the credential.
+
+
+        The caller must be able to READ the object: the same ownership and
+        field-permission check the authenticated download makes. Returns 501
+        when the deployment sets no signing secret.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ttl_seconds:
+                  type: integer
+                  description: >-
+                    How long the link lasts. Absent or zero takes the short
+                    default (15 minutes); anything above the maximum (24 hours)
+                    is capped rather than refused.
+      responses:
+        "201":
+          description: The signed link
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url:
+                    type: string
+                    description: The path to fetch, relative to the service root.
+                  expires_at: { type: string, format: date-time }
+        "404": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+
   /unit-families:
     get:
       tags: [units]

@@ -7,6 +7,32 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Added — Signed, expiring media links ([#552])
+
+`POST /api/v1/media/{key}/signed-url` mints a link, and
+`GET /media/signed/{token}` serves the bytes to anyone holding it — outside
+`/api/v1`, with no credential, because the signature IS the credential. Turn it
+on with `FLEXITYPE_MEDIA_URL_SECRET`, or `APIConfig.MediaURLSecret` when
+embedding. `client.SignMediaURL` and the TypeScript SDK's
+`entities.signMediaUrl` call it.
+
+Media bytes are served behind the same authentication as everything else, and a
+token carries one tenant, so a public surface — a storefront, a catalogue page,
+an email — could not link to an image. It had to proxy every request through a
+service holding a tenant credential, which carries the whole file through a
+process with no other reason to touch it and defeats any CDN in front of it.
+
+The rules the design holds to: the signature covers the tenant, the object key
+AND the expiry together; the tenant is read back out of the verified token
+rather than the request; minting is gated on the same ownership and
+field-permission check the authenticated download makes; every redemption
+failure is the same 404; the default life is 15 minutes and the cap is 24
+hours; and the secret must be at least 32 characters and must not be the
+webhook signing key.
+
+Without the secret the endpoint answers `501 FEATURE_DISABLED` rather than
+pretending to work, and a secret below the floor stops the service at start-up.
+
 ### Added — An event envelope says which entity changed ([#550])
 
 `type_definition_id` and `entity_id` are on the envelope. They name the ENTITY

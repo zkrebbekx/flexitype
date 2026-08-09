@@ -82,7 +82,12 @@ func newFlexitype(t *testing.T, tenants ...string) (string, map[string]merchantA
 		out[tenant] = merchantAccount{tenant: tenant, token: serviceaccount.MintToken(id, secret)}
 	}
 	svc := flexitype.NewInMemory()
-	srv := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{Accounts: serviceaccount.NewStore(accounts)}))
+	srv := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{
+		Accounts: serviceaccount.NewStore(accounts),
+		// Signed media links, so a shopper's browser fetches an image straight
+		// from flexitype instead of through the storefront.
+		MediaURLSecret: "storefront-test-media-signing-secret-0123456789",
+	}))
 	t.Cleanup(srv.Close)
 	return srv.URL, out
 }

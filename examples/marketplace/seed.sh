@@ -191,12 +191,25 @@ for _ in $(seq 1 60); do
   if [ "$projected" = "$OBJECT_KEY" ]; then break; fi
   sleep 1
 done
-img_status=$(curl -s -o /dev/null -w '%{http_code}' "$STOREFRONT/api/products/alpine/tee-merino/image")
-if [ "$img_status" != "200" ]; then
-  echo "FAILED: the product image is not reachable (HTTP $img_status)" >&2
+# The storefront REDIRECTS to a signed, expiring link rather than proxying the
+# bytes, so the first response is a 302 and the second is the image itself.
+img_redirect=$(curl -s -o /dev/null -w '%{http_code}' "$STOREFRONT/api/products/alpine/tee-merino/image")
+if [ "$img_redirect" != "302" ]; then
+  echo "FAILED: expected a redirect to a signed link, got HTTP $img_redirect" >&2
   exit 1
 fi
-echo "    alpine/tee-merino/image -> 200"
+signed=$(curl -s -o /dev/null -w '%{redirect_url}' "$STOREFRONT/api/products/alpine/tee-merino/image")
+case "$signed" in
+  */media/signed/*) ;;
+  *) echo "FAILED: the redirect does not point at a signed link: $signed" >&2; exit 1 ;;
+esac
+# Redeemed with NO credential at all: the signature is the credential.
+img_status=$(curl -s -o /dev/null -w '%{http_code}' "$signed")
+if [ "$img_status" != "200" ]; then
+  echo "FAILED: the signed image link is not reachable (HTTP $img_status)" >&2
+  exit 1
+fi
+echo "    alpine/tee-merino/image -> 302 -> signed link -> 200 (no credential)"
 
 echo "==> A shopper cannot widen the filter to see drafts"
 drafts=$(curl -sS "$STOREFRONT/api/products?status=draft" | jq '.items | length')

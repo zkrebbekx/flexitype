@@ -75,6 +75,12 @@ services:
       # Product images are stored on disk in this demo. Without it, a media
       # upload has nowhere to put the bytes.
       FLEXITYPE_BLOB_DIR: /var/lib/flexitype/blobs
+      # Signed, expiring image links. With this set the storefront redirects a
+      # shopper straight to flexitype instead of proxying every photo through
+      # itself, so the bytes never cross the storefront and a CDN can cache
+      # them. A demo value in a public file; a real deployment keeps it in a
+      # secret manager, and it must NOT be the webhook signing key.
+      FLEXITYPE_MEDIA_URL_SECRET: marketplace-demo-media-signing-secret-0123456789
     volumes:
       - blobs:/var/lib/flexitype/blobs
     ports:
@@ -95,6 +101,11 @@ services:
       MARKETPLACE_INTERNAL_TOKEN: marketplace-internal-demo-token
       # A burst of value events for one product collapses into one projection.
       STOREFRONT_DEBOUNCE: 250ms
+      # The address a SHOPPER's browser reaches flexitype on — not the
+      # container-network name this service uses, which would not resolve in a
+      # browser. With it set, a product image is a redirect to a signed link
+      # rather than bytes proxied through this service.
+      STOREFRONT_MEDIA_PUBLIC_BASE: http://localhost:8080
     ports:
       - "9200:9200"
 

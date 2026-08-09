@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // EntitiesService operates at the entity level: browsing, the faceted grid,
@@ -284,4 +285,38 @@ func (s *EntitiesService) CreateRevision(ctx context.Context, typeID, entityID, 
 // and content type.
 func (c *Client) DownloadMedia(ctx context.Context, objectKey string) ([]byte, string, error) {
 	return c.doRaw(ctx, "/media/"+url.PathEscape(objectKey), nil)
+}
+
+// SignedMediaURL is a link anyone holding it can fetch, until it expires.
+type SignedMediaURL struct {
+	// URL is relative to the service root, e.g. "/media/signed/eyJ...".
+	URL string `json:"url"`
+	// ExpiresAt is when the link stops working.
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// SignMediaURL mints a signed, expiring link to one stored object.
+//
+// Media bytes sit behind the same authentication as everything else, and the
+// token carries the tenant, so a public surface — a storefront, a catalogue
+// page, an email — cannot link to an image: it has to proxy every request
+// through a service holding a tenant credential. A signed link removes that
+// proxy. It is redeemed at the returned URL with NO credential, because the
+// signature is the credential.
+//
+// ttl is how long the link lasts. Zero takes the service's short default;
+// anything above its maximum is capped rather than refused. The caller must be
+// able to read the object, and a deployment with no signing secret reports the
+// capability as disabled (501, FEATURE_DISABLED).
+func (c *Client) SignMediaURL(ctx context.Context, objectKey string, ttl time.Duration) (*SignedMediaURL, error) {
+	body := struct {
+		TTLSeconds int `json:"ttl_seconds"`
+	}{TTLSeconds: int(ttl.Seconds())}
+
+	var out SignedMediaURL
+	if err := c.do(ctx, http.MethodPost,
+		"/media/"+url.PathEscape(objectKey)+"/signed-url", nil, body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

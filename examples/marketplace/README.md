@@ -304,9 +304,17 @@ GET /api/products/{tenant}/{entityID}/image
 GET /api/merchants
 ```
 
-The image endpoint proxies the bytes from flexitype's blob store with the
-merchant's own credential, so a shopper never holds one, and the image of a
-non-active product is unreachable because the row was already refused.
+The image endpoint mints a **signed, expiring link** with the merchant's
+credential and redirects the browser to it, so the bytes go straight from
+flexitype to the shopper and a CDN can cache them — they never cross this
+service. A shopper still holds no merchant token: the signature is scoped to
+one object and one expiry, and the image of a non-active product is unreachable
+because the row was already refused.
+
+Set `STOREFRONT_MEDIA_PUBLIC_BASE` to the address a BROWSER reaches flexitype
+on; the container-network name this service uses would not resolve there.
+Without it — or against a deployment that sets no `FLEXITYPE_MEDIA_URL_SECRET`
+— it falls back to proxying the bytes.
 
 ## Tests
 
@@ -372,19 +380,19 @@ Each one is filed, so it can be tracked rather than only recorded here.
    value set — would let a projection service hold no merchant credential at
    all. That is the single biggest security cost of this architecture. ([#549])
 
-5. **An event does not say which entity changed without a payload parse.** The
-   envelope's `aggregate_id` is the attribute VALUE id, so a subscriber that
-   only wants "entity E changed" has to decode the payload for
-   `type_definition_id` and `entity_id`. Putting the entity's coordinates on
-   the envelope would let a router work without knowing any payload schema. ([#550])
+5. ~~**An event does not say which entity changed without a payload parse.**~~
+   **Fixed.** `type_definition_id` and `entity_id` are on the envelope, so this
+   projector routes without decoding a payload. It keeps the payload fallback
+   for a delivery recorded by an older service. ([#550])
 
-6. **There is no data type for long text.** `description` is a `string` with a
-   large `max_length`, which is fine but tells a UI nothing about how to
-   render it. A `text` type, or a `multiline` hint, would. ([#551])
+6. ~~**There is no data type for long text.**~~ **Fixed.** The `text` data type
+   stores as a string and declares that the value is long, so a generated form
+   draws a text area. The `ecommerce` template's `description` uses it. ([#551])
 
-7. **A media value's bytes are only reachable with a tenant credential.** That
-   is right, but it means every public-facing surface has to proxy images.
-   Signed, expiring media URLs would remove a whole proxy path. ([#552])
+7. ~~**A media value's bytes are only reachable with a tenant credential.**~~
+   **Fixed.** `POST /media/{key}/signed-url` mints a signed, expiring link that
+   anyone can redeem with no credential, so this storefront redirects to it
+   instead of proxying every photo. ([#552])
 
 8. ~~**Blob storage needs a writable directory the distroless image cannot
    create.**~~ **Fixed.** The disk store now proves the root is writable when

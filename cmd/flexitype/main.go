@@ -415,6 +415,7 @@ func run(log *logger.Logger) error {
 		DisableConsole: !cfg.EnableConsole,
 		MaxImportBytes: cfg.MaxImportBytes,
 		MaxMediaBytes:  cfg.MaxMediaBytes,
+		MediaURLSecret: cfg.MediaURLSecret,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("cannot build the API handler")

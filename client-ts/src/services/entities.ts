@@ -78,6 +78,14 @@ export interface RemoveEntityResult {
   relationships_gone?: number
 }
 
+/** A signed, expiring link to one stored media object. */
+export interface SignedMediaUrl {
+  /** The path to fetch, relative to the service root. */
+  url: string
+  /** When the link stops working, as an RFC 3339 timestamp. */
+  expires_at: string
+}
+
 /** Entity-level operations: browse, project, import, export, media, revisions. */
 export class EntitiesService extends Service {
   /** One page of a type's entities. */
@@ -340,6 +348,33 @@ export class EntitiesService extends Service {
       'POST',
       `/entities/${segment(typeId)}/${segment(entityId)}/attributes/${segment(attributeId)}/media`,
       { rawBody: form },
+      requestPart(options),
+    )
+  }
+
+  /**
+   * Mints a signed, expiring link to a stored object.
+   *
+   * Media bytes sit behind the same authentication as everything else, and the
+   * token carries the tenant, so a PUBLIC surface — a storefront, a catalogue
+   * page, an email — cannot use `mediaUrl`: it would have to proxy every
+   * request through a service holding a tenant credential. The returned link
+   * is fetched with no credential at all, because the signature is the
+   * credential.
+   *
+   * `ttlSeconds` is how long it lasts. Absent or zero takes the service's short
+   * default; anything above its maximum is capped rather than refused. The
+   * caller must be able to read the object, and a deployment that sets no
+   * signing secret answers FEATURE_DISABLED.
+   */
+  signMediaUrl(
+    objectKey: string,
+    options: RequestOptions & { ttlSeconds?: number } = {},
+  ): Promise<SignedMediaUrl> {
+    return this.http.request<SignedMediaUrl>(
+      'POST',
+      `/media/${segment(objectKey)}/signed-url`,
+      { body: { ttl_seconds: options.ttlSeconds ?? 0 } },
       requestPart(options),
     )
   }

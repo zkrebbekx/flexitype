@@ -2154,6 +2154,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/media/{objectKey}/signed-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                objectKey: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a signed, expiring link to a stored object
+         * @description Media bytes sit behind the same authentication as the rest of the API, and the token carries the tenant, so a public surface cannot link to an image without proxying every request through a credentialed service. A signed link removes that proxy: it is issued here by an authenticated caller and redeemed by anyone holding it, at `GET /media/signed/{token}` — which is OUTSIDE `/api/v1` and takes no credential, because the signature is the credential.
+         *
+         *     The caller must be able to READ the object: the same ownership and field-permission check the authenticated download makes. Returns 501 when the deployment sets no signing secret.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    objectKey: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description How long the link lasts. Absent or zero takes the short default (15 minutes); anything above the maximum (24 hours) is capped rather than refused. */
+                        ttl_seconds?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description The signed link */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: date-time */
+                            expires_at?: string;
+                            /** @description The path to fetch, relative to the service root. */
+                            url?: string;
+                        };
+                    };
+                };
+                404: components["responses"]["Error"];
+                501: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/query": {
         parameters: {
             query?: never;

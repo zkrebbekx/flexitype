@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -61,7 +64,7 @@ func TestOnlyActiveProductsReachShoppers(t *testing.T) {
 		So(err, ShouldBeNil)
 		So(count, ShouldEqual, 3) // all three ARE projected; only the read path hides two
 
-		handler := NewAPI(store, projector, "internal-token", quietLogger()).Handler(
+		handler := NewAPI(store, projector, "internal-token", "", quietLogger()).Handler(
 			NewIngest(store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
 
 		Convey("When a shopper lists the catalog", func() {
@@ -136,7 +139,7 @@ func TestInternalEndpointsRequireTheSharedCredential(t *testing.T) {
 	Convey("Given a running storefront", t, func() {
 		store := newTestStore(t)
 		projector := NewProjector(store, "http://127.0.0.1:1", time.Second)
-		handler := NewAPI(store, projector, "internal-token", quietLogger()).Handler(
+		handler := NewAPI(store, projector, "internal-token", "", quietLogger()).Handler(
 			NewIngest(store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
 
 		Convey("When a caller registers a merchant with no credential", func() {
@@ -178,6 +181,81 @@ func TestInternalEndpointsRequireTheSharedCredential(t *testing.T) {
 				So(err, ShouldBeNil)
 				So(string(raw), ShouldNotContainSubstring, "ft_a_b")
 				So(string(raw), ShouldContainSubstring, "Merchant A")
+			})
+		})
+	})
+}
+
+// TestProductImageRedirectsToASignedLink covers the image path.
+//
+// The bytes live behind a merchant credential, so this storefront used to
+// proxy every image: the whole file crossed a process that has no other reason
+// to touch it, and no CDN in front of the storefront could cache it. A signed
+// link moves the fetch to the browser without giving it a merchant token.
+func TestProductImageRedirectsToASignedLink(t *testing.T) {
+	Convey("Given a merchant with a product image", t, func() {
+		store := newTestStore(t)
+		baseURL, accounts := newFlexitype(t, "merchant-a")
+		c := seedMerchant(t, store, baseURL, accounts["merchant-a"], "Merchant A", "secret-a")
+		apparel := subtype(t, c, "apparel", "Apparel", "size", "string")
+		ctx := context.Background()
+
+		writeProduct(t, c, apparel, "shot-1", map[string]any{
+			"name": "Photographed Jacket", "sku": "IMG-1", "status": "active", "price": "99.00",
+		})
+		imageAttr := attrID(t, c, apparel, "image")
+		// A real 1x1 PNG: the media constraint checks the SNIFFED type, so
+		// arbitrary bytes are refused as "media type is not allowed".
+		pixel, derr := base64.StdEncoding.DecodeString(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+		So(derr, ShouldBeNil)
+		_, err := c.Entities().UploadMedia(ctx, apparel, "shot-1", imageAttr,
+			"photo.png", "image/png", bytes.NewReader(pixel))
+		So(err, ShouldBeNil)
+
+		projector := NewProjector(store, baseURL, 10*time.Second)
+		So(projector.Project(ctx, "merchant-a", apparel, "shot-1"), ShouldBeNil)
+
+		Convey("When the storefront knows the address a browser reaches flexitype on", func() {
+			handler := NewAPI(store, projector, "internal-token", baseURL, quietLogger()).Handler(
+				NewIngest(store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/products/merchant-a/shot-1/image", nil))
+
+			Convey("Then the shopper is redirected instead of being served the bytes", func() {
+				So(rec.Code, ShouldEqual, http.StatusFound)
+				// The response is a redirect page, not the image: the bytes never
+				// pass through this process.
+				So(bytes.Contains(rec.Body.Bytes(), pixel), ShouldBeFalse)
+				So(rec.Header().Get("Location"), ShouldStartWith, baseURL+"/media/signed/")
+			})
+
+			Convey("And the link carries no merchant token", func() {
+				So(rec.Header().Get("Location"), ShouldNotContainSubstring, accounts["merchant-a"].token)
+			})
+
+			Convey("And following it with no credential returns the bytes", func() {
+				resp, gerr := http.Get(rec.Header().Get("Location"))
+				So(gerr, ShouldBeNil)
+				defer func() { _ = resp.Body.Close() }()
+				body, rerr := io.ReadAll(resp.Body)
+				So(rerr, ShouldBeNil)
+				So(resp.StatusCode, ShouldEqual, http.StatusOK)
+				So(body, ShouldResemble, pixel)
+			})
+		})
+
+		Convey("When no public address is configured", func() {
+			handler := NewAPI(store, projector, "internal-token", "", quietLogger()).Handler(
+				NewIngest(store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/products/merchant-a/shot-1/image", nil))
+
+			Convey("Then it proxies the bytes as it always did", func() {
+				So(rec.Code, ShouldEqual, http.StatusOK)
+				So(rec.Body.Bytes(), ShouldResemble, pixel)
 			})
 		})
 	})

@@ -19,6 +19,7 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/blob"
 	"github.com/zkrebbekx/flexitype/pkg/health"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
+	"github.com/zkrebbekx/flexitype/pkg/mediaurl"
 	"github.com/zkrebbekx/flexitype/pkg/metrics"
 	"github.com/zkrebbekx/flexitype/pkg/ratelimit"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
@@ -61,6 +62,11 @@ type ServerConfig struct {
 	MaxImportBytes int64
 	// MaxMediaBytes caps a media upload. 0 uses DefaultMaxMediaBytes.
 	MaxMediaBytes int64
+	// MediaSigner, when set, turns on signed, expiring media links: an
+	// authenticated caller mints one, and anybody holding it can fetch that
+	// one object until it expires. Without it the signing endpoint reports
+	// the capability as disabled.
+	MediaSigner *mediaurl.Signer
 	// TimeZone is the deployment's calendar zone for `today` and `now`. It is
 	// stamped on the REQUEST context, because that is the context every
 	// handler passes to the interactor methods. Stamping it where the
@@ -98,6 +104,8 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 		graphql:        cfg.GraphQL,
 		maxImportBytes: orDefault(cfg.MaxImportBytes, DefaultMaxImportBytes),
 		maxMediaBytes:  orDefault(cfg.MaxMediaBytes, DefaultMaxMediaBytes),
+		mediaSigner:    cfg.MediaSigner,
+		clock:          cfg.Clock,
 	}
 
 	r := chi.NewRouter()
@@ -117,6 +125,13 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 	if cfg.Metrics != nil {
 		r.Handle("/metrics", cfg.Metrics.Handler())
 	}
+
+	// Redeeming a signed media link is deliberately OUTSIDE the API's
+	// authentication: the signature IS the credential, and the whole reason
+	// the link exists is that a public surface holds no tenant token. It
+	// carries its own tenant, expiry and object key, all covered by the
+	// signature.
+	r.Get("/media/signed/{token}", s.downloadSignedMedia)
 
 	// The OpenAPI document is public (before auth) so client generators
 	// and mock servers can fetch the contract without credentials.
@@ -225,6 +240,10 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 		})
 
 		api.Get("/media/{objectKey}", s.downloadMedia)
+		// Mint a signed, expiring link to one object. Authenticated, and
+		// gated on the same ownership and field-permission check the
+		// authenticated download makes.
+		api.Post("/media/{objectKey}/signed-url", s.signMediaURL)
 
 		api.Route("/unit-families", func(r chi.Router) {
 			r.Get("/", s.listUnitFamilies)
@@ -388,6 +407,16 @@ type server struct {
 
 	maxImportBytes int64
 	maxMediaBytes  int64
+	mediaSigner    *mediaurl.Signer
+	clock          func() time.Time
+}
+
+// now reads the server's clock, which a test can pin.
+func (s *server) now() time.Time {
+	if s.clock == nil {
+		return time.Now()
+	}
+	return s.clock()
 }
 
 // orDefault returns v when it is a positive ceiling, and fallback otherwise,

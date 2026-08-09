@@ -18,6 +18,8 @@ import (
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // concurrentWriters is how many goroutines race for each invariant. Each of
@@ -350,7 +352,7 @@ func TestChangeSetPublishDeadlockPostgres(t *testing.T) {
 			const rounds = 10
 			var deadlocks int
 			for round := 0; round < rounds; round++ {
-				pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_entity_summary, flexitype_changeset CASCADE`)
+				testdb.TruncateTables(t, pool, "flexitype_attribute_value", "flexitype_entity_summary", "flexitype_changeset")
 				forward := stage(entities, attrs[0])
 				backward := stage([]string{entities[1], entities[0]}, attrs[1])
 

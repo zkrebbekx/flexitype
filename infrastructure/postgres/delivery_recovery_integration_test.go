@@ -119,8 +119,7 @@ func TestDeadLetterRetentionIntegration(t *testing.T) {
 	}
 
 	Convey("Given an old dead delivery pinning an expired envelope", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_webhook_delivery, flexitype_webhook_subscription,
-			flexitype_event_outbox CASCADE`)
+		testdb.TruncateTables(t, pool, "flexitype_webhook_delivery", "flexitype_webhook_subscription", "flexitype_event_outbox")
 		tenant := valueobjects.DefaultTenant
 		old := time.Now().UTC().Add(-90 * 24 * time.Hour)
 
@@ -202,8 +201,7 @@ func TestRedeliverRampsTheBacklogIntegration(t *testing.T) {
 	}
 
 	Convey("Given a backlog of dead deliveries larger than one batch", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_webhook_delivery, flexitype_webhook_subscription,
-			flexitype_event_outbox CASCADE`)
+		testdb.TruncateTables(t, pool, "flexitype_webhook_delivery", "flexitype_webhook_subscription", "flexitype_event_outbox")
 		tenant := valueobjects.DefaultTenant
 		now := time.Now().UTC()
 

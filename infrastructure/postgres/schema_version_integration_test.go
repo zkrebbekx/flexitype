@@ -15,6 +15,8 @@ import (
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // TestGraphQLSchemaVersionReplicaPropagationIntegration proves the fix for
@@ -34,8 +36,7 @@ func TestGraphQLSchemaVersionReplicaPropagationIntegration(t *testing.T) {
 	Convey("Given two replicas over one database: writer A and reader B", t, func() {
 		// goconvey re-runs this setup per leaf assertion; start from a clean
 		// definition set (the trigger-maintained version resets with it).
-		pool.MustExec(`TRUNCATE flexitype_relationship_definition, flexitype_attribute_definition,
-			flexitype_type_definition, flexitype_schema_version CASCADE`)
+		testdb.TruncateTables(t, pool, "flexitype_relationship_definition", "flexitype_attribute_definition", "flexitype_type_definition", "flexitype_schema_version")
 
 		// Replica A owns the write path: a full service whose interactors commit
 		// definition changes (firing the version trigger). Its own engine is

@@ -12,6 +12,8 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // TestMediaValueForKeyTieBreakIntegration proves the owner of an object key is
@@ -47,8 +49,7 @@ func TestMediaValueForKeyTieBreakIntegration(t *testing.T) {
 	}
 
 	Convey("Given two media values of one object key sharing a creation instant", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_entity_summary,
-			flexitype_attribute_definition, flexitype_type_definition CASCADE`)
+		testdb.TruncateTables(t, pool, "flexitype_attribute_value", "flexitype_entity_summary", "flexitype_attribute_definition", "flexitype_type_definition")
 		seedSummarySchema(t, pool, typeID.String(), attrID)
 		hi := "01ZZZZZZZZZZZZZZZZZZZZZZZZ"
 		lo := "01AAAAAAAAAAAAAAAAAAAAAAAA"

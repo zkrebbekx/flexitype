@@ -19,6 +19,8 @@ import (
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // countingQuerier wraps a pool and records every SelectContext query so a test
@@ -64,9 +66,7 @@ func TestWindowedLinksIntegration(t *testing.T) {
 	}
 
 	Convey("Given products with a five-supplier fan-out and a second relationship", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_relationship, flexitype_relationship_definition,
-			flexitype_attribute_value, flexitype_attribute_definition, flexitype_type_definition,
-			flexitype_entity_summary, flexitype_schema_version CASCADE`)
+		testdb.TruncateTables(t, pool, "flexitype_relationship", "flexitype_relationship_definition", "flexitype_attribute_value", "flexitype_attribute_definition", "flexitype_type_definition", "flexitype_entity_summary", "flexitype_schema_version")
 
 		svc := flexitype.New(pool)
 		it := svc.Interactors(ctx)

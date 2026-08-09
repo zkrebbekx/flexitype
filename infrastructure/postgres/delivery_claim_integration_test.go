@@ -14,6 +14,8 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // TestDeliveryClaimIntegration exercises the delivery worker's claim/lease/
@@ -33,7 +35,7 @@ func TestDeliveryClaimIntegration(t *testing.T) {
 	deliveries := postgres.NewDeliveryStore(pool)
 
 	Convey("Given a subscription and three fanned-out deliveries", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_event_outbox, flexitype_webhook_delivery, flexitype_webhook_subscription`)
+		testdb.TruncateTables(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery", "flexitype_webhook_subscription")
 
 		sub := webhook.Subscription{
 			ID:        ulid.New(),

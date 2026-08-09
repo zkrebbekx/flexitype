@@ -83,3 +83,67 @@ func TestTruncateOnceLeavesNoTransactionOpen(t *testing.T) {
 		})
 	})
 }
+
+// TestTruncateTablesRefusesAnythingButATableName guards the one thing a
+// table-name argument must not become.
+//
+// The names reach the statement by concatenation, because TRUNCATE takes no
+// placeholders. That is safe only while they are bare identifiers, so it is
+// checked rather than assumed.
+func TestTruncateTablesRefusesAnythingButATableName(t *testing.T) {
+	Convey("Given a name that is not a plain identifier", t, func() {
+		for _, bad := range []string{
+			"flexitype_a; DROP TABLE flexitype_b",
+			"public.flexitype_a",
+			`"flexitype_a"`,
+			"flexitype_a --",
+			"",
+		} {
+			Convey("Then "+bad+" is refused, and no statement is built", func() {
+				stmt, err := truncateStatement([]string{"flexitype_ok", bad})
+				So(err, ShouldNotBeNil)
+				So(stmt, ShouldBeEmpty)
+			})
+		}
+
+		Convey("Then ordinary names build a sorted statement", func() {
+			stmt, err := truncateStatement([]string{"flexitype_b", "flexitype_a"})
+			So(err, ShouldBeNil)
+			So(stmt, ShouldEqual, "TRUNCATE flexitype_a, flexitype_b CASCADE")
+		})
+	})
+}
+
+// TestTruncateTablesSortsItsArgument pins the ordering that keeps two callers
+// from taking the same locks in opposite orders.
+func TestTruncateTablesSortsItsArgument(t *testing.T) {
+	pool := Open(t, "truncsort")
+	for _, name := range []string{"flexitype_sortprobe_b", "flexitype_sortprobe_a"} {
+		if _, err := pool.Exec(`CREATE TABLE IF NOT EXISTS ` + name + ` (id int)`); err != nil {
+			t.Fatalf("create probe table: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(`DROP TABLE IF EXISTS flexitype_sortprobe_a, flexitype_sortprobe_b`)
+	})
+
+	Convey("Given two callers naming the same tables in opposite orders", t, func() {
+		_, err := pool.Exec(`INSERT INTO flexitype_sortprobe_a VALUES (1)`)
+		So(err, ShouldBeNil)
+		_, err = pool.Exec(`INSERT INTO flexitype_sortprobe_b VALUES (1)`)
+		So(err, ShouldBeNil)
+
+		Convey("When each truncates", func() {
+			TruncateTables(t, pool, "flexitype_sortprobe_b", "flexitype_sortprobe_a")
+			TruncateTables(t, pool, "flexitype_sortprobe_a", "flexitype_sortprobe_b")
+
+			Convey("Then both succeed and the tables are empty", func() {
+				var n int
+				So(pool.Get(&n, `SELECT count(*) FROM flexitype_sortprobe_a`), ShouldBeNil)
+				So(n, ShouldEqual, 0)
+				So(pool.Get(&n, `SELECT count(*) FROM flexitype_sortprobe_b`), ShouldBeNil)
+				So(n, ShouldEqual, 0)
+			})
+		})
+	})
+}

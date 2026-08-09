@@ -65,14 +65,14 @@ func TestOutboxLeaseIntegration(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 	// Clean slate for a deterministic run.
-	pool.MustExec(`TRUNCATE flexitype_event_outbox, flexitype_webhook_delivery`)
+	testdb.TruncateTables(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery")
 
 	store := postgres.NewOutboxStore(transactor)
 
 	Convey("Given a batch of pending envelopes and two concurrent relays", t, func() {
 		// goconvey re-runs this setup once per leaf assertion, so reset the
 		// tables each time to keep every path isolated.
-		pool.MustExec(`TRUNCATE flexitype_event_outbox, flexitype_webhook_delivery`)
+		testdb.TruncateTables(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery")
 		ids := writeEnvelopes(ctx, transactor, store, 40)
 
 		var mu sync.Mutex
@@ -128,7 +128,7 @@ func TestOutboxLeaseIntegration(t *testing.T) {
 
 	Convey("Given an abandoned lease from a crashed relay", t, func() {
 		// Reset per leaf re-execution (see note above).
-		pool.MustExec(`TRUNCATE flexitype_event_outbox, flexitype_webhook_delivery`)
+		testdb.TruncateTables(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery")
 		ids := writeEnvelopes(ctx, transactor, store, 5)
 
 		Convey("When a relay claims but never finalizes (short lease TTL)", func() {

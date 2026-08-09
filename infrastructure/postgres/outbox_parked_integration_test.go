@@ -13,6 +13,8 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/events"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // TestOutboxParkedRecoveryIntegration covers issue #478: a parked envelope
@@ -49,7 +51,7 @@ func TestOutboxParkedRecoveryIntegration(t *testing.T) {
 	}
 
 	Convey("Given an outbox with two parked envelopes among pending ones", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_event_outbox, flexitype_webhook_delivery`)
+		testdb.TruncateTables(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery")
 		ids := writeEnvelopes(ctx, transactor, store, 4)
 		park(ids[0], ids[1])
 
@@ -204,7 +206,7 @@ func TestOutboxParkedRecoveryIntegration(t *testing.T) {
 	})
 
 	Convey("Given one envelope parked long ago and one parked recently", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_event_outbox, flexitype_webhook_delivery`)
+		testdb.TruncateTables(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery")
 		ids := writeEnvelopes(ctx, transactor, store, 2)
 		park(ids[0], ids[1])
 		pool.MustExec(
@@ -256,7 +258,7 @@ func TestOutboxParkKnobsIntegration(t *testing.T) {
 	}
 
 	Convey("Given an outbox store with a budget of two attempts and a low retry ceiling", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_event_outbox, flexitype_webhook_delivery`)
+		testdb.TruncateTables(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery")
 		store := postgres.NewOutboxStore(transactor,
 			postgres.WithOutboxMaxAttempts(2),
 			postgres.WithOutboxRetryCeiling(2*time.Second))

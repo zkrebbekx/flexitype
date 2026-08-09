@@ -18,6 +18,8 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // These suites drive the schema read ports — type definitions, attribute
@@ -77,9 +79,9 @@ func seedTextValue(pool *sqlx.DB, tenant string, typeID, attrID ulid.ID, entityI
 	return id
 }
 
-func truncateValues(pool *sqlx.DB) {
-	pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_attribute_value_dependency,
-		flexitype_attribute_definition, flexitype_type_definition CASCADE`)
+func truncateValues(t *testing.T, pool *sqlx.DB) {
+	t.Helper()
+	testdb.TruncateTables(t, pool, "flexitype_attribute_value", "flexitype_attribute_value_dependency", "flexitype_attribute_definition", "flexitype_type_definition")
 }
 
 func TestTypeDefinitionRepositoryReadIntegration(t *testing.T) {
@@ -87,7 +89,7 @@ func TestTypeDefinitionRepositoryReadIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	Convey("Given live, archived and foreign-tenant type definitions", t, func() {
-		truncateValues(pool)
+		truncateValues(t, pool)
 		product := seedTypeDefinitionFull(pool, "default", "product", false)
 		variant := seedTypeDefinitionFull(pool, "default", "variant", false)
 		retired := seedTypeDefinitionFull(pool, "default", "retired", true)
@@ -174,7 +176,7 @@ func TestAttributeDefinitionRepositoryReadIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	Convey("Given attributes of several data types, one archived, across two types", t, func() {
-		truncateValues(pool)
+		truncateValues(t, pool)
 		product := seedTypeDefinitionFull(pool, "default", "product", false)
 		other := seedTypeDefinitionFull(pool, "default", "variant", false)
 		colour := seedAttributeDefinitionFull(pool, "default", product, "colour", "string", false)
@@ -337,7 +339,7 @@ func TestAttributeValueRepositoryListIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	Convey("Given values for two entities of one type, one archived, plus another tenant", t, func() {
-		truncateValues(pool)
+		truncateValues(t, pool)
 		product := seedTypeDefinitionFull(pool, "default", "product", false)
 		variant := seedTypeDefinitionFull(pool, "default", "variant", false)
 		colour := seedAttributeDefinitionFull(pool, "default", product, "colour", "string", false)

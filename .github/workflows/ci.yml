@@ -121,7 +121,6 @@ jobs:
           docker rm -f pgbouncer
       - name: Smoke test (migrations + service boot)
         env:
-          FLEXITYPE_PORT: "58080"
           FLEXITYPE_DB_HOST: localhost
           FLEXITYPE_DB_PORT: "5432"
           # Authentication is required by default; this smoke test drives the
@@ -131,29 +130,37 @@ jobs:
         run: |
           set -euo pipefail
           (cd cmd/flexitype && go build -o /tmp/flexitype .)
-          # The step assumes the port is free, and a run has failed with
-          # "bind: address already in use" while nothing else in this workflow
-          # binds it. Wait briefly, then say WHAT holds it: a bare bind error
-          # gives an operator nothing to act on.
-          for _ in $(seq 1 10); do
-            if ! ss -ltn "sport = :58080" | grep -q LISTEN; then break; fi
+
+          # A FIXED port failed twice with "bind: address already in use", and
+          # the guard that was supposed to explain it used `ss`, which is not
+          # on every runner image — a missing `ss` made the check silently
+          # pass, so the real failure surfaced as curl exit 7 with no cause.
+          #
+          # Pick a port per run instead, and make a failed boot say so itself
+          # rather than leaving curl to report a refused connection.
+          PORT=$(( 20000 + RANDOM % 20000 ))
+          export FLEXITYPE_PORT="$PORT"
+          /tmp/flexitype > /tmp/flexitype.log 2>&1 &
+          SERVICE_PID=$!
+          trap 'kill $SERVICE_PID 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if ! kill -0 $SERVICE_PID 2>/dev/null; then
+              echo "the service exited before it became ready:"
+              cat /tmp/flexitype.log
+              exit 1
+            fi
+            if curl -fs "localhost:$PORT/readyz" > /dev/null; then break; fi
             sleep 1
           done
-          if ss -ltn "sport = :58080" | grep -q LISTEN; then
-            echo "port 58080 is still held before the smoke test:"
-            ss -ltnp "sport = :58080" || true
+
+          if ! curl -fs "localhost:$PORT/readyz" > /dev/null; then
+            echo "the service never became ready on port $PORT:"
+            cat /tmp/flexitype.log
             exit 1
           fi
-          /tmp/flexitype &
-          SERVICE_PID=$!
-          for i in $(seq 1 30); do
-            if curl -fs localhost:58080/readyz > /dev/null; then break; fi
-            sleep 1
-          done
-          curl -fs localhost:58080/readyz
-          curl -fs -X POST localhost:58080/api/v1/type-definitions \
+          curl -fs -X POST "localhost:$PORT/api/v1/type-definitions" \
             -d '{"internal_name":"smoke","display_name":"Smoke"}' | grep -q '"internal_name":"smoke"'
-          kill $SERVICE_PID
 
   compose:
     name: compose quickstart

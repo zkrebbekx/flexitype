@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
@@ -34,8 +35,26 @@ func openTestDB(t *testing.T) *sqlx.DB {
 
 // truncateAll empties every flexitype table in this package's schema so each
 // goconvey leaf re-execution starts clean.
-func truncateAll(t *testing.T, pool *sqlx.DB) {
+//
+// Drain any service the caller names FIRST. A schema change schedules a
+// rebuild on a context detached from the request, after a settle delay — so it
+// commonly starts once the test that triggered it has returned, and lands
+// inside the next test's TRUNCATE, where the two take the same locks in
+// opposite orders. testdb.TruncateAll retries a lost deadlock, but waiting is
+// the answer that removes the race rather than tolerating it.
+func truncateAll(t *testing.T, pool *sqlx.DB, services ...*flexitype.Service) {
 	t.Helper()
+	for _, svc := range services {
+		if svc == nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		if err := svc.Drain(ctx); err != nil {
+			cancel()
+			t.Fatalf("drain background work before truncate: %v", err)
+		}
+		cancel()
+	}
 	testdb.TruncateAll(t, pool)
 }
 

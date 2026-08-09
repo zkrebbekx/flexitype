@@ -285,7 +285,7 @@ func TestComputedRollupsPostgres(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 	runComputedRollups(t, "postgres", func() *flexitype.Service {
-		truncateAll(t, pool)
+		truncateAll(t, pool, svc)
 		return svc
 	})
 }

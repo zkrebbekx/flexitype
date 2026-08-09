@@ -16,25 +16,76 @@ import (
 )
 
 // TemplateName is the curated schema bundle every merchant starts from. It
-// lives in application/schema/templates/ecommerce_strict.json and ships inside
-// the flexitype binary.
+// lives in application/schema/templates/ecommerce.json and ships inside the
+// flexitype binary.
 //
 // Applying a template — rather than sharing one schema — is what makes each
 // merchant's `product` type its OWN. A merchant can rename a field, add a
 // constraint or archive an attribute without touching any other merchant.
+const TemplateName = "ecommerce"
+
+// enforceActiveProductRules switches the template's `status = active` rules
+// from reporting the gap to refusing the write.
 //
-// The STRICT variant is deliberate. Its two rules — an active product needs a
-// SKU and a price — enforce on write rather than reporting the gap, because
-// `status = active` is a lifecycle state: a product a shopper can buy with no
-// SKU and no price is not a product that should exist, and this marketplace
-// has no later gate that would catch one.
+// `active` is a lifecycle state, not a fact someone is entering: a product a
+// shopper can buy with no sku and no price is not a product that should exist,
+// and this marketplace has no later gate that would catch one. That is the
+// case `enforce: on_write` exists for — see docs/dependencies.md.
 //
-// It costs the platform nothing here because a product is written as one
-// batch (see putProduct), which is how a caller satisfies an on_write rule:
-// the state and what it demands arrive together. A platform that saved a
-// product field by field would want the plain `ecommerce` template and a gate
-// of its own.
-const TemplateName = "ecommerce_strict"
+// It is done HERE rather than by shipping a second template, and the reason is
+// worth reading if you are tempted by the other approach. A schema import
+// deduplicates a dependency on its whole rule INCLUDING the effect, and it
+// only ever creates or skips — it never updates. So applying a stricter
+// variant of a template a tenant already has does not migrate the rule, it
+// adds a second one alongside; the resolver then merges the pair into the
+// stricter of the two, and there is no way back through templates. Updating
+// the rule in place is the only form of this that stays idempotent, which is
+// what the comment above claims about onboarding as a whole.
+//
+// This also shows the thing a template cannot: how to set the mode on a rule
+// in your own schema.
+func enforceActiveProductRules(ctx context.Context, c *client.Client) error {
+	page, err := c.Dependencies().List(ctx, client.ListOptions{Limit: 100})
+	if err != nil {
+		return fmt.Errorf("list dependencies: %w", err)
+	}
+	for _, dep := range page.Items {
+		if dep.Effect.Required == nil || !*dep.Effect.Required {
+			continue // not a demand, so there is nothing to enforce
+		}
+		if dep.Effect.Enforce == string(enforceOnWrite) {
+			continue // already switched by an earlier run
+		}
+		effect, err := json.Marshal(client.Effect{
+			AllowedValues: dep.Effect.AllowedValues,
+			Constraints:   dep.Effect.Constraints,
+			Required:      dep.Effect.Required,
+			Enforce:       string(enforceOnWrite),
+		})
+		if err != nil {
+			return fmt.Errorf("encode effect: %w", err)
+		}
+		conditions, err := json.Marshal(dep.Conditions)
+		if err != nil {
+			return fmt.Errorf("encode conditions: %w", err)
+		}
+		// Update is a full replace, so the conditions and the rest of the
+		// effect are sent back as they were read.
+		if _, err := c.Dependencies().Update(ctx, dep.ID, client.CreateDependencyInput{
+			SourceAttributeID: dep.SourceAttributeID,
+			TargetAttributeID: dep.TargetAttributeID,
+			Conditions:        conditions,
+			Effect:            effect,
+			Description:       dep.Description,
+		}); err != nil {
+			return fmt.Errorf("update dependency %s: %w", dep.ID, err)
+		}
+	}
+	return nil
+}
+
+// enforceOnWrite is the mode that refuses a write leaving the demand unmet.
+const enforceOnWrite = "on_write"
 
 // accountName is the service account the platform creates in each merchant
 // tenant. One well-known name makes onboarding recognisable as idempotent.
@@ -137,6 +188,11 @@ func (o *Onboarder) Onboard(ctx context.Context, in OnboardInput) (Merchant, err
 	//    present is skipped, never duplicated — so applying it again is safe.
 	if _, err := tenantClient.Schema().ApplyTemplate(ctx, TemplateName); err != nil {
 		return Merchant{}, fmt.Errorf("apply template %q to %q: %w", TemplateName, tenant, err)
+	}
+
+	// 3b. Make the template's two "active product" rules refuse the write.
+	if err := enforceActiveProductRules(ctx, tenantClient); err != nil {
+		return Merchant{}, fmt.Errorf("enforce active-product rules for %q: %w", tenant, err)
 	}
 
 	// 4. The storefront's webhook subscription, inside the merchant's tenant.

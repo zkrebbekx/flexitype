@@ -26,6 +26,9 @@ type entityRef struct {
 	tenant valueobjects.TenantID
 	typeID valueobjects.TypeDefinitionID
 	entity valueobjects.EntityID
+	// fullView judges this entity over every value it holds rather than the
+	// caller's readable subset. Set for a removal; see noteRemoval.
+	fullView bool
 }
 
 // requiredGate accumulates the entities a transaction touched, so the
@@ -54,8 +57,36 @@ func (g *requiredGate) add(ref entityRef) {
 // entity happened to be incomplete — turning a reporting gap into a broken
 // derived value. The requirement is about what a CALLER submits.
 func (i *Interactor) noteWrite(c *uow.Collector, tx db.Transactor, ref entityRef, internal bool) {
+	i.noteWriteFull(c, tx, ref, internal, false)
+}
+
+// noteRemoval records a removal, which is judged over the entity's FULL value
+// set rather than the caller's view.
+//
+// A write resolves over what the caller can read, so a rule keyed on a value
+// the caller cannot see does not fire for it — otherwise the refusal answers a
+// question the field ACL hides. A removal cannot use that rule. A principal
+// permitted to remove the demanded value, but not to read the rule's source,
+// would take the value away unopposed and leave the entity in exactly the
+// state the rule forbids — and every OTHER principal, including an admin, is
+// then refused every write to that entity until the value comes back. One
+// least-privileged account could do that across a tenant.
+//
+// So a removal fails closed: it is judged over everything the entity holds.
+// The asymmetry is deliberate. Refusing to remove a value tells the caller
+// only that some rule wants it, which it can already infer from the write it
+// is about to be refused; leaving the entity wedged for everyone else is the
+// worse answer.
+func (i *Interactor) noteRemoval(c *uow.Collector, tx db.Transactor, ref entityRef, internal bool) {
+	i.noteWriteFull(c, tx, ref, internal, true)
+}
+
+func (i *Interactor) noteWriteFull(c *uow.Collector, tx db.Transactor, ref entityRef, internal, fullView bool) {
 	if c == nil || internal {
 		return
+	}
+	if fullView {
+		ref.fullView = true
 	}
 	gate, _ := c.Stash(requiredGateKey, func() any {
 		return &requiredGate{seen: make(map[entityRef]bool, 1)}
@@ -154,9 +185,11 @@ func (i *Interactor) enforceRequiredOnWrite(ctx context.Context, tx db.Transacto
 		// rule's source can write a state that principal cannot see is
 		// forbidden. That is the same trade the read paths already make, and
 		// it is the one that keeps the three answers consistent.
-		values, err = i.readableOnly(ctx, tx, values)
-		if err != nil {
-			return err
+		if !ref.fullView {
+			values, err = i.readableOnly(ctx, tx, values)
+			if err != nil {
+				return err
+			}
 		}
 		filled := make(map[valueobjects.AttributeDefinitionID][]valueobjects.Value, len(values))
 		for _, av := range values {
@@ -179,7 +212,7 @@ func (i *Interactor) enforceRequiredOnWrite(ctx context.Context, tx db.Transacto
 			// set filtered above, a restricted attribute always looks absent,
 			// so enforcing it would refuse every write this caller makes to
 			// the entity, for a requirement it cannot see, name or satisfy.
-			if !uow.AccessFromContext(ctx).CanRead(a.InternalName()) {
+			if !ref.fullView && !uow.AccessFromContext(ctx).CanRead(a.InternalName()) {
 				continue
 			}
 			targets, ok := targeting[a.ID()]

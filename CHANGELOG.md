@@ -1,30 +1,63 @@
 ## [Unreleased]
 
-### Added — An `ecommerce_strict` template, and the marketplace example applies it
+### Added — The marketplace example enforces its own product rules
 
-1.8.0 let a dependency refuse a write, but nothing shipped actually did — both
-templates and both examples reported. The mode was documented and tested, and
-demonstrated by nothing a user could apply.
+1.8.0 let a dependency refuse a write, and nothing shipped actually did — every
+template and every example reported. The mode was documented and tested, and
+demonstrated by nothing that runs.
 
-`ecommerce_strict` is the `ecommerce` schema with its two `status = active`
-rules set to `"enforce": "on_write"`: a product cannot be stored active without
-a SKU and a price. Everything else about the two templates is identical, and a
-test pins that — if they drift, the pair stops demonstrating one decision and
-becomes two schemas to maintain.
+`examples/marketplace` now switches the two `status = active` rules it gets
+from the `ecommerce` template to `"enforce": "on_write"` after applying it, so
+a product cannot be stored active without a sku and a price. `active` is a
+lifecycle state rather than a fact being entered, which is the case the mode
+exists for.
 
-| Template | Its two rules | Choose it when |
-| --- | --- | --- |
-| `ecommerce` | report the gap | Products are assembled field by field, and something downstream decides when one goes live. |
-| `ecommerce_strict` | refuse the write | Nothing downstream gates, so a product must never be stored active and unsellable. |
+It is done in the example's own onboarding rather than by shipping a stricter
+template, and the reason is the fix below: a template cannot re-configure a
+rule a tenant already has. Setting the mode in place is what keeps onboarding
+idempotent, and it shows the thing a template cannot — how to do it in your own
+schema.
 
-`examples/marketplace` now onboards merchants from the strict one. It costs the
-platform nothing, because it already wrote a whole product as one batch — which
-is exactly how a caller satisfies such a rule: the state and what it demands
-arrive together, in any order. That also makes the example's README claim about
-`sku` and `price` true of the running system rather than of its intent.
+Every shipped template still leaves its rules reporting.
 
-Existing tenants are untouched: a template is applied into a tenant, never
-shared, so this changes what a NEW tenant starts from and nothing else.
+### Fixed — A schema import no longer adds a second copy of a rule you have tuned
+
+Import identified a dependency by its whole rule INCLUDING its effect. So a
+bundle carrying a rule the tenant already had, configured differently, read as
+a rule the tenant did not have: import created a second one alongside, the
+resolver merged the pair into the stricter of the two, and re-applying a
+template after someone had tuned one of its rules silently changed what the
+tenant enforced — permanently, with no way back through templates.
+
+A rule is now identified by its source, its target and its conditions. A bundle
+rule whose identity already exists is skipped, whatever its effect says. Import
+creates what is missing; it has never updated, and overwriting a rule an
+operator deliberately tuned would be worse than leaving it. Cascading picklists
+are unaffected — several rules on one attribute pair differ in their
+conditions, which are part of the identity.
+
+### Fixed — A restricted principal could make an entity unwritable for everyone
+
+An `on_write` rule is resolved over the values the caller may read, so a rule
+keyed on a value the caller cannot see does not fire for it. Applied to a
+REMOVAL, that let a principal permitted to remove the demanded value — but not
+to read the rule's source — take it away unopposed, leaving the entity in the
+state the rule forbids. Every other principal, including an admin, was then
+refused every write to that entity until the value came back.
+
+A removal is now judged over everything the entity holds. The asymmetry is
+deliberate: refusing to remove a value tells the caller only that some rule
+wants it, which it can already infer from the write it is about to be refused.
+
+### Fixed — `SetInput.Internal` bypassed the write gate for an embedder
+
+The field turns off the computed-attribute guard, the field ACL and the
+dependency gate, and it is exported — so a Go embedder could set it and store a
+state a rule forbids. It is not reachable over HTTP, which uses its own DTO.
+
+It is now honoured only for a caller that already holds system access, which is
+what the materializer runs with and what nothing reachable from the API can
+obtain.
 
 ## [1.8.0] — 2026-08-09
 

@@ -181,6 +181,9 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 		return snap, domainerrors.NewValidation("value is required")
 	}
 
+	// internal is resolved from the attribute below, not taken on trust.
+	internal := false
+
 	err = func() error {
 		attrs := i.attrs.WithTx(tx)
 		values := i.values.WithTx(tx)
@@ -305,7 +308,7 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 		// The materializer is exempt: it may clear or rewrite a derived value
 		// on a type being wound down, and blocking it would strand stale
 		// computed values that the archive is meant to retire.
-		if !in.Internal {
+		if !internal {
 			typeDefs := i.typeDefs.WithTx(tx)
 			entityTypeDef, terr := typeDefs.Get(ctx, entityType)
 			if terr != nil {
@@ -328,14 +331,30 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			}
 		}
 
+		// Internal is honoured only on a COMPUTED attribute, which is the only
+		// thing the materializer writes.
+		//
+		// The field is exported and it turns off the computed-attribute guard,
+		// the field ACL and the dependency write gate. Its sibling fromUpload
+		// is unexported for exactly that reason; unexporting this one would
+		// take the materializer's only entry point with it. Binding it to the
+		// caller's access does not help either — an embedded library caller is
+		// admin by default, which is the case that matters.
+		//
+		// So the privilege is bound to the SUBJECT instead: a derived value is
+		// the service's own output and answers to no dependency rule, while an
+		// ordinary attribute is a caller's submission whatever flag rides with
+		// it.
+		internal = in.Internal && def.IsComputed()
+
 		// Computed attributes are read-only: only the materializer (Internal)
 		// may write their derived value.
-		if def.IsComputed() && !in.Internal {
+		if def.IsComputed() && !internal {
 			return domainerrors.NewValidation("attribute is computed (read-only)", "attribute", def.InternalName())
 		}
 		// Field-level access control: the principal must be permitted to
 		// write this attribute (the materializer writes as the system).
-		if !in.Internal && !uow.AccessFromContext(ctx).CanWrite(def.InternalName()) {
+		if !internal && !uow.AccessFromContext(ctx).CanWrite(def.InternalName()) {
 			return domainerrors.NewForbidden("not permitted to write this attribute", "attribute", def.InternalName())
 		}
 
@@ -388,7 +407,7 @@ func (i *Interactor) setWithin(ctx context.Context, tx db.Transactor, c *uow.Col
 			tenant: def.TenantID(),
 			typeID: entityType,
 			entity: entityID,
-		}, in.Internal)
+		}, internal)
 		if def.Unique() {
 			// This is a read followed by a write, which would admit two
 			// concurrent writers of the same value under READ COMMITTED. It is
@@ -806,8 +825,9 @@ func (i *Interactor) Remove(ctx context.Context, rawID string) (*domainvalue.Sna
 		// and a rolled-back removal deleted them anyway.
 		i.gcMediaAfterCommit(tx, before.ID, before.Value)
 		// Taking a value away can leave a demand unmet just as failing to write
-		// one can, so a removal is checked on the same terms.
-		i.noteWrite(c, tx, entityRef{
+		// one can, so a removal is checked — over the entity's full value set;
+		// see noteRemoval.
+		i.noteRemoval(c, tx, entityRef{
 			tenant: av.TenantID(),
 			typeID: av.TypeDefinitionID(),
 			entity: av.EntityID(),

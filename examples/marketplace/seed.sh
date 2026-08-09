@@ -49,7 +49,8 @@ curl -fs "$PLATFORM/healthz" > /dev/null
 # --- 2. Onboard the merchants ------------------------------------------------
 #
 # Onboarding creates the tenant, a service account scoped to it, applies the
-# `ecommerce_strict` template, registers the storefront webhook and runs a first
+# `ecommerce` template (switching its two active-product rules to refuse the
+# write), registers the storefront webhook and runs a first
 # backfill. It is idempotent, so re-running this script is safe.
 # A failure here used to print ERROR and carry on, so a merchant that was
 # never onboarded looked like one that was — and the run failed later, or not

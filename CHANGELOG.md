@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+## [1.8.0] — 2026-08-09
+
+A dependency can now refuse a write instead of reporting a gap.
+
+**Upgrading from 1.7.x: go to
+[1.7.1](https://github.com/zkrebbekx/flexitype/releases/tag/v1.7.1) first, not
+1.7.0.**
+1.7.1 carries this release's `enforce` key through unread, so a rolling deploy
+or a rollback cannot strip it from a rule. Rolling back to 1.7.0 silently
+rewrites a blocking rule as a reporting one, permanently.
+
 ### Added — A dependency chooses where its requirement is enforced
 
 A `required` effect now declares where it is enforced:
@@ -2370,7 +2381,9 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 - Quantity `one_of` members and defaults are unit-rebased; equal quantities in
   different units compare equal.
 
-[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/zkrebbekx/flexitype/compare/v1.7.1...v1.8.0
+[1.7.1]: https://github.com/zkrebbekx/flexitype/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/zkrebbekx/flexitype/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/zkrebbekx/flexitype/compare/v1.5.0...v1.6.0
 [1.4.0]: https://github.com/zkrebbekx/flexitype/compare/v1.3.0...v1.4.0

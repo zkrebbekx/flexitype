@@ -16,6 +16,8 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // errNotDurable is the sentinel a test returns from inside a transaction to
@@ -24,9 +26,9 @@ var errNotDurable = errors.New("rollback for test")
 
 // truncateWebhooks clears every table the webhook suites touch. Deliveries
 // reference both subscriptions and outbox envelopes, so all four go together.
-func truncateWebhooks(pool *sqlx.DB) {
-	pool.MustExec(`TRUNCATE flexitype_webhook_delivery, flexitype_webhook_subscription,
-		flexitype_event_outbox CASCADE`)
+func truncateWebhooks(t *testing.T, pool *sqlx.DB) {
+	t.Helper()
+	testdb.TruncateTablesCascade(t, pool, "flexitype_webhook_delivery", "flexitype_webhook_subscription", "flexitype_event_outbox")
 }
 
 func newSubscription(tenant, name string, active bool, types []string) webhook.Subscription {
@@ -44,7 +46,7 @@ func TestSubscriptionStoreIntegration(t *testing.T) {
 	store := postgres.NewSubscriptionStore(pool)
 
 	Convey("Given subscriptions across two tenants, one inactive", t, func() {
-		truncateWebhooks(pool)
+		truncateWebhooks(t, pool)
 		zebra := newSubscription("default", "zebra", true, []string{"flexitype.entity.created"})
 		apple := newSubscription("default", "apple", true, nil)
 		dormant := newSubscription("default", "dormant", false, nil)
@@ -227,7 +229,7 @@ func TestSubscriptionStoreIntegration(t *testing.T) {
 	})
 
 	Convey("Given a store bound to an open transaction", t, func() {
-		truncateWebhooks(pool)
+		truncateWebhooks(t, pool)
 		sub := newSubscription("default", "txbound", true, nil)
 
 		Convey("When a subscription is created inside a transaction that rolls back", func() {
@@ -300,7 +302,7 @@ func TestDeliveryStoreListIntegration(t *testing.T) {
 	deliveries := postgres.NewDeliveryStore(pool)
 
 	Convey("Given deliveries in mixed states across two subscriptions and two tenants", t, func() {
-		truncateWebhooks(pool)
+		truncateWebhooks(t, pool)
 		subA := newSubscription("default", "sub-a", true, nil)
 		subB := newSubscription("default", "sub-b", true, nil)
 		subOther := newSubscription("other", "sub-c", true, nil)
@@ -444,7 +446,7 @@ func TestDeliveryStoreRedeliverIntegration(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	Convey("Given one delivery in each terminal and each in-flight state", t, func() {
-		truncateWebhooks(pool)
+		truncateWebhooks(t, pool)
 		sub := newSubscription("default", "sub-a", true, nil)
 		So(subs.Create(ctx, sub), ShouldBeNil)
 		envelopes := writeEnvelopesFor(ctx, transactor, outboxStore, 4, "default", "flexitype.entity.created")

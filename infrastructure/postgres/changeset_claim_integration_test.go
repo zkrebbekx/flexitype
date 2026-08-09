@@ -13,6 +13,8 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // TestStalePublishingIntegration proves the store finds change-sets stranded
@@ -37,7 +39,7 @@ func TestStalePublishingIntegration(t *testing.T) {
 	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 
 	Convey("Given claims of differing age, an approved set and a second tenant", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_changeset CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_changeset")
 		So(isReclaimer, ShouldBeTrue)
 
 		mk := func(name string, tenant valueobjects.TenantID, state appchangeset.State, updated time.Time) {

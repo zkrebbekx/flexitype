@@ -27,6 +27,8 @@ import (
 	"github.com/zkrebbekx/flexitype/pkg/events"
 	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // controlPlaneFixture opens the integration database, migrates it, and
@@ -112,7 +114,7 @@ func TestAdminStoreTenantsIntegration(t *testing.T) {
 
 	Convey("Given three tenants created out of alphabetical order", t, func() {
 		// Service accounts reference tenants, so clear both.
-		pool.MustExec(`TRUNCATE flexitype_service_account, flexitype_tenant CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_service_account", "flexitype_tenant")
 		created := time.Now().UTC().Truncate(time.Millisecond)
 		for _, name := range []string{"zulu", "alpha", "mike"} {
 			So(store.CreateTenant(ctx, admin.Tenant{
@@ -196,7 +198,7 @@ func TestAdminStoreAccountsIntegration(t *testing.T) {
 	store := postgres.NewAdminStore(pool)
 
 	Convey("Given two service accounts on one tenant and one on another", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_service_account, flexitype_tenant CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC().Truncate(time.Millisecond)
 		for _, tenant := range []string{"acme", "other"} {
 			So(store.CreateTenant(ctx, admin.Tenant{
@@ -311,7 +313,7 @@ func TestAccountLookupIntegration(t *testing.T) {
 	lookup := postgres.NewAccountLookup(pool)
 
 	Convey("Given an active service account with a known secret", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_service_account, flexitype_tenant CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC()
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
@@ -412,7 +414,7 @@ func TestActivityLogIntegration(t *testing.T) {
 	}
 
 	Convey("Given an audit trail for two tenants across two entities", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_activity_log`)
+		testdb.TruncateTables(t, pool, "flexitype_activity_log")
 		base := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
 		entry := func(tenant, actor, entity, entityID string, action activity.Action, offset time.Duration) activity.Entry {
 			return activity.Entry{
@@ -509,7 +511,7 @@ func TestActivityLogIntegration(t *testing.T) {
 	})
 
 	Convey("Given an entry carrying before and after state", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_activity_log`)
+		testdb.TruncateTables(t, pool, "flexitype_activity_log")
 		now := time.Now().UTC()
 		withState := activity.Entry{
 			ID: ulid.New(), TenantID: "default", Actor: "alice",
@@ -547,7 +549,7 @@ func TestActivityLogIntegration(t *testing.T) {
 	})
 
 	Convey("Given more entries than fit on one page", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_activity_log`)
+		testdb.TruncateTables(t, pool, "flexitype_activity_log")
 		base := time.Now().UTC().Add(-time.Hour)
 		ids := make([]ulid.ID, 5)
 		for i := range ids {
@@ -583,7 +585,7 @@ func TestMatchStoreIntegration(t *testing.T) {
 	store := postgres.NewMatchStore(pool)
 
 	Convey("Given match rules on two type definitions and two tenants", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_match_rule, flexitype_match_dismissal CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_match_rule", "flexitype_match_dismissal")
 		base := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
 		rule := func(tenant, typeDef, attr string, strategy dedup.Strategy, offset time.Duration) dedup.Rule {
 			return dedup.Rule{
@@ -711,7 +713,7 @@ func TestUnitStoreIntegration(t *testing.T) {
 	store := postgres.NewUnitFamilyStore(pool)
 
 	Convey("Given unit families on two tenants", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_unit_family CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_unit_family")
 		mass := unit.Family{
 			ID: ulid.New(), TenantID: "default", Name: "mass", BaseUnit: "g",
 			Units: map[string]float64{"g": 1, "kg": 1000},
@@ -827,8 +829,7 @@ func TestFeedStoreIntegration(t *testing.T) {
 	}
 
 	Convey("Given an expanded feed for two tenants with two event types", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_event_outbox, flexitype_webhook_delivery,
-			flexitype_webhook_subscription, flexitype_event_cursor CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery", "flexitype_webhook_subscription", "flexitype_event_cursor")
 		created := stampFeed(3, "default", "flexitype.entity.created")
 		updated := stampFeed(2, "default", "flexitype.entity.updated")
 		stampFeed(2, "other", "flexitype.entity.created")
@@ -932,8 +933,7 @@ func TestFeedStoreIntegration(t *testing.T) {
 	})
 
 	Convey("Given a feed where one envelope still has an unsettled delivery", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_event_outbox, flexitype_webhook_delivery,
-			flexitype_webhook_subscription, flexitype_event_cursor CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery", "flexitype_webhook_subscription", "flexitype_event_cursor")
 		ids := stampFeed(3, "default", "flexitype.entity.created")
 		// Age every envelope past the cutoff.
 		cutoff := time.Now().UTC().Add(time.Hour)
@@ -995,7 +995,7 @@ func TestCursorStoreIntegration(t *testing.T) {
 	now := time.Now().UTC()
 
 	Convey("Given a consumer that has never committed a cursor", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_event_cursor`)
+		testdb.TruncateTables(t, pool, "flexitype_event_cursor")
 
 		Convey("When its position is read", func() {
 			pos, err := cursors.Get(ctx, "default", "reporting")
@@ -1046,7 +1046,7 @@ func TestCursorStoreIntegration(t *testing.T) {
 	})
 
 	Convey("Given the same consumer name on two tenants", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_event_cursor`)
+		testdb.TruncateTables(t, pool, "flexitype_event_cursor")
 		So(cursors.Commit(ctx, "default", "reporting", 5, 0, now), ShouldBeNil)
 		So(cursors.Commit(ctx, "other", "reporting", 9, 0, now), ShouldBeNil)
 
@@ -1094,8 +1094,7 @@ func TestDeliveryStatsIntegration(t *testing.T) {
 	stats := postgres.NewDeliveryStats(pool)
 
 	Convey("Given pending outbox envelopes and deliveries in mixed states", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_event_outbox, flexitype_webhook_delivery,
-			flexitype_webhook_subscription CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery", "flexitype_webhook_subscription")
 		ids := writeEnvelopesFor(ctx, transactor, outboxStore, 4, "default", "flexitype.entity.created")
 		// Two envelopes are already dispatched, so only two stay pending.
 		pool.MustExec(`UPDATE flexitype_event_outbox SET dispatched_at = now() WHERE id = ANY($1)`,
@@ -1127,7 +1126,7 @@ func TestDeliveryStatsIntegration(t *testing.T) {
 	})
 
 	Convey("Given an empty outbox", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_event_outbox, flexitype_webhook_delivery`)
+		testdb.TruncateTables(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery")
 
 		Convey("When the depth snapshot is taken", func() {
 			depth, err := stats.Snapshot(ctx)
@@ -1167,7 +1166,7 @@ func TestRolesIntegration(t *testing.T) {
 	lookup := postgres.NewAccountLookup(pool)
 
 	Convey("Given a tenant with a reader role and a redactor role", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_role, flexitype_service_account, flexitype_tenant CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC().Truncate(time.Millisecond)
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
@@ -1359,7 +1358,7 @@ func TestRolePermissionsDecodeFailure(t *testing.T) {
 	lookup := postgres.NewAccountLookup(pool)
 
 	Convey("Given a role whose field_permissions column holds an array", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_role, flexitype_service_account, flexitype_tenant CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC()
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
@@ -1399,7 +1398,7 @@ func TestRolePermissionsDecodeFailure(t *testing.T) {
 	})
 
 	Convey("Given an account whose own field_permissions column holds an array", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_role, flexitype_service_account, flexitype_tenant CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC()
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
@@ -1500,7 +1499,7 @@ func TestRoleResolutionSafety(t *testing.T) {
 	lookup := postgres.NewAccountLookup(pool)
 
 	Convey("Given an account restricted only by a role", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_role, flexitype_service_account, flexitype_tenant CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC()
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
@@ -1591,7 +1590,7 @@ func TestRoleResolutionSafety(t *testing.T) {
 	})
 
 	Convey("Given a role upserted twice", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_role, flexitype_service_account, flexitype_tenant CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC().Truncate(time.Millisecond)
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,

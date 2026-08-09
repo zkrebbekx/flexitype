@@ -1,5 +1,29 @@
 ## [Unreleased]
 
+### Fixed — Every test truncate now shares one lock discipline ([#579])
+
+`TruncateAll` gained a deterministic order, a bounded wait and a retry. Most
+truncates in the repo never reached it: 20 files ran `pool.MustExec("TRUNCATE
+...")` directly, so they got none of it — and `MustExec` **panics**, so a
+deadlock there was a panic with no explanation rather than a named failure.
+Several also listed their tables in an order that conflicted with another
+file's.
+
+They now go through `testdb.TruncateTables` or `TruncateTablesCascade`, which
+sort the names, reject anything that is not a bare identifier (the names reach
+the SQL by concatenation, because `TRUNCATE` takes no placeholders), and share
+the timeout and retry.
+
+The two variants are separate deliberately. `CASCADE` is not a formality: it
+empties every table with a foreign key onto the named ones, so applying it
+everywhere would have silently widened what a dozen call sites truncate. Each
+keeps whichever form its own SQL had.
+
+`conformance` is a separate module and cannot import `internal/testdb`, so its
+two truncates stay as they were, with a comment saying why.
+
+[#579]: https://github.com/zkrebbekx/flexitype/issues/579
+
 ### Fixed — The test truncate no longer waits forever for a lock ([#576])
 
 A worker holding a conflicting lock WITHOUT forming a cycle is not a deadlock,

@@ -15,6 +15,8 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // seedRelationshipDefinition inserts a relationship definition between two
@@ -48,10 +50,9 @@ func seedRelationship(pool *sqlx.DB, tenant string, defID ulid.ID, parent, child
 	return id
 }
 
-func truncateRelationships(pool *sqlx.DB) {
-	pool.MustExec(`TRUNCATE flexitype_relationship, flexitype_relationship_definition,
-		flexitype_attribute_value, flexitype_attribute_value_dependency,
-		flexitype_attribute_definition, flexitype_type_definition CASCADE`)
+func truncateRelationships(t *testing.T, pool *sqlx.DB) {
+	t.Helper()
+	testdb.TruncateTablesCascade(t, pool, "flexitype_relationship", "flexitype_relationship_definition", "flexitype_attribute_value", "flexitype_attribute_value_dependency", "flexitype_attribute_definition", "flexitype_type_definition")
 }
 
 func TestRelationshipRepositoryReadIntegration(t *testing.T) {
@@ -59,7 +60,7 @@ func TestRelationshipRepositoryReadIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	Convey("Given links under two definitions, one archived, plus a foreign tenant", t, func() {
-		truncateRelationships(pool)
+		truncateRelationships(t, pool)
 		product := seedTypeDefinitionFull(pool, "default", "product", false)
 		part := seedTypeDefinitionFull(pool, "default", "part", false)
 		contains := seedRelationshipDefinition(pool, "default", product, part, "contains")
@@ -296,7 +297,7 @@ func TestRelationshipRepositoryReadIntegration(t *testing.T) {
 	})
 
 	Convey("Given relationship definitions over three type definitions", t, func() {
-		truncateRelationships(pool)
+		truncateRelationships(t, pool)
 		product := seedTypeDefinitionFull(pool, "default", "product", false)
 		part := seedTypeDefinitionFull(pool, "default", "part", false)
 		bundle := seedTypeDefinitionFull(pool, "default", "bundle", false)

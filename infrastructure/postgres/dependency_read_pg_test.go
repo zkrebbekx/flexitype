@@ -15,6 +15,8 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // The dependency read paths are dataloader-backed: point lookups batch into
@@ -67,9 +69,9 @@ func seedDependency(pool *sqlx.DB, tenant string, source, target ulid.ID, descri
 	return id
 }
 
-func truncateSchema(pool *sqlx.DB) {
-	pool.MustExec(`TRUNCATE flexitype_attribute_value_dependency, flexitype_attribute_definition,
-		flexitype_type_definition CASCADE`)
+func truncateSchema(t *testing.T, pool *sqlx.DB) {
+	t.Helper()
+	testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value_dependency", "flexitype_attribute_definition", "flexitype_type_definition")
 }
 
 // dependencyFixture seeds a small dependency graph:
@@ -86,8 +88,9 @@ type dependencyFixture struct {
 	foreign                ulid.ID
 }
 
-func seedDependencyGraph(pool *sqlx.DB) dependencyFixture {
-	truncateSchema(pool)
+func seedDependencyGraph(t *testing.T, pool *sqlx.DB) dependencyFixture {
+	t.Helper()
+	truncateSchema(t, pool)
 	typeID := seedTypeDefinition(pool, "default", "product")
 	f := dependencyFixture{
 		colour:   seedAttributeDefinition(pool, "default", typeID, "colour"),
@@ -110,7 +113,7 @@ func TestDependencyRepositoryReadIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	Convey("Given a seeded dependency graph with a live, an archived and a foreign-tenant edge", t, func() {
-		f := seedDependencyGraph(pool)
+		f := seedDependencyGraph(t, pool)
 		repo := postgres.NewDependencyRepository(pool)
 
 		Convey("When a dependency is fetched by id through the loader", func() {
@@ -321,7 +324,7 @@ func TestDependencyRepositoryReadIntegration(t *testing.T) {
 	})
 
 	Convey("Given a transaction-bound dependency repository", t, func() {
-		f := seedDependencyGraph(pool)
+		f := seedDependencyGraph(t, pool)
 		repo := postgres.NewDependencyRepository(pool)
 
 		Convey("When reads run inside the transaction", func() {

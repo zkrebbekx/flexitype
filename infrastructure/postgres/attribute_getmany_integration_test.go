@@ -14,6 +14,8 @@ import (
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // TestAttributeGetManyIntegration pins the two properties GetMany's callers
@@ -36,8 +38,7 @@ func TestAttributeGetManyIntegration(t *testing.T) {
 	}
 
 	Convey("Given a type carrying five attribute definitions", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_attribute_definition,
-			flexitype_type_definition, flexitype_entity_summary, flexitype_schema_version CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_attribute_definition", "flexitype_type_definition", "flexitype_entity_summary", "flexitype_schema_version")
 
 		svc := flexitype.New(pool)
 		it := svc.Interactors(ctx)

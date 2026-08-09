@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,6 +143,71 @@ func containsRune(s string, r rune) bool {
 	return false
 }
 
+// TruncateTables empties the named tables in the caller's schema, with the
+// same lock discipline TruncateAll uses: a deterministic order, a bounded wait
+// and a retry when it loses a race to a background worker.
+//
+// It exists because most truncates in this repo were hand-written
+// pool.MustExec calls, which got none of that — and MustExec PANICS, so a
+// deadlock there was a panic with no explanation rather than a named test
+// failure. Prefer TruncateAll; use this when a test deliberately empties a
+// subset.
+//
+// Names are sorted here, so two callers listing the same tables in different
+// orders cannot take their locks in opposite orders.
+func TruncateTables(t *testing.T, pool *sqlx.DB, tables ...string) {
+	t.Helper()
+	truncate(t, pool, tables, false)
+}
+
+// TruncateTablesCascade is TruncateTables with CASCADE, for a table another
+// one references.
+//
+// The two are separate because CASCADE is not a formality: it empties every
+// table with a foreign key onto the named ones, which is more than a caller
+// asking for one table usually means. A call site keeps whichever its SQL had.
+func TruncateTablesCascade(t *testing.T, pool *sqlx.DB, tables ...string) {
+	t.Helper()
+	truncate(t, pool, tables, true)
+}
+
+func truncate(t *testing.T, pool *sqlx.DB, tables []string, cascade bool) {
+	t.Helper()
+	if len(tables) == 0 {
+		return
+	}
+	stmt, err := truncateStatement(tables, cascade)
+	if err != nil {
+		t.Fatalf("testdb: %v", err)
+	}
+	truncateWithRetry(t, pool, stmt)
+}
+
+// truncateStatement builds the statement for a table list, sorted so two
+// callers naming the same tables in different orders cannot take their locks
+// in opposite orders.
+//
+// The names reach the SQL by concatenation, because TRUNCATE takes no
+// placeholders, so each is checked to be a bare identifier first.
+func truncateStatement(tables []string, cascade bool) (string, error) {
+	sorted := append([]string(nil), tables...)
+	sort.Strings(sorted)
+	for _, name := range sorted {
+		if !tableName.MatchString(name) {
+			return "", fmt.Errorf("refusing to truncate %q: not a plain table name", name)
+		}
+	}
+	stmt := "TRUNCATE " + strings.Join(sorted, ", ")
+	if cascade {
+		stmt += " CASCADE"
+	}
+	return stmt, nil
+}
+
+// tableName accepts only a bare identifier, so a caller cannot smuggle SQL
+// through a table list.
+var tableName = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+
 // TruncateAll empties every flexitype table in the caller's schema, leaving
 // the migration bookkeeping intact. It is scoped to the current schema, so it
 // cannot reach another package's data.
@@ -182,6 +249,13 @@ func TruncateAll(t *testing.T, pool *sqlx.DB) {
 	// returns the server's LOCALIZED primary message — the same match against
 	// a server with a non-English lc_messages silently stops working. The
 	// repo's migration runner already does it this way.
+	truncateWithRetry(t, pool, stmt)
+}
+
+// truncateWithRetry runs one TRUNCATE statement under the lock discipline both
+// entry points share.
+func truncateWithRetry(t *testing.T, pool *sqlx.DB, stmt string) {
+	t.Helper()
 	for attempt := 0; ; attempt++ {
 		err := truncateOnce(pool, stmt)
 		if err == nil {

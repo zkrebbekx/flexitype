@@ -15,6 +15,8 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // seedSummarySchema creates the type + attribute a value row needs to satisfy
@@ -82,8 +84,7 @@ func TestEntitySummaryProjectionIntegration(t *testing.T) {
 		// goconvey re-runs this setup per leaf assertion; reset every table the
 		// projection and its foreign keys touch (TRUNCATE does not fire the row
 		// trigger, so the summary is cleared explicitly here).
-		pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_entity_summary,
-			flexitype_attribute_definition, flexitype_type_definition CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_entity_summary", "flexitype_attribute_definition", "flexitype_type_definition")
 		seedSummarySchema(t, pool, typeID.String(), attrID)
 
 		// eA: 3 values, newest at +12m. eB: 2 values, newest at +21m.

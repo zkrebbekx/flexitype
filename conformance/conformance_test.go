@@ -212,6 +212,10 @@ func TestEventCursorConformance(t *testing.T) {
 
 		svc := flexitype.New(pool, flexitype.WithOutbox())
 		So(svc.Migrate(context.Background()), ShouldBeNil)
+		// Not testdb.TruncateTables: this is a SEPARATE module, and
+		// internal/testdb is internal to the main one, so the shared lock
+		// discipline cannot reach here. Tolerable because this truncates a
+		// single table and races nothing.
 		pool.MustExec(`TRUNCATE flexitype_event_cursor`)
 
 		ts := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{AllowAnonymous: true}))

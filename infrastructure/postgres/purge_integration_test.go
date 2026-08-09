@@ -16,6 +16,8 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // countValues reports how many value rows survive for the tenant.
@@ -52,8 +54,7 @@ func TestPurgeSkipsNothingIntegration(t *testing.T) {
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	Convey("Given one value of an entity, updated by an uncommitted transaction", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_entity_summary,
-			flexitype_attribute_definition, flexitype_type_definition CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_entity_summary", "flexitype_attribute_definition", "flexitype_type_definition")
 		seedSummarySchema(t, pool, typeID.String(), attrID)
 		// One row is the minimal reproduction: if the only row in a chunk is
 		// skipped, the chunk returns nothing and an empty chunk used to mean
@@ -114,8 +115,7 @@ func TestPurgeChunkingCompletesIntegration(t *testing.T) {
 	repo := postgres.NewAttributeValueRepository(pool)
 
 	Convey("Given more value rows than one purge chunk holds", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_entity_summary,
-			flexitype_attribute_definition, flexitype_type_definition CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_entity_summary", "flexitype_attribute_definition", "flexitype_type_definition")
 		seedSummarySchema(t, pool, typeID.String(), attrID)
 		// 5200 rows over 13 entities: more than purgeChunk (5000), so the
 		// loop runs at least twice.
@@ -162,8 +162,7 @@ func TestPurgeTakesEntityOrderIntegration(t *testing.T) {
 	repo := postgres.NewAttributeValueRepository(pool)
 
 	Convey("Given many entities and a writer that inserts in canonical entity order", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_entity_summary,
-			flexitype_attribute_definition, flexitype_type_definition CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_entity_summary", "flexitype_attribute_definition", "flexitype_type_definition")
 		seedSummarySchema(t, pool, typeID.String(), attrID)
 		pool.MustExec(`
 			INSERT INTO flexitype_attribute_value
@@ -177,7 +176,7 @@ func TestPurgeTakesEntityOrderIntegration(t *testing.T) {
 			var errs []string
 			for round := 0; round < 2; round++ {
 				if round > 0 {
-					pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_entity_summary CASCADE`)
+					testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_entity_summary")
 					pool.MustExec(`
 						INSERT INTO flexitype_attribute_value
 						    (id, tenant_id, type_definition_id, attribute_definition_id, entity_id, data_type,
@@ -268,8 +267,7 @@ func TestPurgeReportsAStallIntegration(t *testing.T) {
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	Convey("Given a table whose deletes are suppressed", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_entity_summary,
-			flexitype_attribute_definition, flexitype_type_definition CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_entity_summary", "flexitype_attribute_definition", "flexitype_type_definition")
 		seedSummarySchema(t, pool, typeID.String(), attrID)
 		insertLiveValue(t, pool, typeID.String(), attrID, "eX", 1, base)
 

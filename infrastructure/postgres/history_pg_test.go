@@ -16,6 +16,8 @@ import (
 	"github.com/zkrebbekx/flexitype/infrastructure/postgres"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 	"github.com/zkrebbekx/flexitype/pkg/ulid"
+
+	"github.com/zkrebbekx/flexitype/internal/testdb"
 )
 
 // --- change-sets ------------------------------------------------------------
@@ -26,7 +28,7 @@ func TestChangeSetStoreListIntegration(t *testing.T) {
 	store := postgres.NewChangeSetStore(pool)
 
 	Convey("Given change-sets created at different times across two tenants", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_changeset`)
+		testdb.TruncateTables(t, pool, "flexitype_changeset")
 		base := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
 		mk := func(name string, state changeset.State, offset time.Duration, publishAt *time.Time) changeset.ChangeSet {
 			return changeset.ChangeSet{
@@ -91,7 +93,7 @@ func TestChangeSetStoreListIntegration(t *testing.T) {
 	})
 
 	Convey("Given approved change-sets with and without a due publish time", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_changeset`)
+		testdb.TruncateTables(t, pool, "flexitype_changeset")
 		now := time.Now().UTC().Truncate(time.Millisecond)
 		past := now.Add(-time.Hour)
 		future := now.Add(time.Hour)
@@ -158,7 +160,7 @@ func TestRevisionStoreAsOfIntegration(t *testing.T) {
 	store := postgres.NewRevisionStore(pool)
 
 	Convey("Given three revisions of one entity taken an hour apart", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_entity_revision`)
+		testdb.TruncateTables(t, pool, "flexitype_entity_revision")
 		base := time.Now().UTC().Add(-4 * time.Hour).Truncate(time.Millisecond)
 		mk := func(seq int, label string, at time.Time) revision.Revision {
 			return revision.Revision{

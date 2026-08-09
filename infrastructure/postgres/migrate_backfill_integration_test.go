@@ -40,8 +40,7 @@ func TestEntitySummaryBackfillIntegration(t *testing.T) {
 	}
 
 	Convey("Given three entities whose value rows predate the projection", t, func() {
-		pool.MustExec(`TRUNCATE flexitype_attribute_value, flexitype_attribute_definition,
-			flexitype_type_definition, flexitype_entity_summary CASCADE`)
+		testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_attribute_definition", "flexitype_type_definition", "flexitype_entity_summary")
 
 		typeID := ulid.New().String()
 		pool.MustExec(`

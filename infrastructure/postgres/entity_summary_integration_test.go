@@ -84,7 +84,7 @@ func TestEntitySummaryProjectionIntegration(t *testing.T) {
 		// goconvey re-runs this setup per leaf assertion; reset every table the
 		// projection and its foreign keys touch (TRUNCATE does not fire the row
 		// trigger, so the summary is cleared explicitly here).
-		testdb.TruncateTables(t, pool, "flexitype_attribute_value", "flexitype_entity_summary", "flexitype_attribute_definition", "flexitype_type_definition")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_entity_summary", "flexitype_attribute_definition", "flexitype_type_definition")
 		seedSummarySchema(t, pool, typeID.String(), attrID)
 
 		// eA: 3 values, newest at +12m. eB: 2 values, newest at +21m.

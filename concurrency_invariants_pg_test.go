@@ -352,7 +352,7 @@ func TestChangeSetPublishDeadlockPostgres(t *testing.T) {
 			const rounds = 10
 			var deadlocks int
 			for round := 0; round < rounds; round++ {
-				testdb.TruncateTables(t, pool, "flexitype_attribute_value", "flexitype_entity_summary", "flexitype_changeset")
+				testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_entity_summary", "flexitype_changeset")
 				forward := stage(entities, attrs[0])
 				backward := stage([]string{entities[1], entities[0]}, attrs[1])
 

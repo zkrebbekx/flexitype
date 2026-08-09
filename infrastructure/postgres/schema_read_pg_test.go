@@ -81,7 +81,7 @@ func seedTextValue(pool *sqlx.DB, tenant string, typeID, attrID ulid.ID, entityI
 
 func truncateValues(t *testing.T, pool *sqlx.DB) {
 	t.Helper()
-	testdb.TruncateTables(t, pool, "flexitype_attribute_value", "flexitype_attribute_value_dependency", "flexitype_attribute_definition", "flexitype_type_definition")
+	testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_attribute_value_dependency", "flexitype_attribute_definition", "flexitype_type_definition")
 }
 
 func TestTypeDefinitionRepositoryReadIntegration(t *testing.T) {

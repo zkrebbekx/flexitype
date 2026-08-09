@@ -28,7 +28,7 @@ var errNotDurable = errors.New("rollback for test")
 // reference both subscriptions and outbox envelopes, so all four go together.
 func truncateWebhooks(t *testing.T, pool *sqlx.DB) {
 	t.Helper()
-	testdb.TruncateTables(t, pool, "flexitype_webhook_delivery", "flexitype_webhook_subscription", "flexitype_event_outbox")
+	testdb.TruncateTablesCascade(t, pool, "flexitype_webhook_delivery", "flexitype_webhook_subscription", "flexitype_event_outbox")
 }
 
 func newSubscription(tenant, name string, active bool, types []string) webhook.Subscription {

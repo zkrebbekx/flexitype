@@ -114,7 +114,7 @@ func TestAdminStoreTenantsIntegration(t *testing.T) {
 
 	Convey("Given three tenants created out of alphabetical order", t, func() {
 		// Service accounts reference tenants, so clear both.
-		testdb.TruncateTables(t, pool, "flexitype_service_account", "flexitype_tenant")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_service_account", "flexitype_tenant")
 		created := time.Now().UTC().Truncate(time.Millisecond)
 		for _, name := range []string{"zulu", "alpha", "mike"} {
 			So(store.CreateTenant(ctx, admin.Tenant{
@@ -198,7 +198,7 @@ func TestAdminStoreAccountsIntegration(t *testing.T) {
 	store := postgres.NewAdminStore(pool)
 
 	Convey("Given two service accounts on one tenant and one on another", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_service_account", "flexitype_tenant")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC().Truncate(time.Millisecond)
 		for _, tenant := range []string{"acme", "other"} {
 			So(store.CreateTenant(ctx, admin.Tenant{
@@ -313,7 +313,7 @@ func TestAccountLookupIntegration(t *testing.T) {
 	lookup := postgres.NewAccountLookup(pool)
 
 	Convey("Given an active service account with a known secret", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_service_account", "flexitype_tenant")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC()
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
@@ -585,7 +585,7 @@ func TestMatchStoreIntegration(t *testing.T) {
 	store := postgres.NewMatchStore(pool)
 
 	Convey("Given match rules on two type definitions and two tenants", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_match_rule", "flexitype_match_dismissal")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_match_rule", "flexitype_match_dismissal")
 		base := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
 		rule := func(tenant, typeDef, attr string, strategy dedup.Strategy, offset time.Duration) dedup.Rule {
 			return dedup.Rule{
@@ -713,7 +713,7 @@ func TestUnitStoreIntegration(t *testing.T) {
 	store := postgres.NewUnitFamilyStore(pool)
 
 	Convey("Given unit families on two tenants", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_unit_family")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_unit_family")
 		mass := unit.Family{
 			ID: ulid.New(), TenantID: "default", Name: "mass", BaseUnit: "g",
 			Units: map[string]float64{"g": 1, "kg": 1000},
@@ -829,7 +829,7 @@ func TestFeedStoreIntegration(t *testing.T) {
 	}
 
 	Convey("Given an expanded feed for two tenants with two event types", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery", "flexitype_webhook_subscription", "flexitype_event_cursor")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery", "flexitype_webhook_subscription", "flexitype_event_cursor")
 		created := stampFeed(3, "default", "flexitype.entity.created")
 		updated := stampFeed(2, "default", "flexitype.entity.updated")
 		stampFeed(2, "other", "flexitype.entity.created")
@@ -933,7 +933,7 @@ func TestFeedStoreIntegration(t *testing.T) {
 	})
 
 	Convey("Given a feed where one envelope still has an unsettled delivery", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery", "flexitype_webhook_subscription", "flexitype_event_cursor")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery", "flexitype_webhook_subscription", "flexitype_event_cursor")
 		ids := stampFeed(3, "default", "flexitype.entity.created")
 		// Age every envelope past the cutoff.
 		cutoff := time.Now().UTC().Add(time.Hour)
@@ -1094,7 +1094,7 @@ func TestDeliveryStatsIntegration(t *testing.T) {
 	stats := postgres.NewDeliveryStats(pool)
 
 	Convey("Given pending outbox envelopes and deliveries in mixed states", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery", "flexitype_webhook_subscription")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_event_outbox", "flexitype_webhook_delivery", "flexitype_webhook_subscription")
 		ids := writeEnvelopesFor(ctx, transactor, outboxStore, 4, "default", "flexitype.entity.created")
 		// Two envelopes are already dispatched, so only two stay pending.
 		pool.MustExec(`UPDATE flexitype_event_outbox SET dispatched_at = now() WHERE id = ANY($1)`,
@@ -1166,7 +1166,7 @@ func TestRolesIntegration(t *testing.T) {
 	lookup := postgres.NewAccountLookup(pool)
 
 	Convey("Given a tenant with a reader role and a redactor role", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC().Truncate(time.Millisecond)
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
@@ -1358,7 +1358,7 @@ func TestRolePermissionsDecodeFailure(t *testing.T) {
 	lookup := postgres.NewAccountLookup(pool)
 
 	Convey("Given a role whose field_permissions column holds an array", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC()
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
@@ -1398,7 +1398,7 @@ func TestRolePermissionsDecodeFailure(t *testing.T) {
 	})
 
 	Convey("Given an account whose own field_permissions column holds an array", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC()
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
@@ -1499,7 +1499,7 @@ func TestRoleResolutionSafety(t *testing.T) {
 	lookup := postgres.NewAccountLookup(pool)
 
 	Convey("Given an account restricted only by a role", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC()
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,
@@ -1590,7 +1590,7 @@ func TestRoleResolutionSafety(t *testing.T) {
 	})
 
 	Convey("Given a role upserted twice", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_role", "flexitype_service_account", "flexitype_tenant")
 		now := time.Now().UTC().Truncate(time.Millisecond)
 		So(store.CreateTenant(ctx, admin.Tenant{
 			ID: ulid.New(), Name: "acme", Active: true, CreatedAt: now, UpdatedAt: now,

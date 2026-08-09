@@ -66,7 +66,7 @@ func TestWindowedLinksIntegration(t *testing.T) {
 	}
 
 	Convey("Given products with a five-supplier fan-out and a second relationship", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_relationship", "flexitype_relationship_definition", "flexitype_attribute_value", "flexitype_attribute_definition", "flexitype_type_definition", "flexitype_entity_summary", "flexitype_schema_version")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_relationship", "flexitype_relationship_definition", "flexitype_attribute_value", "flexitype_attribute_definition", "flexitype_type_definition", "flexitype_entity_summary", "flexitype_schema_version")
 
 		svc := flexitype.New(pool)
 		it := svc.Interactors(ctx)

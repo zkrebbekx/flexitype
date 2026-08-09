@@ -157,10 +157,26 @@ func containsRune(s string, r rune) bool {
 // orders cannot take their locks in opposite orders.
 func TruncateTables(t *testing.T, pool *sqlx.DB, tables ...string) {
 	t.Helper()
+	truncate(t, pool, tables, false)
+}
+
+// TruncateTablesCascade is TruncateTables with CASCADE, for a table another
+// one references.
+//
+// The two are separate because CASCADE is not a formality: it empties every
+// table with a foreign key onto the named ones, which is more than a caller
+// asking for one table usually means. A call site keeps whichever its SQL had.
+func TruncateTablesCascade(t *testing.T, pool *sqlx.DB, tables ...string) {
+	t.Helper()
+	truncate(t, pool, tables, true)
+}
+
+func truncate(t *testing.T, pool *sqlx.DB, tables []string, cascade bool) {
+	t.Helper()
 	if len(tables) == 0 {
 		return
 	}
-	stmt, err := truncateStatement(tables)
+	stmt, err := truncateStatement(tables, cascade)
 	if err != nil {
 		t.Fatalf("testdb: %v", err)
 	}
@@ -173,7 +189,7 @@ func TruncateTables(t *testing.T, pool *sqlx.DB, tables ...string) {
 //
 // The names reach the SQL by concatenation, because TRUNCATE takes no
 // placeholders, so each is checked to be a bare identifier first.
-func truncateStatement(tables []string) (string, error) {
+func truncateStatement(tables []string, cascade bool) (string, error) {
 	sorted := append([]string(nil), tables...)
 	sort.Strings(sorted)
 	for _, name := range sorted {
@@ -181,7 +197,11 @@ func truncateStatement(tables []string) (string, error) {
 			return "", fmt.Errorf("refusing to truncate %q: not a plain table name", name)
 		}
 	}
-	return "TRUNCATE " + strings.Join(sorted, ", ") + " CASCADE", nil
+	stmt := "TRUNCATE " + strings.Join(sorted, ", ")
+	if cascade {
+		stmt += " CASCADE"
+	}
+	return stmt, nil
 }
 
 // tableName accepts only a bare identifier, so a caller cannot smuggle SQL

@@ -38,7 +38,7 @@ func TestAttributeGetManyIntegration(t *testing.T) {
 	}
 
 	Convey("Given a type carrying five attribute definitions", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_attribute_value", "flexitype_attribute_definition", "flexitype_type_definition", "flexitype_entity_summary", "flexitype_schema_version")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_attribute_value", "flexitype_attribute_definition", "flexitype_type_definition", "flexitype_entity_summary", "flexitype_schema_version")
 
 		svc := flexitype.New(pool)
 		it := svc.Interactors(ctx)

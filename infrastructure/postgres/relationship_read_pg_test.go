@@ -52,7 +52,7 @@ func seedRelationship(pool *sqlx.DB, tenant string, defID ulid.ID, parent, child
 
 func truncateRelationships(t *testing.T, pool *sqlx.DB) {
 	t.Helper()
-	testdb.TruncateTables(t, pool, "flexitype_relationship", "flexitype_relationship_definition", "flexitype_attribute_value", "flexitype_attribute_value_dependency", "flexitype_attribute_definition", "flexitype_type_definition")
+	testdb.TruncateTablesCascade(t, pool, "flexitype_relationship", "flexitype_relationship_definition", "flexitype_attribute_value", "flexitype_attribute_value_dependency", "flexitype_attribute_definition", "flexitype_type_definition")
 }
 
 func TestRelationshipRepositoryReadIntegration(t *testing.T) {

@@ -100,16 +100,20 @@ func TestTruncateTablesRefusesAnythingButATableName(t *testing.T) {
 			"",
 		} {
 			Convey("Then "+bad+" is refused, and no statement is built", func() {
-				stmt, err := truncateStatement([]string{"flexitype_ok", bad})
+				stmt, err := truncateStatement([]string{"flexitype_ok", bad}, true)
 				So(err, ShouldNotBeNil)
 				So(stmt, ShouldBeEmpty)
 			})
 		}
 
 		Convey("Then ordinary names build a sorted statement", func() {
-			stmt, err := truncateStatement([]string{"flexitype_b", "flexitype_a"})
+			stmt, err := truncateStatement([]string{"flexitype_b", "flexitype_a"}, true)
 			So(err, ShouldBeNil)
 			So(stmt, ShouldEqual, "TRUNCATE flexitype_a, flexitype_b CASCADE")
+
+			plain, perr := truncateStatement([]string{"flexitype_b", "flexitype_a"}, false)
+			So(perr, ShouldBeNil)
+			So(plain, ShouldEqual, "TRUNCATE flexitype_a, flexitype_b")
 		})
 	})
 }
@@ -134,8 +138,8 @@ func TestTruncateTablesSortsItsArgument(t *testing.T) {
 		So(err, ShouldBeNil)
 
 		Convey("When each truncates", func() {
-			TruncateTables(t, pool, "flexitype_sortprobe_b", "flexitype_sortprobe_a")
-			TruncateTables(t, pool, "flexitype_sortprobe_a", "flexitype_sortprobe_b")
+			TruncateTablesCascade(t, pool, "flexitype_sortprobe_b", "flexitype_sortprobe_a")
+			TruncateTablesCascade(t, pool, "flexitype_sortprobe_a", "flexitype_sortprobe_b")
 
 			Convey("Then both succeed and the tables are empty", func() {
 				var n int

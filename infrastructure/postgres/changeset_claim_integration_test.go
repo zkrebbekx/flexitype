@@ -39,7 +39,7 @@ func TestStalePublishingIntegration(t *testing.T) {
 	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 
 	Convey("Given claims of differing age, an approved set and a second tenant", t, func() {
-		testdb.TruncateTables(t, pool, "flexitype_changeset")
+		testdb.TruncateTablesCascade(t, pool, "flexitype_changeset")
 		So(isReclaimer, ShouldBeTrue)
 
 		mk := func(name string, tenant valueobjects.TenantID, state appchangeset.State, updated time.Time) {

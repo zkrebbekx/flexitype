@@ -968,3 +968,94 @@ func TestInternalWriteNeedsSystemAccess(t *testing.T) {
 		})
 	})
 }
+
+// TestRemovalGateIsNotAValueOracle covers issue #598.
+//
+// The 1.9.0 fix judged a removal over the entity's FULL value set, to stop a
+// restricted principal wedging an entity for everyone. That also removed the
+// field-ACL protection from the rest of the write path: a restricted principal
+// removing an UNRELATED readable value was refused exactly when a rule keyed
+// on a value it cannot read happened to fire — one bit per probe.
+func TestRemovalGateIsNotAValueOracle(t *testing.T) {
+	Convey("Given two entities that differ only in an attribute the caller cannot read", t, func() {
+		svc := flexitype.NewInMemory()
+		// Reporting to begin with, so the violating state can be established
+		// at all: an on_write rule would have refused it.
+		f := newEnforcementFixture(t, svc, "on_read")
+		ia := f.svc.Interactors(f.ctx)
+
+		// `probe` declares allergens and never lists them — already violating.
+		So(f.set(f.flag, "probe", true), ShouldBeNil)
+		So(f.set(f.name, "probe", "Probe"), ShouldBeNil)
+		// `clean` differs ONLY in the hidden attribute.
+		So(f.set(f.flag, "clean", false), ShouldBeNil)
+		So(f.set(f.name, "clean", "Clean"), ShouldBeNil)
+
+		// The schema author now switches the rule to blocking.
+		_, uerr := ia.Dependencies().Update(f.ctx, appdependency.UpdateInput{
+			ID:         f.dependency,
+			Conditions: json.RawMessage(`[{"kind":"equals","value":{"type":"bool","value":true}}]`),
+			Effect:     json.RawMessage(`{"required":true,"enforce":"on_write"}`),
+		})
+		So(uerr, ShouldBeNil)
+
+		blind := uow.WithAccess(f.ctx, uow.Access{
+			Attr:    map[string]uow.Perm{"contains_allergens": uow.PermNone},
+			Default: uow.PermWrite,
+		})
+		removeName := func(entity string) error {
+			values, lerr := ia.Values().ListByEntity(f.ctx, f.dish, entity)
+			So(lerr, ShouldBeNil)
+			for _, v := range values {
+				if v.AttributeDefinitionID.String() == f.name {
+					_, rerr := f.svc.Interactors(blind).Values().Remove(blind, v.ID.String())
+					return rerr
+				}
+			}
+			return nil
+		}
+
+		Convey("When it removes an UNRELATED readable value from each", func() {
+			violating := removeName("probe")
+			satisfied := removeName("clean")
+
+			Convey("Then the outcome does not depend on the hidden value", func() {
+				// Removing `name` changes nothing about the allergens rule. If
+				// the entity was already violating it, that is not this
+				// caller's doing, and refusing here reports one bit of an
+				// attribute the field ACL hides.
+				So(violating, ShouldBeNil)
+				So(satisfied, ShouldBeNil)
+			})
+		})
+	})
+
+	Convey("Given a dish that satisfies a blocking rule", t, func() {
+		svc := flexitype.NewInMemory()
+		f := newEnforcementFixture(t, svc, "on_write")
+		So(f.setBatch(
+			f.item(f.flag, "tart", true),
+			f.item(f.allergens, "tart", "gluten"),
+		), ShouldBeNil)
+
+		Convey("When the demanded value is removed", func() {
+			values, lerr := f.svc.Interactors(f.ctx).Values().ListByEntity(f.ctx, f.dish, "tart")
+			So(lerr, ShouldBeNil)
+			var id string
+			for _, v := range values {
+				if v.AttributeDefinitionID.String() == f.allergens {
+					id = v.ID.String()
+				}
+			}
+			So(id, ShouldNotBeEmpty)
+			_, rerr := f.svc.Interactors(f.ctx).Values().Remove(f.ctx, id)
+
+			Convey("Then it is refused — the removal CAUSED the violation", func() {
+				// The wedge stays closed: judging the transition still catches
+				// the removal that creates the forbidden state.
+				So(rerr, ShouldNotBeNil)
+				So(domainerrors.IsDependencyViolation(rerr), ShouldBeTrue)
+			})
+		})
+	})
+}

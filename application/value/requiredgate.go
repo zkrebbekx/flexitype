@@ -37,6 +37,9 @@ type entityRef struct {
 type requiredGate struct {
 	seen  map[entityRef]bool
 	order []entityRef
+	// removed holds what a removal took away, so the check can reconstruct the
+	// state before it and judge the transition rather than the outcome.
+	removed map[valueobjects.EntityID][]*domainvalue.AttributeValue
 }
 
 func (g *requiredGate) add(ref entityRef) {
@@ -60,25 +63,56 @@ func (i *Interactor) noteWrite(c *uow.Collector, tx db.Transactor, ref entityRef
 	i.noteWriteFull(c, tx, ref, internal, false)
 }
 
-// noteRemoval records a removal, which is judged over the entity's FULL value
-// set rather than the caller's view.
+// noteRemoval records a removal, and what it took away.
 //
-// A write resolves over what the caller can read, so a rule keyed on a value
-// the caller cannot see does not fire for it — otherwise the refusal answers a
-// question the field ACL hides. A removal cannot use that rule. A principal
-// permitted to remove the demanded value, but not to read the rule's source,
-// would take the value away unopposed and leave the entity in exactly the
-// state the rule forbids — and every OTHER principal, including an admin, is
-// then refused every write to that entity until the value comes back. One
-// least-privileged account could do that across a tenant.
+// A removal is judged on the TRANSITION it causes, over the entity's full
+// value set: refused only when the entity was not violating a rule before and
+// is after. Two things have to hold at once, and only this shape gets both.
 //
-// So a removal fails closed: it is judged over everything the entity holds.
-// The asymmetry is deliberate. Refusing to remove a value tells the caller
-// only that some rule wants it, which it can already infer from the write it
-// is about to be refused; leaving the entity wedged for everyone else is the
-// worse answer.
-func (i *Interactor) noteRemoval(c *uow.Collector, tx db.Transactor, ref entityRef, internal bool) {
-	i.noteWriteFull(c, tx, ref, internal, true)
+// It must not be judged over the caller's view alone. A principal permitted to
+// remove the demanded value, but not to read the rule's source, would take the
+// value away unopposed and leave the entity in exactly the state the rule
+// forbids — after which every OTHER principal, admin included, is refused
+// every write to that entity until the value comes back. One least-privileged
+// account could do that across a tenant.
+//
+// It must also not be judged on the entity's state alone, which is what this
+// did first. Resolving over the full set meant a restricted principal removing
+// an UNRELATED readable value was refused exactly when a rule keyed on a value
+// it cannot read happened to fire — one bit of that value per probe, and the
+// refusal named the attribute. The justification offered at the time, that the
+// caller could infer the same bit from a write, was simply wrong: the write
+// path does not fire a rule keyed on an unreadable source.
+//
+// Judging the transition keeps the wedge closed — removing the demanded value
+// still transitions the entity into the forbidden state, so it is still
+// refused — while a pre-existing unmet requirement is no longer probeable,
+// because it was already unmet before the removal.
+func (i *Interactor) noteRemoval(
+	c *uow.Collector,
+	tx db.Transactor,
+	ref entityRef,
+	removed *domainvalue.AttributeValue,
+	internal bool,
+) {
+	if c == nil || internal || removed == nil {
+		return
+	}
+	gate, _ := c.Stash(requiredGateKey, func() any {
+		return &requiredGate{seen: make(map[entityRef]bool, 1)}
+	}).(*requiredGate)
+	if gate == nil {
+		return
+	}
+	ref.fullView = true
+	gate.add(ref)
+	if gate.removed == nil {
+		gate.removed = make(map[valueobjects.EntityID][]*domainvalue.AttributeValue, 1)
+	}
+	gate.removed[ref.entity] = append(gate.removed[ref.entity], removed)
+	c.CheckBeforeCommitOnce(requiredGateKey, func(ctx context.Context) error {
+		return i.enforceRequiredOnWrite(ctx, tx, gate)
+	})
 }
 
 func (i *Interactor) noteWriteFull(c *uow.Collector, tx db.Transactor, ref entityRef, internal, fullView bool) {
@@ -245,6 +279,28 @@ func (i *Interactor) enforceRequiredOnWrite(ctx context.Context, tx db.Transacto
 			if _, ok := filled[a.ID()]; ok {
 				continue
 			}
+			// A removal is judged on the TRANSITION it caused. If the entity
+			// was already violating this rule before, the removal did not
+			// create the state and refusing would answer a question about
+			// values the caller may not be able to read — see noteRemoval.
+			if ref.fullView {
+				was, berr := violatedBefore(ctx, a, targets, filled, gate.removed[ref.entity])
+				if berr != nil {
+					return berr
+				}
+				if was {
+					continue
+				}
+			}
+			// An unreadable attribute is never named. Completeness already
+			// leaves such a name out of Missing, and a refusal that prints it
+			// discloses exactly what the field ACL hides.
+			if !uow.AccessFromContext(ctx).CanRead(a.InternalName()) {
+				return domainerrors.NewDependencyViolation(
+					"an attribute dependency requires a value this entity does not have",
+					"entity", ref.entity.String(),
+				)
+			}
 			return domainerrors.NewDependencyViolation(
 				fmt.Sprintf("an attribute dependency requires a value for %q", a.InternalName()),
 				"attribute", a.InternalName(),
@@ -253,6 +309,44 @@ func (i *Interactor) enforceRequiredOnWrite(ctx context.Context, tx db.Transacto
 		}
 	}
 	return nil
+}
+
+// violatedBefore reports whether this rule was ALREADY unsatisfied before the
+// removal, by resolving it again over the entity's values plus what was taken
+// away.
+//
+// Refusing only on the transition is what keeps a removal from answering a
+// question about a hidden value: a requirement that was already unmet stays
+// unmet, and the caller learns nothing it did not already cause.
+func violatedBefore(
+	ctx context.Context,
+	a *domainattribute.Definition,
+	targets []*domaindependency.Dependency,
+	filled map[valueobjects.AttributeDefinitionID][]valueobjects.Value,
+	removed []*domainvalue.AttributeValue,
+) (bool, error) {
+	if len(removed) == 0 {
+		return false, nil
+	}
+	before := make(map[valueobjects.AttributeDefinitionID][]valueobjects.Value, len(filled)+1)
+	for id, vs := range filled {
+		before[id] = vs
+	}
+	for _, av := range removed {
+		id := av.AttributeDefinitionID()
+		before[id] = append(before[id], av.Value())
+	}
+	eff, err := domaindependency.ResolveEffectiveWithContext(
+		a, targets, before, uow.ContextValuesFromContext(ctx), uow.LocalNow(ctx))
+	if err != nil {
+		return false, err
+	}
+	if !eff.Required ||
+		eff.RequiredEnforcement.Or(domaindependency.DefaultEnforcement) != domaindependency.EnforceOnWrite {
+		return false, nil
+	}
+	_, ok := before[a.ID()]
+	return !ok, nil
 }
 
 // readableOnly drops the values of attributes the principal may not read, so

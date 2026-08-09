@@ -825,13 +825,13 @@ func (i *Interactor) Remove(ctx context.Context, rawID string) (*domainvalue.Sna
 		// and a rolled-back removal deleted them anyway.
 		i.gcMediaAfterCommit(tx, before.ID, before.Value)
 		// Taking a value away can leave a demand unmet just as failing to write
-		// one can, so a removal is checked — over the entity's full value set;
-		// see noteRemoval.
+		// one can, so a removal is checked on the TRANSITION it causes; see
+		// noteRemoval.
 		i.noteRemoval(c, tx, entityRef{
 			tenant: av.TenantID(),
 			typeID: av.TypeDefinitionID(),
 			entity: av.EntityID(),
-		}, def.IsComputed())
+		}, av, def.IsComputed())
 
 		snap = av.Snapshot()
 		c.CollectEvents(evts...)

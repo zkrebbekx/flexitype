@@ -1,5 +1,29 @@
 ## [Unreleased]
 
+### Fixed — The removal gate was a field-ACL oracle ([#598])
+
+1.9.0 made a removal fail closed over the entity's FULL value set, so a
+restricted principal could not wedge an entity for everyone by taking away a
+value it could see while the rule that demanded it was keyed on one it could
+not. That removed the field-ACL protection from the rest of the path: removing
+an UNRELATED readable value was then refused exactly when a rule keyed on a
+hidden value happened to fire — one bit of that value per probe — and the
+refusal named the attribute.
+
+The justification in the code was wrong, and worth correcting: it claimed the
+caller could infer the same bit from a write. It cannot. The write path does
+not fire a rule keyed on an unreadable source, which is the whole reason that
+path is safe.
+
+A removal is now judged on the TRANSITION it causes: refused only when the
+entity was not violating the rule before and is after. Both properties hold.
+Removing the demanded value still creates the forbidden state, so the wedge
+stays closed; a requirement that was already unmet is no longer probeable,
+because the removal did not cause it. A refusal also never names an attribute
+the caller cannot read.
+
+[#598]: https://github.com/zkrebbekx/flexitype/issues/598
+
 ### Fixed — The SSRF guard deferred to `HTTP_PROXY` ([#593])
 
 `safedial`'s guard validates the address the dialer is about to connect to,

@@ -197,7 +197,7 @@ func (i *Interactor) removeScopedWithin(ctx context.Context, tx db.Transactor, c
 			tenant: av.TenantID(),
 			typeID: av.TypeDefinitionID(),
 			entity: av.EntityID(),
-		}, def.IsComputed())
+		}, av, def.IsComputed())
 		c.CollectEvents(evts...)
 		c.RecordChange(activity.Change{
 			Entity:   domainvalue.AggregateType,

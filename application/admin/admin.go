@@ -389,6 +389,9 @@ func (i *Interactor) CreateAccount(ctx context.Context, in CreateAccountInput) (
 	if len(scopes) == 0 && len(in.Roles) == 0 {
 		return nil, domainerrors.NewValidation("at least one scope or role is required")
 	}
+	if err := checkCrossTenantReader(scopes); err != nil {
+		return nil, err
+	}
 	acctID, secret, err := identityFor(in)
 	if err != nil {
 		return nil, err
@@ -553,13 +556,43 @@ func parseScopesAllowEmpty(raw []string) ([]serviceaccount.Scope, error) {
 	out := make([]serviceaccount.Scope, 0, len(raw))
 	for _, s := range raw {
 		switch serviceaccount.Scope(s) {
-		case serviceaccount.ScopeRead, serviceaccount.ScopeWrite, serviceaccount.ScopeAdmin:
+		case serviceaccount.ScopeRead, serviceaccount.ScopeWrite, serviceaccount.ScopeAdmin,
+			serviceaccount.ScopeReadAnyTenant:
 			out = append(out, serviceaccount.Scope(s))
 		default:
 			return nil, domainerrors.NewValidation("unknown scope", "scope", s)
 		}
 	}
 	return out, nil
+}
+
+// checkCrossTenantReader refuses a credential that reads every tenant AND
+// writes.
+//
+// The cross-tenant scope exists so a read model can hold ONE credential
+// instead of one per tenant. A credential that could also write would be
+// strictly worse than what it replaces: one leak would then mutate every
+// tenant rather than read them. The combination is refused here, and the API
+// refuses a mutating method for such an account anyway — two independent
+// checks, because this one is the difference between a read exposure and a
+// write one.
+func checkCrossTenantReader(scopes []serviceaccount.Scope) error {
+	crossTenant, writes := false, ""
+	for _, scope := range scopes {
+		switch scope {
+		case serviceaccount.ScopeReadAnyTenant:
+			crossTenant = true
+		case serviceaccount.ScopeWrite, serviceaccount.ScopeAdmin:
+			writes = string(scope)
+		}
+	}
+	if crossTenant && writes != "" {
+		return domainerrors.NewValidation(
+			"an account with read_any_tenant may not also hold "+writes+
+				": a cross-tenant credential reads every tenant, so it must write none",
+			"scope", writes)
+	}
+	return nil
 }
 
 // generateSecret returns a 256-bit URL-safe random secret.

@@ -78,6 +78,41 @@ suspends **every service account under it**, in one action. Authentication joins
 the tenant's own flag, so this is a real suspension rather than control-plane
 metadata.
 
+### A read-only cross-tenant credential
+
+A tenant comes from the token, so there is no request that reads two. That is a
+property, not a gap — but it makes every cross-tenant READ MODEL (a marketplace
+storefront, a group-wide search index, a billing rollup) hold one full
+read/write credential PER TENANT, purely to re-read entities. Concentrating
+every tenant's credential in one service is a far larger exposure than the read
+it needs.
+
+The `read_any_tenant` scope is the narrow answer: read anything, write nothing.
+
+```bash
+curl -sX POST -H "Authorization: Bearer $ADMIN" "$API/service-accounts" \
+  -d '{"tenant_name":"reporting","name":"search-indexer","scopes":["read_any_tenant"]}'
+
+# The tenant to read travels per request.
+curl -s -H "Authorization: Bearer $READER" -H 'X-Flexitype-Tenant: acme' \
+  "$API/type-definitions"
+```
+
+Rules the service keeps:
+
+- The header is read **only** for an account holding the scope. For every
+  other credential the tenant still comes from the token and the header is
+  ignored, so it can never widen an ordinary credential.
+- An account with `read_any_tenant` may **not** also hold `write` or `admin`.
+  The combination is refused when the account is created.
+- The API refuses **every mutating method** for such an account, whatever else
+  it holds. That is the second of two independent checks.
+- `admin` does **not** imply it. Admin is a platform-operator privilege over
+  the control plane; inheriting a silent cross-tenant data read from it is
+  exactly the implicit widening this scope exists to avoid.
+- Field permissions still apply, and the tenant that was actually read is what
+  the request log records.
+
 ### A bootstrap credential a manifest can know
 
 A minted bootstrap token is printed once, and the shipped image is distroless.
@@ -321,9 +356,8 @@ Set `FLEXITYPE_MEDIA_URL_SECRET` and an authenticated caller can mint a link
 anybody may redeem, for a while:
 
 ```bash
-curl -sX POST -H "Authorization: Bearer $TOKEN" \
-  -d '{"ttl_seconds":600}' \
-  "$API/media/$OBJECT_KEY/signed-url"
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$API/media/$OBJECT_KEY/signed-url?ttl_seconds=600"
 # {"url":"/media/signed/eyJ2Ijoi…","expires_at":"2026-08-09T12:10:00Z"}
 
 curl -s "$BASE/media/signed/eyJ2Ijoi…" -o photo.png   # no credential at all
@@ -344,6 +378,9 @@ What the design holds to:
 - Every redemption failure — malformed, forged, expired, unknown key — is the
   **same 404**. Distinguishing "expired" from "forged" tells a probing holder
   which half to work on.
+- Minting is a **GET**, because it changes nothing: it hands back a capability
+  to read an object the caller can already read. That also keeps it reachable
+  by a read-only credential, including a cross-tenant reader.
 - The default lifetime is 15 minutes and the cap is 24 hours. A longer request
   is capped rather than refused.
 - The secret must be at least 32 characters, and **must not be the webhook

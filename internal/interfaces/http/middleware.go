@@ -10,6 +10,8 @@ import (
 
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/uow"
+	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 	"github.com/zkrebbekx/flexitype/pkg/logger"
 	"github.com/zkrebbekx/flexitype/pkg/metrics"
 	"github.com/zkrebbekx/flexitype/pkg/ratelimit"
@@ -217,8 +219,19 @@ func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(ht
 				return
 			}
 
+			reads := r.Method == http.MethodGet || r.Method == http.MethodHead
+			// A cross-tenant reader is refused every mutating method, whatever
+			// else it holds. Creating one that also holds write is refused, so
+			// this is the second of two independent checks: the difference
+			// between one credential that can read every tenant and one that
+			// can rewrite every tenant is worth two.
+			if account.ReadsAnyTenant() && !reads {
+				writeForbidden(w, "an account with read_any_tenant may only read")
+				return
+			}
+
 			required := serviceaccount.ScopeWrite
-			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			if reads {
 				required = serviceaccount.ScopeRead
 			}
 			if !account.HasScope(required) {
@@ -226,16 +239,35 @@ func authenticate(auth serviceaccount.Authenticator, log *logger.Logger) func(ht
 				return
 			}
 
+			// Which tenant a cross-tenant reader wants. The header is read
+			// ONLY for such an account, so it can never widen a normal
+			// credential: for everything else the tenant still comes from the
+			// token and the header is ignored.
+			tenant := account.Tenant()
+			if account.ReadsAnyTenant() {
+				if named := strings.TrimSpace(r.Header.Get(serviceaccount.TenantHeader)); named != "" {
+					parsed, perr := valueobjects.ParseTenantID(named)
+					if perr != nil {
+						writeError(w, log, domainerrors.NewValidation(
+							"invalid "+serviceaccount.TenantHeader+" header: "+perr.Error()))
+						return
+					}
+					tenant = parsed
+				}
+			}
+
 			if ri := reqInfoFromContext(r.Context()); ri != nil {
 				ri.actor = account.Name
-				ri.tenant = account.Tenant().String()
+				// The tenant that was actually READ, so a cross-tenant
+				// reader's requests are attributable per tenant in the log.
+				ri.tenant = tenant.String()
 			}
 			ctx := uow.WithActor(r.Context(), uow.Actor{
 				ID:   account.ID,
 				Name: account.Name,
 				Kind: uow.ActorServiceAccount,
 			})
-			ctx = uow.WithTenant(ctx, account.Tenant())
+			ctx = uow.WithTenant(ctx, tenant)
 			ctx = context.WithValue(ctx, scopesKey{}, account.Scopes)
 			ctx = uow.WithAccess(ctx, accessFor(account))
 			next.ServeHTTP(w, r.WithContext(ctx))

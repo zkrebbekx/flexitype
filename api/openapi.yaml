@@ -1228,7 +1228,15 @@ paths:
                 name: { type: string, description: "lowercase [a-z0-9_-], 2-64 chars" }
                 scopes:
                   type: array
-                  items: { type: string, enum: [read, write, admin] }
+                  items:
+                    type: string
+                    enum: [read, write, admin, read_any_tenant]
+                    description: >-
+                      read_any_tenant lets ONE account read EVERY tenant, and
+                      write none — the credential a cross-tenant read model
+                      needs. The tenant to read comes from the
+                      X-Flexitype-Tenant header, and every mutating method is
+                      refused. It may not be combined with write or admin.
                   description: >
                     Optional when roles are given: an account whose whole
                     permission set comes from its roles needs no scope of its
@@ -1724,8 +1732,16 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
 
   /media/{objectKey}/signed-url:
-    parameters: [{ name: objectKey, in: path, required: true, schema: { type: string } }]
-    post:
+    parameters:
+      - { name: objectKey, in: path, required: true, schema: { type: string } }
+      - name: ttl_seconds
+        in: query
+        schema: { type: integer }
+        description: >-
+          How long the link lasts. Absent or zero takes the short default (15
+          minutes); anything above the maximum (24 hours) is capped rather
+          than refused.
+    get:
       tags: [media]
       summary: Mint a signed, expiring link to a stored object
       description: >-
@@ -1738,24 +1754,17 @@ paths:
         credential, because the signature is the credential.
 
 
+        It is a GET because minting a link changes nothing: it hands back a
+        capability to read an object the caller can already read. That also
+        keeps it reachable by a read-only credential, including a
+        read_any_tenant cross-tenant reader.
+
+
         The caller must be able to READ the object: the same ownership and
         field-permission check the authenticated download makes. Returns 501
         when the deployment sets no signing secret.
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                ttl_seconds:
-                  type: integer
-                  description: >-
-                    How long the link lasts. Absent or zero takes the short
-                    default (15 minutes); anything above the maximum (24 hours)
-                    is capped rather than refused.
       responses:
-        "201":
+        "200":
           description: The signed link
           content:
             application/json:

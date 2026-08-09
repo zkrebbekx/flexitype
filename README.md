@@ -436,6 +436,11 @@ a tenant. Database-backed deployments assign those permissions through
 ]
 ```
 
+A `read_any_tenant` account reads EVERY tenant and writes none — the
+credential a cross-tenant read model needs, so it holds one instead of one per
+tenant. The tenant to read travels in `X-Flexitype-Tenant`, and every mutating
+method is refused. See [docs/configuration.md](docs/configuration.md).
+
 **Authentication is required by default**: with no account source configured
 the service refuses to boot. To run without it — which serves the whole API,
 including the irreversible admin purge, to anonymous callers — set

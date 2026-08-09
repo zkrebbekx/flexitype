@@ -58,11 +58,11 @@ func TestSignedMediaURLs(t *testing.T) {
 		So(objectKey, ShouldNotBeEmpty)
 
 		Convey("When an authenticated caller mints a link", func() {
-			status, body := callMedia(handler, http.MethodPost,
-				"/api/v1/media/"+objectKey+"/signed-url", `{"ttl_seconds":600}`)
+			status, body := callMedia(handler, http.MethodGet,
+				"/api/v1/media/"+objectKey+"/signed-url?ttl_seconds=600", "")
 
 			Convey("Then it is issued with an expiry", func() {
-				So(status, ShouldEqual, http.StatusCreated)
+				So(status, ShouldEqual, http.StatusOK)
 				So(body["url"], ShouldNotBeNil)
 				So(body["expires_at"], ShouldNotBeNil)
 			})
@@ -94,8 +94,8 @@ func TestSignedMediaURLs(t *testing.T) {
 		})
 
 		Convey("When a link is tampered with", func() {
-			status, body := callMedia(handler, http.MethodPost, "/api/v1/media/"+objectKey+"/signed-url", "")
-			So(status, ShouldEqual, http.StatusCreated)
+			status, body := callMedia(handler, http.MethodGet, "/api/v1/media/"+objectKey+"/signed-url", "")
+			So(status, ShouldEqual, http.StatusOK)
 			link, _ := body["url"].(string)
 
 			Convey("Then a changed signature is a 404, not a hint", func() {
@@ -136,7 +136,7 @@ func TestSignedMediaURLs(t *testing.T) {
 		})
 
 		Convey("When a link is minted for an object that does not exist", func() {
-			status, _ := callMedia(handler, http.MethodPost,
+			status, _ := callMedia(handler, http.MethodGet,
 				"/api/v1/media/01JBQ8Z0000000000000000000/signed-url", "")
 
 			Convey("Then it is a 404: a caller cannot mint a link to a key it cannot read", func() {
@@ -145,8 +145,8 @@ func TestSignedMediaURLs(t *testing.T) {
 		})
 
 		Convey("When no lifetime is asked for", func() {
-			status, body := callMedia(handler, http.MethodPost, "/api/v1/media/"+objectKey+"/signed-url", `{}`)
-			So(status, ShouldEqual, http.StatusCreated)
+			status, body := callMedia(handler, http.MethodGet, "/api/v1/media/"+objectKey+"/signed-url", "")
+			So(status, ShouldEqual, http.StatusOK)
 
 			Convey("Then the link is short-lived rather than unbounded", func() {
 				expires, perr := time.Parse(time.RFC3339, body["expires_at"].(string))
@@ -156,9 +156,9 @@ func TestSignedMediaURLs(t *testing.T) {
 		})
 
 		Convey("When a year-long link is asked for", func() {
-			status, body := callMedia(handler, http.MethodPost,
-				"/api/v1/media/"+objectKey+"/signed-url", `{"ttl_seconds":31536000}`)
-			So(status, ShouldEqual, http.StatusCreated)
+			status, body := callMedia(handler, http.MethodGet,
+				"/api/v1/media/"+objectKey+"/signed-url?ttl_seconds=31536000", "")
+			So(status, ShouldEqual, http.StatusOK)
 
 			Convey("Then it is capped at the maximum rather than granted", func() {
 				expires, perr := time.Parse(time.RFC3339, body["expires_at"].(string))
@@ -173,7 +173,7 @@ func TestSignedMediaURLs(t *testing.T) {
 		handler := svc.APIHandler(flexitype.APIConfig{AllowAnonymous: true})
 
 		Convey("When a link is asked for", func() {
-			status, body := callMedia(handler, http.MethodPost,
+			status, body := callMedia(handler, http.MethodGet,
 				"/api/v1/media/01JBQ8Z0000000000000000000/signed-url", "")
 
 			Convey("Then the capability is reported as disabled, not as a bad request", func() {

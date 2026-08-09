@@ -3,8 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/zkrebbekx/flexitype"
+	"github.com/zkrebbekx/flexitype/client"
+	"github.com/zkrebbekx/flexitype/pkg/serviceaccount"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -219,6 +224,89 @@ func TestStorefrontAggregatesHeterogeneousSchemas(t *testing.T) {
 			Convey("Then only that merchant's matching product comes back", func() {
 				So(items, ShouldHaveLength, 1)
 				So(items[0].EntityID, ShouldEqual, "lamp-1")
+			})
+		})
+	})
+}
+
+// TestProjectorReadsEveryTenantWithOneCredential covers the security half of
+// the cross-tenant reader.
+//
+// A projection only ever RE-READS entities. Holding one full read/write token
+// per merchant to do that concentrates every merchant's credential in this
+// service: a leak of its database hands over every catalog. One credential
+// that reads any tenant and writes none removes that entirely.
+func TestProjectorReadsEveryTenantWithOneCredential(t *testing.T) {
+	Convey("Given two merchants and a cross-tenant reader credential", t, func() {
+		store := newTestStore(t)
+		ctx := context.Background()
+
+		readerToken := serviceaccount.MintToken("acct-reader", "reader-secret")
+		accounts := []serviceaccount.Account{{
+			ID: "acct-reader", Name: "storefront", TenantID: "reader-home",
+			Scopes:     []serviceaccount.Scope{serviceaccount.ScopeReadAnyTenant},
+			SecretHash: serviceaccount.HashSecret("reader-secret"),
+		}}
+		for _, tenant := range []string{"merchant-a", "merchant-b"} {
+			accounts = append(accounts, serviceaccount.Account{
+				ID: "acct-" + tenant, Name: tenant, TenantID: tenant,
+				Scopes:     []serviceaccount.Scope{serviceaccount.ScopeRead, serviceaccount.ScopeWrite},
+				SecretHash: serviceaccount.HashSecret("secret-" + tenant),
+			})
+		}
+		svc := flexitype.NewInMemory()
+		srv := httptest.NewServer(svc.APIHandler(flexitype.APIConfig{
+			Accounts: serviceaccount.NewStore(accounts),
+		}))
+		defer srv.Close()
+
+		// Each merchant seeds its own catalog with its own credential.
+		types := map[string]string{}
+		for _, tenant := range []string{"merchant-a", "merchant-b"} {
+			c, cerr := client.New(srv.URL, client.WithToken(
+				serviceaccount.MintToken("acct-"+tenant, "secret-"+tenant)))
+			So(cerr, ShouldBeNil)
+			_, aerr := c.Schema().ApplyTemplate(ctx, "ecommerce")
+			So(aerr, ShouldBeNil)
+			types[tenant] = typeID(t, c, "product")
+			writeProduct(t, c, types[tenant], "p-1", map[string]any{
+				"name": "Product of " + tenant, "sku": "SKU-" + tenant,
+				"status": "active", "price": "10.00",
+			})
+			// The storefront knows the merchant, but is given NO token for it.
+			So(store.UpsertMerchant(ctx, Merchant{
+				Tenant: tenant, DisplayName: tenant, Token: "", WebhookSecret: "whsec-" + tenant,
+			}), ShouldBeNil)
+		}
+
+		projector := NewProjector(store, srv.URL, 10*time.Second)
+		So(projector.UseCrossTenantReader(readerToken), ShouldBeNil)
+
+		Convey("When the projector reads both tenants", func() {
+			So(projector.Project(ctx, "merchant-a", types["merchant-a"], "p-1"), ShouldBeNil)
+			So(projector.Project(ctx, "merchant-b", types["merchant-b"], "p-1"), ShouldBeNil)
+
+			Convey("Then each catalog row holds that tenant's own product", func() {
+				a, ok, err := store.Get(ctx, "merchant-a", "p-1")
+				So(err, ShouldBeNil)
+				So(ok, ShouldBeTrue)
+				So(a.Name, ShouldEqual, "Product of merchant-a")
+
+				b, ok, err := store.Get(ctx, "merchant-b", "p-1")
+				So(err, ShouldBeNil)
+				So(ok, ShouldBeTrue)
+				So(b.Name, ShouldEqual, "Product of merchant-b")
+			})
+
+			Convey("And it held no merchant token to do it", func() {
+				// The merchant rows carry an empty token: every read above went
+				// through the one cross-tenant credential.
+				merchants, err := store.Merchants(ctx)
+				So(err, ShouldBeNil)
+				So(merchants, ShouldNotBeEmpty)
+				for _, m := range merchants {
+					So(m.Token, ShouldBeEmpty)
+				}
 			})
 		})
 	})

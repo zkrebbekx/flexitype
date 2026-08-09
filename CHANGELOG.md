@@ -7,9 +7,43 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
 
 ## [Unreleased]
 
+### Added — A read-only cross-tenant credential ([#549])
+
+The `read_any_tenant` scope gives ONE service account that reads EVERY tenant
+and writes none. The tenant to read travels in the `X-Flexitype-Tenant` header,
+which is read only for such an account — for every other credential the tenant
+still comes from the token and the header is ignored, so it can never widen an
+ordinary one.
+
+A tenant comes from the token, and there is no request that reads two. That is
+a property rather than a gap, but it made every cross-tenant READ MODEL — a
+marketplace storefront, a group-wide search index, a billing rollup — hold one
+full read/write credential PER TENANT purely to re-read entities.
+Concentrating every tenant's credential in one service is a far larger
+exposure than the read it needs.
+
+The narrowness is enforced twice, because the difference between a credential
+that can read every tenant and one that can rewrite every tenant is worth two
+checks: an account holding `read_any_tenant` may not also hold `write` or
+`admin` (refused when it is created), and the API refuses every mutating
+method for such an account whatever else it holds.
+
+`client.ForTenant` and the TypeScript client's `tenant` option send the header.
+The marketplace example now mints one reader at start-up and its storefront
+holds no merchant token for a read.
+
+### Changed — Minting a signed media link is a GET ([#552])
+
+`GET /api/v1/media/{key}/signed-url`, with `?ttl_seconds=`. It was a POST,
+which changes nothing and locked the endpoint away from exactly the credential
+with the strongest reason to want a link: a read-only cross-tenant reader.
+Minting hands back a capability to read an object the caller can already read,
+so it is a read. The feature is unreleased, so nothing depends on the old
+shape.
+
 ### Added — Signed, expiring media links ([#552])
 
-`POST /api/v1/media/{key}/signed-url` mints a link, and
+`GET /api/v1/media/{key}/signed-url` mints a link, and
 `GET /media/signed/{token}` serves the bytes to anyone holding it — outside
 `/api/v1`, with no credential, because the signature IS the credential. Turn it
 on with `FLEXITYPE_MEDIA_URL_SECRET`, or `APIConfig.MediaURLSecret` when

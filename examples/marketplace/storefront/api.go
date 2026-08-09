@@ -53,6 +53,7 @@ func (a *API) Handler(ingest *Ingest) http.Handler {
 	})
 
 	// Internal API — the platform only.
+	mux.Handle("PUT /internal/reader", a.internal(a.putReader))
 	mux.Handle("PUT /internal/merchants/{tenant}", a.internal(a.putMerchant))
 	mux.Handle("POST /internal/merchants/{tenant}/backfill", a.internal(a.backfill))
 
@@ -218,6 +219,36 @@ const signedImageTTL = 5 * time.Minute
 func isFeatureDisabled(err error) bool {
 	var apiErr *client.APIError
 	return errors.As(err, &apiErr) && apiErr.Code == client.CodeFeatureDisabled
+}
+
+// putReader takes the ONE credential this service reads every tenant with.
+//
+// It arrives at runtime rather than as an environment variable because the
+// platform mints it: the account is created through the provisioning API,
+// which needs the admin credential this service does not have.
+//
+// With it, no merchant token is used for a read. Without it, the per-merchant
+// tokens still are — the example runs either way.
+func (a *API) putReader(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request body")
+		return
+	}
+	if in.Token == "" {
+		writeError(w, http.StatusBadRequest, "token is required")
+		return
+	}
+	if err := a.projector.UseCrossTenantReader(in.Token); err != nil {
+		a.log.Error("install the cross-tenant reader", "error", err)
+		writeError(w, http.StatusInternalServerError, "could not install the reader")
+		return
+	}
+	// The token itself is never logged.
+	a.log.Info("reading every tenant with one cross-tenant credential")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // merchantRegistration is what the platform pushes on onboarding.

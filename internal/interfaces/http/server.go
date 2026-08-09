@@ -243,7 +243,11 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 		// Mint a signed, expiring link to one object. Authenticated, and
 		// gated on the same ownership and field-permission check the
 		// authenticated download makes.
-		api.Post("/media/{objectKey}/signed-url", s.signMediaURL)
+		// A GET: minting a link CHANGES NOTHING. It hands back a capability to
+		// read an object the caller can already read, so it is a read — and
+		// making it a POST locked it away from exactly the credential that
+		// needs it most, a read-only cross-tenant reader.
+		api.Get("/media/{objectKey}/signed-url", s.signMediaURL)
 
 		api.Route("/unit-families", func(r chi.Router) {
 			r.Get("/", s.listUnitFamilies)

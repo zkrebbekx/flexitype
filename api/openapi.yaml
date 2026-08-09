@@ -1228,15 +1228,7 @@ paths:
                 name: { type: string, description: "lowercase [a-z0-9_-], 2-64 chars" }
                 scopes:
                   type: array
-                  items:
-                    type: string
-                    enum: [read, write, admin, read_any_tenant]
-                    description: >-
-                      read_any_tenant lets ONE account read EVERY tenant, and
-                      write none — the credential a cross-tenant read model
-                      needs. The tenant to read comes from the
-                      X-Flexitype-Tenant header, and every mutating method is
-                      refused. It may not be combined with write or admin.
+                  items: { type: string, enum: [read, write, admin] }
                   description: >
                     Optional when roles are given: an account whose whole
                     permission set comes from its roles needs no scope of its
@@ -1755,9 +1747,8 @@ paths:
 
 
         It is a GET because minting a link changes nothing: it hands back a
-        capability to read an object the caller can already read. That also
-        keeps it reachable by a read-only credential, including a
-        read_any_tenant cross-tenant reader.
+        capability to read an object the caller can already read, so a
+        read-only credential can mint one.
 
 
         The caller must be able to READ the object: the same ownership and

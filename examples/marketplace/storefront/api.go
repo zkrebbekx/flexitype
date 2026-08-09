@@ -15,6 +15,15 @@ import (
 // API serves the shopper-facing catalog and the platform-facing internal
 // endpoints.
 type API struct {
+	// tenant is the ONE merchant this storefront serves.
+	//
+	// A storefront is deployed per merchant, so it holds one credential and
+	// answers for one catalog. An earlier version of this example served every
+	// merchant from one process, which meant holding every merchant's token —
+	// and then a cross-tenant scope to avoid that. Both were the wrong shape:
+	// the tenant comes from the token, and a service that respects that needs
+	// no privilege crossing a tenant boundary at all.
+	tenant    string
 	store     *Store
 	projector *Projector
 	// internalToken authenticates the platform. The internal endpoints
@@ -30,9 +39,9 @@ type API struct {
 }
 
 // NewAPI wires the storefront's HTTP surface.
-func NewAPI(store *Store, projector *Projector, internalToken, mediaBase string, log Logger) *API {
+func NewAPI(tenant string, store *Store, projector *Projector, internalToken, mediaBase string, log Logger) *API {
 	return &API{
-		store: store, projector: projector, internalToken: internalToken,
+		tenant: tenant, store: store, projector: projector, internalToken: internalToken,
 		mediaBase: strings.TrimSuffix(mediaBase, "/"), log: log,
 	}
 }
@@ -44,16 +53,18 @@ func (a *API) Handler(ingest *Ingest) http.Handler {
 	mux.Handle("POST /hook/{tenant}", ingest)
 
 	// Shopper API — public, read-only, active products only.
+	// No tenant in a shopper path: this storefront serves one merchant, and a
+	// path that could name another would be a boundary to police rather than
+	// one that does not exist.
 	mux.HandleFunc("GET /api/products", a.searchProducts)
-	mux.HandleFunc("GET /api/products/{tenant}/{entityID}", a.getProduct)
-	mux.HandleFunc("GET /api/products/{tenant}/{entityID}/image", a.getProductImage)
-	mux.HandleFunc("GET /api/merchants", a.listMerchants)
+	mux.HandleFunc("GET /api/products/{entityID}", a.getProduct)
+	mux.HandleFunc("GET /api/products/{entityID}/image", a.getProductImage)
+	mux.HandleFunc("GET /api/store", a.getStore)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
 	// Internal API — the platform only.
-	mux.Handle("PUT /internal/reader", a.internal(a.putReader))
 	mux.Handle("PUT /internal/merchants/{tenant}", a.internal(a.putMerchant))
 	mux.Handle("POST /internal/merchants/{tenant}/backfill", a.internal(a.backfill))
 
@@ -92,8 +103,11 @@ func (a *API) searchProducts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items, err := a.store.Search(r.Context(), Filter{
-		Query:    q.Get("q"),
-		Tenant:   q.Get("merchant"),
+		Query: q.Get("q"),
+		// Always this storefront's own tenant. There is no parameter a
+		// shopper can send to reach another merchant's catalog, because
+		// there is no other catalog in this database to reach.
+		Tenant:   a.tenant,
 		MinPrice: q.Get("min_price"),
 		MaxPrice: q.Get("max_price"),
 		Limit:    limit,
@@ -108,7 +122,7 @@ func (a *API) searchProducts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) getProduct(w http.ResponseWriter, r *http.Request) {
-	product, ok, err := a.store.Get(r.Context(), r.PathValue("tenant"), r.PathValue("entityID"))
+	product, ok, err := a.store.Get(r.Context(), a.tenant, r.PathValue("entityID"))
 	if err != nil {
 		a.log.Error("read product", "error", err)
 		writeError(w, http.StatusInternalServerError, "read failed")
@@ -135,7 +149,7 @@ func (a *API) getProduct(w http.ResponseWriter, r *http.Request) {
 // A deployment that sets no signing secret answers FEATURE_DISABLED, and this
 // falls back to proxying the bytes as it used to.
 func (a *API) getProductImage(w http.ResponseWriter, r *http.Request) {
-	tenant := r.PathValue("tenant")
+	tenant := a.tenant
 	product, ok, err := a.store.Get(r.Context(), tenant, r.PathValue("entityID"))
 	if err != nil {
 		a.log.Error("read product", "error", err)
@@ -193,20 +207,21 @@ func (a *API) getProductImage(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
-func (a *API) listMerchants(w http.ResponseWriter, r *http.Request) {
-	merchants, err := a.store.Merchants(r.Context())
+// getStore reports the one merchant this storefront serves.
+func (a *API) getStore(w http.ResponseWriter, r *http.Request) {
+	merchant, ok, err := a.store.Merchant(r.Context(), a.tenant)
 	if err != nil {
-		a.log.Error("list merchants", "error", err)
+		a.log.Error("read the merchant", "error", err)
 		writeError(w, http.StatusInternalServerError, "read failed")
 		return
 	}
-	// Merchant marshals with `json:"-"` on the token and the secret, so
-	// neither can reach a shopper through this response.
-	items := merchants
-	if items == nil {
-		items = []Merchant{}
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "this storefront has not been registered yet")
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	// Merchant marshals with `json:"-"` on the token and the secret, so
+	// neither reaches a shopper through this response.
+	writeJSON(w, http.StatusOK, merchant)
 }
 
 // signedImageTTL is how long a product-image link lasts. Short: a shopper
@@ -221,36 +236,6 @@ func isFeatureDisabled(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Code == client.CodeFeatureDisabled
 }
 
-// putReader takes the ONE credential this service reads every tenant with.
-//
-// It arrives at runtime rather than as an environment variable because the
-// platform mints it: the account is created through the provisioning API,
-// which needs the admin credential this service does not have.
-//
-// With it, no merchant token is used for a read. Without it, the per-merchant
-// tokens still are — the example runs either way.
-func (a *API) putReader(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
-		writeError(w, http.StatusBadRequest, "bad request body")
-		return
-	}
-	if in.Token == "" {
-		writeError(w, http.StatusBadRequest, "token is required")
-		return
-	}
-	if err := a.projector.UseCrossTenantReader(in.Token); err != nil {
-		a.log.Error("install the cross-tenant reader", "error", err)
-		writeError(w, http.StatusInternalServerError, "could not install the reader")
-		return
-	}
-	// The token itself is never logged.
-	a.log.Info("reading every tenant with one cross-tenant credential")
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // merchantRegistration is what the platform pushes on onboarding.
 type merchantRegistration struct {
 	DisplayName   string `json:"display_name"`
@@ -263,6 +248,15 @@ type merchantRegistration struct {
 // onboarding call.
 func (a *API) putMerchant(w http.ResponseWriter, r *http.Request) {
 	tenant := r.PathValue("tenant")
+	// This storefront serves ONE merchant. A registration for another is
+	// refused rather than stored: holding a second merchant's credential is
+	// exactly what the per-merchant deployment exists to avoid, and accepting
+	// it quietly would put one here through a configuration mistake.
+	if tenant != a.tenant {
+		writeError(w, http.StatusForbidden,
+			"this storefront serves "+a.tenant+" and holds no other merchant's credential")
+		return
+	}
 	var in merchantRegistration
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, "bad request body")
@@ -290,6 +284,10 @@ func (a *API) putMerchant(w http.ResponseWriter, r *http.Request) {
 // the seed script can assert on the result.
 func (a *API) backfill(w http.ResponseWriter, r *http.Request) {
 	tenant := r.PathValue("tenant")
+	if tenant != a.tenant {
+		writeError(w, http.StatusForbidden, "this storefront serves "+a.tenant)
+		return
+	}
 	count, err := a.projector.Backfill(r.Context(), tenant)
 	if err != nil {
 		a.log.Error("backfill", "tenant", tenant, "error", err)

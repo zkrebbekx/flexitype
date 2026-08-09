@@ -9,14 +9,20 @@ afterEach(() => {
 describe('the shopper API client', () => {
   it('leaves an empty filter out of the query rather than sending it blank', () => {
     expect(searchPath({})).toBe('/api/products')
-    expect(searchPath({ q: '', merchant: '' })).toBe('/api/products')
-    expect(searchPath({ q: 'merino', merchant: 'alpine', minPrice: '10', limit: 24 })).toBe(
-      '/api/products?q=merino&merchant=alpine&min_price=10&limit=24',
+    expect(searchPath({ q: '', minPrice: '' })).toBe('/api/products')
+    expect(searchPath({ q: 'merino', minPrice: '10', limit: 24 })).toBe(
+      '/api/products?q=merino&min_price=10&limit=24',
     )
   })
 
   it('escapes a search term instead of letting it change the query', () => {
-    expect(searchPath({ q: 'a&merchant=bolt' })).toBe('/api/products?q=a%26merchant%3Dbolt')
+    expect(searchPath({ q: 'a&min_price=999' })).toBe('/api/products?q=a%26min_price%3D999')
+  })
+
+  it('has no merchant parameter at all: this storefront serves one', () => {
+    // A shopper cannot ask for another merchant's catalogue, because the
+    // storefront has one and the path does not exist.
+    expect(searchPath({ q: 'merino' })).toBe('/api/products?q=merino')
   })
 
   it('sends no credential: the shopper API is public', async () => {
@@ -40,7 +46,7 @@ describe('the shopper API client', () => {
       vi.fn(async () => Response.json({ error: { message: 'no such product' } }, { status: 404 })),
     )
 
-    const failure = await getProduct('alpine', 'draft-1').catch((error: unknown) => error)
+    const failure = await getProduct('draft-1').catch((error: unknown) => error)
     expect(failure).toBeInstanceOf(StorefrontError)
     expect((failure as StorefrontError).status).toBe(404)
   })

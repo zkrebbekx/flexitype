@@ -2,6 +2,16 @@ module github.com/zkrebbekx/flexitype
 
 go 1.25.0
 
+// v1.6.0 added a `read_any_tenant` scope: one credential that read every
+// tenant. It made the property every other guarantee here rests on — the
+// tenant comes from the token, so no request reads two tenants — conditional,
+// in order to serve one architecture. It is removed in v1.7.0, and a read
+// model that spans tenants should use one consumer per tenant instead.
+//
+// Nothing else in v1.6.0 is affected; v1.7.0 carries all of it.
+retract v1.6.0
+
+
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/getkin/kin-openapi v0.146.0

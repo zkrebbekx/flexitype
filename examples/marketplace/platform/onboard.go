@@ -47,22 +47,23 @@ type Onboarder struct {
 	// field so a test can point it at its own service.
 	newTenantClient func(token string) (*client.Client, error)
 
-	storefront *StorefrontClient
-	hookBase   string
-	log        Logger
+	// storefronts resolves a merchant to ITS storefront. One storefront serves
+	// one merchant, so onboarding hands a credential to exactly one of them
+	// and there is no service holding more than one.
+	storefronts *StorefrontDirectory
+	log         Logger
 }
 
 // NewOnboarder wires the onboarding usecase.
-func NewOnboarder(store *Store, admin *client.Client, flexitypeURL string, storefront *StorefrontClient, hookBase string, log Logger) *Onboarder {
+func NewOnboarder(store *Store, admin *client.Client, flexitypeURL string, storefronts *StorefrontDirectory, log Logger) *Onboarder {
 	return &Onboarder{
 		store: store,
 		admin: admin,
 		newTenantClient: func(token string) (*client.Client, error) {
 			return client.New(flexitypeURL, client.WithToken(token), client.WithUserAgent("marketplace-platform"))
 		},
-		storefront: storefront,
-		hookBase:   strings.TrimRight(hookBase, "/"),
-		log:        log,
+		storefronts: storefronts,
+		log:         log,
 	}
 }
 
@@ -85,12 +86,6 @@ func (o *Onboarder) Onboard(ctx context.Context, in OnboardInput) (Merchant, err
 	tenant := in.Tenant
 	if tenant == "" {
 		tenant = in.ID
-	}
-
-	// Onboarding re-installs the reader, so a storefront that restarted (or
-	// was not up when this service started) gets it without an operator step.
-	if err := o.EnsureStorefrontReader(ctx); err != nil {
-		o.log.Warn("could not install the storefront's cross-tenant reader", "error", err)
 	}
 
 	existing, found, err := o.store.Get(ctx, in.ID)
@@ -153,10 +148,15 @@ func (o *Onboarder) Onboard(ctx context.Context, in OnboardInput) (Merchant, err
 	//    merchant's entities, then project everything that already exists.
 	//    A merchant onboarded after its catalogue was imported has no events
 	//    to replay, and the subscription only carries what happens next.
-	if err := o.storefront.RegisterMerchant(ctx, merchant); err != nil {
+	// This merchant's own storefront, and no other.
+	storefront, err := o.storefronts.For(tenant)
+	if err != nil {
 		return Merchant{}, err
 	}
-	projected, err := o.storefront.Backfill(ctx, tenant)
+	if err := storefront.RegisterMerchant(ctx, merchant); err != nil {
+		return Merchant{}, err
+	}
+	projected, err := storefront.Backfill(ctx, tenant)
 	if err != nil {
 		return Merchant{}, err
 	}
@@ -201,13 +201,18 @@ func (o *Onboarder) ensureAccount(ctx context.Context, tenant string) (string, e
 // ensureSubscription registers, or re-points, the storefront's webhook
 // subscription in the merchant's tenant.
 func (o *Onboarder) ensureSubscription(ctx context.Context, c *client.Client, tenant, secret string) error {
+	storefront, err := o.storefronts.For(tenant)
+	if err != nil {
+		return err
+	}
+	hookURL := storefront.HookURL(tenant)
 	// The tenant rides in the delivery PATH, so the storefront can pick the
 	// right secret with one HMAC verification instead of trying every
 	// merchant's. The path is untrusted: it only selects a secret, and the
 	// storefront takes the tenant from the signed envelope.
 	in := client.SubscriptionInput{
 		Name:   subscriptionName,
-		URL:    o.hookBase + "/" + tenant,
+		URL:    hookURL,
 		Secret: secret,
 		EventTypes: []string{
 			"flexitype.attribute_value.set",
@@ -262,6 +267,15 @@ type StorefrontClient struct {
 	http    *http.Client
 }
 
+// HookURL is where this storefront receives a merchant's deliveries.
+//
+// It is derived from the storefront's own address rather than configured
+// separately: a merchant's webhook goes to that merchant's storefront, and two
+// settings that must agree are one more thing to get wrong.
+func (s *StorefrontClient) HookURL(tenant string) string {
+	return s.baseURL + "/hook/" + tenant
+}
+
 // NewStorefrontClient builds the internal client.
 func NewStorefrontClient(baseURL, token string) *StorefrontClient {
 	return &StorefrontClient{
@@ -271,17 +285,42 @@ func NewStorefrontClient(baseURL, token string) *StorefrontClient {
 	}
 }
 
-// RegisterReader hands the storefront the ONE credential it reads every
-// tenant with.
-func (s *StorefrontClient) RegisterReader(ctx context.Context, token string) error {
-	body, err := json.Marshal(map[string]string{"token": token})
-	if err != nil {
-		return err
+// StorefrontDirectory resolves a merchant to its own storefront.
+//
+// There is one per merchant, so a credential is handed to exactly one service
+// and no process holds two. A merchant with no storefront is an onboarding
+// error rather than a silent skip: its catalog would never reach a shopper.
+type StorefrontDirectory struct {
+	// resolve maps a merchant to its storefront. It is a function rather than
+	// a map so a deployment can resolve one however it likes — a config map
+	// here, service discovery elsewhere.
+	resolve func(tenant string) (*StorefrontClient, error)
+}
+
+// NewStorefrontDirectory builds the directory from "tenant=url" pairs.
+func NewStorefrontDirectory(urls map[string]string, internalToken string) *StorefrontDirectory {
+	byTenant := make(map[string]*StorefrontClient, len(urls))
+	for tenant, url := range urls {
+		byTenant[tenant] = NewStorefrontClient(url, internalToken)
 	}
-	if _, err := s.do(ctx, http.MethodPut, "/internal/reader", body); err != nil {
-		return fmt.Errorf("register the cross-tenant reader with the storefront: %w", err)
-	}
-	return nil
+	return &StorefrontDirectory{resolve: func(tenant string) (*StorefrontClient, error) {
+		sf, ok := byTenant[tenant]
+		if !ok {
+			return nil, fmt.Errorf(
+				"no storefront is deployed for %q: one storefront serves one merchant", tenant)
+		}
+		return sf, nil
+	}}
+}
+
+// NewStorefrontDirectoryFunc builds a directory over a custom resolver.
+func NewStorefrontDirectoryFunc(resolve func(tenant string) (*StorefrontClient, error)) *StorefrontDirectory {
+	return &StorefrontDirectory{resolve: resolve}
+}
+
+// For returns the storefront serving one merchant.
+func (d *StorefrontDirectory) For(tenant string) (*StorefrontClient, error) {
+	return d.resolve(tenant)
 }
 
 // RegisterMerchant hands the storefront a merchant's credential.
@@ -349,53 +388,4 @@ func (s *StorefrontClient) do(ctx context.Context, method, path string, body []b
 		return nil, fmt.Errorf("storefront %s %s: status %d", method, path, resp.StatusCode)
 	}
 	return out.Bytes(), nil
-}
-
-// readerTenant holds the cross-tenant reader account. It owns no catalog; it
-// exists because every service account belongs to some tenant.
-const readerTenant = "storefront-reader"
-
-// EnsureStorefrontReader creates the ONE credential the storefront reads every
-// merchant with, and hands it over.
-//
-// The storefront only ever RE-READS entities. Before this, it held one full
-// read/write token per merchant to do that, so a leak of its database handed
-// over every merchant's catalog — a standing risk that bought nothing. A
-// `read_any_tenant` account reads any tenant and writes none.
-//
-// It runs at start-up and is idempotent: an existing account is ROTATED
-// rather than duplicated, because its secret was returned once and this
-// service did not keep it.
-func (o *Onboarder) EnsureStorefrontReader(ctx context.Context) error {
-	if _, err := o.admin.Admin().CreateTenant(ctx, readerTenant); err != nil &&
-		!errors.Is(err, client.ErrConflict) {
-		return fmt.Errorf("create the reader tenant: %w", err)
-	}
-
-	accounts, err := o.admin.Admin().ListServiceAccounts(ctx, readerTenant)
-	if err != nil {
-		return fmt.Errorf("list reader accounts: %w", err)
-	}
-	for _, a := range accounts {
-		if a.Name != "storefront" {
-			continue
-		}
-		rotated, rerr := o.admin.Admin().RotateServiceAccount(ctx, a.ID)
-		if rerr != nil {
-			return fmt.Errorf("rotate the storefront reader: %w", rerr)
-		}
-		return o.storefront.RegisterReader(ctx, rotated.Token)
-	}
-
-	created, err := o.admin.Admin().CreateServiceAccount(ctx, client.CreateServiceAccountInput{
-		TenantName: readerTenant,
-		Name:       "storefront",
-		// Read every tenant, write none. The service refuses the combination
-		// with write or admin, so this cannot quietly become more.
-		Scopes: []string{"read_any_tenant"},
-	})
-	if err != nil {
-		return fmt.Errorf("create the storefront reader: %w", err)
-	}
-	return o.storefront.RegisterReader(ctx, created.Token)
 }

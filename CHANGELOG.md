@@ -1,5 +1,50 @@
 ## [Unreleased]
 
+### Removed — The `read_any_tenant` scope, and v1.6.0 is retracted ([#549])
+
+v1.6.0 added a scope for one credential that reads every tenant. It is
+removed, and **v1.6.0 is retracted** in both modules: `go get` refuses it by
+default and says why. The tag itself cannot be withdrawn — it is in the Go
+checksum database — so a retraction is the mechanism.
+
+The scope existed to serve ONE architecture: a service aggregating every
+tenant into a single read model. To serve it, the property every other
+guarantee here rests on — the tenant comes from the token, so no request reads
+two tenants — became conditional. Every later feature would have had to answer
+"and what does a cross-tenant reader see?": the field ACL, erasure receipts,
+audit attribution, per-tenant rate limits, signed media links. That is a
+permanent cost, paid by everyone, for one shape of consumer.
+
+It also concentrated rather than removed risk. It replaced N per-tenant tokens
+with one token that reads everything — a smaller number of more valuable
+credentials, which is not obviously better.
+
+A read model spanning tenants has answers that do not cross the boundary: one
+consumer per tenant, or per-tenant credentials held in a secret manager where
+the concentration is explicit. `examples/marketplace` now demonstrates the
+first.
+
+Gone with it: the `X-Flexitype-Tenant` header, `Client.ForTenant`, and the
+TypeScript client's `tenant` option. Nothing else from v1.6.0 changes.
+
+### Changed — The marketplace example runs one storefront per merchant
+
+The example ran one storefront across every merchant, which forced it to hold
+every merchant's credential — and drove the scope above. Each merchant now has
+its own storefront: one credential, one catalogue in its own schema, and a
+refusal for anything that is not its merchant.
+
+- A shopper asking for another merchant's product gets a 404. The path takes
+  no tenant, and the data is not in that database.
+- The platform registering another merchant's credential gets a 403.
+- A delivery on another merchant's hook path gets a 401 that is byte-identical
+  to a bad signature, so the merchants a storefront serves are not probeable.
+
+The shopper UI drops its merchant filter: it is one merchant's storefront.
+`seed.sh` asserts each refusal, and now fails loudly when onboarding fails —
+it used to print an error and carry on, so a merchant that was never onboarded
+looked like one that was.
+
 ### Added — A recipe-costing example ([examples/kitchen/](examples/kitchen/))
 
 A restaurant group's recipe and menu system: a Go service on the SDK, a React

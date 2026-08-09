@@ -675,6 +675,23 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 	// can never drive the recompute loop without end.
 	cyclic := cyclicNames(computed)
 
+	// ROLLUPS FIRST, and their results fed into the formula inputs.
+	//
+	// A formula reading a rollup on the same entity — line_cost = quantity *
+	// ingredient_cost, where ingredient_cost is rolled up from the linked
+	// ingredient — used to evaluate against the values loaded at the top of
+	// this function, so it saw the rollup's PREVIOUS result. It converged only
+	// because the rollup's write emitted an event that recomputed the entity
+	// again, which makes the answer depend on a follow-up dispatch: under load
+	// the stale value was still there when the next read happened.
+	//
+	// Ordering them here makes one pass self-consistent, and the follow-up
+	// event becomes a no-op rather than the thing that saves it.
+	sort.SliceStable(computed, func(i, j int) bool {
+		return computed[i].Computed.Kind == domainattribute.ComputedRollup &&
+			computed[j].Computed.Kind != domainattribute.ComputedRollup
+	})
+
 	for _, c := range computed {
 		if cyclic[c.InternalName] {
 			continue
@@ -703,6 +720,12 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 				if cerr := clearStale(); cerr != nil {
 					return cerr
 				}
+				// A cleared rollup is absent, not its last value. Leaving it in
+				// the inputs let a formula in this same pass re-derive from the
+				// number that just went away, and write it straight back.
+				delete(inputs, c.InternalName)
+				delete(exact, c.InternalName)
+				delete(members, c.InternalName)
 				continue
 			}
 			if _, werr := it.Values().Set(ctx, appvalue.SetInput{
@@ -713,6 +736,19 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 				Value:                 result.raw,
 			}); werr != nil {
 				return fmt.Errorf("materialize rollup value: %w", werr)
+			}
+			// A formula later in this pass reads what the rollup just
+			// produced, not what it held when this function started.
+			if value, perr := valueobjects.ParseValue(c.DataType, result.raw); perr == nil {
+				inputs[c.InternalName] = nil
+				exact[c.InternalName] = nil
+				members[c.InternalName] = 1
+				if f, ok := toFloat(value); ok {
+					inputs[c.InternalName] = []float64{f}
+				}
+				if r, ok := toRat(value); ok {
+					exact[c.InternalName] = []*big.Rat{r}
+				}
 			}
 			continue
 		}

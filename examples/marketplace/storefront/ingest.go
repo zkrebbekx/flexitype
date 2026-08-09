@@ -29,6 +29,9 @@ const signatureTolerance = 5 * time.Minute
 // therefore fails verification. After verification the tenant is taken from
 // the SIGNED envelope, and a mismatch with the path is rejected.
 type Ingest struct {
+	// tenant is the ONE merchant this storefront serves. A delivery for any
+	// other is refused before its signature is even considered.
+	tenant    string
 	store     *Store
 	debouncer *Debouncer
 	seen      *seenSet
@@ -37,8 +40,9 @@ type Ingest struct {
 }
 
 // NewIngest wires the webhook receiver.
-func NewIngest(store *Store, debouncer *Debouncer, log Logger) *Ingest {
+func NewIngest(tenant string, store *Store, debouncer *Debouncer, log Logger) *Ingest {
 	return &Ingest{
+		tenant:    tenant,
 		store:     store,
 		debouncer: debouncer,
 		seen:      newSeenSet(10000),
@@ -61,6 +65,12 @@ type valueEventPayload struct {
 // ServeHTTP handles one delivery.
 func (i *Ingest) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tenant := r.PathValue("tenant")
+	if tenant != i.tenant {
+		// Answered exactly like a bad signature, so the set of merchants a
+		// storefront serves is not probeable from outside.
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxDeliveryBytes))
 	if err != nil {

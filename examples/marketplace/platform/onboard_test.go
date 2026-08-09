@@ -19,9 +19,17 @@ func newOnboarder(t *testing.T, store *Store, sf *fakeStorefront, ft testFlexity
 	if err != nil {
 		t.Fatalf("build admin client: %v", err)
 	}
+	// Every tenant a test onboards resolves to the one fake storefront, which
+	// stands in for that merchant's own deployment.
 	return NewOnboarder(store, admin, ft.url,
-		NewStorefrontClient(sf.server.URL, "internal-token"),
-		"http://storefront.test/hook", quietLogger())
+		newTestDirectory(sf.server.URL, "internal-token"), quietLogger())
+}
+
+// newTestDirectory resolves ANY tenant to one storefront, so a test does not
+// have to declare in advance the merchants it is about to create.
+func newTestDirectory(url, token string) *StorefrontDirectory {
+	sf := NewStorefrontClient(url, token)
+	return NewStorefrontDirectoryFunc(func(string) (*StorefrontClient, error) { return sf, nil })
 }
 
 // TestOnboardingIsIdempotent pins the property the whole control plane rests
@@ -73,7 +81,10 @@ func TestOnboardingIsIdempotent(t *testing.T) {
 				subs, err := merchantClient.Webhooks().List(ctx)
 				So(err, ShouldBeNil)
 				So(subs, ShouldHaveLength, 1)
-				So(subs[0].URL, ShouldEqual, "http://storefront.test/hook/"+tenant)
+				// The hook points at THIS merchant's own storefront, derived
+				// from its address rather than configured separately: two
+				// settings that must agree are one more thing to get wrong.
+				So(subs[0].URL, ShouldEqual, sf.server.URL+"/hook/"+tenant)
 			})
 
 			Convey("When the same merchant is onboarded a second time", func() {
@@ -230,7 +241,6 @@ func newOnboarderWithLog(t *testing.T, store *Store, sf *fakeStorefront, ft test
 		t.Fatalf("build admin client: %v", err)
 	}
 	return NewOnboarder(store, admin, ft.url,
-		NewStorefrontClient(sf.server.URL, "internal-token"),
-		"http://storefront.test/hook",
+		newTestDirectory(sf.server.URL, "internal-token"),
 		slog.New(slog.NewTextHandler(sink, nil)))
 }

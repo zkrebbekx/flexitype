@@ -335,8 +335,9 @@ script).
 For multi-tenancy in anger, see
 [`examples/marketplace`](examples/marketplace/): a tenant per merchant, a
 curated schema template applied into each one, merchants extending the root
-product type with their own subtypes, and a shopper storefront that keeps an
-event-driven projection because flexitype has no cross-tenant query.
+product type with their own subtypes, and ONE STOREFRONT PER MERCHANT — each
+holding one credential and serving one catalogue, because flexitype takes the
+tenant from the token and nothing there needs to cross that line.
 
 For what the SERVICE computes on its own, see
 [`examples/kitchen`](examples/kitchen/): a restaurant group's recipe costing,
@@ -444,11 +445,6 @@ a tenant. Database-backed deployments assign those permissions through
   }
 ]
 ```
-
-A `read_any_tenant` account reads EVERY tenant and writes none — the
-credential a cross-tenant read model needs, so it holds one instead of one per
-tenant. The tenant to read travels in `X-Flexitype-Tenant`, and every mutating
-method is refused. See [docs/configuration.md](docs/configuration.md).
 
 **Authentication is required by default**: with no account source configured
 the service refuses to boot. To run without it — which serves the whole API,

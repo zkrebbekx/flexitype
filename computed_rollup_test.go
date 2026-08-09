@@ -31,6 +31,7 @@ type rollupFixture struct {
 	costPerKg, quantityKg               string
 	ofIngredient, hasLine               string
 	foodCost, lineCount, lineCostAttrID string
+	ingredientCostAttrID                string
 }
 
 func newRollupFixture(t *testing.T, svc *flexitype.Service) *rollupFixture {
@@ -75,7 +76,7 @@ func newRollupFixture(t *testing.T, svc *flexitype.Service) *rollupFixture {
 		TypeDefinitionID: f.line, InternalName: "quantity_kg",
 		DisplayName: "Quantity (kg)", DataType: "decimal",
 	})
-	newAttr(appattribute.CreateInput{
+	f.ingredientCostAttrID = newAttr(appattribute.CreateInput{
 		TypeDefinitionID: f.line, InternalName: "ingredient_cost",
 		DisplayName: "Ingredient cost", DataType: "decimal",
 		Computed: json.RawMessage(`{"kind":"rollup","rollup":{"relationship":"of_ingredient","direction":"parent","aggregate":"sum","target":"cost_per_kg"}}`),
@@ -170,8 +171,15 @@ func runComputedRollups(t *testing.T, label string, setup func() *flexitype.Serv
 			Convey("Then the change reaches the dish, two relationships away", func() {
 				// The butter line becomes 0.250 * 9.00 = 2.25, so the dish is
 				// 0.6 + 2.25. Nothing wrote to the dish, or to the line.
-				So(f.value(f.line, "line-butter", f.lineCostAttrID), ShouldEqual, `"2.25"`)
-				So(f.value(f.dish, "shortcrust", f.foodCost), ShouldEqual, `"2.85"`)
+				//
+				// Both halves are reported together: when this fails, which
+				// one is stale says whether the rollup or the formula reading
+				// it did not catch up.
+				So(
+					f.value(f.line, "line-butter", f.ingredientCostAttrID)+" "+
+						f.value(f.line, "line-butter", f.lineCostAttrID)+" "+
+						f.value(f.dish, "shortcrust", f.foodCost),
+					ShouldEqual, `"9" "2.25" "2.85"`)
 			})
 		})
 
@@ -355,6 +363,58 @@ func TestRollupDefinitionIsResolved(t *testing.T) {
 
 			Convey("Then it is accepted: count needs nothing on the far side", func() {
 				So(err, ShouldBeNil)
+			})
+		})
+	})
+}
+
+// TestOnePassIsSelfConsistent pins the ordering inside a single recompute.
+//
+// `line_cost = quantity * ingredient_cost` reads a ROLLUP on the same entity.
+// If the formula is evaluated against the values loaded at the start of the
+// pass, it uses the rollup's PREVIOUS result, and the right answer arrives
+// only because the rollup's write emits an event that recomputes the entity
+// again. That makes correctness depend on a follow-up dispatch — and under
+// load the stale value is what a read finds.
+//
+// One pass must therefore be self-consistent. The follow-up event is then a
+// no-op rather than the thing that saves it.
+func TestOnePassIsSelfConsistent(t *testing.T) {
+	Convey("Given a line whose cost reads a rollup on the same entity", t, func() {
+		svc := flexitype.NewInMemory()
+		f := newRollupFixture(t, svc)
+
+		f.set(f.costPerKg, f.ingredient, "butter", `"7.50"`)
+		f.set(f.quantityKg, f.line, "line-butter", `"0.250"`)
+		f.link(f.ofIngredient, "butter", "line-butter")
+		So(f.value(f.line, "line-butter", f.lineCostAttrID), ShouldEqual, `"1.875"`)
+
+		Convey("When the ingredient's price changes", func() {
+			f.set(f.costPerKg, f.ingredient, "butter", `"9.00"`)
+
+			Convey("Then the line cost is right on the FIRST read", func() {
+				// 0.250 * 9.00. Reading 1.875 here means the formula ran
+				// against the rollup's previous result and something later
+				// was expected to fix it.
+				So(f.value(f.line, "line-butter", f.lineCostAttrID), ShouldEqual, `"2.25"`)
+			})
+		})
+
+		Convey("When the link is removed", func() {
+			links, err := svc.Interactors(f.ctx).Relationships().ListByEntity(f.ctx, "line-butter")
+			So(err, ShouldBeNil)
+			for _, link := range links {
+				if link.Definition.InternalName == "of_ingredient" {
+					_, uerr := svc.Interactors(f.ctx).Relationships().Unlink(f.ctx, link.Relationship.ID.String())
+					So(uerr, ShouldBeNil)
+				}
+			}
+
+			Convey("Then the dependent formula clears in the same pass", func() {
+				// The rollup is undefined with no counterparts, so the formula
+				// that multiplies it is undefined too — not left at its last
+				// value.
+				So(f.value(f.line, "line-butter", f.lineCostAttrID), ShouldEqual, ``)
 			})
 		})
 	})

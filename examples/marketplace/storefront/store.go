@@ -13,7 +13,8 @@ import (
 // Store owns the storefront's OWN database: the merchant directory and the
 // denormalized catalog projection that shoppers query.
 //
-// The projection exists because flexitype has no cross-tenant query. A
+// The projection exists because a shopper page is read-heavy with its own
+// ranking and filtering. A
 // service-account token IS a tenant, so a shopper query that spans merchants
 // cannot be expressed against flexitype at all. The storefront therefore
 // keeps its own copy, fed by webhooks, and answers shoppers from it.

@@ -78,40 +78,28 @@ suspends **every service account under it**, in one action. Authentication joins
 the tenant's own flag, so this is a real suspension rather than control-plane
 metadata.
 
-### A read-only cross-tenant credential
+### There is no cross-tenant credential
 
-A tenant comes from the token, so there is no request that reads two. That is a
-property, not a gap — but it makes every cross-tenant READ MODEL (a marketplace
-storefront, a group-wide search index, a billing rollup) hold one full
-read/write credential PER TENANT, purely to re-read entities. Concentrating
-every tenant's credential in one service is a far larger exposure than the read
-it needs.
+A tenant comes from the token. There is no header, no parameter and no scope
+that changes that, so no request reads two tenants.
 
-The `read_any_tenant` scope is the narrow answer: read anything, write nothing.
+flexitype briefly had a `read_any_tenant` scope for a cross-tenant read model.
+It was withdrawn in v1.7.0 and v1.6.0 is retracted. The reasoning is worth
+keeping: the scope existed to serve ONE architecture — a service aggregating
+every tenant into one read model — and it made the property every other
+guarantee rests on conditional. Every later feature would have had to answer
+"and what does a cross-tenant reader see?": the field ACL, erasure receipts,
+audit attribution, per-tenant rate limits, signed media links.
 
-```bash
-curl -sX POST -H "Authorization: Bearer $ADMIN" "$API/service-accounts" \
-  -d '{"tenant_name":"reporting","name":"search-indexer","scopes":["read_any_tenant"]}'
+A read model that needs several tenants has answers that do not cross the
+boundary:
 
-# The tenant to read travels per request.
-curl -s -H "Authorization: Bearer $READER" -H 'X-Flexitype-Tenant: acme' \
-  "$API/type-definitions"
-```
-
-Rules the service keeps:
-
-- The header is read **only** for an account holding the scope. For every
-  other credential the tenant still comes from the token and the header is
-  ignored, so it can never widen an ordinary credential.
-- An account with `read_any_tenant` may **not** also hold `write` or `admin`.
-  The combination is refused when the account is created.
-- The API refuses **every mutating method** for such an account, whatever else
-  it holds. That is the second of two independent checks.
-- `admin` does **not** imply it. Admin is a platform-operator privilege over
-  the control plane; inheriting a silent cross-tenant data read from it is
-  exactly the implicit widening this scope exists to avoid.
-- Field permissions still apply, and the tenant that was actually read is what
-  the request log records.
+- **One consumer per tenant.** A projection service deployed per tenant holds
+  one credential and serves one catalogue. `examples/marketplace` is built this
+  way: one storefront per merchant, each refusing anything that is not its own.
+- **Per-tenant credentials in a secret manager**, if one process genuinely must
+  serve several — the concentration is then explicit and auditable rather than
+  a scope that reads everything.
 
 ### A bootstrap credential a manifest can know
 

@@ -64,8 +64,8 @@ func TestOnlyActiveProductsReachShoppers(t *testing.T) {
 		So(err, ShouldBeNil)
 		So(count, ShouldEqual, 3) // all three ARE projected; only the read path hides two
 
-		handler := NewAPI(store, projector, "internal-token", "", quietLogger()).Handler(
-			NewIngest(store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
+		handler := NewAPI("merchant-a", store, projector, "internal-token", "", quietLogger()).Handler(
+			NewIngest("merchant-a", store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
 
 		Convey("When a shopper lists the catalog", func() {
 			status, body := shopperGet(handler, "/api/products")
@@ -86,7 +86,7 @@ func TestOnlyActiveProductsReachShoppers(t *testing.T) {
 		})
 
 		Convey("When a shopper asks for the draft by its exact id", func() {
-			status, _ := shopperGet(handler, "/api/products/merchant-a/draft-1")
+			status, _ := shopperGet(handler, "/api/products/draft-1")
 
 			Convey("Then it is a 404: a draft is not reachable by guessing", func() {
 				So(status, ShouldEqual, http.StatusNotFound)
@@ -94,7 +94,7 @@ func TestOnlyActiveProductsReachShoppers(t *testing.T) {
 		})
 
 		Convey("When a shopper asks for the archived product by its exact id", func() {
-			status, _ := shopperGet(handler, "/api/products/merchant-a/gone-1")
+			status, _ := shopperGet(handler, "/api/products/gone-1")
 
 			Convey("Then it is a 404", func() {
 				So(status, ShouldEqual, http.StatusNotFound)
@@ -139,8 +139,8 @@ func TestInternalEndpointsRequireTheSharedCredential(t *testing.T) {
 	Convey("Given a running storefront", t, func() {
 		store := newTestStore(t)
 		projector := NewProjector(store, "http://127.0.0.1:1", time.Second)
-		handler := NewAPI(store, projector, "internal-token", "", quietLogger()).Handler(
-			NewIngest(store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
+		handler := NewAPI("merchant-a", store, projector, "internal-token", "", quietLogger()).Handler(
+			NewIngest("merchant-a", store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
 
 		Convey("When a caller registers a merchant with no credential", func() {
 			rec := httptest.NewRecorder()
@@ -176,7 +176,7 @@ func TestInternalEndpointsRequireTheSharedCredential(t *testing.T) {
 			})
 
 			Convey("And the shopper merchant list never carries the token", func() {
-				_, body := shopperGet(handler, "/api/merchants")
+				_, body := shopperGet(handler, "/api/store")
 				raw, err := json.Marshal(body)
 				So(err, ShouldBeNil)
 				So(string(raw), ShouldNotContainSubstring, "ft_a_b")
@@ -217,11 +217,11 @@ func TestProductImageRedirectsToASignedLink(t *testing.T) {
 		So(projector.Project(ctx, "merchant-a", apparel, "shot-1"), ShouldBeNil)
 
 		Convey("When the storefront knows the address a browser reaches flexitype on", func() {
-			handler := NewAPI(store, projector, "internal-token", baseURL, quietLogger()).Handler(
-				NewIngest(store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
+			handler := NewAPI("merchant-a", store, projector, "internal-token", baseURL, quietLogger()).Handler(
+				NewIngest("merchant-a", store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
 
 			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/products/merchant-a/shot-1/image", nil))
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/products/shot-1/image", nil))
 
 			Convey("Then the shopper is redirected instead of being served the bytes", func() {
 				So(rec.Code, ShouldEqual, http.StatusFound)
@@ -247,15 +247,95 @@ func TestProductImageRedirectsToASignedLink(t *testing.T) {
 		})
 
 		Convey("When no public address is configured", func() {
-			handler := NewAPI(store, projector, "internal-token", "", quietLogger()).Handler(
-				NewIngest(store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
+			handler := NewAPI("merchant-a", store, projector, "internal-token", "", quietLogger()).Handler(
+				NewIngest("merchant-a", store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
 
 			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/products/merchant-a/shot-1/image", nil))
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/products/shot-1/image", nil))
 
 			Convey("Then it proxies the bytes as it always did", func() {
 				So(rec.Code, ShouldEqual, http.StatusOK)
 				So(rec.Body.Bytes(), ShouldResemble, pixel)
+			})
+		})
+	})
+}
+
+// TestAStorefrontServesOneMerchant is the property that replaced the
+// cross-tenant one.
+//
+// An earlier version of this example ran ONE storefront across every merchant.
+// That forced it to hold every merchant's credential, and then a cross-tenant
+// scope in the service to avoid holding them. Both were the wrong shape: the
+// tenant comes from the token, and a storefront per merchant needs no
+// privilege that crosses a tenant boundary at all.
+//
+// What holds it now is that this process knows one tenant, and refuses
+// everything else at the edges.
+func TestAStorefrontServesOneMerchant(t *testing.T) {
+	Convey("Given a storefront deployed for merchant-a", t, func() {
+		store := newTestStore(t)
+		ctx := context.Background()
+		So(store.UpsertMerchant(ctx, Merchant{
+			Tenant: "merchant-a", DisplayName: "Merchant A",
+			Token: "ft_a_b", WebhookSecret: "secret-a",
+		}), ShouldBeNil)
+		// A row for another merchant, as a shared database would have.
+		So(store.UpsertMerchant(ctx, Merchant{
+			Tenant: "merchant-b", DisplayName: "Merchant B",
+			Token: "ft_b_c", WebhookSecret: "secret-b",
+		}), ShouldBeNil)
+		So(store.UpsertProduct(ctx, Product{
+			Tenant: "merchant-b", EntityID: "other-1", TypeID: "t", Subtype: "apparel",
+			Name: "Somebody else's jacket", SKU: "B-1", Status: "active",
+		}), ShouldBeNil)
+
+		projector := NewProjector(store, "http://127.0.0.1:1", time.Second)
+		handler := NewAPI("merchant-a", store, projector, "internal-token", "", quietLogger()).Handler(
+			NewIngest("merchant-a", store, NewDebouncer(0, func(context.Context, entityKey) error { return nil }, quietLogger()), quietLogger()))
+
+		Convey("When a shopper lists the catalog", func() {
+			_, body := shopperGet(handler, "/api/products")
+
+			Convey("Then another merchant's product is not in it", func() {
+				So(entityIDs(body), ShouldBeEmpty)
+			})
+		})
+
+		Convey("When a shopper asks for another merchant's product by id", func() {
+			status, _ := shopperGet(handler, "/api/products/other-1")
+
+			Convey("Then it is a 404: there is no path that names another tenant", func() {
+				So(status, ShouldEqual, http.StatusNotFound)
+			})
+		})
+
+		Convey("When the platform registers a DIFFERENT merchant's credential", func() {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPut, "/internal/merchants/merchant-b",
+				jsonBody(`{"display_name":"Merchant B","token":"ft_b_c","webhook_secret":"s"}`))
+			req.Header.Set("X-Internal-Token", "internal-token")
+			handler.ServeHTTP(rec, req)
+
+			Convey("Then it is refused: this process holds one merchant's token", func() {
+				So(rec.Code, ShouldEqual, http.StatusForbidden)
+				So(rec.Body.String(), ShouldContainSubstring, "merchant-a")
+			})
+		})
+
+		Convey("When a delivery arrives on another merchant's hook path", func() {
+			env := valueEnvelope("e1", "merchant-b", "type-1", "p-1")
+			rec := httptest.NewRecorder()
+			rec2 := httptest.NewRecorder()
+			handler.ServeHTTP(rec, signedDelivery("merchant-b", "secret-b", env, time.Now()))
+			handler.ServeHTTP(rec2, signedDelivery("merchant-b", "guessed", env, time.Now()))
+
+			Convey("Then it is refused, and looks exactly like a bad signature", func() {
+				// Answering differently would make the set of merchants a
+				// storefront serves probeable from outside.
+				So(rec.Code, ShouldEqual, http.StatusUnauthorized)
+				So(rec2.Code, ShouldEqual, http.StatusUnauthorized)
+				So(rec.Body.String(), ShouldEqual, rec2.Body.String())
 			})
 		})
 	})

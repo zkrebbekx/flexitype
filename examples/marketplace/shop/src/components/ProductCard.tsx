@@ -7,7 +7,7 @@ export function ProductCard({ product }: { product: Product }) {
   return (
     <li className="rounded-lg border border-slate-200">
       <Link
-        to={`/p/${encodeURIComponent(product.tenant)}/${encodeURIComponent(product.entity_id)}`}
+        to={`/p/${encodeURIComponent(product.entity_id)}`}
         className="block"
       >
         <div className="aspect-square overflow-hidden rounded-t-lg bg-slate-100">

@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+### Fixed — The SSRF guard deferred to `HTTP_PROXY` ([#593])
+
+`safedial`'s guard validates the address the dialer is about to connect to,
+which defeats DNS rebinding. It set `Proxy: http.ProxyFromEnvironment`, so with
+a proxy configured the address it validated was the PROXY — public, allowed —
+and it never saw the destination. The proxy then made the internal connection
+on the caller's behalf. The webhook delivery worker uses this client, so a
+tenant could point a webhook at an internal address.
+
+The guard was present, correct, and answering a question about the wrong
+address.
+
+The client no longer uses an environment proxy. `Options.UseEnvironmentProxy`
+opts back in, and its documentation says plainly that doing so disables the
+guard for every request the proxy handles.
+
+[#593]: https://github.com/zkrebbekx/flexitype/issues/593
+
 ### Fixed — BREAKING: React hooks could serve one tenant's data to another ([#589])
 
 The hooks cached results under keys that named no client, so an application

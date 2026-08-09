@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"syscall"
 	"time"
 )
@@ -31,6 +32,18 @@ type Options struct {
 	AllowPrivate bool
 	// Timeout is the whole-request timeout (default 10s).
 	Timeout time.Duration
+	// UseEnvironmentProxy honours HTTP_PROXY, HTTPS_PROXY and NO_PROXY.
+	//
+	// It is OFF by default, and turning it on DISABLES the SSRF guard for
+	// every request the proxy handles. A proxy moves the connect target from
+	// the destination to the proxy itself: the guard then validates the
+	// proxy's address, which is public and allowed, and never sees where the
+	// request is really going. The proxy makes the internal connection on the
+	// caller's behalf.
+	//
+	// Set it only where the destinations are trusted, or where the proxy
+	// enforces its own egress policy.
+	UseEnvironmentProxy bool
 }
 
 // NewClient returns an *http.Client whose dialer rejects non-public
@@ -56,8 +69,21 @@ func NewClient(opts Options) *http.Client {
 			return guardAddress(address)
 		},
 	}
+	// No proxy by default, so the Control hook above always sees the real
+	// destination.
+	//
+	// http.ProxyFromEnvironment used to be set here, which quietly handed the
+	// decision to the environment: with HTTP_PROXY configured, a webhook aimed
+	// at 169.254.169.254 was dialled as a connection to the proxy — public,
+	// allowed — and the proxy fetched the metadata service. The guard was
+	// still there, still correct, and answering a question about the wrong
+	// address.
+	proxy := func(*http.Request) (*url.URL, error) { return nil, nil }
+	if opts.UseEnvironmentProxy {
+		proxy = http.ProxyFromEnvironment
+	}
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 proxy,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,

@@ -500,11 +500,26 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 		if !sOK || !tOK {
 			return nil, domainerrors.NewValidation("dependency references an unknown attribute", "source", d.SourceType+"."+d.SourceAttribute, "target", d.TargetType+"."+d.TargetAttribute)
 		}
-		key, err := bundleDependencyKey(d, srcID, tgtID, attrFamilyIDs, familyByID)
+		key, rule, err := bundleDependencyKeys(d, srcID, tgtID, attrFamilyIDs, familyByID)
 		if err != nil {
 			return nil, fmt.Errorf("import dependency %s->%s: %w", d.SourceType+"."+d.SourceAttribute, d.TargetType+"."+d.TargetAttribute, err)
 		}
-		if existingDeps[key] {
+		// Identity is the RULE — source, target and conditions — not the rule
+		// plus its effect.
+		//
+		// Keying on the effect too meant a bundle whose rule the tenant already
+		// had, configured differently, was read as a rule the tenant did not
+		// have: import created a second one alongside. The resolver then merged
+		// the pair into the stricter of the two, so re-applying a template
+		// after someone had tuned one of its rules silently changed what the
+		// tenant enforced, permanently and with no way back through templates.
+		//
+		// Skipping is the conservative answer. Import creates what is missing;
+		// it has never updated, and overwriting a rule an operator deliberately
+		// tuned would be worse than leaving it. Cascading picklists are
+		// unaffected: several rules on one pair differ in their CONDITIONS,
+		// which are part of the identity.
+		if existingDeps[key] || existingDeps[rule] {
 			res.Dependencies.Skipped++
 			continue
 		}
@@ -518,6 +533,7 @@ func (i *Interactor) Import(ctx context.Context, bundle *Bundle) (*ImportResult,
 			return nil, fmt.Errorf("import dependency %s->%s: %w", d.SourceType+"."+d.SourceAttribute, d.TargetType+"."+d.TargetAttribute, err)
 		}
 		existingDeps[key] = true
+		existingDeps[rule] = true
 		res.Dependencies.Created++
 	}
 
@@ -641,6 +657,11 @@ func (i *Interactor) currentDependencyKeys(ctx context.Context) (map[string]bool
 				return nil, err
 			}
 			keys[key] = true
+			rule, err := dependencyIdentityKey(d.SourceAttributeID.String(), d.TargetAttributeID.String(), d.Conditions)
+			if err != nil {
+				return nil, err
+			}
+			keys[rule] = true
 		}
 		if !out.PageInfo.HasNextPage {
 			break
@@ -672,25 +693,52 @@ func (i *Interactor) currentUnitFamilies(ctx context.Context) (map[string]appuni
 // does, and returns the rule's idempotency key. Without the rebase a
 // hand-authored quantity operand with an absent or wrong base never matches
 // the stored rule, and every re-import creates one more copy.
-func bundleDependencyKey(d Dependency, srcID, tgtID string, attrFamilyIDs map[string]string, familyByID map[string]appunit.Family) (string, error) {
+func bundleDependencyKeys(d Dependency, srcID, tgtID string, attrFamilyIDs map[string]string, familyByID map[string]appunit.Family) (string, string, error) {
 	var conditions []domaindependency.Condition
 	if len(d.Conditions) > 0 && string(d.Conditions) != "null" {
 		if err := json.Unmarshal(d.Conditions, &conditions); err != nil {
-			return "", domainerrors.NewValidation("invalid conditions", "error", err.Error())
+			return "", "", domainerrors.NewValidation("invalid conditions", "error", err.Error())
 		}
 	}
 	var effect domaindependency.Effect
 	if len(d.Effect) > 0 && string(d.Effect) != "null" {
 		if err := json.Unmarshal(d.Effect, &effect); err != nil {
-			return "", domainerrors.NewValidation("invalid effect", "error", err.Error())
+			return "", "", domainerrors.NewValidation("invalid effect", "error", err.Error())
 		}
 	}
 	if err := appdependency.RebaseRuleOperands(conditions, &effect,
 		rebaseFunc(attrFamilyIDs[srcID], familyByID),
 		rebaseFunc(attrFamilyIDs[tgtID], familyByID)); err != nil {
+		return "", "", err
+	}
+	key, err := dependencyRuleKey(srcID, tgtID, conditions, effect)
+	if err != nil {
+		return "", "", err
+	}
+	rule, err := dependencyIdentityKey(srcID, tgtID, conditions)
+	if err != nil {
+		return "", "", err
+	}
+	return key, rule, nil
+}
+
+// dependencyIdentityKey identifies the RULE — which attribute's values decide
+// what, about which other attribute — without its effect.
+//
+// Two entries sharing this key are one rule configured two ways, never two
+// rules. The effect is deliberately absent: it is what an operator tunes, and
+// a tuned rule must still be recognised as the rule the bundle already
+// created.
+func dependencyIdentityKey(srcID, tgtID string, conditions []domaindependency.Condition) (string, error) {
+	condJSON, err := json.Marshal(conditions)
+	if err != nil {
 		return "", err
 	}
-	return dependencyRuleKey(srcID, tgtID, conditions, effect)
+	condCanon, err := canonicalizeJSON(condJSON)
+	if err != nil {
+		return "", err
+	}
+	return "rule|" + srcID + "->" + tgtID + "|" + string(condCanon), nil
 }
 
 // rebaseFunc returns the operand rebase for one attribute: appunit.Rebase

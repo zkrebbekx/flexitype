@@ -49,24 +49,19 @@ Look at the **condition**, not the target.
 
 `on_read` is the default because most conditions are facts rather than states.
 
-Two shipped templates make the same schema available either way, so the choice
-is one you apply rather than one you edit:
+The shipped examples take both sides:
 
-| Template | Its two `status = active` rules | Choose it when |
-| --- | --- | --- |
-| `ecommerce` | report the gap | Products are assembled field by field, and something downstream decides when one goes live. |
-| `ecommerce_strict` | refuse the write | Nothing downstream gates, so a product must never be stored active and unsellable. |
-
-They are otherwise identical, and a test pins that: if they drift, the pair
-stops demonstrating one decision and becomes two schemas to maintain.
-
-Both shipped examples take a side, for the reason above:
-
-- [`examples/marketplace`](../examples/marketplace/) applies
-  `ecommerce_strict`. It writes a whole product in one batch, which is exactly
-  how a caller satisfies an `on_write` rule.
-- [`examples/kitchen`](../examples/kitchen/) reports: a chef ticks "contains
+- [`examples/marketplace`](../examples/marketplace/) switches its
+  `status = active` rules to `on_write` after applying the template. It writes
+  a whole product in one batch, which is exactly how a caller satisfies such a
+  rule.
+- [`examples/kitchen`](../examples/kitchen/) and
+  [`examples/catalog`](../examples/catalog/) report: a chef ticks "contains
   allergens", then types the list, and publishing turns the gap into a refusal.
+
+Every shipped **template** leaves its rules reporting. A curated starting schema
+should not decide this for you, and — see below — a template cannot change the
+mode of a rule a tenant already has.
 
 Before switching a rule to `on_write`, read
 [Adding a blocking rule to data that already exists](#adding-a-blocking-rule-to-data-that-already-exists).
@@ -179,6 +174,23 @@ a UI can tell a rule from a wall before it lets someone save half a record:
 curl -s "localhost:8080/api/v1/entities/<dish-type-id>/tart/attributes/<allergens>/effective-schema"
 # {"required":true,"required_enforcement":"on_write","restricted":false}
 ```
+
+## Applying a template over a rule you have tuned
+
+A schema import identifies a dependency by the RULE — its source, its target
+and its conditions — and it only ever **creates or skips**. It never updates.
+
+So a template cannot re-configure a rule a tenant already has. If you set
+`enforce: on_write` on a rule a template created, re-applying that template
+leaves your setting alone; and a bundle that carries the same rule with a
+different effect is skipped rather than added a second time. Identifying a rule
+by its effect as well would make the second case create a shadow twin, which
+the resolver then merges into the stricter of the two — silently changing what
+the tenant enforces, with no way back through templates.
+
+To change a rule's mode, update the rule
+(`PATCH /dependencies/{id}`), as [`examples/marketplace`](../examples/marketplace/platform/onboard.go)
+does after onboarding.
 
 ## Conflicting rules
 

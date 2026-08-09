@@ -244,3 +244,69 @@ func newOnboarderWithLog(t *testing.T, store *Store, sf *fakeStorefront, ft test
 		newTestDirectory(sf.server.URL, "internal-token"),
 		slog.New(slog.NewTextHandler(sink, nil)))
 }
+
+// TestOnboardingEnforcesActiveProductRules pins the example's own claim.
+//
+// The marketplace demonstrates `enforce: on_write`. Nothing pinned that: the
+// onboarding could quietly stop switching the rules and every test here would
+// still pass, leaving the READMEs describing a system that no longer behaved
+// that way — the exact defect this example was fixed for once already.
+func TestOnboardingEnforcesActiveProductRules(t *testing.T) {
+	Convey("Given a platform with no merchants", t, func() {
+		ft := newFlexitype(t)
+		store := newTestStore(t)
+		sf := newFakeStorefront(t, "internal-token")
+		onboarder := newOnboarder(t, store, sf, ft)
+		ctx := context.Background()
+		tenant := newTenant("alpine")
+		in := OnboardInput{ID: tenant, DisplayName: "Alpine Apparel", Tenant: tenant}
+
+		Convey("When a merchant is onboarded", func() {
+			merchant, err := onboarder.Onboard(ctx, in)
+			So(err, ShouldBeNil)
+
+			c, cerr := client.New(ft.url, client.WithToken(merchant.Token))
+			So(cerr, ShouldBeNil)
+			page, lerr := c.Dependencies().List(ctx, client.ListOptions{Limit: 100})
+			So(lerr, ShouldBeNil)
+
+			Convey("Then every rule that demands a value refuses the write", func() {
+				So(page.Items, ShouldNotBeEmpty)
+				demanding := 0
+				for _, dep := range page.Items {
+					if dep.Effect.Required == nil || !*dep.Effect.Required {
+						continue
+					}
+					demanding++
+					So(dep.Effect.Enforce, ShouldEqual, "on_write")
+				}
+				// The template ships two: an active product needs a sku and a
+				// price.
+				So(demanding, ShouldEqual, 2)
+			})
+
+			Convey("Then the rules are not duplicated", func() {
+				// Switching the mode must UPDATE the template's rules, not add
+				// a second pair alongside them. An import deduplicates on the
+				// whole rule including its effect, so creating instead of
+				// updating would leave the tenant carrying four rules with no
+				// way back.
+				So(page.Items, ShouldHaveLength, 2)
+			})
+
+			Convey("And the same merchant is onboarded again", func() {
+				_, aerr := onboarder.Onboard(ctx, in)
+				So(aerr, ShouldBeNil)
+
+				Convey("Then it is still two rules, still enforcing", func() {
+					again, aerr2 := c.Dependencies().List(ctx, client.ListOptions{Limit: 100})
+					So(aerr2, ShouldBeNil)
+					So(again.Items, ShouldHaveLength, 2)
+					for _, dep := range again.Items {
+						So(dep.Effect.Enforce, ShouldEqual, "on_write")
+					}
+				})
+			})
+		})
+	})
+}

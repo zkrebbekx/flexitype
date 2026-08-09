@@ -14,17 +14,25 @@
 package testdb
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 	// The tests that use this package drive the lib/pq-backed repositories.
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
+
+// maxTruncateAttempts bounds the deadlock retry in TruncateAll. Each losing
+// attempt costs about deadlock_timeout (1s by default), so this is seconds,
+// not the sum of the backoffs.
+const maxTruncateAttempts = 5
+
+// deadlockDetected is SQLSTATE 40P01.
+const deadlockDetected = "40P01"
 
 // schemaName accepts only what can be embedded in a connection string and a
 // CREATE SCHEMA statement without quoting.
@@ -131,11 +139,14 @@ func containsRune(s string, r rune) bool {
 func TruncateAll(t *testing.T, pool *sqlx.DB) {
 	t.Helper()
 	var stmt string
-	// ORDER BY is what makes the lock order deterministic. TRUNCATE takes an
-	// ACCESS EXCLUSIVE lock on every table it names, in the order it names
-	// them, and string_agg without ORDER BY returns whatever order the scan
-	// produced — so two truncates could take the same locks in opposite orders
-	// and deadlock each other.
+	// ORDER BY makes the lock order deterministic: TRUNCATE takes an ACCESS
+	// EXCLUSIVE lock on every table it names, in the order it names them, and
+	// string_agg without ORDER BY returns whatever order the scan produced.
+	//
+	// This is hygiene, not the fix. No test here runs in parallel and each
+	// package truncates its own schema, so two concurrent truncates do not
+	// arise in CI — they arise when a developer runs two test binaries at
+	// once, which is the case this settles.
 	err := pool.Get(&stmt, `SELECT 'TRUNCATE ' || string_agg(format('%I.%I', schemaname, tablename), ', ' ORDER BY tablename) || ' CASCADE'
 		FROM pg_tables
 		WHERE schemaname = current_schema()
@@ -147,24 +158,39 @@ func TruncateAll(t *testing.T, pool *sqlx.DB) {
 	if stmt == "" {
 		return // nothing migrated yet
 	}
-	// A deterministic order settles truncate against truncate, but not
-	// truncate against a background worker: an outbox relay, a scheduler or a
-	// post-commit recompute left running by the previous test holds locks in
-	// an order nothing here controls. Postgres resolves that by killing one
-	// side, and the victim was the test's own setup — a failure with no
-	// relation to what the test was checking.
+	// The deadlock this retries is against a BACKGROUND WORKER, and the worker
+	// that causes it cannot be stopped by a test: a schema change schedules a
+	// recompute on a context deliberately detached from every caller
+	// (flexitype.go, schemaChangeRecomputer), which starts after a settle
+	// delay — often once the test that triggered it has returned, landing in
+	// the next test's truncate. Service exposes no way to await it.
 	//
-	// Retrying is the right answer rather than ordering the world: the loser
-	// of a deadlock has already rolled back, and the worker it lost to is
+	// So this is a stopgap for a product gap, and worth removing once Service
+	// can be drained. Retrying is sound in the meantime: the loser of a
+	// deadlock has already rolled back, and the worker it lost to is
 	// finishing.
+	//
+	// Matched on SQLSTATE rather than the message, because lib/pq's Error()
+	// returns the server's LOCALIZED primary message — the same match against
+	// a server with a non-English lc_messages silently stops working. The
+	// repo's migration runner already does it this way.
 	for attempt := 0; ; attempt++ {
 		_, err := pool.Exec(stmt)
 		if err == nil {
 			return
 		}
-		if attempt == 4 || !strings.Contains(err.Error(), "deadlock detected") {
+		var pqErr *pq.Error
+		if attempt == maxTruncateAttempts-1 || !errors.As(err, &pqErr) || pqErr.Code != deadlockDetected {
+			// Detail carries "Process X waits for … blocked by process Y",
+			// which names the other side. Error() alone does not, and that is
+			// the field that identifies which worker leaked.
+			if errors.As(err, &pqErr) && pqErr.Detail != "" {
+				t.Fatalf("testdb: truncate: %v (detail: %s)", err, pqErr.Detail)
+			}
 			t.Fatalf("testdb: truncate: %v", err)
 		}
+		t.Logf("testdb: truncate lost a deadlock (attempt %d/%d), retrying: %s",
+			attempt+1, maxTruncateAttempts, pqErr.Detail)
 		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)
 	}
 }

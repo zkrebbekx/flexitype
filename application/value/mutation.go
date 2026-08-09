@@ -193,7 +193,7 @@ func (i *Interactor) removeScopedWithin(ctx context.Context, tx db.Transactor, c
 		// Same gate as Remove: a mutation that takes a demanded value away
 		// leaves the state a write would have been refused for, and a change
 		// set publishing that removal must not be the way around it.
-		i.noteWrite(c, tx, entityRef{
+		i.noteRemoval(c, tx, entityRef{
 			tenant: av.TenantID(),
 			typeID: av.TypeDefinitionID(),
 			entity: av.EntityID(),

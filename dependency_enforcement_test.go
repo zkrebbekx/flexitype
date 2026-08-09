@@ -718,10 +718,17 @@ func TestRequiredEnforcementAndFieldACL(t *testing.T) {
 			So(allergenValueID, ShouldNotBeEmpty)
 			_, rerr := f.svc.Interactors(blind).Values().Remove(blind, allergenValueID)
 
-			Convey("Then the rule does not fire for that caller", func() {
-				// It cannot see the flag, so it must not be refused because of
-				// the flag's value — that refusal IS the flag's value.
-				So(rerr, ShouldBeNil)
+			Convey("Then the removal is refused anyway", func() {
+				// A WRITE resolves over the caller's view, so a rule keyed on a
+				// value it cannot see does not fire — otherwise the refusal
+				// answers a question the field ACL hides.
+				//
+				// A REMOVAL cannot use that rule. Allowing it let this
+				// principal strand the entity in the state the rule forbids,
+				// after which every other principal was refused every write to
+				// it. See TestRestrictedPrincipalCannotWedgeAnEntity.
+				So(rerr, ShouldNotBeNil)
+				So(domainerrors.IsDependencyViolation(rerr), ShouldBeTrue)
 			})
 		})
 
@@ -859,6 +866,104 @@ func TestRequiredEnforcementRemainingPaths(t *testing.T) {
 				// writes although neither asked to.
 				So(err, ShouldNotBeNil)
 				So(err.Error(), ShouldContainSubstring, "requires a value")
+			})
+		})
+	})
+}
+
+// TestRestrictedPrincipalCannotWedgeAnEntity covers the asymmetry between a
+// write and a removal under the field ACL.
+//
+// A write resolves over the caller's readable values, so a rule keyed on a
+// value the caller cannot see does not fire for it. Applied to a REMOVAL that
+// let a least-privileged account take the demanded value away unopposed — and
+// every other principal, including an admin, was then refused every write to
+// that entity until it came back.
+func TestRestrictedPrincipalCannotWedgeAnEntity(t *testing.T) {
+	Convey("Given a dish under a blocking rule, complete", t, func() {
+		svc := flexitype.NewInMemory()
+		f := newEnforcementFixture(t, svc, "on_write")
+		So(f.setBatch(
+			f.item(f.flag, "tart", true),
+			f.item(f.allergens, "tart", "gluten"),
+		), ShouldBeNil)
+
+		values, err := f.svc.Interactors(f.ctx).Values().ListByEntity(f.ctx, f.dish, "tart")
+		So(err, ShouldBeNil)
+		var allergenValueID string
+		for _, v := range values {
+			if v.AttributeDefinitionID.String() == f.allergens {
+				allergenValueID = v.ID.String()
+			}
+		}
+		So(allergenValueID, ShouldNotBeEmpty)
+
+		Convey("When a principal that cannot read the rule's source removes the value", func() {
+			blind := uow.WithAccess(f.ctx, uow.Access{
+				Attr:    map[string]uow.Perm{"contains_allergens": uow.PermNone},
+				Default: uow.PermWrite,
+			})
+			_, rerr := f.svc.Interactors(blind).Values().Remove(blind, allergenValueID)
+
+			Convey("Then the removal is refused", func() {
+				// Judged over everything the entity holds, not the caller's
+				// view. The alternative left the entity wedged for everyone.
+				So(rerr, ShouldNotBeNil)
+				So(domainerrors.IsDependencyViolation(rerr), ShouldBeTrue)
+			})
+
+			Convey("Then a full-access principal can still write the entity", func() {
+				So(f.set(f.name, "tart", "Tarte"), ShouldBeNil)
+			})
+		})
+	})
+}
+
+// TestInternalWriteNeedsSystemAccess covers the flag that turns the gate off.
+//
+// SetInput.Internal disables the computed-attribute guard, the field ACL and
+// the dependency write gate, and it is EXPORTED — so a Go embedder could set it
+// and store a state a rule forbids. Its sibling fromUpload is unexported for
+// exactly that reason. Unexporting this one would take the materializer's only
+// entry point with it, so the privilege is bound to the caller's access.
+func TestInternalWriteNeedsSystemAccess(t *testing.T) {
+	Convey("Given a blocking rule", t, func() {
+		svc := flexitype.NewInMemory()
+		f := newEnforcementFixture(t, svc, "on_write")
+		raw, _ := json.Marshal(true)
+
+		Convey("When an ordinary caller sets Internal on the write", func() {
+			_, err := f.svc.Interactors(f.ctx).Values().Set(f.ctx, appvalue.SetInput{
+				AttributeDefinitionID: f.flag, EntityID: "tart",
+				TypeDefinitionID: f.dish, Value: raw, Internal: true,
+			})
+
+			Convey("Then the rule still refuses it", func() {
+				So(err, ShouldNotBeNil)
+				So(domainerrors.IsDependencyViolation(err), ShouldBeTrue)
+			})
+
+			Convey("Then nothing was stored", func() {
+				values, lerr := f.svc.Interactors(f.ctx).Values().ListByEntity(f.ctx, f.dish, "tart")
+				So(lerr, ShouldBeNil)
+				So(values, ShouldBeEmpty)
+			})
+		})
+
+		Convey("When even the SYSTEM sets Internal on an ordinary attribute", func() {
+			sys := uow.WithSystemAccess(f.ctx)
+			_, err := f.svc.Interactors(sys).Values().Set(sys, appvalue.SetInput{
+				AttributeDefinitionID: f.flag, EntityID: "tart",
+				TypeDefinitionID: f.dish, Value: raw, Internal: true,
+			})
+
+			Convey("Then it is still refused", func() {
+				// The exemption is bound to the SUBJECT, not the caller. An
+				// embedded library caller is admin by default, so binding it to
+				// access would have granted exactly the case that matters.
+				// Only a derived value answers to no dependency rule.
+				So(err, ShouldNotBeNil)
+				So(domainerrors.IsDependencyViolation(err), ShouldBeTrue)
 			})
 		})
 	})

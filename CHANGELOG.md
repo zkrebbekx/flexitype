@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [1.7.0] — 2026-08-09
+
+A withdrawal, and the feature that replaced it.
+
+v1.6.0 shipped a scope that let one credential read every tenant. It is
+removed and v1.6.0 is retracted. The example that asked for it now runs one
+storefront per merchant instead, which is what it should have been. In its
+place: computed rollups over relationships, and a second full example built on
+them.
+
 ### Removed — The `read_any_tenant` scope, and v1.6.0 is retracted ([#549])
 
 v1.6.0 added a scope for one credential that reads every tenant. It is
@@ -122,6 +132,33 @@ an unknown relationship, a direction that points the wrong way, or a target
 that is missing or not numeric. Each of those aggregates an empty set for
 ever, which is indistinguishable from "no data yet", and that invisibility is
 why the feature was withheld in the first place.
+
+### Fixed — One recompute pass is now self-consistent ([#563])
+
+A recompute loads an entity's values once, then evaluates its computed
+attributes. Two defects followed from evaluating a formula against those
+loaded values when the formula reads a ROLLUP on the same entity —
+`line_cost = quantity * ingredient_cost`:
+
+- A rollup that produced a NEW value was ignored by the formula, which used
+  the rollup's previous result. An ingredient's price rose from 7.50 to 9.00
+  and the line still cost 1.875 instead of 2.25.
+- A rollup that produced NO value left its old one in the formula's inputs.
+  Deleting the ingredient's price cleared the rollup, and the formula
+  immediately re-derived 1.875 from the number that had just gone away and
+  wrote it back.
+
+In both cases the right answer arrived only because the rollup's write emitted
+an event that recomputed the entity again. Correctness depended on a follow-up
+dispatch, and a read landing before it found the stale value.
+
+Rollups are now evaluated before the formulas that read them, and each
+result — a value or its absence — is applied to the inputs of the same pass.
+The follow-up event is a no-op rather than the thing that saves it.
+
+Both defects appeared only against Postgres. The in-memory backend dispatches a
+nested recompute synchronously, so the second pass always arrives before the
+read and hides the window.
 
 ## [1.6.0] — 2026-08-09
 
@@ -2227,7 +2264,9 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 - Quantity `one_of` members and defaults are unit-rebased; equal quantities in
   different units compare equal.
 
-[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/zkrebbekx/flexitype/compare/v1.6.0...v1.7.0
+[1.6.0]: https://github.com/zkrebbekx/flexitype/compare/v1.5.0...v1.6.0
 [1.4.0]: https://github.com/zkrebbekx/flexitype/compare/v1.3.0...v1.4.0
 [#465]: https://github.com/zkrebbekx/flexitype/pull/465
 [#466]: https://github.com/zkrebbekx/flexitype/pull/466

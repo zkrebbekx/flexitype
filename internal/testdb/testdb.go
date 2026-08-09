@@ -34,6 +34,14 @@ const maxTruncateAttempts = 5
 // deadlockDetected is SQLSTATE 40P01.
 const deadlockDetected = "40P01"
 
+// lockNotAvailable is SQLSTATE 55P03, what lock_timeout raises.
+const lockNotAvailable = "55P03"
+
+// truncateLockTimeout bounds how long the truncate waits for its locks. Long
+// enough that a busy-but-progressing worker finishes, short enough that a
+// stuck one is reported rather than hanging the package.
+const truncateLockTimeout = "2s"
+
 // schemaName accepts only what can be embedded in a connection string and a
 // CREATE SCHEMA statement without quoting.
 var schemaName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,45}$`)
@@ -175,12 +183,14 @@ func TruncateAll(t *testing.T, pool *sqlx.DB) {
 	// a server with a non-English lc_messages silently stops working. The
 	// repo's migration runner already does it this way.
 	for attempt := 0; ; attempt++ {
-		_, err := pool.Exec(stmt)
+		err := truncateOnce(pool, stmt)
 		if err == nil {
 			return
 		}
 		var pqErr *pq.Error
-		if attempt == maxTruncateAttempts-1 || !errors.As(err, &pqErr) || pqErr.Code != deadlockDetected {
+		retryable := errors.As(err, &pqErr) &&
+			(pqErr.Code == deadlockDetected || pqErr.Code == lockNotAvailable)
+		if attempt == maxTruncateAttempts-1 || !retryable {
 			// Detail carries "Process X waits for … blocked by process Y",
 			// which names the other side. Error() alone does not, and that is
 			// the field that identifies which worker leaked.
@@ -189,8 +199,34 @@ func TruncateAll(t *testing.T, pool *sqlx.DB) {
 			}
 			t.Fatalf("testdb: truncate: %v", err)
 		}
-		t.Logf("testdb: truncate lost a deadlock (attempt %d/%d), retrying: %s",
-			attempt+1, maxTruncateAttempts, pqErr.Detail)
+		t.Logf("testdb: truncate could not take its locks (%s, attempt %d/%d), retrying: %s",
+			pqErr.Code, attempt+1, maxTruncateAttempts, pqErr.Detail)
 		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)
 	}
+}
+
+// truncateOnce runs the statement under a lock timeout, so a lock it cannot
+// take fails instead of waiting.
+//
+// Without one, TRUNCATE waits indefinitely for its ACCESS EXCLUSIVE locks. A
+// worker that holds a conflicting lock WITHOUT forming a cycle is not a
+// deadlock, so Postgres never intervenes: the package instead dies on the CI
+// -timeout with a goroutine dump, which says nothing about the cause. A
+// timeout turns that into a bounded, named, retryable failure.
+//
+// SET LOCAL needs a transaction, which also makes the timeout scoped: the
+// pooled connection goes back to the pool with its own settings.
+func truncateOnce(pool *sqlx.DB, stmt string) error {
+	tx, err := pool.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`SET LOCAL lock_timeout = '` + truncateLockTimeout + `'`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(stmt); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

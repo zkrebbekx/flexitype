@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+### Fixed — The test truncate no longer waits forever for a lock ([#576])
+
+A worker holding a conflicting lock WITHOUT forming a cycle is not a deadlock,
+so Postgres never intervenes and `TRUNCATE` waits for as long as the lock is
+held. The package then died on the CI test deadline with a goroutine dump,
+which says nothing about the cause — a worse failure than the deadlock the
+retry already covered.
+
+It now runs under `SET LOCAL lock_timeout` and retries `55P03` alongside
+`40P01`, so an unavailable lock is a bounded, named failure. Verified both
+ways: with the timeout the call returns a `55P03` in under a second, and
+without it the package hangs until the deadline kills it.
+
+Only the test harness changes. Adding `lock_timeout` to the MIGRATION session
+is the other half of this hazard and is deliberately not bundled here: it would
+turn a slow-but-successful deploy into a failed one, which is a production
+decision rather than a test fix. Tracked separately.
+
+[#576]: https://github.com/zkrebbekx/flexitype/issues/576
+
 ### Fixed — A migration can no longer build an index on a live table without CONCURRENTLY ([#577])
 
 `docs/upgrades.md` states the rule: an index built on a large table uses

@@ -144,6 +144,10 @@ type Effect struct {
 	AllowedValues []TypedValue `json:"allowed_values,omitempty"`
 	Constraints   []Constraint `json:"constraints,omitempty"`
 	Required      *bool        `json:"required,omitempty"`
+	// Enforce is a v1.8 payload key carried through this release so a client
+	// that reads an effect and writes it back cannot strip it. This release
+	// gives it no meaning.
+	Enforce string `json:"enforce,omitempty"`
 }
 
 // Dependency is a conditional-validation / cascading-picklist rule.

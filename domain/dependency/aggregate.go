@@ -24,18 +24,32 @@ type Effect struct {
 	Constraints attribute.Constraints
 	// Required overrides the target's required flag when non-nil.
 	Required *bool
+	// Enforce is a v1.8 payload key: it says WHERE a required override is
+	// enforced (on_write refuses the write, on_read reports the gap). This
+	// release does NOT read it — every requirement here is reported, exactly
+	// as before — but it preserves the key through decode and re-encode, so an
+	// Update, an Archive, a clone or a schema export by this binary cannot
+	// strip a v1.8 rule's mode during a rollback or a rolling deploy.
+	//
+	// Shipping the key one release ahead of its behavior is what keeps
+	// "release N-1 runs correctly against release N's data" true for stored
+	// payloads, not only for columns. Without it, a v1.7 pod re-saving a
+	// blocking rule would silently turn it into a reporting one, permanently,
+	// and rolling forward would not bring it back.
+	Enforce string `json:"enforce,omitempty"`
 }
 
 type effectJSON struct {
 	AllowedValues []json.RawMessage     `json:"allowed_values,omitempty"`
 	Constraints   attribute.Constraints `json:"constraints,omitempty"`
 	Required      *bool                 `json:"required,omitempty"`
+	Enforce       string                `json:"enforce,omitempty"`
 }
 
 // MarshalJSON encodes allowed values in their self-describing typed form so
 // the effect survives storage round-trips.
 func (e Effect) MarshalJSON() ([]byte, error) {
-	out := effectJSON{Constraints: e.Constraints, Required: e.Required}
+	out := effectJSON{Constraints: e.Constraints, Required: e.Required, Enforce: e.Enforce}
 	for _, v := range e.AllowedValues {
 		typed, err := v.MarshalTyped()
 		if err != nil {
@@ -54,6 +68,7 @@ func (e *Effect) UnmarshalJSON(b []byte) error {
 	}
 	e.Constraints = in.Constraints
 	e.Required = in.Required
+	e.Enforce = in.Enforce
 	e.AllowedValues = nil
 	for _, raw := range in.AllowedValues {
 		v, err := valueobjects.UnmarshalTypedValue(raw)

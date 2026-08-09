@@ -1,5 +1,27 @@
 ## [Unreleased]
 
+## [1.7.1] — 2026-08-09
+
+### Fixed — Carry the v1.8 `enforce` key through this release
+
+v1.8 stores `enforce` inside a dependency's effect JSONB, to say where a
+required override is enforced: `on_write` refuses a write that leaves the value
+absent, `on_read` reports the gap.
+
+This release's decoder dropped unknown keys, and the effect document is
+re-encoded in full on every `Save`. So an Update, an Archive, a clone or a
+schema export by a v1.7.0 binary — a rollback, or a v1.7.0 pod still serving
+during a rolling deploy — silently rewrote a blocking rule as a reporting one,
+permanently. Rolling forward did not bring it back, and the failure runs in the
+dangerous direction: the wall quietly becomes a suggestion.
+
+This patch carries the key as a decode-and-re-encode passthrough field.
+Evaluation is unchanged: every requirement is reported here, exactly as in
+1.7.0, so a mixed fleet behaves identically on every pod. Only the authored
+mode is preserved, and it takes effect when the fleet reaches 1.8.
+
+**Roll back to 1.7.1, never to 1.7.0**, from any later release.
+
 ## [1.7.0] — 2026-08-09
 
 A withdrawal, and the feature that replaced it.
@@ -2264,7 +2286,8 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 - Quantity `one_of` members and defaults are unit-rebased; equal quantities in
   different units compare equal.
 
-[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/zkrebbekx/flexitype/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/zkrebbekx/flexitype/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/zkrebbekx/flexitype/compare/v1.5.0...v1.6.0
 [1.4.0]: https://github.com/zkrebbekx/flexitype/compare/v1.3.0...v1.4.0

@@ -503,6 +503,11 @@ type EffectiveSchemaOutput struct {
 	Required              bool                 `json:"required"`
 	Restricted            bool                 `json:"restricted"`
 	AllowedValues         []valueobjects.Value `json:"allowed_values,omitempty"`
+	// RequiredEnforcement says how Required is enforced: "on_write" refuses a
+	// write that leaves the value absent, "on_read" reports the gap and leaves
+	// the decision to the caller. A UI needs the difference to know whether it
+	// is describing a rule or a wall.
+	RequiredEnforcement string `json:"required_enforcement,omitempty"`
 }
 
 // EffectiveSchema resolves the dependency-adjusted schema for one target
@@ -575,6 +580,7 @@ func (i *Interactor) EffectiveSchema(ctx context.Context, rawAttrID, rawEntityID
 		Required:              schema.Required,
 		Restricted:            schema.Restricted,
 		AllowedValues:         schema.AllowedValues,
+		RequiredEnforcement:   string(schema.RequiredEnforcement.Or(domaindependency.DefaultEnforcement)),
 	}, nil
 }
 

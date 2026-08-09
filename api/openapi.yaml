@@ -2366,6 +2366,17 @@ components:
         allowed_values: { type: array, items: { $ref: "#/components/schemas/TypedValue" } }
         constraints: { type: array, items: { $ref: "#/components/schemas/Constraint" } }
         required: { type: boolean, nullable: true }
+        enforce:
+          type: string
+          enum: [on_write, on_read]
+          description: >
+            When the required override is enforced. on_write refuses a write
+            that leaves the value absent; the check runs at the end of the
+            write transaction, so a batch or an import row supplying the
+            condition and the required attribute together passes in any order.
+            on_read (the default) never refuses a write: the gap is reported by
+            the effective schema and by completeness, and the caller decides
+            where to gate on it. Valid only on an effect that sets required.
     CreateDependency:
       type: object
       description: A new conditional-validation rule.
@@ -2391,6 +2402,10 @@ components:
         attribute_definition_id: { type: string }
         entity_id: { type: string }
         required: { type: boolean }
+        required_enforcement:
+          type: string
+          enum: [on_write, on_read]
+          description: How required is enforced — whether it refuses a write or reports a gap.
         restricted: { type: boolean }
         allowed_values: { type: array, items: {} }
     RelationshipDefinition:

@@ -5063,6 +5063,11 @@ export interface components {
         DependencyEffect: {
             allowed_values?: components["schemas"]["TypedValue"][];
             constraints?: components["schemas"]["Constraint"][];
+            /**
+             * @description When the required override is enforced. on_write refuses a write that leaves the value absent; the check runs at the end of the write transaction, so a batch or an import row supplying the condition and the required attribute together passes in any order. on_read (the default) never refuses a write: the gap is reported by the effective schema and by completeness, and the caller decides where to gate on it. Valid only on an effect that sets required.
+             * @enum {string}
+             */
+            enforce?: "on_write" | "on_read";
             required?: boolean | null;
         };
         /** @description A value computed at evaluation time — now, today, or now plus an offset. */
@@ -5096,6 +5101,11 @@ export interface components {
             attribute_definition_id?: string;
             entity_id?: string;
             required?: boolean;
+            /**
+             * @description How required is enforced — whether it refuses a write or reports a gap.
+             * @enum {string}
+             */
+            required_enforcement?: "on_write" | "on_read";
             restricted?: boolean;
         };
         /** @description A relationship with its definition and the queried entity's role resolved, so a caller does not have to look either up. */

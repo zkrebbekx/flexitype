@@ -1,5 +1,70 @@
 ## [Unreleased]
 
+### Added — A dependency chooses where its requirement is enforced
+
+A dependency's `required` effect now takes an `enforce` mode:
+
+```json
+{"required": true, "enforce": "on_write"}
+```
+
+| Mode | Behaviour |
+| --- | --- |
+| `on_read` (default) | The write is accepted. The gap is reported by the effective schema and by completeness, and the caller gates on it. |
+| `on_write` | The write is refused while the value is missing. |
+
+`on_read` is what every dependency has always done, and it stays the default. A
+rule stored without `enforce` behaves exactly as before and is not rewritten
+with a mode. Blocking could not be the default without making every stored rule
+start refusing writes on upgrade.
+
+**The check runs at the end of the write transaction, not on each value.** A
+batch or an import row that supplies the condition and the required attribute
+together passes whatever order its cells are written in. A per-value check
+would have let a CSV's column order decide whether an import worked:
+`contains_allergens` usually lands before `allergens`, so the row would be
+refused for a state it was two cells away from leaving. In best-effort import
+mode each row is its own transaction, so one refused row does not cost the
+others.
+
+Removing a value is checked on the same terms — taking `allergens` away leaves
+exactly the state the write was refused for. Deleting the whole entity is
+allowed: an entity with nothing left is gone, not incomplete.
+
+An attribute's OWN `required` flag is never gated on write. It describes the
+finished record, and gating it would make an entity impossible to create, since
+the first value written always leaves the others empty. Only a requirement from
+a matched dependency can refuse a write, because that one is conditional on
+values the entity already holds.
+
+Two smaller decisions worth stating:
+
+- `enforce` is refused on an effect that does not set `required`. Allowed
+  values and constraints are checked against a value the caller submitted, so
+  there is nothing to defer, and a stored setting that changes nothing reads as
+  a configured rule.
+- The rule is enforced whether or not the caller may READ the attribute it
+  demands — skipping it for a restricted principal would leave exactly one way
+  to write the state the rule forbids. The attribute's name is withheld from
+  the error in that case, as completeness already withholds it from `missing`.
+
+`GET .../effective-schema` now returns `required_enforcement`, so a UI can tell
+a rule from a wall before it lets someone save half a record. New:
+[docs/dependencies.md](docs/dependencies.md).
+
+### Fixed — Two examples described a requirement they did not enforce
+
+`examples/marketplace` said the `ecommerce` template's rules "make `sku` and
+`price` required once `status` is `active`", and `examples/kitchen` said the
+service "refuses the incomplete write". Neither was true: both rules report,
+and setting the source alone was always accepted.
+
+The READMEs now say what the rules do, and the kitchen states
+`"enforce": "on_read"` explicitly — a chef ticks the allergen box and then
+types the list, so refusing the tick would make the form unusable. Publishing
+is what turns the gap into a refusal, from the service's own completeness
+report.
+
 ## [1.7.0] — 2026-08-09
 
 A withdrawal, and the feature that replaced it.

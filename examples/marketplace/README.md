@@ -76,6 +76,14 @@ description, sku, status, price, currency, in_stock, image — a `brand` type, a
 `made_by` relationship, and two dependencies that make `sku` and `price`
 required once `status` is `active`.
 
+Those two rules **report**; they do not block. Setting `status` to `active` on
+a product with no sku is accepted, and the gap is what `GET
+/entities/{type}/{id}/completeness` returns. That is the default, and it is
+deliberate: a rule describes what a record needs, and the storefront decides
+when the need becomes a refusal. A rule that must refuse the write itself
+declares `"enforce": "on_write"` — see
+[Enforcing a requirement](../../docs/dependencies.md#enforcing-a-requirement).
+
 Applying, rather than sharing, is the point: after onboarding, merchant A's
 `product` and merchant B's `product` are different rows with different ids. A
 can rename a field, tighten a constraint or archive an attribute without

@@ -21,6 +21,14 @@ type EnvelopeSink interface {
 type Collector struct {
 	events  []events.Event
 	changes []activity.Change
+	// checks are the invariants to verify once the usecase has finished but
+	// before anything commits.
+	checks []func(ctx context.Context) error
+	// checkKeys makes registration idempotent, so a usecase that touches a
+	// thousand values registers its end-of-transaction check once.
+	checkKeys map[string]bool
+	// stash is per-unit-of-work scratch space for the usecases; see Stash.
+	stash map[string]any
 }
 
 // CollectEvents queues domain events for post-commit dispatch.
@@ -31,6 +39,46 @@ func (c *Collector) CollectEvents(evts ...events.Event) {
 // RecordChange queues an audit change for the pre-commit activity log.
 func (c *Collector) RecordChange(ch activity.Change) {
 	c.changes = append(c.changes, ch)
+}
+
+// Stash returns the value stored under key, creating it with create on first
+// use. It gives a usecase somewhere to accumulate state for the life of one
+// unit of work — such as the entities an end-of-transaction check must look at
+// once every write has landed.
+func (c *Collector) Stash(key string, create func() any) any {
+	if c.stash == nil {
+		c.stash = make(map[string]any, 1)
+	}
+	if v, ok := c.stash[key]; ok {
+		return v
+	}
+	v := create()
+	c.stash[key] = v
+	return v
+}
+
+// CheckBeforeCommitOnce registers an invariant to run after the usecase
+// succeeds and before the transaction commits. A second registration under
+// the same key is ignored.
+//
+// It exists for rules that are properties of the FINISHED state rather than
+// of one write. A dependency that demands a value cannot be checked as each
+// value lands: an import row writes its cells one at a time, so the cell that
+// makes the rule apply usually arrives before the cell that satisfies it, and
+// checking early would refuse a row whose final state is complete. Running at
+// the end makes the outcome independent of the order the writes happened in.
+//
+// A failing check returns its error from Execute, so the transaction rolls
+// back exactly as a failing usecase does.
+func (c *Collector) CheckBeforeCommitOnce(key string, fn func(ctx context.Context) error) {
+	if c.checkKeys == nil {
+		c.checkKeys = make(map[string]bool, 1)
+	}
+	if c.checkKeys[key] {
+		return
+	}
+	c.checkKeys[key] = true
+	c.checks = append(c.checks, fn)
 }
 
 // UnitOfWork runs one business transaction. Execute wraps fn in
@@ -247,7 +295,17 @@ func (u *unitOfWork) Execute(ctx context.Context, fn func(tx db.Transactor, c *C
 		}
 	}()
 
-	if err = fn(tx, collector); err != nil {
+	if err = fn(tx, collector); err == nil {
+		// End-of-transaction invariants: properties of the finished state,
+		// which cannot be judged while the writes are still arriving. They run
+		// inside the transaction, so a failure rolls the whole unit back.
+		for _, check := range collector.checks {
+			if err = check(ctx); err != nil {
+				break
+			}
+		}
+	}
+	if err != nil {
 		_ = tx.Rollback(ctx)
 		return err
 	}

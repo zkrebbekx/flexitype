@@ -70,6 +70,16 @@ export interface ClientOptions {
 
   /** Extra headers sent with every request. */
   headers?: Record<string, string> | undefined
+  /**
+   * Overrides the identity this client's cache entries are filed under.
+   *
+   * Set it when two clients would otherwise collide — the same base URL and
+   * the same token, but a different logical scope — or when you want a
+   * readable key in devtools. Two clients sharing a prefix share cached data,
+   * which is the thing to avoid across tenants.
+   */
+  cacheKeyPrefix?: string
+
 }
 
 /**
@@ -79,6 +89,19 @@ export interface ClientOptions {
  * state, so build it once and keep it.
  */
 export interface FlexitypeClient {
+  /**
+   * A stable identity for this client's CACHE entries.
+   *
+   * One client is one tenant, because the tenant travels in the token. A cache
+   * shared across clients must therefore keep their entries apart, or an app
+   * that swaps clients serves one tenant's data to another — the server is not
+   * involved, so its isolation cannot help.
+   *
+   * Derived from the base URL and a hash of the token, or supplied as
+   * `cacheKeyPrefix`. It is NOT a secret and is safe to show: a hash of the
+   * token, never the token.
+   */
+  readonly cacheKey: string
   /** Type definitions and their inheritance. */
   readonly types: TypesService
   /** Attribute definitions. */
@@ -155,8 +178,9 @@ export interface FlexitypeClient {
  * ```
  */
 export function createClient(options: ClientOptions): FlexitypeClient {
+  const baseUrl = normalizeBaseUrl(options.baseUrl)
   const transport = new Transport({
-    baseUrl: normalizeBaseUrl(options.baseUrl),
+    baseUrl,
     token: options.token,
     userAgent: options.userAgent,
     headers: options.headers ?? {},
@@ -165,6 +189,7 @@ export function createClient(options: ClientOptions): FlexitypeClient {
   })
 
   return {
+    cacheKey: options.cacheKeyPrefix ?? defaultCacheKey(baseUrl, options.token),
     types: new TypesService(transport),
     attributes: new AttributesService(transport),
     values: new ValuesService(transport),
@@ -235,6 +260,30 @@ export function createClient(options: ClientOptions): FlexitypeClient {
  * service used to build a client that failed every request. Refusing it here
  * points the reader at the missing "http://" rather than at their network.
  */
+/**
+ * defaultCacheKey identifies a client for cache purposes, without disclosing
+ * its token.
+ *
+ * The base URL alone is not enough: two tenants of one deployment share it and
+ * differ only by token. The token itself must not appear in a query key —
+ * keys are visible in devtools and in application logs — so it is folded into
+ * a short non-cryptographic hash. Distinguishing clients is all this has to
+ * do; it is not a security boundary, and the server's own checks are.
+ */
+export function defaultCacheKey(baseUrl: string, token?: string): string {
+  return `${baseUrl}#${fnv1a(token ?? '')}`
+}
+
+/** fnv1a is a small, stable, dependency-free string hash. */
+function fnv1a(input: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(36)
+}
+
 export function normalizeBaseUrl(baseUrl: string): string {
   if (baseUrl === '') {
     throw new FlexitypeError({

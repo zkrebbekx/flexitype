@@ -14,7 +14,7 @@
 export { FlexitypeProvider, useFlexitypeClient } from './provider.js'
 export type { FlexitypeProviderProps } from './provider.js'
 
-export { flexitypeKeys, FLEXITYPE_KEY_ROOT } from './keys.js'
+export { flexitypeKeysFor, FLEXITYPE_KEY_ROOT } from './keys.js'
 
 export {
   flattenPages,

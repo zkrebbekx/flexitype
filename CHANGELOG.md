@@ -1,5 +1,34 @@
 ## [Unreleased]
 
+### Fixed — BREAKING: React hooks could serve one tenant's data to another ([#589])
+
+The hooks cached results under keys that named no client, so an application
+following the SDK's documented multi-tenant pattern — one cache, swap the
+`client` prop, because the tenant travels in the token — served tenant A's
+data under tenant B. Within `staleTime`, B's backend was never contacted, so
+the server's isolation never came into it.
+
+Every client now carries a `cacheKey`, derived from its base URL and a HASH of
+its token (never the token itself: query keys show up in devtools and in
+logs), or set explicitly with the new `cacheKeyPrefix` option. Every key names
+it:
+
+```
+['flexitype', <cacheKey>, <resource>, <shape>, ...<arguments>]
+```
+
+**Breaking, for hand-written keys.** `flexitypeKeys` is replaced by
+`flexitypeKeysFor(client.cacheKey)`, which returns the same shape. Code using
+the helpers needs the one-line change; code that hardcoded
+`['flexitype','types']` no longer matches and must add the cache key.
+`invalidateAfterValueWrite` takes an optional `cacheKey` and scopes to that
+client.
+
+`['flexitype']` still covers everything, and
+`['flexitype', client.cacheKey]` now covers exactly one tenant.
+
+[#589]: https://github.com/zkrebbekx/flexitype/issues/589
+
 ### Fixed — A rollup could read an attribute its author cannot ([#585])
 
 A rollup is materialized under system access, and its result is stored as an

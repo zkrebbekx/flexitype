@@ -53,7 +53,7 @@ import type { ListTypesOptions } from '../services/types.js'
 import type { SetValue } from '../models.js'
 import { ScopedValues } from '../softtype/scoped.js'
 import { toFormDescriptor, type FormDescriptor, type FormDescriptorOptions } from '../softtype/schema.js'
-import { flexitypeKeys } from './keys.js'
+import { flexitypeKeysFor } from './keys.js'
 import { useFlexitypeClient } from './provider.js'
 
 /**
@@ -104,6 +104,7 @@ export function useTypes(
   queryOptions?: QueryHookOptions<Page<TypeDefinition>>,
 ): UseQueryResult<Page<TypeDefinition>, FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<Page<TypeDefinition>, FlexitypeError>({
       queryKey: flexitypeKeys.types.list(options),
@@ -120,6 +121,7 @@ export function useType(
   queryOptions?: QueryHookOptions<TypeDefinition>,
 ): UseQueryResult<TypeDefinition, FlexitypeError> {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return useQuery<TypeDefinition, FlexitypeError>({
     queryKey: flexitypeKeys.types.detail(id ?? ''),
     queryFn: ({ signal }) => client.types.get(id as string, { signal }),
@@ -140,6 +142,7 @@ export function useEffectiveAttributes(
   queryOptions?: QueryHookOptions<EffectiveAttribute[]>,
 ): UseQueryResult<EffectiveAttribute[], FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<EffectiveAttribute[], FlexitypeError>({
       queryKey: flexitypeKeys.types.effectiveAttributes(typeId ?? ''),
@@ -179,6 +182,7 @@ export function useTypeChildren(
   queryOptions?: QueryHookOptions<TypeDefinition[]>,
 ): UseQueryResult<TypeDefinition[], FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<TypeDefinition[], FlexitypeError>({
       queryKey: flexitypeKeys.types.children(typeId ?? ''),
@@ -198,6 +202,7 @@ export function useAttributes(
   queryOptions?: QueryHookOptions<Page<Attribute>>,
 ): UseQueryResult<Page<Attribute>, FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<Page<Attribute>, FlexitypeError>({
       queryKey: flexitypeKeys.attributes.list(options),
@@ -217,6 +222,7 @@ export function useEntities(
   queryOptions?: QueryHookOptions<Page<EntitySummary>>,
 ): UseQueryResult<Page<EntitySummary>, FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<Page<EntitySummary>, FlexitypeError>({
       queryKey: flexitypeKeys.entities.list(typeId ?? '', options),
@@ -243,6 +249,7 @@ export function useEntityValues(
   queryOptions?: QueryHookOptions<AttributeValue[]>,
 ): UseQueryResult<AttributeValue[], FlexitypeError> & WithState & { scoped: ScopedValues | undefined } {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   const result = withState(
     useQuery<AttributeValue[], FlexitypeError>({
       queryKey: flexitypeKeys.entities.values(typeId ?? '', entityId ?? '', options),
@@ -265,6 +272,7 @@ export function useEntityRelationships(
   queryOptions?: QueryHookOptions<EntityLink[]>,
 ): UseQueryResult<EntityLink[], FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<EntityLink[], FlexitypeError>({
       queryKey: flexitypeKeys.entities.relationships(typeId ?? '', entityId ?? ''),
@@ -283,6 +291,7 @@ export function useEntityCompleteness(
   queryOptions?: QueryHookOptions<Completeness>,
 ): UseQueryResult<Completeness, FlexitypeError> {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return useQuery<Completeness, FlexitypeError>({
     queryKey: flexitypeKeys.entities.completeness(typeId ?? '', entityId ?? ''),
     queryFn: ({ signal }) => client.entities.completeness(typeId as string, entityId as string, { signal }),
@@ -303,6 +312,7 @@ export function useEffectiveSchema(
   queryOptions?: QueryHookOptions<EffectiveSchema>,
 ): UseQueryResult<EffectiveSchema, FlexitypeError> {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return useQuery<EffectiveSchema, FlexitypeError>({
     queryKey: flexitypeKeys.entities.effectiveSchema(typeId ?? '', entityId ?? '', attributeId ?? ''),
     queryFn: ({ signal }) =>
@@ -325,6 +335,7 @@ export function useEntityRevisions(
   queryOptions?: QueryHookOptions<Revision[]>,
 ): UseQueryResult<Revision[], FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<Revision[], FlexitypeError>({
       queryKey: flexitypeKeys.entities.revisions(typeId ?? '', entityId ?? ''),
@@ -343,6 +354,7 @@ export function useEntityGrid(
   queryOptions?: QueryHookOptions<GridPage>,
 ): UseQueryResult<GridPage, FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<GridPage, FlexitypeError>({
       queryKey: flexitypeKeys.entities.grid(typeId ?? '', options),
@@ -376,6 +388,7 @@ export function useQueryEntities(
   queryOptions?: QueryHookOptions<Page<EntitySummary>>,
 ): UseQueryResult<Page<EntitySummary>, FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<Page<EntitySummary>, FlexitypeError>({
       queryKey: flexitypeKeys.query.run(type ?? '', q, options),
@@ -403,6 +416,7 @@ export function useInfiniteQueryEntities(
 ): UseInfiniteQueryResult<{ pages: Page<EntitySummary>[]; pageParams: (string | undefined)[] }, FlexitypeError> &
   WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   const result = useInfiniteQuery({
     queryKey: flexitypeKeys.query.run(type ?? '', q, options),
     queryFn: ({ pageParam, signal }) =>
@@ -433,6 +447,7 @@ export function useSavedViews(
   queryOptions?: QueryHookOptions<SavedView[]>,
 ): UseQueryResult<SavedView[], FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<SavedView[], FlexitypeError>({
       queryKey: flexitypeKeys.savedViews.list(),
@@ -448,6 +463,7 @@ export function useUnitFamilies(
   queryOptions?: QueryHookOptions<UnitFamily[]>,
 ): UseQueryResult<UnitFamily[], FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<UnitFamily[], FlexitypeError>({
       queryKey: flexitypeKeys.unitFamilies.list(),
@@ -464,6 +480,7 @@ export function useDependencies(
   queryOptions?: QueryHookOptions<Page<Dependency>>,
 ): UseQueryResult<Page<Dependency>, FlexitypeError> & WithState {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return withState(
     useQuery<Page<Dependency>, FlexitypeError>({
       queryKey: flexitypeKeys.dependencies.list(options),
@@ -479,6 +496,7 @@ export function useFeatures(
   queryOptions?: QueryHookOptions<Features>,
 ): UseQueryResult<Features, FlexitypeError> {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   return useQuery<Features, FlexitypeError>({
     queryKey: flexitypeKeys.ops.features(),
     queryFn: ({ signal }) => client.features({ signal }),
@@ -526,8 +544,13 @@ export type MutationHookOptions<TData, TVariables> = Omit<
  */
 export async function invalidateAfterValueWrite(
   queryClient: QueryClient,
-  input: { typeId?: string | undefined; entityId?: string | undefined } = {},
+  input: { typeId?: string | undefined; entityId?: string | undefined; cacheKey?: string } = {},
 ): Promise<void> {
+  // Scoped to ONE client. Without the cache key this invalidated every
+  // tenant's entries in a shared cache — harmless for correctness, but it
+  // refetched data the caller has no business touching, and it is the same
+  // omission that let a read cross tenants.
+  const flexitypeKeys = flexitypeKeysFor(input.cacheKey ?? '')
   const work: Promise<unknown>[] = [
     // A changed value can move the entity into or out of any result set, and
     // the client cannot evaluate FQL to know which, so every query, grid and
@@ -567,6 +590,7 @@ export function useSetValue(
     onSuccess: async (...args: OnSuccessArgs<AttributeValue, SetValue>) => {
       const variables = args[1]
       await invalidateAfterValueWrite(queryClient, {
+        cacheKey: client.cacheKey,
         typeId: variables.type_definition_id,
         entityId: variables.entity_id,
       })
@@ -585,7 +609,7 @@ export function useSetValues(
     mutationFn: (items: SetValue[]) => client.values.setBatch(items),
     ...options,
     onSuccess: async (...args: OnSuccessArgs<AttributeValue[], SetValue[]>) => {
-      await invalidateAfterValueWrite(queryClient)
+      await invalidateAfterValueWrite(queryClient, { cacheKey: client.cacheKey })
       await forwardOnSuccess(options, args)
     },
   })
@@ -601,7 +625,7 @@ export function useRemoveValue(
     mutationFn: (id: string) => client.values.remove(id),
     ...options,
     onSuccess: async (...args: OnSuccessArgs<AttributeValue, string>) => {
-      await invalidateAfterValueWrite(queryClient)
+      await invalidateAfterValueWrite(queryClient, { cacheKey: client.cacheKey })
       await forwardOnSuccess(options, args)
     },
   })
@@ -618,6 +642,7 @@ export function useCreateAttribute(
   options?: MutationHookOptions<Attribute, CreateAttributeInput>,
 ): UseMutationResult<Attribute, FlexitypeError, CreateAttributeInput> {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   const queryClient = useQueryClient()
   return useMutation<Attribute, FlexitypeError, CreateAttributeInput>({
     mutationFn: (input) => client.attributes.create(input),
@@ -637,6 +662,7 @@ export function useCreateType(
   options?: MutationHookOptions<TypeDefinition, CreateTypeInput>,
 ): UseMutationResult<TypeDefinition, FlexitypeError, CreateTypeInput> {
   const client = useFlexitypeClient()
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   const queryClient = useQueryClient()
   return useMutation<TypeDefinition, FlexitypeError, CreateTypeInput>({
     mutationFn: (input) => client.types.create(input),
@@ -658,7 +684,7 @@ export function useRemoveEntity(
     mutationFn: ({ typeId, entityId }) => client.entities.remove(typeId, entityId),
     ...options,
     onSuccess: async (...args: OnSuccessArgs<unknown, { typeId: string; entityId: string }>) => {
-      await invalidateAfterValueWrite(queryClient, args[1])
+      await invalidateAfterValueWrite(queryClient, { ...args[1], cacheKey: client.cacheKey })
       await forwardOnSuccess(options, args)
     },
   })

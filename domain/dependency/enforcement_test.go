@@ -215,7 +215,7 @@ func TestEnforcementIsValidated(t *testing.T) {
 				// rule. Allowed values and constraints are checked against a
 				// value the caller submitted, so there is nothing to defer.
 				So(err, ShouldNotBeNil)
-				So(err.Error(), ShouldContainSubstring, "required override")
+				So(err.Error(), ShouldContainSubstring, "requires a value")
 			})
 		})
 

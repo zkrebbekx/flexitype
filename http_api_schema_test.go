@@ -1433,7 +1433,7 @@ func TestHTTPDependencyEnforcement(t *testing.T) {
 
 			Convey("Then it is refused rather than stored and ignored", func() {
 				So(resp.Status, ShouldEqual, http.StatusUnprocessableEntity)
-				So(string(resp.Body), ShouldContainSubstring, "required override")
+				So(string(resp.Body), ShouldContainSubstring, "requires a value")
 			})
 		})
 	})

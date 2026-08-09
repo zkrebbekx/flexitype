@@ -350,17 +350,37 @@ func validateRule(source, target *attribute.Definition, conditions []Condition, 
 			return err
 		}
 	}
-	if effect.isEmpty() {
-		return domainerrors.NewValidation("effect must narrow values, add constraints or override required")
-	}
+	// The enforce checks run BEFORE the empty check. An effect carrying only
+	// enforce is empty by the rule below, so the generic "effect must narrow
+	// values…" message answered first and never mentioned the field the author
+	// actually got wrong.
 	if !effect.Enforce.Valid() {
 		return domainerrors.NewValidation("enforce must be on_write or on_read", "enforce", string(effect.Enforce))
 	}
-	// enforce says when the REQUIRED override is enforced, so it means nothing
-	// without one. Storing it anyway would read as a configured rule that
-	// changes nothing — the shape of mistake this codebase keeps paying for.
-	if effect.Enforce != "" && effect.Required == nil {
-		return domainerrors.NewValidation("enforce applies to the required override, which this effect does not set")
+	// enforce says when a DEMAND for a value is enforced, so it means nothing
+	// on an effect that does not make one. An effect that only relaxes a
+	// requirement has nothing to enforce either, and accepting a mode there let
+	// a relaxing rule contribute on_write to a target another rule demanded —
+	// so a pair of rules blocked writes although neither asked to.
+	//
+	// Storing a setting that changes nothing reads as a configured rule, which
+	// is the shape of mistake this codebase keeps paying for.
+	if effect.Enforce != "" && !effect.DemandsValue() {
+		return domainerrors.NewValidation(
+			"enforce applies to an effect that requires a value, which this effect does not")
+	}
+	// A computed attribute is materialized AFTER the transaction commits, so a
+	// demand for one can never be met while the write is being judged: an
+	// entity that will be complete the instant it commits would be refused, and
+	// no ordering by the caller could help. Refused where it is authored rather
+	// than surfacing later as an unsatisfiable rule.
+	if effect.Enforcement() == EnforceOnWrite && effect.DemandsValue() && target.IsComputed() {
+		return domainerrors.NewValidation(
+			"a computed attribute cannot be required on write: its value is materialized after the write commits",
+			"attribute", target.InternalName())
+	}
+	if effect.isEmpty() {
+		return domainerrors.NewValidation("effect must narrow values, add constraints or override required")
 	}
 	for _, v := range effect.AllowedValues {
 		if v.DataType() != target.DataType() {

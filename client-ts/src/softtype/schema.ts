@@ -140,6 +140,15 @@ export interface FormField {
   kind: FieldKind
   /** The field must hold a value. A dependency can turn this on. */
   required: boolean
+  /**
+   * How `required` is enforced when a dependency turned it on.
+   *
+   * `on_write` means the service refuses a write that leaves the field empty,
+   * so a form that saves one field at a time must send this one with whatever
+   * turned the requirement on. `on_read` (the default) means the gap is
+   * reported and the caller decides where to gate.
+   */
+  requiredEnforcement: 'on_write' | 'on_read'
   /** The attribute holds several values at once. */
   multiValued: boolean
   /** The value must be unique across the type's entities. */
@@ -264,6 +273,7 @@ export function toFormField(
     dataType,
     kind: fieldKind(dataType, options_ !== undefined),
     required: override?.required ?? attribute.required ?? false,
+    requiredEnforcement: override?.required_enforcement ?? 'on_read',
     multiValued: attribute.multi_valued ?? false,
     unique: attribute.unique ?? false,
     localizable: attribute.localizable ?? false,

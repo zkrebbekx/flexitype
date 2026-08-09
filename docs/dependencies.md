@@ -67,7 +67,7 @@ existed. Setting `contains_allergens` to `true` on a dish with no allergens is
 accepted, and the dish is then reported incomplete:
 
 ```bash
-curl -s localhost:8080/entities/dish/tart/completeness
+curl -s localhost:8080/api/v1/entities/<dish-type-id>/tart/completeness
 # {"required":1,"filled":0,"score":0,
 #  "missing":[{"internal_name":"allergens", ...}]}
 ```
@@ -85,8 +85,8 @@ later is enforced with no change to that code.
 ```
 
 ```bash
-curl -s -X POST localhost:8080/values -d '{"attribute_definition_id":"<contains_allergens>","entity_id":"tart","value":true}'
-# 422 {"error":{"code":"dependency_violation",
+curl -s -X POST localhost:8080/api/v1/values -d '{"attribute_definition_id":"<contains_allergens>","entity_id":"tart","value":true}'
+# 422 {"error":{"code":"DEPENDENCY_VIOLATION",
 #      "message":"an attribute dependency requires a value for \"allergens\""}}
 ```
 
@@ -112,8 +112,10 @@ id,contains_allergens,allergens
 tart,true,
 ```
 
-In best-effort import mode each row is its own transaction, so one refused row
-does not cost the others.
+Best-effort import chunks on **entity** boundaries, never mid-entity, and
+retries a failed chunk one entity at a time. So a refused entity does not cost
+the others, and a file's outcome does not depend on where its rows happen to
+fall relative to a chunk size.
 
 **A single value write is a transaction of one.** A caller writing one
 attribute per request — the usual REST flow — cannot set the condition first
@@ -163,7 +165,7 @@ The effective schema says which kind of requirement a caller is looking at, so
 a UI can tell a rule from a wall before it lets someone save half a record:
 
 ```bash
-curl -s "localhost:8080/dependencies/effective-schema?attribute_definition_id=<allergens>&entity_id=tart"
+curl -s "localhost:8080/api/v1/entities/<dish-type-id>/tart/attributes/<allergens>/effective-schema"
 # {"required":true,"required_enforcement":"on_write","restricted":false}
 ```
 
@@ -183,12 +185,31 @@ A rule that does not match contributes nothing — including its mode. A rule
 that *relaxes* a requirement has no enforcement to contribute either, so it
 cannot turn into a block.
 
+### What a restricted caller sees
+
+A rule is resolved over the values the **caller may read**, exactly as
+completeness and the effective schema are, and an attribute the caller cannot
+read is skipped. Two consequences, both deliberate:
+
+- A principal who cannot see a rule's source is not refused by it. Refusing
+  would answer, with one bit per entity, a question about a value the field ACL
+  hides everywhere else.
+- That principal can therefore write a state it cannot see is forbidden. This
+  is the same trade the read paths already make, and it is what keeps the gate,
+  the effective schema and completeness giving one answer.
+
+A caller with full read access gets the rule in full.
+
 ## Validation
 
 - `enforce` must be `on_write` or `on_read`.
-- `enforce` is refused on an effect that does not set `required`. A stored
-  setting that changes nothing reads as a configured rule, which is worse than
-  an error.
+- `enforce` is refused on an effect that does not **require** a value —
+  including one that sets `required: false`. A stored setting that changes
+  nothing reads as a configured rule, and a relaxing rule carrying a mode used
+  to drag an unrelated demanding rule into blocking.
+- A **computed** attribute cannot be required on write. Its value is
+  materialized after the write commits, so the demand could never be met while
+  the write is judged; the rule is refused where it is authored.
 - An effect must do something: narrow values, add constraints, or override
   required.
 

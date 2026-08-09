@@ -720,6 +720,12 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 				if cerr := clearStale(); cerr != nil {
 					return cerr
 				}
+				// A cleared rollup is absent, not its last value. Leaving it in
+				// the inputs let a formula in this same pass re-derive from the
+				// number that just went away, and write it straight back.
+				delete(inputs, c.InternalName)
+				delete(exact, c.InternalName)
+				delete(members, c.InternalName)
 				continue
 			}
 			if _, werr := it.Values().Set(ctx, appvalue.SetInput{

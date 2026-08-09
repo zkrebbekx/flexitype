@@ -1,11 +1,29 @@
-# Changelog
-
-All notable changes to flexitype are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
-follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from 1.0
-(see [API stability](docs/api-stability.md)).
-
 ## [Unreleased]
+
+## [1.6.0] — 2026-08-09
+
+Four capabilities an evaluating team's own build asked for.
+
+Building a full example on 1.5.0 — a multi-tenant marketplace, in
+[examples/marketplace/](examples/marketplace/) — surfaced eight things. The
+four that were deployment defects shipped in 1.5.0. These are the other four,
+and each removes a workaround the example carried.
+
+Every change is additive. No supported signature moved, no stored data
+changed, and a deployment that sets nothing new behaves exactly as 1.5.0 did.
+
+### Read this before upgrading
+
+`read_any_tenant` is a new privilege that crosses the tenancy boundary — the
+property the rest of the design rests on. It is opt-in per account, it cannot
+be combined with `write` or `admin`, `admin` does not imply it, and every
+mutating method is refused for an account holding it. No existing account
+gains anything.
+
+`FLEXITYPE_MEDIA_URL_SECRET` is likewise opt-in. Unset, nothing changes and
+the signing endpoint reports the capability as disabled. Set, a link to media
+bytes can be redeemed without a credential until it expires — which is the
+point, and worth a deliberate decision.
 
 ### Added — A read-only cross-tenant credential ([#549])
 
@@ -32,15 +50,6 @@ method for such an account whatever else it holds.
 The marketplace example now mints one reader at start-up and its storefront
 holds no merchant token for a read.
 
-### Changed — Minting a signed media link is a GET ([#552])
-
-`GET /api/v1/media/{key}/signed-url`, with `?ttl_seconds=`. It was a POST,
-which changes nothing and locked the endpoint away from exactly the credential
-with the strongest reason to want a link: a read-only cross-tenant reader.
-Minting hands back a capability to read an object the caller can already read,
-so it is a read. The feature is unreleased, so nothing depends on the old
-shape.
-
 ### Added — Signed, expiring media links ([#552])
 
 `GET /api/v1/media/{key}/signed-url` mints a link, and
@@ -66,6 +75,16 @@ webhook signing key.
 
 Without the secret the endpoint answers `501 FEATURE_DISABLED` rather than
 pretending to work, and a secret below the floor stops the service at start-up.
+
+### Changed — Minting a signed media link is a GET ([#552])
+
+`GET /api/v1/media/{key}/signed-url`, with `?ttl_seconds=`. It was a POST,
+which changes nothing and locked the endpoint away from exactly the credential
+with the strongest reason to want a link: a read-only cross-tenant reader.
+Minting hands back a capability to read an object the caller can already read,
+so it is a read. The feature is unreleased, so nothing depends on the old
+shape.
+
 ### Added — A `text` data type for long-form values ([#551])
 
 `text` stores and compares exactly as `string`, takes the same constraints,

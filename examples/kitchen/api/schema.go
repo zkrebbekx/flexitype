@@ -40,7 +40,7 @@ const (
 // the same dish.
 var channels = []string{"dine_in", "delivery", "catering"}
 
-// locales a dish is named and described in.
+// locales a dish is named and described in, besides the base value.
 var locales = []string{"en", "fr"}
 
 // ensureSchema creates the model if it is not there. It is idempotent: every

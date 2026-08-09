@@ -301,3 +301,51 @@ func TestAMenuChangeIsScheduled(t *testing.T) {
 		})
 	})
 }
+
+// TestAnUnknownScopeIsRefused covers the guard on channels and locales.
+//
+// A scope is part of a value's ADDRESS, not a closed set, so flexitype accepts
+// any channel string happily. A typo would therefore write a price nobody
+// reads: every read path iterates the channels the menu knows.
+func TestAnUnknownScopeIsRefused(t *testing.T) {
+	Convey("Given a dish on the menu", t, func() {
+		handler := kitchen(t)
+		seedShortcrust(handler)
+
+		Convey("When a price is written for a channel the menu does not have", func() {
+			status, body := call(handler, http.MethodPut, "/api/dishes/shortcrust",
+				`{"price":{"dinein":"9.00"}}`)
+
+			Convey("Then it is refused, and says which channels exist", func() {
+				So(status, ShouldEqual, http.StatusUnprocessableEntity)
+				message, _ := body["error"].(map[string]any)["message"].(string)
+				So(message, ShouldContainSubstring, "dine_in")
+			})
+
+			Convey("And nothing was written: the batch is refused whole", func() {
+				_, dish := call(handler, http.MethodGet, "/api/dishes/shortcrust", "")
+				prices, _ := dish["price"].(map[string]any)
+				So(prices["dinein"], ShouldBeNil)
+				So(prices["dine_in"], ShouldEqual, "8.50")
+			})
+		})
+
+		Convey("When a name is written in a locale the menu does not have", func() {
+			status, _ := call(handler, http.MethodPut, "/api/dishes/shortcrust",
+				`{"name":{"de":"Mürbeteig-Tarte"}}`)
+
+			Convey("Then it is refused too", func() {
+				So(status, ShouldEqual, http.StatusUnprocessableEntity)
+			})
+		})
+
+		Convey("When the base value is written with no locale", func() {
+			status, _ := call(handler, http.MethodPut, "/api/dishes/shortcrust",
+				`{"name":{"":"Shortcrust tart"}}`)
+
+			Convey("Then it is accepted: the base value is not a locale", func() {
+				So(status, ShouldEqual, http.StatusOK)
+			})
+		})
+	})
+}

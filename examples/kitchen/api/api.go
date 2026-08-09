@@ -470,6 +470,29 @@ func (a *API) putDish(w http.ResponseWriter, r *http.Request) {
 	}
 	entityID := r.PathValue("id")
 
+	// A channel or locale the model does not declare is refused here.
+	//
+	// flexitype would accept it: a scope is part of a value's address, not a
+	// closed set, so `price` in channel "dinein" would be written and stored
+	// happily — and then read by nothing, because every read path iterates the
+	// channels the menu knows. A typo would silently price a dish for nobody.
+	for channel := range in.Price {
+		if !known(channels, channel) {
+			writeError(w, http.StatusUnprocessableEntity,
+				"unknown channel "+channel+"; this menu prices for "+strings.Join(channels, ", "))
+			return
+		}
+	}
+	for _, byLocale := range []map[string]string{in.Name, in.Description} {
+		for locale := range byLocale {
+			if locale != "" && !known(locales, locale) {
+				writeError(w, http.StatusUnprocessableEntity,
+					"unknown locale "+locale+"; this menu is written in "+strings.Join(locales, ", "))
+				return
+			}
+		}
+	}
+
 	batch := []client.SetValueInput{}
 	add := func(name, locale, channel string, raw json.RawMessage) {
 		batch = append(batch, client.SetValueInput{
@@ -517,6 +540,16 @@ func (a *API) putDish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, dish)
+}
+
+// known reports whether a scope is one the menu declares.
+func known(allowed []string, value string) bool {
+	for _, candidate := range allowed {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 // deleteDish withdraws a dish: its values are archived and its links are

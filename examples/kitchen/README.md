@@ -77,6 +77,17 @@ That is why removing a line changes the dish's cost even though nothing wrote
 to the dish. `DELETE /api/dishes/{id}/lines/{lineID}` unlinks and then simply
 *re-reads* the dish.
 
+### A scope is an address, not a closed set
+
+`price` is scoped by channel, and flexitype will accept **any** channel string:
+a scope is part of a value's address, not an enumeration. Write
+`price` in channel `dinein` and it is stored happily — and read by nothing,
+because every read path here iterates the channels the menu knows.
+
+So the API refuses a channel or locale the model does not declare, and says
+which ones exist. The alternative is a typo that silently prices a dish for
+nobody.
+
 ### The one number this example computes itself
 
 Margin — `(price - food_cost) / price` — is computed in

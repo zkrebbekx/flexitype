@@ -56,47 +56,30 @@ over.
 
 Two smaller decisions:
 
-- `enforce` is refused on an effect that does not set `required`. Allowed
-  values and constraints are checked against a value the caller submitted, so
-  there is nothing to defer, and a stored setting that changes nothing reads as
-  a configured rule.
-- The rule is enforced whether or not the caller may READ the attribute it
-  demands — skipping it for a restricted principal would leave exactly one way
-  to write the state the rule forbids. The attribute's name is withheld from
-  the error in that case, as completeness already withholds it from `missing`.
+- `enforce` is refused on an effect that does not **require** a value,
+  including one setting `required: false`. Allowed values and constraints are
+  checked against a value the caller submitted, so there is nothing to defer; a
+  setting that changes nothing reads as a configured rule; and a relaxing rule
+  carrying a mode used to drag an unrelated demanding rule into blocking.
+- A **computed** attribute cannot be required on write. Its value is
+  materialized after the write commits, so the demand could never be met while
+  the write is judged.
 
 `GET .../effective-schema` returns `required_enforcement`, so a UI can tell a
 rule from a wall before it lets someone save half a record. The console's
 dependency drawer edits the mode. Both SDKs and the OpenAPI spec carry it. New:
 [docs/dependencies.md](docs/dependencies.md).
 
-### Changed — The `ecommerce` template refuses to activate an incomplete product
-
-Its two rules — an active product needs a SKU and a price — now declare
-`"enforce": "on_write"`. `status = active` is a lifecycle state, and a product
-a shopper can buy with no SKU and no price is not a product that should exist.
-
-Setting `status` to `active` on a bare product is now `422`. Writing the state
-and what it demands in one batch is accepted, and so is writing the SKU
-first — the order a person works in anyway. `examples/marketplace` already
-wrote a whole product as one batch and is unaffected.
-
-This is a behaviour change for a schema created from this template before
-1.8.0. Existing products are untouched and no read changes; the rule applies
-from the next write to each product. To keep the previous behaviour, set the
-two rules' `enforce` to `on_read`.
-
 ### Fixed — Two examples described a requirement they did not enforce
 
 `examples/marketplace` said the `ecommerce` template's rules "make `sku` and
 `price` required once `status` is `active`", and `examples/kitchen` said the
-service "refuses the incomplete write". Neither was true: both rules reported,
+service "refuses the incomplete write". Neither was true: both rules report,
 and setting the source alone was always accepted.
 
-The marketplace's claim is now true — the template blocks. The kitchen's rule
-is the other case, and says so: it declares `"enforce": "on_read"` because a
-chef ticks the allergen box and then types the list, and publishing is what
-turns the gap into a refusal, from the service's own completeness report.
+Both now say what the rules do. The shipped templates are unchanged — a curated
+starting schema should not decide enforcement for you, and switching a rule to
+`on_write` changes what an existing catalogue accepts.
 
 ### Fixed — A change set could publish a removal that a write would be refused for
 
@@ -105,6 +88,23 @@ which did not run the dependency gate. Staging the removal of a demanded value,
 approving it and publishing it therefore left the entity in exactly the state a
 direct removal is refused for. The mutation path now goes through the same
 check.
+
+### Fixed — An import preview answered the one question it exists to answer, wrongly
+
+A dry-run import rolls back deliberately, and end-of-transaction checks ran only
+when the usecase succeeded — so the preview reported a row valid that the real
+import refuses.
+
+### Fixed — A file's import outcome depended on where its rows fell
+
+Best-effort import chunked at a fixed row count, so one entity's rows could
+straddle a boundary and be judged half at a time: the same pair of rows imported
+at rows 50/51 and failed at 100/101. Chunks now end on entity boundaries, and a
+failed chunk is retried one entity at a time.
+
+A transactional import refused by the check also blamed row 0 — the header,
+which is no data row — because the check fails after every row is written. It
+now names the row that first mentions the refused entity.
 
 ## [1.7.0] — 2026-08-09
 

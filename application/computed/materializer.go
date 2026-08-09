@@ -12,10 +12,10 @@
 // entities, off the request goroutine, so a corrected formula converges
 // without waiting for each entity to be written again.
 //
-// Rollup aggregates over relationships are NOT implemented, and a rollup
-// definition is refused at create/update rather than accepted — see
-// domain/attribute/computed.go. An accepted rollup would have produced an
-// attribute that the schema advertises and that never holds a value.
+// A ROLLUP aggregates one attribute across the entities a relationship
+// reaches (see rollup.go). Its inputs are on other entities, so it is driven
+// by two further triggers: a link change recomputes both endpoints, and a
+// value change recomputes whatever aggregates the entity that was written.
 package computed
 
 import (
@@ -39,6 +39,7 @@ import (
 	appvalue "github.com/zkrebbekx/flexitype/application/value"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	domainrelationship "github.com/zkrebbekx/flexitype/domain/relationship"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -121,6 +122,23 @@ func EventTypes() []events.Type {
 		domainattribute.EventArchived, domainattribute.EventRestored,
 		domaintypedef.EventCreated, domaintypedef.EventUpdated,
 		domaintypedef.EventArchived, domaintypedef.EventRestored,
+		// A rollup's inputs live on OTHER entities, so linking or unlinking
+		// changes an aggregate without any value event for the entity that
+		// holds it.
+		domainrelationship.EventLinked, domainrelationship.EventUnlinked,
+		domainrelationship.EventRePinned,
+	}
+}
+
+// isLinkEvent reports whether an event type changes which entities a
+// relationship reaches.
+func isLinkEvent(t events.Type) bool {
+	switch t {
+	case domainrelationship.EventLinked, domainrelationship.EventUnlinked,
+		domainrelationship.EventRePinned:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -261,6 +279,9 @@ func (m *Materializer) Handle(ctx context.Context, env events.Envelope) error {
 		m.scheduleRecompute(env)
 		return nil
 	}
+	if isLinkEvent(env.Type) {
+		return m.handleLink(ctx, env)
+	}
 	var p valuePayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return fmt.Errorf("decode value event payload: %w", err)
@@ -270,7 +291,11 @@ func (m *Materializer) Handle(ctx context.Context, env events.Envelope) error {
 		return err
 	}
 	ctx = uow.WithTenant(ctx, tenant)
-	return m.Recompute(ctx, p.TypeDefinitionID, p.EntityID)
+	if err := m.Recompute(ctx, p.TypeDefinitionID, p.EntityID); err != nil {
+		return err
+	}
+	// Anything aggregating this entity received no event of its own.
+	return m.cascadeToNeighbours(ctx, p.EntityID)
 }
 
 // HandleBatch implements events.BatchHandler. It coalesces one commit's value
@@ -303,6 +328,14 @@ func (m *Materializer) HandleBatch(ctx context.Context, envs []events.Envelope) 
 			}
 			continue
 		}
+		if isLinkEvent(env.Type) {
+			// The batch path is the one that runs, so a link handled only in
+			// Handle would never reach a rollup in production.
+			if err := m.handleLink(ctx, env); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
 		var p valuePayload
 		if err := json.Unmarshal(env.Payload, &p); err != nil {
 			errs = append(errs, fmt.Errorf("decode value event payload: %w", err))
@@ -324,6 +357,10 @@ func (m *Materializer) HandleBatch(ctx context.Context, envs []events.Envelope) 
 		}
 		rctx := uow.WithTenant(ctx, tenant)
 		if err := m.Recompute(rctx, k.typeID, k.entityID); err != nil {
+			errs = append(errs, err)
+		}
+		// Anything aggregating this entity received no event of its own.
+		if err := m.cascadeToNeighbours(rctx, k.entityID); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -566,7 +603,11 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 	}
 	computed := make([]domainattribute.Snapshot, 0)
 	for _, a := range attrs {
-		if a.Attribute.Computed != nil && a.Attribute.Computed.Kind == domainattribute.ComputedFormula {
+		if a.Attribute.Computed == nil {
+			continue
+		}
+		switch a.Attribute.Computed.Kind {
+		case domainattribute.ComputedFormula, domainattribute.ComputedRollup:
 			computed = append(computed, a.Attribute)
 		}
 	}
@@ -641,6 +682,29 @@ func (m *Materializer) recompute(ctx context.Context, typeID, entityID string, a
 				}
 			}
 			return nil
+		}
+
+		if c.Computed.Kind == domainattribute.ComputedRollup {
+			result, rerr := m.evalRollup(ctx, it, c, entityID)
+			if rerr != nil {
+				return rerr
+			}
+			if !result.ok {
+				if cerr := clearStale(); cerr != nil {
+					return cerr
+				}
+				continue
+			}
+			if _, werr := it.Values().Set(ctx, appvalue.SetInput{
+				AttributeDefinitionID: c.ID.String(),
+				EntityID:              entityID,
+				TypeDefinitionID:      typeID,
+				Internal:              true,
+				Value:                 result.raw,
+			}); werr != nil {
+				return fmt.Errorf("materialize rollup value: %w", werr)
+			}
+			continue
 		}
 
 		expr, err := formula.Parse(c.Computed.Formula)

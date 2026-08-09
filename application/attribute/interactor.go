@@ -13,6 +13,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	domainrelationship "github.com/zkrebbekx/flexitype/domain/relationship"
 	domaintypedef "github.com/zkrebbekx/flexitype/domain/typedef"
 	domainvalue "github.com/zkrebbekx/flexitype/domain/value"
 	"github.com/zkrebbekx/flexitype/domain/valueobjects"
@@ -31,13 +32,21 @@ type Interactor struct {
 	// units resolves unit families so quantity min/max constraint operands
 	// normalize to the base unit; nil when unit families are disabled.
 	units appunit.Store
-	now   func() time.Time
+	// relDefs resolves the relationship a computed ROLLUP traverses, so a
+	// rollup naming a relationship that does not exist is refused here rather
+	// than aggregating nothing for ever. Nil-safe: with no repository the
+	// check is skipped rather than failing every rollup.
+	relDefs domainrelationship.DefinitionRepository
+	now     func() time.Time
 }
 
 // NewInteractor wires the attribute-definition usecases. units (nil-able)
 // normalizes quantity constraint operands.
-func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, units appunit.Store) *Interactor {
-	return &Interactor{uow: u, typeDefs: typeDefs, attrs: attrs, values: values, units: units, now: uow.UTCNow}
+func NewInteractor(u uow.UnitOfWork, typeDefs domaintypedef.Repository, attrs domainattribute.Repository, values domainvalue.Repository, units appunit.Store, relDefs domainrelationship.DefinitionRepository) *Interactor {
+	return &Interactor{
+		uow: u, typeDefs: typeDefs, attrs: attrs, values: values,
+		units: units, relDefs: relDefs, now: uow.UTCNow,
+	}
 }
 
 // assertStructuralChangeIsSafe refuses a flag flip that would orphan or
@@ -227,6 +236,20 @@ func (i *Interactor) Create(ctx context.Context, in CreateInput) (*domainattribu
 
 		// A computed formula must not create a dependency cycle with the
 		// type's other computed attributes.
+		// A rollup names a relationship and, for an aggregate, an attribute on
+		// the entities it reaches. Both are resolved HERE.
+		//
+		// A rollup naming a relationship that does not exist finds no
+		// counterparts, aggregates nothing and clears its value — silently,
+		// for ever. That is the exact failure the feature was withheld for a
+		// release to avoid, so a typo is a validation error at definition
+		// time instead.
+		if computed != nil && computed.Kind == domainattribute.ComputedRollup {
+			if rerr := i.assertRollupResolves(ctx, td, computed); rerr != nil {
+				return rerr
+			}
+		}
+
 		if computed != nil && computed.Kind == domainattribute.ComputedFormula {
 			refs, verr := computed.Validate()
 			if verr != nil {
@@ -399,6 +422,21 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 		// with no write to the formula itself.
 		if serr := i.assertNoFormulaReadsScopedSource(ctx, typeDefs, attrs, before, in); serr != nil {
 			return serr
+		}
+
+		// A rollup names a relationship and, for an aggregate, an attribute on
+		// the entities it reaches. Both are resolved HERE, on update as well
+		// as create: a rollup edited to name a relationship that does not
+		// exist finds no counterparts, aggregates nothing and clears its
+		// value — silently, for ever.
+		if computed != nil && computed.Kind == domainattribute.ComputedRollup {
+			owner, terr := typeDefs.Get(ctx, attr.TypeDefinitionID())
+			if terr != nil {
+				return terr
+			}
+			if rerr := i.assertRollupResolves(ctx, owner, computed); rerr != nil {
+				return rerr
+			}
 		}
 
 		// A computed formula must not introduce a dependency cycle with the
@@ -1171,4 +1209,99 @@ func appendUnseenTypes(into []*domaintypedef.TypeDefinition, more []*domaintyped
 		into = append(into, t)
 	}
 	return into
+}
+
+// assertRollupResolves refuses a rollup whose relationship or target cannot be
+// resolved.
+//
+// Three ways a rollup can be written and never produce anything:
+//
+//   - the relationship does not exist;
+//   - the direction points the wrong way, so this type is never on the side
+//     the traversal starts from;
+//   - the aggregated attribute does not exist on the type the relationship
+//     reaches.
+//
+// Each of those aggregates an empty set for ever, which looks identical to
+// "no data yet". Reporting them here is the difference between a schema
+// author fixing a typo and an operator asking why a total is blank.
+func (i *Interactor) assertRollupResolves(
+	ctx context.Context,
+	td *domaintypedef.TypeDefinition,
+	computed *domainattribute.Computed,
+) error {
+	if i.relDefs == nil {
+		return nil
+	}
+	spec := computed.Rollup
+	def, err := i.relDefs.GetByInternalName(ctx, uow.TenantFromContext(ctx), spec.Relationship)
+	if err != nil || def == nil {
+		if err != nil && !domainerrors.IsNotFound(err) {
+			return err
+		}
+		return domainerrors.NewValidation(
+			"rollup relationship "+spec.Relationship+" does not exist",
+			"relationship", spec.Relationship)
+	}
+	snapshot := def.Snapshot()
+
+	// Which side this type sits on decides which direction can traverse.
+	self := td.ID()
+	isParent := snapshot.ParentTypeID == self
+	isChild := snapshot.ChildTypeID == self
+	switch spec.Direction {
+	case "child":
+		if !isParent {
+			return domainerrors.NewValidation(
+				"a child rollup over "+spec.Relationship+" starts from its parent type, which this is not",
+				"direction", spec.Direction)
+		}
+	case "parent":
+		if !isChild {
+			return domainerrors.NewValidation(
+				"a parent rollup over "+spec.Relationship+" starts from its child type, which this is not",
+				"direction", spec.Direction)
+		}
+	default: // linked
+		if !isParent && !isChild {
+			return domainerrors.NewValidation(
+				"this type is not an endpoint of "+spec.Relationship,
+				"relationship", spec.Relationship)
+		}
+	}
+
+	// count needs no target; every other aggregate reads one on the far side.
+	if spec.Aggregate == domainattribute.RollupCount {
+		return nil
+	}
+	counterpart := snapshot.ChildTypeID
+	if spec.Direction == "parent" || (spec.Direction == "linked" && isChild) {
+		counterpart = snapshot.ParentTypeID
+	}
+	target, err := i.attrs.GetByInternalName(ctx, counterpart, spec.Target)
+	if err != nil && !domainerrors.IsNotFound(err) {
+		return err
+	}
+	if target == nil {
+		return domainerrors.NewValidation(
+			"rollup target "+spec.Target+" does not exist on the type "+spec.Relationship+" reaches",
+			"target", spec.Target)
+	}
+	if !isAggregatable(target.Snapshot().DataType) {
+		return domainerrors.NewValidation(
+			"rollup target "+spec.Target+" is not numeric, so it cannot be aggregated",
+			"target", spec.Target)
+	}
+	return nil
+}
+
+// isAggregatable reports whether sum, min and max mean anything for a type.
+func isAggregatable(dt valueobjects.DataType) bool {
+	switch dt {
+	case valueobjects.DataTypeInteger, valueobjects.DataTypeFloat,
+		valueobjects.DataTypeDecimal, valueobjects.DataTypeQuantity:
+		return true
+	default:
+		return false
+	}
 }

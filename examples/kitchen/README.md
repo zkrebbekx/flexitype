@@ -113,8 +113,9 @@ order someone fills it in.
 The choice follows from the **condition**. "Contains allergens" is a fact
 somebody is entering, so the rule reports. A condition that is a *lifecycle
 state* — `status = active` — is the case for the other mode,
-`"enforce": "on_write"`, which refuses the write. See
-[Choosing a mode](../../docs/dependencies.md#choosing-a-mode).
+`"enforce": "on_write"`, which refuses the write; the
+[marketplace example](../marketplace/) applies a template that does exactly
+that. See [Choosing a mode](../../docs/dependencies.md#choosing-a-mode).
 
 Something has to turn "needs" into "must", and here that is publishing:
 `POST /api/dishes/{id}/publish` reads the service's own **completeness** report

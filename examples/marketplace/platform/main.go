@@ -1,7 +1,7 @@
 // Command platform is the merchant-facing half of the marketplace example.
 //
 // It onboards a merchant — creating the flexitype TENANT, a service account
-// scoped to it, applying the `ecommerce` starter template, registering the
+// scoped to it, applying the `ecommerce_strict` starter template, registering the
 // storefront's webhook subscription and triggering the first projection
 // backfill — and then serves a thin merchant API over that merchant's own
 // flexitype client.

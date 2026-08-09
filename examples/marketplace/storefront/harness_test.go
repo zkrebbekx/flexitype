@@ -92,7 +92,7 @@ func newFlexitype(t *testing.T, tenants ...string) (string, map[string]merchantA
 	return srv.URL, out
 }
 
-// seedMerchant applies the ecommerce template into a tenant and registers the
+// seedMerchant applies the strict ecommerce template into a tenant and registers the
 // merchant with the storefront, which is what onboarding does in production.
 func seedMerchant(t *testing.T, store *Store, baseURL string, acct merchantAccount, displayName, secret string) *client.Client {
 	t.Helper()
@@ -100,7 +100,7 @@ func seedMerchant(t *testing.T, store *Store, baseURL string, acct merchantAccou
 	if err != nil {
 		t.Fatalf("build client: %v", err)
 	}
-	if _, err := c.Schema().ApplyTemplate(context.Background(), "ecommerce"); err != nil {
+	if _, err := c.Schema().ApplyTemplate(context.Background(), "ecommerce_strict"); err != nil {
 		t.Fatalf("apply template to %s: %v", acct.tenant, err)
 	}
 	err = store.UpsertMerchant(context.Background(), Merchant{

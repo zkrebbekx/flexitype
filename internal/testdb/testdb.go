@@ -17,7 +17,9 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	// The tests that use this package drive the lib/pq-backed repositories.
@@ -129,7 +131,12 @@ func containsRune(s string, r rune) bool {
 func TruncateAll(t *testing.T, pool *sqlx.DB) {
 	t.Helper()
 	var stmt string
-	err := pool.Get(&stmt, `SELECT 'TRUNCATE ' || string_agg(format('%I.%I', schemaname, tablename), ', ') || ' CASCADE'
+	// ORDER BY is what makes the lock order deterministic. TRUNCATE takes an
+	// ACCESS EXCLUSIVE lock on every table it names, in the order it names
+	// them, and string_agg without ORDER BY returns whatever order the scan
+	// produced — so two truncates could take the same locks in opposite orders
+	// and deadlock each other.
+	err := pool.Get(&stmt, `SELECT 'TRUNCATE ' || string_agg(format('%I.%I', schemaname, tablename), ', ' ORDER BY tablename) || ' CASCADE'
 		FROM pg_tables
 		WHERE schemaname = current_schema()
 		  AND tablename LIKE 'flexitype_%'
@@ -140,7 +147,24 @@ func TruncateAll(t *testing.T, pool *sqlx.DB) {
 	if stmt == "" {
 		return // nothing migrated yet
 	}
-	if _, err := pool.Exec(stmt); err != nil {
-		t.Fatalf("testdb: truncate: %v", err)
+	// A deterministic order settles truncate against truncate, but not
+	// truncate against a background worker: an outbox relay, a scheduler or a
+	// post-commit recompute left running by the previous test holds locks in
+	// an order nothing here controls. Postgres resolves that by killing one
+	// side, and the victim was the test's own setup — a failure with no
+	// relation to what the test was checking.
+	//
+	// Retrying is the right answer rather than ordering the world: the loser
+	// of a deadlock has already rolled back, and the worker it lost to is
+	// finishing.
+	for attempt := 0; ; attempt++ {
+		_, err := pool.Exec(stmt)
+		if err == nil {
+			return
+		}
+		if attempt == 4 || !strings.Contains(err.Error(), "deadlock detected") {
+			t.Fatalf("testdb: truncate: %v", err)
+		}
+		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)
 	}
 }

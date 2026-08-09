@@ -49,13 +49,24 @@ Look at the **condition**, not the target.
 
 `on_read` is the default because most conditions are facts rather than states.
 
-The shipped `ecommerce` template keeps its two `status = active` rules on
-`on_read`, even though the condition is a lifecycle state. A curated starting
-schema should not decide this for you: switching them to `on_write` changes
-what an existing catalogue accepts, and the population is the operator's to
-check. [`examples/kitchen`](../examples/kitchen/) shows the reporting side —
-a chef ticks "contains allergens", then types the list, and publishing turns
-the gap into a refusal.
+Two shipped templates make the same schema available either way, so the choice
+is one you apply rather than one you edit:
+
+| Template | Its two `status = active` rules | Choose it when |
+| --- | --- | --- |
+| `ecommerce` | report the gap | Products are assembled field by field, and something downstream decides when one goes live. |
+| `ecommerce_strict` | refuse the write | Nothing downstream gates, so a product must never be stored active and unsellable. |
+
+They are otherwise identical, and a test pins that: if they drift, the pair
+stops demonstrating one decision and becomes two schemas to maintain.
+
+Both shipped examples take a side, for the reason above:
+
+- [`examples/marketplace`](../examples/marketplace/) applies
+  `ecommerce_strict`. It writes a whole product in one batch, which is exactly
+  how a caller satisfies an `on_write` rule.
+- [`examples/kitchen`](../examples/kitchen/) reports: a chef ticks "contains
+  allergens", then types the list, and publishing turns the gap into a refusal.
 
 Before switching a rule to `on_write`, read
 [Adding a blocking rule to data that already exists](#adding-a-blocking-rule-to-data-that-already-exists).

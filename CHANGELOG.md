@@ -1,5 +1,31 @@
 ## [Unreleased]
 
+### Added — An `ecommerce_strict` template, and the marketplace example applies it
+
+1.8.0 let a dependency refuse a write, but nothing shipped actually did — both
+templates and both examples reported. The mode was documented and tested, and
+demonstrated by nothing a user could apply.
+
+`ecommerce_strict` is the `ecommerce` schema with its two `status = active`
+rules set to `"enforce": "on_write"`: a product cannot be stored active without
+a SKU and a price. Everything else about the two templates is identical, and a
+test pins that — if they drift, the pair stops demonstrating one decision and
+becomes two schemas to maintain.
+
+| Template | Its two rules | Choose it when |
+| --- | --- | --- |
+| `ecommerce` | report the gap | Products are assembled field by field, and something downstream decides when one goes live. |
+| `ecommerce_strict` | refuse the write | Nothing downstream gates, so a product must never be stored active and unsellable. |
+
+`examples/marketplace` now onboards merchants from the strict one. It costs the
+platform nothing, because it already wrote a whole product as one batch — which
+is exactly how a caller satisfies such a rule: the state and what it demands
+arrive together, in any order. That also makes the example's README claim about
+`sku` and `price` true of the running system rather than of its intent.
+
+Existing tenants are untouched: a template is applied into a tenant, never
+shared, so this changes what a NEW tenant starts from and nothing else.
+
 ## [1.8.0] — 2026-08-09
 
 A dependency can now refuse a write instead of reporting a gap.

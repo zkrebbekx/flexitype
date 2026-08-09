@@ -117,3 +117,112 @@ func (a *api) attrIDByName(typeID, internalName string) string {
 	}
 	return ""
 }
+
+// TestStrictEcommerceTemplate is the shipped demonstration of on_write.
+//
+// Every other template reports its requirements, which is the default and
+// right for data assembled over time. This one is the other branch of that
+// decision, applied to a condition that is a lifecycle state: a product cannot
+// be set active without the fields that make it sellable.
+func TestStrictEcommerceTemplate(t *testing.T) {
+	Convey("Given the strict ecommerce template applied to a tenant", t, func() {
+		a := newAPI(t, flexitype.APIConfig{})
+		applied := a.post("/api/v1/schema/templates/ecommerce_strict/apply", nil)
+		So(applied.Status, ShouldEqual, http.StatusOK)
+
+		typeID := a.typeIDByName("product")
+		statusID := a.attrIDByName(typeID, "status")
+		skuID := a.attrIDByName(typeID, "sku")
+		priceID := a.attrIDByName(typeID, "price")
+
+		Convey("When a product is set active on its own", func() {
+			refused := a.post("/api/v1/values", map[string]any{
+				"type_definition_id": typeID, "entity_id": "p1",
+				"attribute_definition_id": statusID, "value": "active",
+			})
+
+			Convey("Then the write is refused", func() {
+				So(refused.Status, ShouldEqual, http.StatusUnprocessableEntity)
+				So(string(refused.Body), ShouldContainSubstring, "sku")
+			})
+
+			Convey("Then nothing was stored", func() {
+				values := a.get("/api/v1/entities/" + typeID + "/p1/values")
+				So(values.Status, ShouldEqual, http.StatusOK)
+				So(values.items(t), ShouldBeEmpty)
+			})
+		})
+
+		Convey("When the state and what it demands arrive together", func() {
+			ok := a.post("/api/v1/values/batch", map[string]any{
+				"items": []any{
+					map[string]any{
+						"type_definition_id": typeID, "entity_id": "p1",
+						"attribute_definition_id": statusID, "value": "active",
+					},
+					map[string]any{
+						"type_definition_id": typeID, "entity_id": "p1",
+						"attribute_definition_id": skuID, "value": "SKU-1",
+					},
+					map[string]any{
+						"type_definition_id": typeID, "entity_id": "p1",
+						"attribute_definition_id": priceID, "value": "10.00",
+					},
+				},
+			})
+
+			Convey("Then it commits", func() {
+				So(ok.Status, ShouldEqual, http.StatusOK)
+			})
+
+			Convey("Then the effective schema says the rule blocks", func() {
+				eff := a.get("/api/v1/entities/" + typeID + "/p1/attributes/" + skuID + "/effective-schema")
+				So(eff.Status, ShouldEqual, http.StatusOK)
+				So(eff.object(t)["required_enforcement"], ShouldEqual, "on_write")
+			})
+		})
+
+		Convey("When a draft product is built one field at a time", func() {
+			// The mode blocks a LIFECYCLE state, not data entry. A product
+			// that never claims to be active is unaffected, which is what
+			// makes the strict template usable at all.
+			for _, step := range []struct{ attr, value string }{
+				{skuID, "SKU-2"}, {priceID, "12.00"}, {statusID, "draft"},
+			} {
+				resp := a.post("/api/v1/values", map[string]any{
+					"type_definition_id": typeID, "entity_id": "p2",
+					"attribute_definition_id": step.attr, "value": step.value,
+				})
+				So(resp.Status, ShouldEqual, http.StatusOK)
+			}
+
+			Convey("Then going active afterwards is accepted", func() {
+				// The order a person works in anyway: fill it in, then publish.
+				resp := a.post("/api/v1/values", map[string]any{
+					"type_definition_id": typeID, "entity_id": "p2",
+					"attribute_definition_id": statusID, "value": "active",
+				})
+				So(resp.Status, ShouldEqual, http.StatusOK)
+			})
+		})
+
+		Convey("When the lenient template is applied instead", func() {
+			b := newAPI(t, flexitype.APIConfig{})
+			So(b.post("/api/v1/schema/templates/ecommerce/apply", nil).Status, ShouldEqual, http.StatusOK)
+			lenientType := b.typeIDByName("product")
+			lenientStatus := b.attrIDByName(lenientType, "status")
+
+			Convey("Then the same write is accepted and the gap reported", func() {
+				resp := b.post("/api/v1/values", map[string]any{
+					"type_definition_id": lenientType, "entity_id": "p1",
+					"attribute_definition_id": lenientStatus, "value": "active",
+				})
+				So(resp.Status, ShouldEqual, http.StatusOK)
+
+				comp := b.get("/api/v1/entities/" + lenientType + "/p1/completeness")
+				So(comp.Status, ShouldEqual, http.StatusOK)
+				So(comp.object(t)["missing"], ShouldNotBeEmpty)
+			})
+		})
+	})
+}

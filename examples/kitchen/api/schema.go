@@ -219,7 +219,9 @@ func ensureDependencies(ctx context.Context, c *client.Client, types map[string]
 	//
 	// The other mode, "on_write", refuses the write instead. It fits a
 	// condition that is a lifecycle state — status = active — where the record
-	// must never enter the state incomplete. See docs/dependencies.md.
+	// must never enter the state incomplete; the marketplace example applies
+	// the ecommerce_strict template, which does that. See
+	// docs/dependencies.md.
 	return ensureDependency(ctx, c, client.CreateDependencyInput{
 		SourceAttributeID: ids["contains_allergens"],
 		TargetAttributeID: ids["allergens"],

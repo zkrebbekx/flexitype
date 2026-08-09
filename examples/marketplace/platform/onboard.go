@@ -16,13 +16,25 @@ import (
 )
 
 // TemplateName is the curated schema bundle every merchant starts from. It
-// lives in application/schema/templates/ecommerce.json and ships inside the
-// flexitype binary.
+// lives in application/schema/templates/ecommerce_strict.json and ships inside
+// the flexitype binary.
 //
 // Applying a template — rather than sharing one schema — is what makes each
 // merchant's `product` type its OWN. A merchant can rename a field, add a
 // constraint or archive an attribute without touching any other merchant.
-const TemplateName = "ecommerce"
+//
+// The STRICT variant is deliberate. Its two rules — an active product needs a
+// SKU and a price — enforce on write rather than reporting the gap, because
+// `status = active` is a lifecycle state: a product a shopper can buy with no
+// SKU and no price is not a product that should exist, and this marketplace
+// has no later gate that would catch one.
+//
+// It costs the platform nothing here because a product is written as one
+// batch (see putProduct), which is how a caller satisfies an on_write rule:
+// the state and what it demands arrive together. A platform that saved a
+// product field by field would want the plain `ecommerce` template and a gate
+// of its own.
+const TemplateName = "ecommerce_strict"
 
 // accountName is the service account the platform creates in each merchant
 // tenant. One well-known name makes onboarding recognisable as idempotent.

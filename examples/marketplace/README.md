@@ -69,12 +69,31 @@ is no request that reads two merchants at once, and no way to write one
 merchant's data with another's credential.
 
 **Every merchant starts from the same schema and then owns its copy.**
-Onboarding applies the curated `ecommerce` template
-([`application/schema/templates/ecommerce.json`](../../application/schema/templates/ecommerce.json))
+Onboarding applies the curated `ecommerce_strict` template
+([`application/schema/templates/ecommerce_strict.json`](../../application/schema/templates/ecommerce_strict.json))
 into the new tenant. The template declares a root `product` type — name,
 description, sku, status, price, currency, in_stock, image — a `brand` type, a
 `made_by` relationship, and two dependencies that make `sku` and `price`
 required once `status` is `active`.
+
+Those two rules **refuse the write** (`"enforce": "on_write"`). `status =
+active` is a lifecycle state, not a fact someone is typing in: a product a
+shopper can buy with no sku and no price is not a product that should exist,
+and this marketplace has no later gate that would catch one.
+
+```bash
+# 422: nothing else on the product yet.
+curl -X POST .../values -d '{"attribute_definition_id":"<status>","entity_id":"p1","value":"active"}'
+# {"error":{"code":"DEPENDENCY_VIOLATION",
+#   "message":"an attribute dependency requires a value for \"sku\""}}
+```
+
+It costs the platform nothing, because it writes a whole product as ONE batch
+([`platform/api.go`](platform/api.go)) — which is how a caller satisfies such a
+rule: the state and what it demands arrive together, in any order. A platform
+that saved a product field by field would take the plain `ecommerce` template
+and gate somewhere of its own. That choice is
+[docs/dependencies.md](../../docs/dependencies.md#choosing-a-mode).
 
 Those two rules **report**; they do not block. Setting `status` to `active` on
 a product with no sku is accepted, and the gap is what `GET

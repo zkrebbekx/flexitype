@@ -4,11 +4,12 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"github.com/zkrebbekx/flexitype/client"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/zkrebbekx/flexitype/client"
 )
 
 // API serves the shopper-facing catalog and the platform-facing internal

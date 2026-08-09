@@ -1,5 +1,51 @@
 ## [Unreleased]
 
+### Added — A recipe-costing example ([examples/kitchen/](examples/kitchen/))
+
+A restaurant group's recipe and menu system: a Go service on the SDK, a React
+console, and a seed script that proves the claim in one call. Single tenant on
+purpose — the marketplace example covers tenancy, and this one is about what
+the service computes on its own.
+
+```
+ingredient.cost_per_kg        formula   pack_price / pack_size
+recipe_line.ingredient_cost   rollup    sum(parent(of_ingredient).cost_per_kg)
+recipe_line.line_cost         formula   quantity * ingredient_cost
+dish.food_cost                rollup    sum(child(has_line).line_cost)
+```
+
+A supplier price list arrives and every dish that uses the ingredient recosts
+itself two relationships away. Nothing in the example adds up a price.
+
+It exercises what no example did before: unit families with real conversion
+(bought by the pound, cooked in grams), computed rollups, values scoped by
+channel (one dish, three prices), values localized per locale, a dependency
+with a completeness gate on publishing, change sets scheduled for a future
+time, and revisions read as-of a date.
+
+### Fixed — A formula can read a quantity ([#563])
+
+`pack_price / pack_size` — a price per base unit — was refused: a quantity was
+not counted as numeric, though the evaluator already converts one. Both halves
+now agree, and a quantity evaluates as its magnitude in the unit family's base
+unit.
+
+The validator and the evaluator disagreeing is the specific failure this
+codebase keeps fighting, and it appeared again while the example was built:
+allowing the source without teaching the evaluator produced an undefined
+formula and a cleared value, silently.
+
+### Fixed — A type whose derived fields are all rollups was skipped ([#563])
+
+The materializer's fast path asks whether a type has any computed attribute,
+and the answer counted only FORMULAS. A dish whose cost and line count are
+both rollups therefore matched "nothing to compute": the aggregate was
+evaluated once, before any link existed, and never again. Every value event
+for that type early-returned.
+
+It survived the in-memory tests and appeared against Postgres in the example's
+own seed, which is exactly what the example is for.
+
 ### Added — Computed rollups over relationships ([#563])
 
 A rollup aggregates one attribute across the entities a relationship reaches:

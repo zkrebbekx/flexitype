@@ -1,0 +1,70 @@
+# A restaurant group's recipe and menu system on flexitype.
+#
+#   cd examples/kitchen
+#   docker compose up --build --wait
+#   ./seed.sh
+#
+# Single tenant on purpose: nothing here is about tenancy. The point is what
+# the service computes on its own.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: flexitype
+      POSTGRES_PASSWORD: flexitype
+      POSTGRES_DB: flexitype
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flexitype"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  flexitype:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FLEXITYPE_DB_HOST: postgres
+      FLEXITYPE_DB_PORT: "5432"
+      FLEXITYPE_DB_USER: flexitype
+      FLEXITYPE_DB_PASSWORD: flexitype
+      FLEXITYPE_DB_NAME: flexitype
+      FLEXITYPE_MIGRATE_ON_START: "true"
+      # Plaintext to a container-network host, and nothing else. Authentication
+      # is off below because this example has one tenant and no credential
+      # story to tell; a real deployment configures an account source.
+      FLEXITYPE_DB_ALLOW_PLAINTEXT: "true"
+      FLEXITYPE_DEV_INSECURE: "true"
+      # The scheduler is what publishes a menu change at its appointed time.
+      FLEXITYPE_OUTBOX: "true"
+      FLEXITYPE_FEATURE_SEARCH_INDEX: "true"
+    ports:
+      - "8080:8080"
+
+  kitchen:
+    build:
+      context: ../..
+      dockerfile: examples/kitchen/api/Dockerfile
+    depends_on:
+      flexitype:
+        condition: service_started
+    environment:
+      KITCHEN_ADDR: ":9400"
+      FLEXITYPE_URL: http://flexitype:8080
+    ports:
+      - "9400:9400"
+
+  console:
+    build:
+      context: ../..
+      dockerfile: examples/kitchen/console/Dockerfile
+    depends_on:
+      kitchen:
+        condition: service_started
+    environment:
+      KITCHEN_URL: http://kitchen:9400
+    ports:
+      - "8083:8083"

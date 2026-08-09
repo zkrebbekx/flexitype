@@ -1096,7 +1096,8 @@ func assertFormulaSourcesAreScalar(ctx context.Context, attrs domainattribute.Re
 					"attribute", a.InternalName())
 			case numeric[a.InternalName()] && !isNumericDataType(a.DataType()):
 				return domainerrors.NewValidation(
-					"a formula can only read or fold a numeric attribute: bool, integer, float or decimal. "+
+					"a formula can only read or fold a numeric attribute: bool, integer, float, "+
+						"decimal or quantity. "+
 						"count() folds members of any type",
 					"attribute", a.InternalName(), "data_type", a.DataType().String())
 			}
@@ -1141,6 +1142,15 @@ func isNumericDataType(dt valueobjects.DataType) bool {
 	switch dt {
 	case valueobjects.DataTypeBool, valueobjects.DataTypeInteger,
 		valueobjects.DataTypeFloat, valueobjects.DataTypeDecimal:
+		return true
+	case valueobjects.DataTypeQuantity:
+		// A quantity evaluates as its magnitude in the family's BASE unit,
+		// which is what makes `pack_price / pack_size` a price per base unit
+		// whatever unit the pack was entered in.
+		//
+		// The evaluator already converted one (see toRat); only this check
+		// refused it, so a cost-per-kilogram — the ordinary reason to divide
+		// by a weight — could not be modelled at all.
 		return true
 	default:
 		return false

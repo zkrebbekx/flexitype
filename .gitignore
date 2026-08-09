@@ -38,3 +38,9 @@ examples/marketplace/shop/node_modules/
 examples/marketplace/shop/dist/
 examples/marketplace/console/tsconfig.tsbuildinfo
 examples/marketplace/shop/tsconfig.tsbuildinfo
+
+# Kitchen example console: dependencies and build output. The lockfile is
+# checked in, so `npm ci` is reproducible.
+examples/kitchen/console/node_modules/
+examples/kitchen/console/dist/
+examples/kitchen/console/tsconfig.tsbuildinfo

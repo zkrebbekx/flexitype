@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -149,5 +150,155 @@ func TestEmbeddedMigrationDirectives(t *testing.T) {
 				})
 			}
 		}
+	})
+}
+
+// grandfatheredPlainIndexes are the released files that build an index on a
+// table an earlier migration created, without CONCURRENTLY.
+//
+// They are NOT fixed, deliberately. All of them have shipped, so every
+// deployment that would have been hurt has already run them; rewriting an
+// applied migration changes nothing for those deployments and only risks a
+// checksum mismatch. A fresh database builds these on an empty or small table,
+// where the lock is brief.
+//
+// The list is CLOSED. It exists so the rule below binds every future
+// migration, and so the exception is a stated decision rather than a gap. A new
+// entry here is the wrong fix — add CONCURRENTLY and the
+// +flexitype:no-transaction directive instead.
+//
+// The last entry is the instructive one: it was added while fixing an
+// unrelated review finding, in the same stretch of work that documented this
+// rule. The directive check passed it, because a plain CREATE INDEX inside a
+// transactional file is consistent with itself. That is the gap this test
+// closes.
+var grandfatheredPlainIndexes = map[string][]string{
+	"000003_type_inheritance.up.sql":         {"idx_flexitype_type_definition_extends"},
+	"000004_outbox_search.up.sql":            {"idx_flexitype_attribute_value_trgm", "idx_flexitype_attribute_value_trgm_lower"},
+	"000005_event_delivery.up.sql":           {"idx_flexitype_event_outbox_feed_seq"},
+	"000008_outbox_lease.up.sql":             {"idx_flexitype_event_outbox_pending"},
+	"000014_scoped_values.up.sql":            {"idx_flexitype_attribute_value_scope"},
+	"000023_outbox_backoff.up.sql":           {"idx_flexitype_event_outbox_claimable"},
+	"000027_role_index.up.sql":               {"idx_flexitype_service_account_roles"},
+	"000033_outbox_parked_index.up.sql":      {"idx_flexitype_event_outbox_parked"},
+	"000039_dependency_enforce_index.up.sql": {"idx_dependency_enforced_on_write"},
+	// 000021 builds these two inside a DO block, which is the one place
+	// CONCURRENTLY is not available. The file explains why at length: the
+	// operator class depends on an extension whose presence has to be tested
+	// first, and a bare CONCURRENTLY statement cannot be conditional.
+	"000021_plan_indexes.up.sql": {"idx_flexitype_attribute_value_trgm", "idx_flexitype_attribute_value_trgm_lower"},
+}
+
+// stripLineComments removes `-- ...` to end of line. Migrations here use no
+// block comments, and none of the index names contain a quote, so this is
+// enough to keep example SQL out of the scan.
+func stripLineComments(sql string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(sql, "\n") {
+		if i := strings.Index(line, "--"); i >= 0 {
+			line = line[:i]
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// grandfathered reports whether a file is allowed to build this index plainly.
+func grandfathered(file, index string) bool {
+	for _, allowed := range grandfatheredPlainIndexes[file] {
+		if allowed == index {
+			return true
+		}
+	}
+	return false
+}
+
+// TestIndexesOnExistingTablesAreConcurrent enforces the rule docs/upgrades.md
+// states and the directive check does not: an index built on a table that
+// ALREADY holds data must use CONCURRENTLY.
+//
+// The existing check asks only whether the no-transaction directive matches
+// the SQL, so a plain CREATE INDEX in a transactional file is consistent with
+// itself and passes. That is how two of them reached a released version.
+//
+// It matters because ACCESS EXCLUSIVE queues AHEAD of everything behind it: a
+// DDL blocked on one long transaction stalls every reader and writer of that
+// table until it completes, and every replica runs Migrate at startup.
+func TestIndexesOnExistingTablesAreConcurrent(t *testing.T) {
+	Convey("Given the embedded up-migrations in order", t, func() {
+		ups, err := upMigrations()
+		So(err, ShouldBeNil)
+
+		// Tables created by an EARLIER migration. A table created in the same
+		// file is empty by construction, so indexing it costs nothing.
+		earlier := map[string]bool{}
+		createTable := regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z0-9_]+)`)
+		createIndex := regexp.MustCompile(`(?i)CREATE\s+(UNIQUE\s+)?INDEX\s+(CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?([a-z0-9_]+)\s+ON\s+([a-z0-9_]+)`)
+
+		for _, name := range ups {
+			body, rerr := migrationsFS.ReadFile("migrations/" + name)
+			So(rerr, ShouldBeNil)
+			// Comments carry example SQL — 000021 spells out the CONCURRENTLY
+			// form it cannot use — so scanning them reports statements no
+			// server ever sees.
+			sql := stripLineComments(string(body))
+
+			here := map[string]bool{}
+			for _, m := range createTable.FindAllStringSubmatch(sql, -1) {
+				here[strings.ToLower(m[1])] = true
+			}
+
+			for _, m := range createIndex.FindAllStringSubmatch(sql, -1) {
+				concurrent := strings.TrimSpace(m[2]) != ""
+				index := strings.ToLower(m[3])
+				table := strings.ToLower(m[4])
+				if concurrent || here[table] || !earlier[table] {
+					continue
+				}
+				Convey("Then "+name+" builds "+index+" on the pre-existing "+table+" concurrently", func() {
+					// If this fails on a NEW migration, add CONCURRENTLY and
+					// the +flexitype:no-transaction directive. Do not add it to
+					// the grandfathered list — that list is closed.
+					So(grandfathered(name, index), ShouldBeTrue)
+				})
+			}
+
+			for table := range here {
+				earlier[table] = true
+			}
+		}
+
+		Convey("Then the grandfathered list names only files that still exist", func() {
+			// A stale entry would silently license a future file that reused
+			// the name.
+			for name := range grandfatheredPlainIndexes {
+				_, ferr := migrationsFS.ReadFile("migrations/" + name)
+				So(ferr, ShouldBeNil)
+			}
+		})
+	})
+}
+
+// TestStripLineComments guards the scanner's input, not the SQL.
+//
+// A migration explains itself in comments, and 000021 spells out the
+// CONCURRENTLY form it cannot use. Scanning that text reports statements no
+// server ever executes, which would either fail the build for a file that is
+// correct or push someone to grandfather a phantom.
+func TestStripLineComments(t *testing.T) {
+	Convey("Given migration text that documents SQL it does not run", t, func() {
+		sql := stripLineComments(strings.Join([]string{
+			"-- CREATE INDEX CONCURRENTLY idx_example ON t (a);",
+			"CREATE INDEX idx_real ON t (a);",
+			"CREATE INDEX idx_trailing ON t (b); -- and a note",
+		}, "\n"))
+
+		Convey("Then only the executed statements remain", func() {
+			So(sql, ShouldNotContainSubstring, "idx_example")
+			So(sql, ShouldContainSubstring, "idx_real")
+			So(sql, ShouldContainSubstring, "idx_trailing")
+			So(sql, ShouldNotContainSubstring, "and a note")
+		})
 	})
 }

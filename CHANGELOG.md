@@ -66,6 +66,26 @@ webhook signing key.
 
 Without the secret the endpoint answers `501 FEATURE_DISABLED` rather than
 pretending to work, and a secret below the floor stops the service at start-up.
+### Added — A `text` data type for long-form values ([#551])
+
+`text` stores and compares exactly as `string`, takes the same constraints,
+and is indexed and searched the same way. It differs in ONE declared thing:
+the value is long.
+
+That difference is the one a renderer cannot infer. A description was a
+`string` with a large `max_length`, and from a form's side that is identical
+to a short one — so a client generating a form from the schema had to guess
+from the constraint, or from the attribute's name, whether to draw one line or
+a text area. The API's promise is that a client can render a correct form from
+the schema ALONE, and one missing distinction broke it for the most common
+content in a catalog.
+
+The TypeScript SDK's `fieldKind` returns a new `textarea` kind for it, the
+console renders a text area, and the `ecommerce` template's `description` now
+declares `text` — its help text used to say the type did not exist.
+
+The change is additive. An existing `string` attribute is untouched, and
+nothing about how a value is stored or compared changed.
 
 ### Added — An event envelope says which entity changed ([#550])
 

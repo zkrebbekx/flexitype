@@ -2067,11 +2067,15 @@ components:
         next_cursor: { type: string }
     DataType:
       type: string
-      enum: [bool, string, integer, float, decimal, date, time, datetime, enum, url, email, json, media, quantity]
+      enum: [bool, string, text, integer, float, decimal, date, time, datetime, enum, url, email, json, media, quantity]
       description: >-
-        The attribute's value type. media and quantity were missing here, so a
-        generated client rejected them before sending a request and the
-        features looked absent rather than undocumented.
+        The attribute's value type. `text` is long-form text: it stores and
+        compares exactly as `string` and takes the same constraints, and it
+        differs in one declared thing — the value is long, so a renderer draws
+        a text area rather than guessing from max_length.
+        media and quantity were missing here, so a generated client rejected
+        them before sending a request and the features looked absent rather
+        than undocumented.
     TypeDefinition:
       type: object
       example:

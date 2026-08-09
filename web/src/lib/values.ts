@@ -5,7 +5,7 @@ import type { DataType, TypedValue } from './api'
 // inputKind picks the native control for a data type.
 export function inputKind(
   dt: DataType,
-): 'text' | 'number' | 'bool' | 'date' | 'time' | 'datetime' | 'json' | 'quantity' {
+): 'text' | 'textarea' | 'number' | 'bool' | 'date' | 'time' | 'datetime' | 'json' | 'quantity' {
   switch (dt) {
     case 'bool':
       return 'bool'
@@ -23,6 +23,10 @@ export function inputKind(
     case 'quantity':
       // A magnitude + unit pair — ValueInput renders a dedicated editor.
       return 'quantity'
+    case 'text':
+      // Long-form text. A string with a large max_length looks identical to
+      // a short one from a form's side, which is why the type exists.
+      return 'textarea'
     default:
       return 'text'
   }

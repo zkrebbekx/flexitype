@@ -4993,10 +4993,10 @@ export interface components {
             };
         };
         /**
-         * @description The attribute's value type. media and quantity were missing here, so a generated client rejected them before sending a request and the features looked absent rather than undocumented.
+         * @description The attribute's value type. `text` is long-form text: it stores and compares exactly as `string` and takes the same constraints, and it differs in one declared thing — the value is long, so a renderer draws a text area rather than guessing from max_length. media and quantity were missing here, so a generated client rejected them before sending a request and the features looked absent rather than undocumented.
          * @enum {string}
          */
-        DataType: "bool" | "string" | "integer" | "float" | "decimal" | "date" | "time" | "datetime" | "enum" | "url" | "email" | "json" | "media" | "quantity";
+        DataType: "bool" | "string" | "text" | "integer" | "float" | "decimal" | "date" | "time" | "datetime" | "enum" | "url" | "email" | "json" | "media" | "quantity";
         /** @description The value an attribute takes when the entity supplies none. */
         DefaultValue: {
             dynamic?: components["schemas"]["DynamicValue"];

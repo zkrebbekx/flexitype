@@ -126,7 +126,21 @@ jobs:
           # development stack.
           FLEXITYPE_DEV_INSECURE: "true"
         run: |
+          set -euo pipefail
           (cd cmd/flexitype && go build -o /tmp/flexitype .)
+          # The step assumes the port is free, and a run has failed with
+          # "bind: address already in use" while nothing else in this workflow
+          # binds it. Wait briefly, then say WHAT holds it: a bare bind error
+          # gives an operator nothing to act on.
+          for _ in $(seq 1 10); do
+            if ! ss -ltn "sport = :58080" | grep -q LISTEN; then break; fi
+            sleep 1
+          done
+          if ss -ltn "sport = :58080" | grep -q LISTEN; then
+            echo "port 58080 is still held before the smoke test:"
+            ss -ltnp "sport = :58080" || true
+            exit 1
+          fi
           /tmp/flexitype &
           SERVICE_PID=$!
           for i in $(seq 1 30); do

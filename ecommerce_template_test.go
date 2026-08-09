@@ -39,7 +39,7 @@ func TestEcommerceTemplate(t *testing.T) {
 				}
 				So(attrs, ShouldResemble, map[string]string{
 					"name":        "string",
-					"description": "string",
+					"description": "text",
 					"sku":         "string",
 					"status":      "enum",
 					"price":       "decimal",

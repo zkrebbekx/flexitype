@@ -46,6 +46,11 @@ describe('coercion, per data type', () => {
 
   it('encodes the textual types as strings', () => {
     expect(toWire('string', 'ABC-1')).toBe('ABC-1')
+    // Long-form text travels exactly as a string does: only the declared
+    // type differs, and that difference is for the renderer.
+    expect(toWire('text', 'A long description.\nWith a second line.')).toBe(
+      'A long description.\nWith a second line.',
+    )
     expect(toWire('enum', 'active')).toBe('active')
     expect(toWire('url', 'https://example.test/x')).toBe('https://example.test/x')
     expect(toWire('email', 'a@example.test')).toBe('a@example.test')

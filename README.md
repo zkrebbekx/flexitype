@@ -53,9 +53,11 @@ No backend; data resets on reload.
 
 - **Soft types**: `TypeDefinition` → `AttributeDefinition` → `AttributeValue`,
   anchored to *your* entities via an opaque `entity_id`
-- **14 data types**: bool, string, integer, float, decimal (arbitrary
-  precision), date, time, datetime, enum, url, email, json, **media** (files
-  backed by a blob store), **quantity** (a magnitude in a unit family)
+- **15 data types**: bool, string, **text** (long-form: it stores as a string
+  and declares that the value is long, so a generated form draws a text area),
+  integer, float, decimal (arbitrary precision), date, time, datetime, enum,
+  url, email, json, **media** (files backed by a blob store), **quantity** (a
+  magnitude in a unit family)
 - **Constraints**: min/max length, min/max value, RE2 pattern, one-of, media
   (allowed MIME types + max size), plus required / multi-valued / unique
   attribute flags

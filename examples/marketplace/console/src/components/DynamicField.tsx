@@ -116,6 +116,21 @@ function Control({ id, field, value, onChange, disabled, describedBy }: ControlP
         </select>
       )
 
+    case 'textarea':
+      // A `text` attribute declares that its value is long. That is the one
+      // thing a renderer cannot infer from a `string` with a large
+      // max_length, and it is why the data type exists.
+      return (
+        <textarea
+          {...common}
+          value={text}
+          rows={6}
+          maxLength={field.constraints.maxLength}
+          onChange={(event) => onChange(event.target.value)}
+          className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+        />
+      )
+
     case 'json':
       return (
         <textarea

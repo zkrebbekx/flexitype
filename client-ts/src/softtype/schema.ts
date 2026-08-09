@@ -84,6 +84,7 @@ export function sortEffectiveAttributes(attributes: readonly EffectiveAttribute[
 /** The kind of control a field wants. */
 export type FieldKind =
   | 'text'
+  | 'textarea'
   | 'number'
   | 'decimal'
   | 'checkbox'
@@ -307,6 +308,11 @@ export function fieldKind(dataType: DataType, hasOptions = false): FieldKind {
       return 'file'
     case 'quantity':
       return 'quantity'
+    case 'text':
+      // A `text` attribute declares that its value is long, which is the one
+      // thing a renderer cannot infer from a `string` with a large
+      // max_length. It draws a text area.
+      return 'textarea'
     case 'url':
       return 'url'
     case 'email':

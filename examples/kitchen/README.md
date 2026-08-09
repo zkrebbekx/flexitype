@@ -41,7 +41,7 @@ itself **two relationships away**. `seed.sh` proves it in one call:
 ```bash
 printf 'id,name,supplier,pack_size,pack_unit,pack_price\nchocolate,Dark chocolate,Cocoa Co,500,g,9.00\n' |
   curl -sS -X POST --data-binary @- http://localhost:9400/api/ingredients/import
-#    food cost: 3.13 -> 4.33
+#    food cost: 3.82435753714287569756 -> 5.02435753714287576417
 ```
 
 That import writes **one value per ingredient**. Search this example for the
@@ -115,9 +115,9 @@ and refuses while anything required is missing. A dependency added later is
 enforced with no change to that code.
 
 ```bash
-curl -sX POST localhost:9400/api/dishes/tart/publish | jq
+curl -sX POST localhost:9400/api/dishes/gate-demo/publish | jq
 # {"error":{"message":"this dish is not ready for the menu: allergens"},
-#  "missing":["allergens"],"score":0.85}
+#  "missing":["allergens"],"score":0.5}
 ```
 
 ## A rounding note

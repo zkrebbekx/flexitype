@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -64,6 +65,66 @@ type Service struct {
 	// audit row in the same transaction as the change. Nil for in-memory
 	// services, which have no control plane.
 	adminUnit uow.UnitOfWork
+	// background tracks the work the service starts on its OWN, outliving the
+	// request that triggered it — today, the schema-change rebuild. Drain
+	// waits for it; see there for why it exists.
+	background *background
+}
+
+// background counts the detached goroutines a service owns.
+//
+// A schema change schedules a rebuild that deliberately outlives the request
+// (see schemaChangeRecomputer), so nothing the CALLER holds can wait for it.
+// Without a handle on the service, "has this finished?" had no answer: an
+// operator could close the pool under a running rebuild, and a test could not
+// tell a quiet moment from a rebuild about to start, which is how a background
+// recompute came to land inside the next test's TRUNCATE.
+type background struct {
+	wg     sync.WaitGroup
+	closed atomic.Bool
+}
+
+// start runs fn in a goroutine the service can wait for. It is a no-op once
+// Drain has been called, so a late event cannot start work the caller has
+// already been told is finished.
+func (b *background) start(fn func()) {
+	if b.closed.Load() {
+		return
+	}
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		fn()
+	}()
+}
+
+// Drain waits for the background work this service started, and refuses to
+// start any more.
+//
+// Call it before closing the pool, and before anything that assumes the
+// database is quiet. It is safe to call more than once, and safe on a service
+// that never started any.
+//
+// It does not cancel: the work it waits for is bounded by its own timeout and
+// is deliberately detached from every request, so cancelling it here would
+// abandon a half-finished rebuild — the thing that detachment exists to
+// prevent. A caller that needs a bound should apply one to ctx.
+func (s *Service) Drain(ctx context.Context) error {
+	if s.background == nil {
+		return nil
+	}
+	s.background.closed.Store(true)
+	done := make(chan struct{})
+	go func() {
+		s.background.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 type options struct {
@@ -448,7 +509,8 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	// their derived values are ordinary (FQL-queryable) values — maintained in
 	// the writing request regardless of the outbox.
 	materializer := computed.NewMaterializer(factory)
-	materializer.OnSchemaChange(schemaChangeRecomputer(materializer, o.onBgError))
+	bg := &background{}
+	materializer.OnSchemaChange(schemaChangeRecomputer(bg, materializer, o.onBgError))
 	materializer.OnFormulaError(o.onBgError)
 	projections.Register(materializer, events.WithEventTypes(computed.EventTypes()...))
 
@@ -479,6 +541,7 @@ func New(pool *sqlx.DB, opts ...Option) *Service {
 	adminUnit := uow.New(transactor, events.NewDispatcher(), adminActivity, adminUnitOpts...)
 
 	return &Service{
+		background:   bg,
 		pool:         pool,
 		transactor:   transactor,
 		dispatcher:   o.dispatcher,
@@ -562,12 +625,14 @@ func NewInMemory(opts ...Option) *Service {
 		SearchStore:      searchStore, // may be nil; enables entity-data erasure of the projection
 	})
 	materializer := computed.NewMaterializer(factory)
-	materializer.OnSchemaChange(schemaChangeRecomputer(materializer, o.onBgError))
+	bg := &background{}
+	materializer.OnSchemaChange(schemaChangeRecomputer(bg, materializer, o.onBgError))
 	materializer.OnFormulaError(o.onBgError)
 	projections.Register(materializer, events.WithEventTypes(computed.EventTypes()...))
 	graphqlEngine := gql.NewEngine(gqlOptions(o)...)
 	projections.Register(graphqlEngine, events.WithEventTypes(graphqlEngine.EventTypes()...))
 	return &Service{
+		background:   bg,
 		transactor:   transactor,
 		dispatcher:   o.dispatcher,
 		factory:      factory,
@@ -1075,9 +1140,9 @@ func (s *Service) NewAPIHandler(cfg APIConfig) (http.Handler, error) {
 // that convergence is shortly after the edit rather than at it, and that a
 // process restart mid-rebuild leaves the remainder to the next write or to
 // RecomputeComputed. Errors go to the background-error sink.
-func schemaChangeRecomputer(m *computed.Materializer, onErr func(error)) func(valueobjects.TenantID, string) {
+func schemaChangeRecomputer(bg *background, m *computed.Materializer, onErr func(error)) func(valueobjects.TenantID, string) {
 	return func(tenant valueobjects.TenantID, typeID string) {
-		go func() {
+		bg.start(func() {
 			// Let the burst settle first. A schema change is normally
 			// followed immediately by writes — an import, a seeding script,
 			// the console applying a template — and a rebuild that overlaps
@@ -1096,7 +1161,7 @@ func schemaChangeRecomputer(m *computed.Materializer, onErr func(error)) func(va
 			if _, err := m.RecomputeType(ctx, tenant, typeID); err != nil && onErr != nil {
 				onErr(fmt.Errorf("recompute computed attributes for type %s: %w", typeID, err))
 			}
-		}()
+		})
 	}
 }
 

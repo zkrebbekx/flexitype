@@ -1,5 +1,28 @@
 ## [Unreleased]
 
+### Added — `Service.Drain`, so background work can be waited for ([#574])
+
+A schema change schedules a rebuild of a type's computed values on a context
+detached from the request that caused it, after a settle delay. That is
+deliberate — a cancelled request must not abandon a half-finished rebuild — but
+nothing could ask whether it had finished.
+
+`Drain(ctx)` waits for it and refuses to start more. It does not cancel: the
+work is bounded by its own timeout, and cancelling here would abandon exactly
+what detaching it was meant to protect. Safe to call twice, and on a service
+that never started any.
+
+`cmd/flexitype` now drains after the HTTP server stops and before the pool
+closes, so a rebuild cannot be cut off mid-write by shutdown.
+
+The test harness drains before truncating. That is the real fix for the
+`deadlock detected (40P01)` failures in CI: the rebuild started once the test
+that triggered it had returned and landed inside the next test's `TRUNCATE`,
+where the two took the same locks in opposite orders. The retry added in 1.9.0
+tolerated that race; draining removes it.
+
+[#574]: https://github.com/zkrebbekx/flexitype/issues/574
+
 ## [1.9.0] — 2026-08-09
 
 Two security fixes to 1.8.0's write gate, and the schema-import defect behind

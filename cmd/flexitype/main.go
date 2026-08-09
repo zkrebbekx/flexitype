@@ -446,6 +446,15 @@ func run(log *logger.Logger) error {
 		Priority: 50,
 		Handler:  otelShutdown,
 	})
+	// After the server stops accepting requests (90) and before the pool
+	// closes (10): a schema change schedules a rebuild that outlives the
+	// request that caused it, and closing the pool underneath it is a torn
+	// write waiting to happen.
+	shutdownHandler.RegisterTask(shutdown.Task{
+		Name:     "background-work",
+		Priority: 20,
+		Handler:  svc.Drain,
+	})
 	shutdownHandler.RegisterTask(shutdown.Task{
 		Name:     "database",
 		Priority: 10,

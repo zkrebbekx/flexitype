@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createClient, type FlexitypeClient } from '../src/client.js'
 import {
   flattenPages,
-  flexitypeKeys,
+  flexitypeKeysFor,
   FlexitypeProvider,
   useEffectiveAttributes,
   useEntityValues,
@@ -247,12 +247,15 @@ describe('mutations', () => {
 
 describe('the query-key scheme', () => {
   it('starts every key with the package root', () => {
-    expect(flexitypeKeys.all).toEqual(['flexitype'])
+    const flexitypeKeys = flexitypeKeysFor('c1')
+    expect(flexitypeKeys.all).toEqual(['flexitype', 'c1'])
     expect(flexitypeKeys.types.list({ limit: 10 })[0]).toBe('flexitype')
+    expect(flexitypeKeys.types.list({ limit: 10 })[1]).toBe('c1')
     expect(flexitypeKeys.entities.values('T-1', 'e1')[0]).toBe('flexitype')
   })
 
   it('nests a derived key under the record it derives from, so a prefix invalidates it', () => {
+    const flexitypeKeys = flexitypeKeysFor('c1')
     const detail = flexitypeKeys.types.detail('T-1')
     const derived = flexitypeKeys.types.effectiveAttributes('T-1')
     expect(derived.slice(0, detail.length)).toEqual([...detail])
@@ -270,8 +273,82 @@ describe('the query-key scheme', () => {
   })
 
   it('keeps one entity’s key clear of another’s', () => {
+    const flexitypeKeys = flexitypeKeysFor('c1')
     const first = flexitypeKeys.entities.detail('T-1', 'e1')
     const second = flexitypeKeys.entities.values('T-1', 'e2')
     expect(second.slice(0, first.length)).not.toEqual([...first])
+  })
+})
+
+describe('one cache, two tenants (#589)', () => {
+  // One client is one tenant, because the tenant travels in the token. The
+  // documented multi-tenant pattern swaps the client prop over a cache the
+  // application owns — so if the cache key does not name the client, a hook
+  // under tenant B reads tenant A's entry and, within staleTime, never
+  // contacts B at all. The server's isolation cannot help: it is not asked.
+  function tenant(name: string): { client: FlexitypeClient; http: FetchMock } {
+    const http = mockFetch(
+      { body: { items: [{ id: `type-${name}`, internal_name: `type_${name}`, display_name: name }] } },
+      { body: { items: [{ id: `type-${name}`, internal_name: `type_${name}`, display_name: name }] } },
+    )
+    const client = createClient({
+      baseUrl: 'https://example.test',
+      token: `token-${name}`,
+      retry: false,
+      fetch: http.fetch,
+    })
+    return { client, http }
+  }
+
+  it('does not serve tenant A’s types to tenant B', async () => {
+    const a = tenant('A')
+    const b = tenant('B')
+    const queryClient = new QueryClient({
+      // The reported configuration: one shared cache, results considered
+      // fresh for a while.
+      defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 5000 } },
+    })
+    queryClients.push(queryClient)
+
+    const render = (client: FlexitypeClient) =>
+      renderHook(() => useTypes(), {
+        wrapper: ({ children }: { children: ReactNode }) =>
+          createElement(
+            QueryClientProvider,
+            { client: queryClient },
+            createElement(FlexitypeProvider, { client }, children),
+          ),
+      })
+
+    const first = render(a.client)
+    await waitFor(() => expect(first.result.current.isSuccess).toBe(true))
+    expect(first.result.current.data?.items[0]?.id).toBe('type-A')
+
+    const second = render(b.client)
+    await waitFor(() => expect(second.result.current.isSuccess).toBe(true))
+
+    // B's own backend was asked, and B's data is what B sees.
+    expect(b.http.calls.length).toBeGreaterThan(0)
+    expect(second.result.current.data?.items[0]?.id).toBe('type-B')
+  })
+
+  it('gives two clients distinct cache identities', () => {
+    const a = tenant('A')
+    const b = tenant('B')
+    expect(a.client.cacheKey).not.toBe(b.client.cacheKey)
+    // The token must not travel in a query key: keys show up in devtools and
+    // in application logs.
+    expect(a.client.cacheKey).not.toContain('token-A')
+  })
+
+  it('gives the same client the same identity every time', () => {
+    const one = createClient({ baseUrl: 'https://example.test', token: 't' })
+    const two = createClient({ baseUrl: 'https://example.test', token: 't' })
+    expect(one.cacheKey).toBe(two.cacheKey)
+  })
+
+  it('honours an explicit cacheKeyPrefix', () => {
+    const client = createClient({ baseUrl: 'https://example.test', token: 't', cacheKeyPrefix: 'merchant-7' })
+    expect(client.cacheKey).toBe('merchant-7')
   })
 })

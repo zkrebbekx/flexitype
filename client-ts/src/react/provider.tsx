@@ -29,6 +29,12 @@ export interface FlexitypeProviderProps {
  *
  * An application that talks to several tenants nests one provider per tenant,
  * or swaps the `client` prop, because the tenant travels in the token.
+ *
+ * A shared cache is safe across that swap because every key names the client
+ * (`client.cacheKey`), so one tenant's entries cannot be read under another.
+ * Two clients that must not share cached data must not share a `cacheKey`:
+ * it is derived from the base URL and a hash of the token, so give them
+ * distinct `cacheKeyPrefix` values if they would otherwise be identical.
  */
 export function FlexitypeProvider({ client, children }: FlexitypeProviderProps) {
   return createElement(ClientContext.Provider, { value: client }, children)

@@ -35,7 +35,7 @@ import {
 import {
   flattenPages,
   FlexitypeProvider,
-  flexitypeKeys,
+  flexitypeKeysFor,
   useEntityValues,
   useFormDescriptor,
   useInfiniteQueryEntities,
@@ -278,6 +278,7 @@ export function EntityForm({ typeId, entityId }: { typeId: string; entityId: str
 
 export async function invalidation(entityId: string): Promise<void> {
   // One entity's values, completeness, relationships and revisions, in one call.
+  const flexitypeKeys = flexitypeKeysFor(client.cacheKey)
   await queryClient.invalidateQueries({ queryKey: flexitypeKeys.entities.detail(typeId, entityId) })
 
   // Every type query, whatever its arguments.

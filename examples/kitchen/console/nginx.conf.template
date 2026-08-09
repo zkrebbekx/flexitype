@@ -1,0 +1,20 @@
+# The kitchen console's origin: the built app, and /api proxied to the kitchen
+# service. No credential is added — this example has one tenant and runs its
+# flexitype with authentication off, so there is none to add.
+server {
+    listen 8083;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location /api/ {
+        proxy_pass ${KITCHEN_URL};
+        proxy_set_header Host $host;
+        proxy_http_version 1.1;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

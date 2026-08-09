@@ -9,6 +9,7 @@ use (
 	./client
 	./cmd/flexitype
 	./conformance
+	./examples/kitchen/api
 	./examples/marketplace/platform
 	./examples/marketplace/storefront
 	./infrastructure/gcppubsub

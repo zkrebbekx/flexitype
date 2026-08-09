@@ -464,10 +464,20 @@ func (m *Materializer) typeHasComputed(ctx context.Context, it *application.Inte
 	if err != nil {
 		return false, fmt.Errorf("load effective attributes: %w", err)
 	}
+	// A ROLLUP counts too. Checking only formulas made the fast path skip
+	// every value event for a type whose derived fields are all rollups — a
+	// dish whose cost is the total of its lines — so the aggregate was
+	// computed once, before any link existed, and never again.
 	has := false
 	for _, a := range attrs {
-		if a.Attribute.Computed != nil && a.Attribute.Computed.Kind == domainattribute.ComputedFormula {
+		if a.Attribute.Computed == nil {
+			continue
+		}
+		switch a.Attribute.Computed.Kind {
+		case domainattribute.ComputedFormula, domainattribute.ComputedRollup:
 			has = true
+		}
+		if has {
 			break
 		}
 	}
@@ -818,9 +828,11 @@ func toRat(v valueobjects.Value) (*big.Rat, bool) {
 		return new(big.Rat).SetInt64(v.Int()), true
 	case valueobjects.DataTypeDecimal:
 		return new(big.Rat).SetString(v.Text())
-	case valueobjects.DataTypeFloat:
+	case valueobjects.DataTypeFloat, valueobjects.DataTypeQuantity:
 		// A float input is already inexact; convert it as-is rather than
-		// pretending otherwise.
+		// pretending otherwise. A QUANTITY converts through its magnitude in
+		// the family's BASE unit, which is what makes `pack_price / pack_size`
+		// a price per base unit whatever unit the pack was entered in.
 		r := new(big.Rat)
 		if math.IsNaN(v.Float()) || math.IsInf(v.Float(), 0) {
 			return nil, false
@@ -900,7 +912,8 @@ func toFloat(v valueobjects.Value) (float64, bool) {
 		return 0, true
 	case valueobjects.DataTypeInteger:
 		return float64(v.Int()), true
-	case valueobjects.DataTypeFloat:
+	case valueobjects.DataTypeFloat, valueobjects.DataTypeQuantity:
+		// A quantity reads as its magnitude in the family's base unit.
 		return v.Float(), true
 	case valueobjects.DataTypeDecimal:
 		f, err := strconv.ParseFloat(v.Text(), 64)

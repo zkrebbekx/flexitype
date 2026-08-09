@@ -338,6 +338,13 @@ curated schema template applied into each one, merchants extending the root
 product type with their own subtypes, and a shopper storefront that keeps an
 event-driven projection because flexitype has no cross-tenant query.
 
+For what the SERVICE computes on its own, see
+[`examples/kitchen`](examples/kitchen/): a restaurant group's recipe costing,
+where a supplier price list moves every dish's cost two relationships away
+with no arithmetic in the application at all. Unit conversion (bought by the
+pound, cooked in grams), computed rollups, one price per channel, one name per
+locale, and next week's menu approved now and published at 06:00 on Monday.
+
 ## Standalone service
 
 ```bash

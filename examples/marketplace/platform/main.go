@@ -15,6 +15,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -49,8 +50,14 @@ func run(log Logger) error {
 		return errors.New("PLATFORM_DB_DSN is required")
 	}
 	flexitypeURL := envOr("FLEXITYPE_URL", "http://flexitype:8080")
-	storefrontURL := envOr("STOREFRONT_URL", "http://storefront:9200")
-	hookBase := envOr("STOREFRONT_HOOK_BASE", storefrontURL+"/hook")
+	// One storefront per merchant: "alpine=http://storefront-alpine:9200,bolt=..."
+	storefrontURLs, err := parsePerTenant(envOr("STOREFRONT_URLS", ""))
+	if err != nil {
+		return fmt.Errorf("STOREFRONT_URLS: %w", err)
+	}
+	if len(storefrontURLs) == 0 {
+		return errors.New("STOREFRONT_URLS is required: it maps each merchant to its own storefront")
+	}
 	internalToken := os.Getenv("MARKETPLACE_INTERNAL_TOKEN")
 	if internalToken == "" {
 		return errors.New("MARKETPLACE_INTERNAL_TOKEN is required: it authenticates this service to the storefront")
@@ -95,20 +102,8 @@ func run(log Logger) error {
 	}
 
 	onboarder := NewOnboarder(store, admin, flexitypeURL,
-		NewStorefrontClient(storefrontURL, internalToken), hookBase, log)
+		NewStorefrontDirectory(storefrontURLs, internalToken), log)
 	api := NewAPI(store, onboarder, apiToken, flexitypeURL, log)
-
-	// Hand the storefront the ONE credential it reads every merchant with, so
-	// it holds no merchant token for a read. It is best-effort at start-up:
-	// the storefront may not be up yet, and onboarding re-runs it. Without it
-	// the storefront falls back to per-merchant tokens, which is what it did
-	// before this existed.
-	go func() {
-		if err := onboarder.EnsureStorefrontReader(ctx); err != nil {
-			log.Warn("could not install the storefront's cross-tenant reader; "+
-				"it will fall back to per-merchant tokens", "error", err)
-		}
-	}()
 
 	srv := &http.Server{Addr: addr, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
@@ -118,7 +113,8 @@ func run(log Logger) error {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Info("platform listening", "addr", addr, "flexitype", flexitypeURL, "storefront", storefrontURL)
+	log.Info("platform listening", "addr", addr, "flexitype", flexitypeURL,
+		"storefronts", len(storefrontURLs))
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -179,6 +175,26 @@ func waitForDB(ctx context.Context, db *sql.DB, timeout time.Duration) error {
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// parsePerTenant reads "tenant=value,tenant=value" into a map.
+//
+// A storefront is deployed per merchant, so every address this service knows
+// is addressed by the merchant it serves.
+func parsePerTenant(raw string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		tenant, value, ok := strings.Cut(pair, "=")
+		if !ok || strings.TrimSpace(tenant) == "" || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("expected tenant=url pairs, got %q", pair)
+		}
+		out[strings.TrimSpace(tenant)] = strings.TrimRight(strings.TrimSpace(value), "/")
+	}
+	return out, nil
 }
 
 func envOr(key, fallback string) string {

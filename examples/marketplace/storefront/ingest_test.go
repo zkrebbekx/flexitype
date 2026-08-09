@@ -90,7 +90,7 @@ func TestIngestVerifiesSignatures(t *testing.T) {
 		rec := &recorder{}
 		// A zero delay projects inline, so each assertion below sees the
 		// effect of its own request with no timer to wait on.
-		ingest := NewIngest(store, NewDebouncer(0, rec.project, quietLogger()), quietLogger())
+		ingest := NewIngest("merchant-a", store, NewDebouncer(0, rec.project, quietLogger()), quietLogger())
 		now := time.Now()
 		ingest.now = func() time.Time { return now }
 
@@ -303,7 +303,7 @@ func newIngestHarness(t *testing.T) *ingestHarness {
 	rec := &recorder{}
 	h := &ingestHarness{tenant: tenant, rec: rec, now: time.Now()}
 	// A zero delay projects inline, so an assertion sees its own delivery.
-	h.ingest = NewIngest(store, NewDebouncer(0, rec.project, quietLogger()), quietLogger())
+	h.ingest = NewIngest(tenant, store, NewDebouncer(0, rec.project, quietLogger()), quietLogger())
 	h.ingest.now = func() time.Time { return h.now }
 	return h
 }

@@ -13,11 +13,11 @@ import { Alert, Button, Spinner } from '../components/ui.js'
  * page knowing a single one of those names in advance.
  */
 export default function ProductPage() {
-  const { tenant = '', entityId = '' } = useParams()
+  const { entityId = '' } = useParams()
   const basket = useBasket()
   const product = useQuery({
-    queryKey: ['product', tenant, entityId],
-    queryFn: () => getProduct(tenant, entityId),
+    queryKey: ['product', entityId],
+    queryFn: () => getProduct(entityId),
     retry: false,
   })
 
@@ -66,7 +66,6 @@ export default function ProductPage() {
           type="button"
           onClick={() =>
             basket.add({
-              tenant: item.tenant,
               entityId: item.entity_id,
               name: item.name,
               merchant: item.merchant,

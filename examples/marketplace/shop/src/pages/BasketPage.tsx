@@ -4,11 +4,10 @@ import { useBasket } from '../lib/basket.js'
 import { Button } from '../components/ui.js'
 
 /**
- * The basket, grouped by merchant.
+ * The basket.
  *
- * The grouping is the point: each merchant is a separate tenant, so one basket
- * is one order per merchant. The example stops here rather than pretending to
- * settle payment across tenants.
+ * One storefront is one merchant, so a basket is one merchant's order. The
+ * example stops here rather than pretending to settle payment.
  */
 export default function BasketPage() {
   const { lines, remove, clear } = useBasket()
@@ -36,10 +35,10 @@ export default function BasketPage() {
           <h2 className="mb-3 text-sm font-semibold text-slate-700">{merchant}</h2>
           <ul className="divide-y divide-slate-100">
             {merchantLines.map((line) => (
-              <li key={`${line.tenant}/${line.entityId}`} className="flex items-center justify-between py-3">
+              <li key={line.entityId} className="flex items-center justify-between py-3">
                 <div>
                   <Link
-                    to={`/p/${encodeURIComponent(line.tenant)}/${encodeURIComponent(line.entityId)}`}
+                    to={`/p/${encodeURIComponent(line.entityId)}`}
                     className="text-sm font-medium hover:underline"
                   >
                     {line.name}

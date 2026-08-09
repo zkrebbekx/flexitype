@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Seeds the marketplace: onboards three merchants, gives each its OWN subtypes
-# of the shared product type, writes products, and then asserts that the
-# storefront aggregated them.
+# of the shared product type, writes products, and then asserts that each
+# merchant's own storefront projected its own catalogue — and only its own.
 #
 #   cd examples/marketplace
 #   docker compose up --build --wait
@@ -23,7 +23,10 @@ done
 DIR="$(cd "$(dirname "$0")" && pwd)"
 FLEXITYPE="${FLEXITYPE:-http://localhost:8080}"
 PLATFORM="${PLATFORM:-http://localhost:9300}"
-STOREFRONT="${STOREFRONT:-http://localhost:9200}"
+# One storefront per merchant. Each holds one credential and serves one
+# catalogue, so there is no service here that can read two merchants.
+ALPINE="${ALPINE:-http://localhost:9200}"
+BOLT="${BOLT:-http://localhost:9201}"
 CONSOLE_TOKEN="${PLATFORM_API_TOKEN:-platform-console-demo-token}"
 api() { curl -sS -H "Authorization: Bearer $CONSOLE_TOKEN" -H 'Content-Type: application/json' "$@"; }
 
@@ -48,22 +51,33 @@ curl -fs "$PLATFORM/healthz" > /dev/null
 # Onboarding creates the tenant, a service account scoped to it, applies the
 # `ecommerce` template, registers the storefront webhook and runs a first
 # backfill. It is idempotent, so re-running this script is safe.
+# A failure here used to print ERROR and carry on, so a merchant that was
+# never onboarded looked like one that was — and the run failed later, or not
+# at all.
 onboard() {
-  api -X POST "$PLATFORM/api/merchants" \
-    -d "{\"id\":\"$1\",\"display_name\":\"$2\",\"tenant\":\"$1\"}" |
-    jq -r '.id // ("ERROR: " + (.error.message // "unknown"))'
+  local body
+  body=$(api -X POST "$PLATFORM/api/merchants" \
+    -d "{\"id\":\"$1\",\"display_name\":\"$2\",\"tenant\":\"$1\"}")
+  local id
+  id=$(echo "$body" | jq -r '.id // ""')
+  if [ -z "$id" ]; then
+    echo "FAILED: onboarding $1: $(echo "$body" | jq -r '.error.message // .')" >&2
+    exit 1
+  fi
+  echo "    $id"
 }
 
+# Two merchants, each with its own storefront. Two is enough to show the
+# isolation the example is about; a third would be a third deployment.
 echo "==> Onboarding merchants"
 onboard alpine "Alpine Apparel"
 onboard bolt "Bolt Electronics"
-onboard cellar "Cellar Coffee"
 
 # --- 3. Each merchant EXTENDS the shared product type ------------------------
 #
 # The starter template gave every merchant the same root `product`. Each one
-# now adds a subtype with the fields only it has. The storefront aggregates all
-# three without knowing any of them in advance.
+# now adds a subtype with the fields only it has. Each merchant's storefront
+# projects its own subtype without knowing it in advance.
 subtype() {
   merchant="$1"; shift
   api -X POST "$PLATFORM/api/merchants/$merchant/types" -d "$1" | jq -r '.internal_name // .error.message'
@@ -81,12 +95,6 @@ subtype bolt '{
   "attributes":[
     {"internal_name":"voltage","display_name":"Voltage","data_type":"integer"},
     {"internal_name":"warranty_months","display_name":"Warranty (months)","data_type":"integer"}
-  ]}'
-subtype cellar '{
-  "internal_name":"coffee","display_name":"Coffee",
-  "attributes":[
-    {"internal_name":"roast","display_name":"Roast","data_type":"string"},
-    {"internal_name":"weight_grams","display_name":"Weight (g)","data_type":"integer"}
   ]}'
 
 # --- 4. Products -------------------------------------------------------------
@@ -114,14 +122,6 @@ product bolt kettle '{"type":"electronics","values":{
   "name":"Pour-Over Kettle","description":"A gooseneck kettle with a temperature dial.",
   "sku":"BOLT-2","status":"active","price":"120.00","currency":"EUR","in_stock":true,
   "voltage":240,"warranty_months":12}}'
-product cellar beans-ethiopia '{"type":"coffee","values":{
-  "name":"Ethiopia Guji","description":"A washed Guji with jasmine and stone fruit.",
-  "sku":"CEL-1","status":"active","price":"18.50","currency":"EUR","in_stock":true,
-  "roast":"filter","weight_grams":250}}'
-product cellar beans-archived '{"type":"coffee","values":{
-  "name":"Last Season Blend","description":"Withdrawn from sale.",
-  "sku":"CEL-2","status":"archived","price":"14.00","currency":"EUR","in_stock":false,
-  "roast":"espresso","weight_grams":250}}'
 
 # --- 5. A product image ------------------------------------------------------
 #
@@ -144,61 +144,79 @@ OBJECT_KEY=$(echo "$upload" | jq -r '.value.object_key')
 # The products above reach the storefront over signed webhooks, so there is a
 # short delay: the outbox relay dispatches, and the storefront debounces a
 # burst per entity.
-echo "==> Waiting for the storefront projection"
-active_count() { curl -sS "$STOREFRONT/api/products?limit=100" | jq '.items | length'; }
+echo "==> Waiting for each storefront's projection"
+alpine_count() { curl -sS "$ALPINE/api/products?limit=100" | jq '.items | length'; }
+bolt_count() { curl -sS "$BOLT/api/products?limit=100" | jq '.items | length'; }
 for _ in $(seq 1 60); do
-  if [ "$(active_count)" -ge 4 ]; then break; fi
+  if [ "$(alpine_count)" -ge 1 ] && [ "$(bolt_count)" -ge 1 ]; then break; fi
   sleep 1
 done
 
 # --- 7. Assert what a shopper sees -------------------------------------------
-echo "==> The storefront aggregates every merchant"
-curl -sS "$STOREFRONT/api/products?limit=100" |
-  jq '{count: (.items | length), products: [.items[] | {merchant, subtype, name, price}]}'
+echo "==> Alpine's storefront serves Alpine's catalogue"
+curl -sS "$ALPINE/api/products?limit=100" |
+  jq '{store: "alpine", count: (.items | length), products: [.items[] | {merchant, subtype, name, price}]}'
+echo "==> Bolt's storefront serves Bolt's"
+curl -sS "$BOLT/api/products?limit=100" |
+  jq '{store: "bolt", count: (.items | length), products: [.items[] | {merchant, subtype, name, price}]}'
 
-count=$(active_count)
-if [ "$count" -ne 4 ]; then
-  echo "FAILED: expected 4 active products across three merchants, got $count" >&2
-  echo "Check 'docker compose logs storefront' for projection errors." >&2
+# The property that replaced "one storefront aggregates every merchant": each
+# one holds ONE merchant's catalogue, so nothing here can read two.
+others=$(curl -sS "$ALPINE/api/products?limit=100" | jq '[.items[] | select(.merchant != "Alpine Apparel")] | length')
+if [ "$others" -ne 0 ]; then
+  echo "FAILED: alpine's storefront returned $others products belonging to another merchant" >&2
   exit 1
 fi
+others=$(curl -sS "$BOLT/api/products?limit=100" | jq '[.items[] | select(.merchant != "Bolt Electronics")] | length')
+if [ "$others" -ne 0 ]; then
+  echo "FAILED: bolt's storefront returned $others products belonging to another merchant" >&2
+  exit 1
+fi
+echo "    each storefront returns only its own merchant's products"
 
-echo "==> Full-text search across merchants: 'merino'"
-curl -sS --get "$STOREFRONT/api/products" --data-urlencode 'q=merino' |
+echo "==> Full-text search within one merchant's catalogue: 'merino'"
+curl -sS --get "$ALPINE/api/products" --data-urlencode 'q=merino' |
   jq '[.items[] | {merchant, name}]'
 
-echo "==> Filter by merchant and price range"
-curl -sS --get "$STOREFRONT/api/products" \
-  --data-urlencode 'merchant=bolt' --data-urlencode 'min_price=40' --data-urlencode 'max_price=100' |
+echo "==> Filter by price range"
+curl -sS --get "$BOLT/api/products" \
+  --data-urlencode 'min_price=40' --data-urlencode 'max_price=100' |
   jq '[.items[] | {name, price}]'
 
 echo "==> A draft and an archived product are invisible to shoppers"
-for hidden in alpine/jacket-draft cellar/beans-archived; do
-  code=$(curl -s -o /dev/null -w '%{http_code}' "$STOREFRONT/api/products/${hidden%%/*}/${hidden##*/}")
-  if [ "$code" != "404" ]; then
-    echo "FAILED: $hidden is reachable (HTTP $code); only active products may be" >&2
-    exit 1
-  fi
-  echo "    $hidden -> 404"
-done
+code=$(curl -s -o /dev/null -w '%{http_code}' "$ALPINE/api/products/jacket-draft")
+if [ "$code" != "404" ]; then
+  echo "FAILED: alpine/jacket-draft is reachable (HTTP $code); only active products may be" >&2
+  exit 1
+fi
+echo "    alpine/jacket-draft -> 404"
+
+echo "==> One merchant's storefront cannot be asked for another's product"
+# tee-merino belongs to alpine. Bolt's storefront has never held it.
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BOLT/api/products/tee-merino")
+if [ "$code" != "404" ]; then
+  echo "FAILED: bolt's storefront answered for an alpine product (HTTP $code)" >&2
+  exit 1
+fi
+echo "    bolt asked for alpine's tee-merino -> 404"
 
 echo "==> The product image is served through the storefront"
 # Wait for the projection to carry THIS upload's object key. Replacing a media
 # value garbage-collects the superseded blob, so a storefront still holding the
 # previous key would fetch an object that no longer exists.
 for _ in $(seq 1 60); do
-  projected=$(curl -sS "$STOREFRONT/api/products/alpine/tee-merino" | jq -r '.image.object_key // ""')
+  projected=$(curl -sS "$ALPINE/api/products/tee-merino" | jq -r '.image.object_key // ""')
   if [ "$projected" = "$OBJECT_KEY" ]; then break; fi
   sleep 1
 done
 # The storefront REDIRECTS to a signed, expiring link rather than proxying the
 # bytes, so the first response is a 302 and the second is the image itself.
-img_redirect=$(curl -s -o /dev/null -w '%{http_code}' "$STOREFRONT/api/products/alpine/tee-merino/image")
+img_redirect=$(curl -s -o /dev/null -w '%{http_code}' "$ALPINE/api/products/tee-merino/image")
 if [ "$img_redirect" != "302" ]; then
   echo "FAILED: expected a redirect to a signed link, got HTTP $img_redirect" >&2
   exit 1
 fi
-signed=$(curl -s -o /dev/null -w '%{redirect_url}' "$STOREFRONT/api/products/alpine/tee-merino/image")
+signed=$(curl -s -o /dev/null -w '%{redirect_url}' "$ALPINE/api/products/tee-merino/image")
 case "$signed" in
   */media/signed/*) ;;
   *) echo "FAILED: the redirect does not point at a signed link: $signed" >&2; exit 1 ;;
@@ -212,7 +230,7 @@ fi
 echo "    alpine/tee-merino/image -> 302 -> signed link -> 200 (no credential)"
 
 echo "==> A shopper cannot widen the filter to see drafts"
-drafts=$(curl -sS "$STOREFRONT/api/products?status=draft" | jq '.items | length')
+drafts=$(curl -sS "$ALPINE/api/products?status=draft" | jq '.items | length')
 if [ "$drafts" -ne 0 ]; then
   echo "FAILED: status=draft returned $drafts products" >&2
   exit 1
@@ -223,6 +241,7 @@ api "$PLATFORM/api/merchants" | jq '{merchants: [.items[] | {id, display_name, t
 
 echo
 echo "Done."
-echo "  storefront:  $STOREFRONT/api/products"
+echo "  alpine's storefront:  $ALPINE/api/products"
+echo "  bolt's storefront:    $BOLT/api/products"
 echo "  platform:    $PLATFORM/api/merchants  (Bearer $CONSOLE_TOKEN)"
 echo "  flexitype:   $FLEXITYPE"

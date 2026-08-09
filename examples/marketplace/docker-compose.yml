@@ -86,7 +86,13 @@ services:
     ports:
       - "8080:8080"
 
-  storefront:
+  # ONE storefront per merchant. Each holds one credential, answers for one
+  # catalog, and refuses anything that is not its merchant — so no service
+  # here needs a privilege that crosses a tenant boundary.
+  #
+  # Two are run to make the shape visible. A real deployment runs one per
+  # merchant, with its credential from a secret manager.
+  storefront-alpine:
     build:
       context: ../..
       dockerfile: examples/marketplace/storefront/Dockerfile
@@ -95,19 +101,35 @@ services:
         condition: service_healthy
     environment:
       STOREFRONT_ADDR: ":9200"
+      STOREFRONT_TENANT: alpine
       STOREFRONT_DB_DSN: postgres://flexitype:flexitype@postgres:5432/flexitype?sslmode=disable
+      STOREFRONT_DB_SCHEMA: storefront_alpine
       FLEXITYPE_URL: http://flexitype:8080
-      # Gates merchant registration and the backfill. The platform presents it.
       MARKETPLACE_INTERNAL_TOKEN: marketplace-internal-demo-token
-      # A burst of value events for one product collapses into one projection.
       STOREFRONT_DEBOUNCE: 250ms
-      # The address a SHOPPER's browser reaches flexitype on — not the
-      # container-network name this service uses, which would not resolve in a
-      # browser. With it set, a product image is a redirect to a signed link
-      # rather than bytes proxied through this service.
       STOREFRONT_MEDIA_PUBLIC_BASE: http://localhost:8080
     ports:
       - "9200:9200"
+
+  storefront-bolt:
+    build:
+      context: ../..
+      dockerfile: examples/marketplace/storefront/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      STOREFRONT_ADDR: ":9200"
+      STOREFRONT_TENANT: bolt
+      STOREFRONT_DB_DSN: postgres://flexitype:flexitype@postgres:5432/flexitype?sslmode=disable
+      # Its own schema: one merchant's catalog is not in another's database.
+      STOREFRONT_DB_SCHEMA: storefront_bolt
+      FLEXITYPE_URL: http://flexitype:8080
+      MARKETPLACE_INTERNAL_TOKEN: marketplace-internal-demo-token
+      STOREFRONT_DEBOUNCE: 250ms
+      STOREFRONT_MEDIA_PUBLIC_BASE: http://localhost:8080
+    ports:
+      - "9201:9200"
 
   platform:
     build:
@@ -118,14 +140,19 @@ services:
         condition: service_healthy
       flexitype:
         condition: service_started
-      storefront:
+      storefront-alpine:
+        condition: service_started
+      storefront-bolt:
         condition: service_started
     environment:
       PLATFORM_ADDR: ":9300"
       PLATFORM_DB_DSN: postgres://flexitype:flexitype@postgres:5432/flexitype?sslmode=disable
       FLEXITYPE_URL: http://flexitype:8080
-      STOREFRONT_URL: http://storefront:9200
-      STOREFRONT_HOOK_BASE: http://storefront:9200/hook
+      # One storefront per merchant, addressed by tenant. Onboarding pushes a
+      # merchant's credential to ITS storefront and to no other.
+      # A merchant's webhook goes to that merchant's storefront, derived from
+      # this address — there is no second setting that has to agree with it.
+      STOREFRONT_URLS: alpine=http://storefront-alpine:9200,bolt=http://storefront-bolt:9200
       MARKETPLACE_INTERNAL_TOKEN: marketplace-internal-demo-token
       PLATFORM_API_TOKEN: platform-console-demo-token
       # The same value the flexitype service was given above. A real
@@ -159,10 +186,11 @@ services:
       context: ../..
       dockerfile: examples/marketplace/shop/Dockerfile
     depends_on:
-      storefront:
+      storefront-alpine:
         condition: service_started
     environment:
-      STOREFRONT_URL: http://storefront:9200
+      # The shop is a merchant's own storefront UI.
+      STOREFRONT_URL: http://storefront-alpine:9200
     ports:
       - "8082:8082"
 

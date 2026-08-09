@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
-/** One line of the basket. A product is identified by its tenant AND its id. */
+/** One line of the basket. */
 export interface BasketLine {
-  tenant: string
   entityId: string
   name: string
   merchant: string
@@ -30,19 +29,16 @@ function write(lines: BasketLine[]): void {
   window.dispatchEvent(new Event(CHANGED))
 }
 
-function keyOf(line: Pick<BasketLine, 'tenant' | 'entityId'>): string {
-  return `${line.tenant} ${line.entityId}`
+function keyOf(line: Pick<BasketLine, 'entityId'>): string {
+  return line.entityId
 }
 
 /**
  * The basket, in local storage.
  *
- * It is a browser-side list, not an order. The example stops where a real
- * marketplace would start splitting one basket into one order per merchant,
- * because each merchant is a separate tenant and a separate settlement.
- *
- * A line is keyed by tenant AND entity id. Two merchants can both call a
- * product `sku-1`, and keying on the id alone would merge them into one line.
+ * It is a browser-side list, not an order: the example stops where checkout
+ * would begin. One storefront is one merchant, so a basket is one merchant's
+ * order and an entity id identifies a line on its own.
  */
 export function useBasket() {
   const [lines, setLines] = useState<BasketLine[]>(read)
@@ -71,7 +67,7 @@ export function useBasket() {
     )
   }, [])
 
-  const remove = useCallback((line: Pick<BasketLine, 'tenant' | 'entityId'>) => {
+  const remove = useCallback((line: Pick<BasketLine, 'entityId'>) => {
     write(read().filter((entry) => keyOf(entry) !== keyOf(line)))
   }, [])
 

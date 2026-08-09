@@ -34,7 +34,7 @@ export interface Product {
   updated_at: string
 }
 
-/** One merchant a shopper can filter by. */
+/** The merchant this storefront serves. */
 export interface Merchant {
   tenant: string
   display_name: string
@@ -43,7 +43,6 @@ export interface Merchant {
 /** The filters the product search takes. */
 export interface SearchFilters {
   q?: string
-  merchant?: string
   minPrice?: string
   maxPrice?: string
   limit?: number
@@ -82,7 +81,6 @@ function messageOf(body: unknown): string | undefined {
 export function searchPath(filters: SearchFilters): string {
   const params = new URLSearchParams()
   if (filters.q !== undefined && filters.q !== '') params.set('q', filters.q)
-  if (filters.merchant !== undefined && filters.merchant !== '') params.set('merchant', filters.merchant)
   if (filters.minPrice !== undefined && filters.minPrice !== '') params.set('min_price', filters.minPrice)
   if (filters.maxPrice !== undefined && filters.maxPrice !== '') params.set('max_price', filters.maxPrice)
   if (filters.limit !== undefined) params.set('limit', String(filters.limit))
@@ -98,19 +96,18 @@ export async function searchProducts(filters: SearchFilters): Promise<Product[]>
 }
 
 /** One product. A draft or an archived one is a 404, not a hidden field. */
-export async function getProduct(tenant: string, entityId: string): Promise<Product> {
-  return get<Product>(`/api/products/${encodeURIComponent(tenant)}/${encodeURIComponent(entityId)}`)
+export async function getProduct(entityId: string): Promise<Product> {
+  return get<Product>(`/api/products/${encodeURIComponent(entityId)}`)
 }
 
-/** Every merchant with something on offer. */
-export async function listMerchants(): Promise<Merchant[]> {
-  const body = await get<{ items?: Merchant[] }>('/api/merchants')
-  return body.items ?? []
+/** The merchant this storefront belongs to. */
+export async function getStore(): Promise<Merchant> {
+  return get<Merchant>('/api/store')
 }
 
-/** The URL of a product photo. The storefront proxies the bytes. */
-export function imageUrl(product: Pick<Product, 'tenant' | 'entity_id'>): string {
-  return `/api/products/${encodeURIComponent(product.tenant)}/${encodeURIComponent(product.entity_id)}/image`
+/** The URL of a product photo: a redirect to a signed, expiring link. */
+export function imageUrl(product: Pick<Product, 'entity_id'>): string {
+  return `/api/products/${encodeURIComponent(product.entity_id)}/image`
 }
 
 /** Renders a price with its currency, or an empty string when it has none. */

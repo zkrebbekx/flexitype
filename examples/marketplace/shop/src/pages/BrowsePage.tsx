@@ -2,25 +2,26 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
 
-import { listMerchants, searchProducts, type SearchFilters } from '../lib/storefront.js'
+import { getStore, searchProducts, type SearchFilters } from '../lib/storefront.js'
 import { ProductCard } from '../components/ProductCard.js'
 import { Alert, Button, Spinner, TextInput } from '../components/ui.js'
 
 const PAGE_SIZE = 24
 
 /**
- * The shopper's catalog: every merchant, in one grid.
+ * One merchant's catalog.
  *
  * The search is full text over the projection's generated `tsvector`, so it
- * covers a merchant's own product copy without the shop knowing any merchant's
- * schema.
+ * covers this merchant's own product copy without the shop knowing its schema.
+ * There is no merchant filter: a storefront is deployed per merchant, so this
+ * page has one catalog and no way to ask for another.
  */
 export default function BrowsePage() {
   const [draft, setDraft] = useState<SearchFilters>({})
   const [filters, setFilters] = useState<SearchFilters>({})
   const [page, setPage] = useState(0)
 
-  const merchants = useQuery({ queryKey: ['merchants'], queryFn: listMerchants })
+  const store = useQuery({ queryKey: ['store'], queryFn: getStore })
   const query = { ...filters, limit: PAGE_SIZE, offset: page * PAGE_SIZE }
   const products = useQuery({
     queryKey: ['products', query],
@@ -35,7 +36,9 @@ export default function BrowsePage() {
 
   return (
     <div className="space-y-8">
-      <form onSubmit={apply} className="grid gap-3 sm:grid-cols-[1fr_180px_120px_120px_auto] sm:items-end">
+      <h1 className="text-xl font-semibold">{store.data?.display_name ?? 'Catalogue'}</h1>
+
+      <form onSubmit={apply} className="grid gap-3 sm:grid-cols-[1fr_120px_120px_auto] sm:items-end">
         <label className="block text-sm">
           <span className="mb-1 block font-medium text-slate-700">Search</span>
           <TextInput
@@ -43,22 +46,6 @@ export default function BrowsePage() {
             placeholder="merino, roast, 240 V…"
             onChange={(event) => setDraft({ ...draft, q: event.target.value })}
           />
-        </label>
-
-        <label className="block text-sm">
-          <span className="mb-1 block font-medium text-slate-700">Merchant</span>
-          <select
-            value={draft.merchant ?? ''}
-            onChange={(event) => setDraft({ ...draft, merchant: event.target.value })}
-            className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-          >
-            <option value="">Every merchant</option>
-            {(merchants.data ?? []).map((merchant) => (
-              <option key={merchant.tenant} value={merchant.tenant}>
-                {merchant.display_name}
-              </option>
-            ))}
-          </select>
         </label>
 
         <label className="block text-sm">

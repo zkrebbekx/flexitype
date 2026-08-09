@@ -28,15 +28,16 @@ export default function App() {
       <main className="mx-auto max-w-6xl px-6 py-8">
         <Routes>
           <Route path="/" element={<BrowsePage />} />
-          <Route path="/p/:tenant/:entityId" element={<ProductPage />} />
+          <Route path="/p/:entityId" element={<ProductPage />} />
           <Route path="/basket" element={<BasketPage />} />
           <Route path="*" element={<BrowsePage />} />
         </Routes>
       </main>
 
       <footer className="mx-auto max-w-6xl px-6 py-10 text-xs text-slate-500">
-        Every product here belongs to a different flexitype tenant with its own schema. This page reads one
-        projected catalog, because a cross-tenant query does not exist.
+        This storefront serves one merchant. Its catalogue is a projection fed by that merchant's webhooks,
+        because flexitype takes the tenant from the token — so a catalogue read is a projection, not a live
+        query.
       </footer>
     </div>
   )

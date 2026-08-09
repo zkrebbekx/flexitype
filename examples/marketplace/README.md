@@ -1,7 +1,8 @@
 # Example: a multi-tenant marketplace
 
-Many merchants, one storefront. Each merchant is its OWN flexitype tenant with
-its OWN schema; shoppers browse every merchant's products in one place.
+Many merchants, **one storefront each**. Each merchant is its own flexitype
+tenant with its own schema, and each has its own storefront holding one
+credential and serving one catalogue.
 
 Two Go services against a **standalone** flexitype over HTTP with the Go SDK
 (`github.com/zkrebbekx/flexitype/client`), and two React front ends on the
@@ -9,11 +10,11 @@ TypeScript SDK (`@flexitype/client`). Nothing here embeds the library.
 
 - **[`platform/`](platform/)** — onboards a merchant, serves the merchant API,
   and forwards a merchant's flexitype READS with its token attached.
-- **[`storefront/`](storefront/)** — receives signed webhooks, keeps its own
-  denormalized catalog, and serves shoppers.
+- **[`storefront/`](storefront/)** — deployed PER MERCHANT: receives that
+  merchant's signed webhooks, keeps its catalogue, and serves its shoppers.
 - **[`console/`](console/)** — the merchant console. Its product form is drawn
   by the SCHEMA: it names no product field.
-- **[`shop/`](shop/)** — the shopper storefront. One catalog, every merchant.
+- **[`shop/`](shop/)** — the shopper UI of one merchant's storefront.
 
 **Prerequisites:** Docker, `curl` and `jq`. `seed.sh` checks for them up front.
 
@@ -41,10 +42,11 @@ docker compose up --build --wait      # postgres, flexitype, platform, storefron
 
 | What | Where |
 | --- | --- |
-| Shopper storefront | <http://localhost:8082> |
+| Shopper storefront (Alpine) | <http://localhost:8082> |
 | Merchant console | <http://localhost:8081> |
 | flexitype console | <http://localhost:8080> |
-| Shopper API | <http://localhost:9200/api/products> |
+| Alpine's storefront API | <http://localhost:9200/api/products> |
+| Bolt's storefront API | <http://localhost:9201/api/products> |
 | Merchant API | <http://localhost:9300/api/merchants> |
 
 `seed.sh` is safe to re-run. To start over: `docker compose down --volumes`,
@@ -91,21 +93,44 @@ touching B.
 A subtype inherits every `product` field, so the storefront finds `name`,
 `price` and `status` on all three without knowing any of them in advance.
 
-## Why the storefront projects instead of querying
+## One storefront per merchant
 
-flexitype has no cross-tenant query, and that is a property, not a gap: the
-tenant comes from the token, so "every merchant's active products, ranked by
-relevance" is not expressible against flexitype at all.
+This example ran the other way once: ONE storefront across every merchant,
+aggregating them into a single catalogue. That forced it to hold every
+merchant's credential — a leak of its database handed over every catalogue —
+and it pushed flexitype itself to grow a `read_any_tenant` scope so the
+storefront could hold one credential instead of many.
 
-The storefront therefore keeps its OWN denormalized catalog in Postgres, fed by
-flexitype's webhooks, and answers shoppers from it. One row per product:
+Both were the wrong shape, and the friction was the design saying so. flexitype
+takes the tenant from the token, so no request reads two tenants. A service
+built to aggregate tenants is fighting that, and the fix was not a privilege
+that crosses the line — it was to stop needing one.
+
+So: **one storefront per merchant**. Each is configured with its tenant
+(`STOREFRONT_TENANT`), holds one credential, keeps one catalogue in its own
+schema, and refuses anything that is not its merchant:
+
+| Reached by | Answer |
+| --- | --- |
+| A shopper asking for another merchant's product | 404 — the path takes no tenant, and the data is not in this database |
+| The platform registering another merchant's credential | 403 — this process holds one merchant's token |
+| A delivery on another merchant's hook path | 401, byte-identical to a bad signature, so the merchants a storefront serves are not probeable |
+
+`seed.sh` asserts each of those.
+
+## Why a storefront projects instead of querying
+
+Even for one merchant, the storefront keeps its own denormalized catalogue in
+Postgres, fed by flexitype's webhooks, rather than querying flexitype per
+request: a shopper page is a read-heavy surface with its own ranking and
+filtering, and a projection is what makes it cheap. One row per product:
 
 ```sql
 CREATE TABLE storefront.catalog_product (
     tenant      text NOT NULL,          -- the merchant
     entity_id   text NOT NULL,
     type_id     text NOT NULL,          -- the flexitype type definition
-    subtype     text NOT NULL,          -- "apparel", "electronics", "coffee"
+    subtype     text NOT NULL,          -- "apparel", "electronics"
     name        text NOT NULL DEFAULT '',
     description text NOT NULL DEFAULT '',
     sku         text NOT NULL DEFAULT '',
@@ -121,11 +146,16 @@ CREATE TABLE storefront.catalog_product (
 );
 ```
 
-The core commerce fields get columns, because every merchant has them and the
-storefront filters and sorts on them. Everything a merchant added to its own
-subtype goes into `attributes`, keyed by internal name — that is what lets one
-storefront render heterogeneous schemas. A localized or scoped value is kept
-under `name@fr`, so the base value stays the default rendering.
+The core commerce fields get columns, because the storefront filters and sorts
+on them. Everything the merchant added to its own subtype goes into
+`attributes`, keyed by internal name — that is what lets the storefront render
+a schema it does not know in advance. A localized or scoped value is kept under
+`name@fr`, so the base value stays the default rendering.
+
+The `tenant` column stays in the schema even though one storefront holds one
+merchant. It is what makes every read say which merchant it is about, so a
+misconfigured deployment fails a comparison rather than silently serving the
+wrong catalogue.
 
 `search` is a GENERATED column, so it cannot drift from the text it indexes:
 there is no code path that writes `name` without rewriting the vector.
@@ -201,11 +231,10 @@ would have answered with, and nothing is sent.
 
 ### The shopper storefront ([`shop/`](shop/))
 
-One grid over every merchant, answered from the projection rather than from
-flexitype — a cross-tenant query does not exist. A product page renders
-whatever the merchant added to its own subtype, keyed by internal name, without
-knowing any of those names. A basket line is keyed by tenant AND entity id,
-because two merchants can both call a product `sku-1`.
+One merchant's catalogue, answered from that merchant's projection. There is no
+merchant filter and no tenant in any path: this UI is served by one storefront,
+which has one catalogue. A product page renders whatever the merchant added to
+its own subtype, keyed by internal name, without knowing any of those names.
 
 ## Credentials
 
@@ -215,16 +244,16 @@ There are four in this example, and they are all demo values in
 | Credential | Held by | What it opens |
 | --- | --- | --- |
 | flexitype admin token | platform | creating tenants and service accounts |
-| cross-tenant reader token | storefront | READING every merchant's catalog, and writing none |
-| merchant service-account token | platform, storefront | one merchant's catalog |
-| `MARKETPLACE_INTERNAL_TOKEN` | platform → storefront | merchant registration, backfill |
+| merchant service-account token | platform, and that merchant's storefront ONLY | one merchant's catalogue |
+| `MARKETPLACE_INTERNAL_TOKEN` | platform → each storefront | merchant registration, backfill |
 | `PLATFORM_API_TOKEN` | the console's nginx → platform | the merchant API |
 
 **The merchant token is stored in a table here. A real deployment would not do
 that.** It would keep the token in a secret manager (Vault, AWS Secrets
 Manager, GCP Secret Manager) and store only the secret's NAME in the row, so a
-database dump or a read-only SQL leak does not hand over every merchant's
-catalog. The token never appears in a log line or an API response: `Merchant`
+database dump or a read-only SQL leak does not hand over that merchant's
+catalogue. A storefront holds ONE such token, so a leak reaches one merchant
+rather than all of them. The token never appears in a log line or an API response: `Merchant`
 marshals it with `json:"-"`, which is a mechanism rather than a rule each
 handler has to remember, and there is a test for it.
 
@@ -345,7 +374,9 @@ The Go suites cover: onboarding is idempotent and re-runnable after a part-way
 failure; two merchants are isolated; the projector is idempotent and order-independent;
 a new attribute is picked up; the backfill is re-runnable; a draft or archived
 product is invisible on every shopper path; an unsigned, wrongly signed,
-tampered, stale or cross-tenant delivery is refused; the debouncer coalesces a
+tampered, stale or wrong-tenant delivery is refused; a storefront serves one
+merchant and refuses another's product, credential and deliveries; the
+debouncer coalesces a
 burst per entity; no response or log line carries a merchant token; and the read-only
 passthrough reaches the right tenant, refuses a write, refuses the admin API
 and never echoes the token.
@@ -375,12 +406,11 @@ Each one is filed, so it can be tracked rather than only recorded here.
    keeps authentication on without setting the variable that turns it off.
    `FLEXITYPE_DEV_INSECURE` still implies it. ([#548])
 
-4. ~~**The projector needs one credential per tenant.**~~ **Fixed.** The
-   `read_any_tenant` scope gives ONE credential that reads every tenant and
-   writes none. The platform mints it at start-up and hands it to the
-   storefront, which then uses no merchant token for a read. The per-merchant
-   tokens remain as a fallback, so the example still runs against a service
-   without such an account. ([#549])
+4. ~~**The projector needs one credential per tenant.**~~ **Answered by
+   changing the example, not the service.** A `read_any_tenant` scope was added
+   and then withdrawn: it made the property every other guarantee rests on
+   conditional, to serve one architecture. A storefront per merchant holds one
+   credential and needs no privilege that crosses a tenant boundary. ([#549])
 
 5. ~~**An event does not say which entity changed without a payload parse.**~~
    **Fixed.** `type_definition_id` and `entity_id` are on the envelope, so this

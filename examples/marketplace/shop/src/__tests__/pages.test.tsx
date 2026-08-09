@@ -56,20 +56,13 @@ function stubCatalog(products: Product[]) {
     'fetch',
     vi.fn(async (url: string) => {
       urls.push(url)
-      if (url.startsWith('/api/merchants')) {
-        return Response.json({
-          items: [
-            { tenant: 'alpine', display_name: 'Alpine Apparel' },
-            { tenant: 'bolt', display_name: 'Bolt Electronics' },
-          ],
-        })
+      if (url.startsWith('/api/store')) {
+        return Response.json({ tenant: 'alpine', display_name: 'Alpine Apparel' })
       }
       if (url.includes('/image')) return new Response('', { status: 404 })
       const parsed = new URL(url, 'http://shop.test')
-      const merchant = parsed.searchParams.get('merchant')
       const term = parsed.searchParams.get('q')
       let items = products
-      if (merchant !== null) items = items.filter((product) => product.tenant === merchant)
       if (term !== null) items = items.filter((product) => product.name.toLowerCase().includes(term.toLowerCase()))
       return Response.json({ items })
     }),
@@ -85,17 +78,12 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('browsing every merchant at once', () => {
-  it('shows products from more than one tenant in one grid', async () => {
-    stubCatalog([apparel, electronics])
+describe('browsing one merchant\'s catalogue', () => {
+  it('shows the products this storefront serves', async () => {
+    stubCatalog([apparel])
     renderWith(<BrowsePage />)
 
     expect(await screen.findByText('Merino Base Layer')).toBeInTheDocument()
-    expect(screen.getByText('Travel Kettle')).toBeInTheDocument()
-    // Each merchant appears on its card and again in the filter, so both
-    // names are present more than once.
-    expect(screen.getAllByText('Alpine Apparel').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Bolt Electronics').length).toBeGreaterThan(0)
   })
 
   it('passes the filters to the API rather than filtering in the browser', async () => {
@@ -105,20 +93,19 @@ describe('browsing every merchant at once', () => {
     await screen.findByText('Merino Base Layer')
 
     await user.type(screen.getByLabelText('Search'), 'kettle')
-    await user.selectOptions(screen.getByLabelText('Merchant'), 'bolt')
     await user.type(screen.getByLabelText('Max price'), '50')
     await user.click(screen.getByRole('button', { name: /Search/ }))
 
     expect(await screen.findByText('Travel Kettle')).toBeInTheDocument()
-    expect(screen.queryByText('Merino Base Layer')).not.toBeInTheDocument()
     const searched = urls.filter((url) => url.startsWith('/api/products?'))
     expect(searched[searched.length - 1]).toContain('q=kettle')
-    expect(searched[searched.length - 1]).toContain('merchant=bolt')
     expect(searched[searched.length - 1]).toContain('max_price=50')
+    // There is no merchant filter to send: this storefront serves one.
+    expect(searched[searched.length - 1]).not.toContain('merchant=')
   })
 })
 
-describe('one product page over heterogeneous schemas', () => {
+describe('one product page over a merchant\'s own schema', () => {
   it('renders a merchant’s own fields without knowing their names', async () => {
     stubCatalog([electronics])
     vi.stubGlobal(
@@ -131,9 +118,9 @@ describe('one product page over heterogeneous schemas', () => {
 
     renderWith(
       <Routes>
-        <Route path="/p/:tenant/:entityId" element={<ProductPage />} />
+        <Route path="/p/:entityId" element={<ProductPage />} />
       </Routes>,
-      '/p/bolt/bolt-kettle-1',
+      '/p/bolt-kettle-1',
     )
 
     expect(await screen.findByRole('heading', { name: 'Travel Kettle' })).toBeInTheDocument()
@@ -151,47 +138,42 @@ describe('one product page over heterogeneous schemas', () => {
 
     renderWith(
       <Routes>
-        <Route path="/p/:tenant/:entityId" element={<ProductPage />} />
+        <Route path="/p/:entityId" element={<ProductPage />} />
       </Routes>,
-      '/p/alpine/draft-1',
+      '/p/draft-1',
     )
 
     expect(await screen.findByRole('alert')).toHaveTextContent('No such product')
   })
 
-  it('keeps two merchants’ products apart in the basket', async () => {
+  it('adds a product to the basket once per product', async () => {
     const user = userEvent.setup()
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
         if (url.includes('/image')) return new Response('', { status: 404 })
-        return Response.json(url.includes('/bolt/') ? electronics : apparel)
+        return Response.json(apparel)
       }),
     )
 
-    const view = renderWith(
-      <Routes>
-        <Route path="/p/:tenant/:entityId" element={<ProductPage />} />
-      </Routes>,
-      '/p/bolt/bolt-kettle-1',
-    )
-    await screen.findByRole('heading', { name: 'Travel Kettle' })
-    await user.click(screen.getByRole('button', { name: 'Add to basket' }))
-    view.unmount()
-
     renderWith(
       <Routes>
-        <Route path="/p/:tenant/:entityId" element={<ProductPage />} />
+        <Route path="/p/:entityId" element={<ProductPage />} />
       </Routes>,
-      '/p/alpine/alp-merino-1',
+      '/p/alp-merino-1',
     )
     await screen.findByRole('heading', { name: 'Merino Base Layer' })
     await user.click(screen.getByRole('button', { name: 'Add to basket' }))
+    await user.click(screen.getByRole('button', { name: 'Add to basket' }))
 
-    const stored: unknown = JSON.parse(window.localStorage.getItem('marketplace.basket') ?? '[]')
-    expect(stored).toHaveLength(2)
-    // Two tenants, two lines. Keying on the entity id alone would merge two
-    // different merchants' products whenever their ids collided.
-    expect((stored as { tenant: string }[]).map((line) => line.tenant).sort()).toEqual(['alpine', 'bolt'])
+    const stored = JSON.parse(window.localStorage.getItem('marketplace.basket') ?? '[]') as {
+      entityId: string
+      quantity: number
+    }[]
+    // One line, quantity two: a storefront serves one merchant, so an entity
+    // id identifies a line on its own.
+    expect(stored).toHaveLength(1)
+    expect(stored[0]?.entityId).toBe('alp-merino-1')
+    expect(stored[0]?.quantity).toBe(2)
   })
 })

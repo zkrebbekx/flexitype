@@ -1,10 +1,15 @@
-// Command storefront is the shopper side of the marketplace example.
+// Command storefront is the shopper side of the marketplace example, deployed
+// PER MERCHANT.
 //
-// flexitype has no cross-tenant query: a service-account token IS a tenant, so
-// "every merchant's active products, ranked by relevance" cannot be asked of
-// flexitype at all. The storefront therefore keeps its OWN denormalized
-// catalog in Postgres, fed by flexitype's signed webhooks, and answers
-// shoppers from it.
+// One instance serves one merchant: it holds that merchant's credential, keeps
+// that merchant's catalogue, and refuses anything that is not its merchant. A
+// service-account token IS a tenant, so a storefront built this way needs no
+// privilege that crosses a tenant boundary — an earlier version of this
+// example aggregated every merchant, which needed one.
+//
+// It keeps its OWN denormalized catalogue in Postgres, fed by flexitype's
+// signed webhooks, and answers shoppers from it: a shopper page is read-heavy
+// with its own ranking, and a projection is what makes it cheap.
 //
 // The three moving parts:
 //
@@ -52,6 +57,12 @@ func run(log Logger) error {
 		return errors.New("STOREFRONT_DB_DSN is required")
 	}
 	flexitypeURL := envOr("FLEXITYPE_URL", "http://flexitype:8080")
+	// The ONE merchant this storefront serves. A storefront is deployed per
+	// merchant, so it holds one credential and answers for one catalog.
+	tenant := os.Getenv("STOREFRONT_TENANT")
+	if tenant == "" {
+		return errors.New("STOREFRONT_TENANT is required: a storefront serves exactly one merchant")
+	}
 	// The address a SHOPPER's browser reaches flexitype on. A signed image
 	// link is redeemed by the browser, so the container-network URL this
 	// process uses would not resolve for it. Empty falls back to proxying the
@@ -83,22 +94,11 @@ func run(log Logger) error {
 	}
 
 	projector := NewProjector(store, flexitypeURL, 30*time.Second)
-	// ONE credential that reads every tenant and writes none, instead of one
-	// full read/write token per merchant. A projection only ever re-reads, so
-	// holding a write-capable credential for every tenant is a standing risk
-	// that buys nothing. Without it, the per-merchant tokens are used as
-	// before.
-	if err := projector.UseCrossTenantReader(os.Getenv("FLEXITYPE_READER_TOKEN")); err != nil {
-		return err
-	}
-	if os.Getenv("FLEXITYPE_READER_TOKEN") != "" {
-		log.Info("reading every tenant with one cross-tenant credential; no merchant token is used for a read")
-	}
 	debouncer := NewDebouncer(debounce, func(ctx context.Context, key entityKey) error {
 		return projector.Project(ctx, key.Tenant, key.TypeID, key.EntityID)
 	}, log)
-	ingest := NewIngest(store, debouncer, log)
-	api := NewAPI(store, projector, internalToken, mediaBase, log)
+	ingest := NewIngest(tenant, store, debouncer, log)
+	api := NewAPI(tenant, store, projector, internalToken, mediaBase, log)
 
 	srv := &http.Server{
 		Addr:              addr,

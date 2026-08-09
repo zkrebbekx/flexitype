@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [1.9.0] — 2026-08-09
+
+Two security fixes to 1.8.0's write gate, and the schema-import defect behind
+them.
+
+**Upgrading from 1.7.x: go to
+[1.7.1](https://github.com/zkrebbekx/flexitype/releases/tag/v1.7.1) first, not
+1.7.0.** A rule that carries `enforce` loses it permanently if a 1.7.0 binary
+re-saves it.
+
 ### Added — The marketplace example enforces its own product rules
 
 1.8.0 let a dependency refuse a write, and nothing shipped actually did — every
@@ -30,7 +40,13 @@ template after someone had tuned one of its rules silently changed what the
 tenant enforced — permanently, with no way back through templates.
 
 A rule is now identified by its source, its target and its conditions. A bundle
-rule whose identity already exists is skipped, whatever its effect says. Import
+rule whose identity already exists is skipped, whatever its effect says.
+
+**This changes what a re-import does.** A bundle that deliberately carried the
+same rule twice with different effects previously created both; it now creates
+the first and skips the second. Nothing in a tenant is rewritten, and a bundle
+that already produced duplicates keeps them — the change is to what the NEXT
+import creates. Import
 creates what is missing; it has never updated, and overwriting a rule an
 operator deliberately tuned would be worse than leaving it. Cascading picklists
 are unaffected — several rules on one attribute pair differ in their
@@ -2440,7 +2456,8 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 - Quantity `one_of` members and defaults are unit-rebased; equal quantities in
   different units compare equal.
 
-[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/zkrebbekx/flexitype/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/zkrebbekx/flexitype/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/zkrebbekx/flexitype/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/zkrebbekx/flexitype/compare/v1.6.0...v1.7.0

@@ -46,6 +46,9 @@ const form = reactive({
   allowedValues: [] as string[],
   newAllowed: '',
   requiredOverride: 'none' as 'none' | 'true' | 'false',
+  // Where the demand is enforced. Only rendered while the override forces
+  // required: it is the only effect whose subject can be absent.
+  enforce: 'on_read' as 'on_read' | 'on_write',
   // Extra constraints the effect adds to the target while matched. Which
   // fields render depends on the target's data type, exactly as the
   // attribute drawer's own constraint editor does.
@@ -397,6 +400,24 @@ const COMPARATORS = [
               { value: 'false', label: 'Force optional' },
             ]"
           />
+
+          <div v-if="form.requiredOverride === 'true'" class="flex flex-col gap-1">
+            <Select
+              v-model="form.enforce"
+              label="Enforce the requirement"
+              :options="[
+                { value: 'on_read', label: 'On read — report the gap' },
+                { value: 'on_write', label: 'On write — refuse the write' },
+              ]"
+            />
+            <p class="text-[12px] text-(--text-secondary)">
+              {{
+                form.enforce === 'on_write'
+                  ? 'A write that leaves the value missing is refused. The check runs at the end of the write, so a batch or an import row supplying both together passes in any order — but a caller writing one attribute per request cannot set the condition first.'
+                  : 'The write is accepted and the gap is reported by completeness, for the application to act on where it decides — at publish, at checkout, at submit.'
+              }}
+            </p>
+          </div>
 
           <div class="flex flex-col gap-2">
             <span class="text-[13px] font-medium text-(--text-secondary)">Extra constraints while matched</span>

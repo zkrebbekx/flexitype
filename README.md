@@ -83,7 +83,9 @@ No backend; data resets on reload.
 - **Attribute dependencies**: cascading picklists and conditional validation —
   when a source attribute matches conditions (equals / in / range / pattern /
   dynamic time), the target's allowed values narrow, constraints tighten or
-  required flips; resolve the *effective schema* per entity for building UIs
+  required flips; resolve the *effective schema* per entity for building UIs.
+  A requirement reports by default and can be set to refuse the write instead —
+  see [docs/dependencies.md](docs/dependencies.md)
 - **Dynamic values**: `now` / `today` / relative-time defaults and conditions
 - **Domain events**: aggregates return `[]events.Event`; a dispatcher fans a
   stable JSON envelope out to **your** infrastructure — pub/sub brokers,

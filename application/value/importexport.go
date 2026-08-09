@@ -299,6 +299,12 @@ func (i *Interactor) importTransactional(ctx context.Context, tenant valueobject
 		return nil
 	})
 	if err != nil {
+		// An end-of-transaction check fails after every row has been written,
+		// so failedRow is still 0 — the header, which is no data row at all.
+		// Such an error names the entity it refused, so the row is recoverable.
+		if failedRow == 0 {
+			failedRow = rowOfEntity(valid, domainerrors.DetailsOf(err)["entity"])
+		}
 		report.Errors = append(report.Errors, importErrorFrom(failedRow, err))
 		if failedRow != 0 {
 			erroredRows[failedRow] = true
@@ -308,30 +314,91 @@ func (i *Interactor) importTransactional(ctx context.Context, tenant valueobject
 	report.RowsWritten = len(valid)
 }
 
+// rowOfEntity returns the file row that first mentions an entity, or 0 when
+// the detail is absent or names an entity this import did not touch.
+func rowOfEntity(valid []preparedRow, entity any) int {
+	id, ok := entity.(string)
+	if !ok || id == "" {
+		return 0
+	}
+	for _, p := range valid {
+		if p.entity() == id {
+			return p.row
+		}
+	}
+	return 0
+}
+
 // importBestEffort commits rows in chunk-sized transactions. A chunk that
 // commits cleanly writes all its rows at once (amortizing definition locks and
 // the existing-value prefetch); a chunk that fails rolls back as a unit and is
 // re-run row by row, so every writable row is still written and only the bad
 // rows are reported — matching the per-row semantics best effort had before.
 func (i *Interactor) importBestEffort(ctx context.Context, tenant valueobjects.TenantID, valid []preparedRow, erroredRows map[int]bool, report *ImportReport) {
-	for start := 0; start < len(valid); start += importChunkSize {
-		end := min(start+importChunkSize, len(valid))
-		chunk := valid[start:end]
-		if err := i.writeChunk(ctx, tenant, chunk); err == nil {
-			report.RowsWritten += len(chunk)
+	// Chunk on ENTITY boundaries, never mid-entity.
+	//
+	// A rule that refuses a write is judged over an entity's finished state at
+	// the end of its transaction, so splitting one entity's rows across two
+	// chunks judges half of it. The same file then imported or failed
+	// depending on where its rows happened to fall: a pair of rows at 50/51
+	// succeeded and the identical pair at 100/101 did not. Row position is not
+	// a property of the data, so it must not decide the outcome.
+	for _, group := range entityChunks(valid) {
+		if err := i.writeChunk(ctx, tenant, group); err == nil {
+			report.RowsWritten += len(group)
 			continue
 		}
-		// The chunk rolled back atomically; fall back to per-row transactions so
-		// good rows still land and only the offending rows are reported.
-		for _, p := range chunk {
-			if err := i.applyRow(ctx, p.inputs, true); err != nil {
-				report.Errors = append(report.Errors, importErrorFrom(p.row, err))
-				erroredRows[p.row] = true
+		// The chunk rolled back atomically; fall back to smaller units so good
+		// rows still land and only the offending ones are reported. The unit is
+		// one ENTITY, for the reason above — retrying row by row would split a
+		// pair that only succeeds together.
+		for _, rows := range groupByEntity(group) {
+			inputs := make([]SetInput, 0, len(rows))
+			for _, p := range rows {
+				inputs = append(inputs, p.inputs...)
+			}
+			if err := i.applyRow(ctx, inputs, true); err != nil {
+				for _, p := range rows {
+					report.Errors = append(report.Errors, importErrorFrom(p.row, err))
+					erroredRows[p.row] = true
+				}
 				continue
 			}
-			report.RowsWritten++
+			report.RowsWritten += len(rows)
 		}
 	}
+}
+
+// entityChunks slices rows into chunks of about importChunkSize, extending a
+// chunk so every row of one entity stays inside it. Rows arrive in file order
+// and an entity's rows are usually adjacent; a chunk grows only while they are.
+func entityChunks(valid []preparedRow) [][]preparedRow {
+	var out [][]preparedRow
+	for start := 0; start < len(valid); {
+		end := min(start+importChunkSize, len(valid))
+		for end < len(valid) && valid[end].entity() == valid[end-1].entity() {
+			end++
+		}
+		out = append(out, valid[start:end])
+		start = end
+	}
+	return out
+}
+
+// groupByEntity splits a chunk into one slice per entity, in first-seen order.
+func groupByEntity(chunk []preparedRow) [][]preparedRow {
+	index := make(map[string]int, len(chunk))
+	var out [][]preparedRow
+	for _, p := range chunk {
+		at, ok := index[p.entity()]
+		if !ok {
+			index[p.entity()] = len(out)
+			out = append(out, []preparedRow{p})
+			continue
+		}
+		out[at] = append(out[at], p)
+	}
+	return out
 }
 
 // writeChunk applies every row of a chunk in one unit of work with a shared
@@ -528,6 +595,14 @@ func (i *Interactor) applyRow(ctx context.Context, inputs []SetInput, commit boo
 			}
 		}
 		if !commit {
+			// A dry run rolls back by returning a sentinel, and Execute runs
+			// the end-of-transaction checks only when the usecase SUCCEEDS. So
+			// the preview skipped them and reported a row as valid that the
+			// real import refuses — the one answer a preview exists to give.
+			// Ask for the verdict first, then roll back.
+			if cerr := c.RunChecks(ctx); cerr != nil {
+				return cerr
+			}
 			return errRowValid
 		}
 		return nil

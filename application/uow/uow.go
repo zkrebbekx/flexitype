@@ -57,6 +57,21 @@ func (c *Collector) Stash(key string, create func() any) any {
 	return v
 }
 
+// RunChecks runs the registered end-of-transaction invariants and reports the
+// first failure. It runs them once: a second call is a no-op, so a usecase
+// that needs the verdict before Execute would reach it — a dry run, which
+// rolls back deliberately — can ask for it without the checks running twice.
+func (c *Collector) RunChecks(ctx context.Context) error {
+	checks := c.checks
+	c.checks = nil
+	for _, check := range checks {
+		if err := check(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CheckBeforeCommitOnce registers an invariant to run after the usecase
 // succeeds and before the transaction commits. A second registration under
 // the same key is ignored.
@@ -299,11 +314,7 @@ func (u *unitOfWork) Execute(ctx context.Context, fn func(tx db.Transactor, c *C
 		// End-of-transaction invariants: properties of the finished state,
 		// which cannot be judged while the writes are still arriving. They run
 		// inside the transaction, so a failure rolls the whole unit back.
-		for _, check := range collector.checks {
-			if err = check(ctx); err != nil {
-				break
-			}
-		}
+		err = collector.RunChecks(ctx)
 	}
 	if err != nil {
 		_ = tx.Rollback(ctx)

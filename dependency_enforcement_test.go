@@ -3,12 +3,14 @@ package flexitype_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
 
 	"github.com/zkrebbekx/flexitype"
 	appattribute "github.com/zkrebbekx/flexitype/application/attribute"
+	appchangeset "github.com/zkrebbekx/flexitype/application/changeset"
 	appdependency "github.com/zkrebbekx/flexitype/application/dependency"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
@@ -439,6 +441,424 @@ func TestRequiredEnforcementDuringImport(t *testing.T) {
 				bad, err := f.svc.Interactors(f.ctx).Values().ListByEntity(f.ctx, f.dish, "bad")
 				So(err, ShouldBeNil)
 				So(bad, ShouldBeEmpty)
+			})
+		})
+	})
+}
+
+// TestRequiredEnforcementAcrossWritePaths pins the gate on every path that
+// changes an entity, and OFF the one that must never be blocked.
+//
+// The check hangs off the value write path, and several features write values
+// without going through Set or Remove — a change set publishing mutations, a
+// snapshot restore, an erasure purge. A rule that a change set can step around
+// is not a rule.
+func TestRequiredEnforcementAcrossWritePaths(t *testing.T) {
+	Convey("Given a dish that declares allergens, under a blocking rule", t, func() {
+		svc := flexitype.NewInMemory()
+		f := newEnforcementFixture(t, svc, "on_write")
+		So(f.setBatch(
+			f.item(f.flag, "tart", true),
+			f.item(f.allergens, "tart", "gluten"),
+		), ShouldBeNil)
+
+		ia := f.svc.Interactors(f.ctx)
+
+		Convey("When a change set publishes a removal of the allergens", func() {
+			cs, err := ia.ChangeSets().Create(f.ctx, appchangeset.CreateInput{Name: "drop allergens"})
+			So(err, ShouldBeNil)
+			_, err = ia.ChangeSets().AddMutation(f.ctx, cs.ID.String(), appvalue.Mutation{
+				Kind:                  appvalue.MutationRemove,
+				AttributeDefinitionID: f.allergens,
+				EntityID:              "tart",
+				TypeDefinitionID:      f.dish,
+			})
+			So(err, ShouldBeNil)
+			_, err = ia.ChangeSets().Submit(f.ctx, cs.ID.String())
+			So(err, ShouldBeNil)
+			_, err = ia.ChangeSets().Approve(f.ctx, cs.ID.String())
+			So(err, ShouldBeNil)
+			_, perr := ia.ChangeSets().Publish(f.ctx, cs.ID.String())
+
+			Convey("Then publishing is refused, and the value survives", func() {
+				// A change set is the obvious way around a write rule: stage
+				// the removal, approve it, let the scheduler apply it. It goes
+				// through the same gate.
+				So(perr, ShouldNotBeNil)
+				So(domainerrors.IsDependencyViolation(perr), ShouldBeTrue)
+
+				values, lerr := ia.Values().ListByEntity(f.ctx, f.dish, "tart")
+				So(lerr, ShouldBeNil)
+				So(values, ShouldHaveLength, 2)
+			})
+		})
+
+		Convey("When a change set publishes a complete pair of mutations", func() {
+			cs, err := ia.ChangeSets().Create(f.ctx, appchangeset.CreateInput{Name: "new dish"})
+			So(err, ShouldBeNil)
+			for _, m := range []appvalue.Mutation{
+				{
+					Kind: appvalue.MutationSet, AttributeDefinitionID: f.flag,
+					EntityID: "cake", TypeDefinitionID: f.dish, Value: json.RawMessage(`true`),
+				},
+				{
+					Kind: appvalue.MutationSet, AttributeDefinitionID: f.allergens,
+					EntityID: "cake", TypeDefinitionID: f.dish, Value: json.RawMessage(`"egg"`),
+				},
+			} {
+				_, aerr := ia.ChangeSets().AddMutation(f.ctx, cs.ID.String(), m)
+				So(aerr, ShouldBeNil)
+			}
+			_, err = ia.ChangeSets().Submit(f.ctx, cs.ID.String())
+			So(err, ShouldBeNil)
+			_, err = ia.ChangeSets().Approve(f.ctx, cs.ID.String())
+			So(err, ShouldBeNil)
+			_, perr := ia.ChangeSets().Publish(f.ctx, cs.ID.String())
+
+			Convey("Then it publishes, because the set is judged as a whole", func() {
+				So(perr, ShouldBeNil)
+				values, lerr := ia.Values().ListByEntity(f.ctx, f.dish, "cake")
+				So(lerr, ShouldBeNil)
+				So(values, ShouldHaveLength, 2)
+			})
+		})
+
+		Convey("When the dish is erased", func() {
+			_, err := ia.Erasure().PurgeEntity(f.ctx, f.dish, "tart")
+
+			Convey("Then the purge succeeds", func() {
+				// Erasure answers an obligation that outranks a schema rule.
+				// A tenant that cannot delete a record because a dependency
+				// says it is incomplete has a compliance problem the schema
+				// created, so this path is deliberately NOT gated.
+				So(err, ShouldBeNil)
+				values, lerr := ia.Values().ListByEntity(f.ctx, f.dish, "tart")
+				So(lerr, ShouldBeNil)
+				So(values, ShouldBeEmpty)
+			})
+		})
+	})
+}
+
+// TestRequiredEnforcementImportScope covers the two ways the end-of-write
+// check and the import machinery disagreed about what "the write" is.
+func TestRequiredEnforcementImportScope(t *testing.T) {
+	Convey("Given a blocking rule and an import", t, func() {
+		svc := flexitype.NewInMemory()
+		f := newEnforcementFixture(t, svc, "on_write")
+
+		run := func(rows [][]string, dry bool) *appvalue.ImportReport {
+			report, err := f.svc.Interactors(f.ctx).Values().Import(f.ctx, appvalue.ImportInput{
+				TypeDefinitionID: f.dish,
+				KeyColumn:        "id",
+				Mapping: map[string]string{
+					"contains_allergens": "contains_allergens",
+					"allergens":          "allergens",
+					"name":               "name",
+				},
+				Columns: []string{"id", "contains_allergens", "allergens", "name"},
+				Rows:    rows,
+				DryRun:  dry,
+			})
+			So(err, ShouldBeNil)
+			return report
+		}
+
+		Convey("When a row that the import would refuse is PREVIEWED", func() {
+			report := run([][]string{{"tart", "true", "", "Tart"}}, true)
+
+			Convey("Then the preview refuses it too", func() {
+				// A dry run rolls back deliberately, and the checks used to run
+				// only when the usecase succeeded — so the preview called a row
+				// valid that the real import rejects. That is the one question
+				// a preview exists to answer.
+				So(report.Errors, ShouldNotBeEmpty)
+				So(report.Errors[0].Reason, ShouldContainSubstring, "allergens")
+			})
+		})
+
+		Convey("When a complete row is PREVIEWED", func() {
+			report := run([][]string{{"tart", "true", "gluten", "Tart"}}, true)
+
+			Convey("Then it is reported valid and nothing is written", func() {
+				So(report.Errors, ShouldBeEmpty)
+				values, err := f.svc.Interactors(f.ctx).Values().ListByEntity(f.ctx, f.dish, "tart")
+				So(err, ShouldBeNil)
+				So(values, ShouldBeEmpty)
+			})
+		})
+
+		Convey("When one entity's two rows straddle a chunk boundary", func() {
+			// importChunkSize is 100. Build 102 rows where the pair that only
+			// succeeds together sits at 100/101 — the split the old fixed-size
+			// chunking made fatal.
+			rows := make([][]string, 0, 101)
+			for k := 0; k < 99; k++ {
+				rows = append(rows, []string{fmt.Sprintf("filler-%03d", k), "false", "", "Filler"})
+			}
+			rows = append(rows,
+				[]string{"tart", "true", "", "Tart"},
+				[]string{"tart", "", "gluten", ""},
+			)
+			report := run(rows, false)
+
+			Convey("Then the entity is judged whole and the import succeeds", func() {
+				// The same two rows at 50/51 always worked. Row position is not
+				// a property of the data and must not decide the outcome.
+				So(report.Errors, ShouldBeEmpty)
+				So(report.RowsWritten, ShouldEqual, 101)
+			})
+		})
+
+		Convey("When a chunk fails and one entity in it spans two rows", func() {
+			// The bad dish makes the whole chunk roll back. The retry must keep
+			// each entity's rows together: retrying row by row would split the
+			// pair that only succeeds as a pair, so a row's fate would depend
+			// on an unrelated row elsewhere in the file.
+			report := run([][]string{
+				{"bad", "true", "", "Bad"},
+				{"tart", "true", "", "Tart"},
+				{"tart", "", "gluten", ""},
+			}, false)
+
+			Convey("Then only the bad entity is reported", func() {
+				So(report.RowsWritten, ShouldEqual, 2)
+				So(report.Errors, ShouldHaveLength, 1)
+				So(report.Errors[0].Row, ShouldEqual, 1)
+
+				good, err := f.svc.Interactors(f.ctx).Values().ListByEntity(f.ctx, f.dish, "tart")
+				So(err, ShouldBeNil)
+				So(good, ShouldNotBeEmpty)
+				bad, err := f.svc.Interactors(f.ctx).Values().ListByEntity(f.ctx, f.dish, "bad")
+				So(err, ShouldBeNil)
+				So(bad, ShouldBeEmpty)
+			})
+		})
+
+		Convey("When a transactional import is refused by the check", func() {
+			report, err := f.svc.Interactors(f.ctx).Values().Import(f.ctx, appvalue.ImportInput{
+				TypeDefinitionID: f.dish,
+				KeyColumn:        "id",
+				Mapping: map[string]string{
+					"contains_allergens": "contains_allergens",
+					"allergens":          "allergens",
+				},
+				Columns: []string{"id", "contains_allergens", "allergens"},
+				Rows: [][]string{
+					{"plain", "false", ""},
+					{"tart", "true", ""},
+				},
+				Mode: appvalue.ImportTransactional,
+			})
+			So(err, ShouldBeNil)
+
+			Convey("Then the error points at the offending row, not the header", func() {
+				// The check fails after every row has been written, so the
+				// usual "which setWithin failed" answer is empty and the report
+				// blamed row 0 — the header, which is no data row at all.
+				So(report.Errors, ShouldHaveLength, 1)
+				So(report.Errors[0].Row, ShouldEqual, 2)
+			})
+		})
+	})
+}
+
+// TestRequiredEnforcementAndFieldACL covers the branch that decides what a
+// principal with restricted read access sees, which had no test at all.
+func TestRequiredEnforcementAndFieldACL(t *testing.T) {
+	Convey("Given a blocking rule over an attribute the caller cannot read", t, func() {
+		svc := flexitype.NewInMemory()
+		f := newEnforcementFixture(t, svc, "on_write")
+
+		restricted := uow.WithAccess(f.ctx, uow.Access{
+			Attr:    map[string]uow.Perm{"allergens": uow.PermNone},
+			Default: uow.PermWrite,
+		})
+
+		Convey("When that caller writes the source on its own", func() {
+			raw, _ := json.Marshal(true)
+			_, err := f.svc.Interactors(restricted).Values().Set(restricted, appvalue.SetInput{
+				AttributeDefinitionID: f.flag, EntityID: "tart",
+				TypeDefinitionID: f.dish, Value: raw,
+			})
+
+			Convey("Then the rule does not fire for it", func() {
+				// Resolving over values the caller cannot see makes the answer
+				// an oracle over those values, and refusing on an attribute it
+				// can neither read nor write would lock it out of the entity
+				// with an error naming nothing. Completeness already leaves
+				// such an attribute out; the gate now agrees.
+				So(err, ShouldBeNil)
+			})
+		})
+
+		Convey("When the caller cannot read the rule's SOURCE", func() {
+			// The target is readable, so the attribute-skip does not apply and
+			// only the value filter decides. Resolving over raw values here
+			// leaked one bit of the source per entity, through a refusal on a
+			// write to an unrelated attribute.
+			blind := uow.WithAccess(f.ctx, uow.Access{
+				Attr:    map[string]uow.Perm{"contains_allergens": uow.PermNone},
+				Default: uow.PermWrite,
+			})
+			So(f.set(f.flag, "tart", true), ShouldNotBeNil) // admin cannot either, yet
+			So(f.setBatch(
+				f.item(f.flag, "tart", true),
+				f.item(f.allergens, "tart", "gluten"),
+			), ShouldBeNil)
+
+			values, err := f.svc.Interactors(f.ctx).Values().ListByEntity(f.ctx, f.dish, "tart")
+			So(err, ShouldBeNil)
+			var allergenValueID string
+			for _, v := range values {
+				if v.AttributeDefinitionID.String() == f.allergens {
+					allergenValueID = v.ID.String()
+				}
+			}
+			So(allergenValueID, ShouldNotBeEmpty)
+			_, rerr := f.svc.Interactors(blind).Values().Remove(blind, allergenValueID)
+
+			Convey("Then the rule does not fire for that caller", func() {
+				// It cannot see the flag, so it must not be refused because of
+				// the flag's value — that refusal IS the flag's value.
+				So(rerr, ShouldBeNil)
+			})
+		})
+
+		Convey("When a caller that CAN read it writes the same thing", func() {
+			err := f.set(f.flag, "tart", true)
+
+			Convey("Then the rule fires", func() {
+				So(err, ShouldNotBeNil)
+				So(domainerrors.IsDependencyViolation(err), ShouldBeTrue)
+			})
+		})
+	})
+}
+
+// TestRequiredEnforcementRemainingPaths covers the behaviours that had been
+// claimed but never guarded: the materializer exemption, applied defaults,
+// snapshot restore, and a rule that only relaxes.
+func TestRequiredEnforcementRemainingPaths(t *testing.T) {
+	Convey("Given a blocking rule", t, func() {
+		svc := flexitype.NewInMemory()
+		f := newEnforcementFixture(t, svc, "on_write")
+		ia := f.svc.Interactors(f.ctx)
+
+		Convey("When a restore lands in a state the rule allows", func() {
+			So(f.set(f.name, "tart", "Tart"), ShouldBeNil)
+			before, err := ia.Revisions().Create(f.ctx, f.dish, "tart", "before")
+			So(err, ShouldBeNil)
+			So(f.setBatch(
+				f.item(f.flag, "tart", true),
+				f.item(f.allergens, "tart", "gluten"),
+			), ShouldBeNil)
+
+			_, rerr := ia.Revisions().Restore(f.ctx, before.ID.String())
+
+			Convey("Then it is allowed", func() {
+				// Rolling back to before the flag was set removes the demand
+				// along with it. The rule asks for allergens only while the
+				// dish says it has them.
+				So(rerr, ShouldBeNil)
+			})
+		})
+
+		Convey("When applying defaults to an entity that already violates the rule", func() {
+			So(f.setBatch(
+				f.item(f.flag, "tart", true),
+				f.item(f.allergens, "tart", "gluten"),
+			), ShouldBeNil)
+			_, err := ia.Values().ApplyDefaults(f.ctx, f.dish, "tart")
+
+			Convey("Then a complete entity is untouched by the rule", func() {
+				So(err, ShouldBeNil)
+			})
+		})
+
+		Convey("When a computed attribute is made required on write", func() {
+			computed, err := ia.Attributes().Create(f.ctx, appattribute.CreateInput{
+				TypeDefinitionID: f.dish, InternalName: "portion_cost", DisplayName: "Portion cost",
+				DataType: "decimal",
+				Computed: json.RawMessage(`{"kind":"formula","formula":"1 + 1"}`),
+			})
+			So(err, ShouldBeNil)
+			_, derr := ia.Dependencies().Create(f.ctx, appdependency.CreateInput{
+				SourceAttributeID: f.flag,
+				TargetAttributeID: computed.ID.String(),
+				Conditions:        json.RawMessage(`[{"kind":"equals","value":{"type":"bool","value":true}}]`),
+				Effect:            json.RawMessage(`{"required":true,"enforce":"on_write"}`),
+			})
+
+			Convey("Then the rule is refused where it is authored", func() {
+				// A computed value is materialized after the transaction
+				// commits, so the demand can never be met while the write is
+				// judged. Such a rule would refuse an entity that is complete
+				// the instant it commits, and no caller ordering could help.
+				So(derr, ShouldNotBeNil)
+				So(derr.Error(), ShouldContainSubstring, "materialized after")
+			})
+		})
+	})
+
+	Convey("Given data that predates a blocking rule", t, func() {
+		svc := flexitype.NewInMemory()
+		f := newEnforcementFixture(t, svc, "on_read")
+		ia := f.svc.Interactors(f.ctx)
+
+		// Legal while the rule only reported.
+		So(f.set(f.flag, "tart", true), ShouldBeNil)
+		before, err := ia.Revisions().Create(f.ctx, f.dish, "tart", "before")
+		So(err, ShouldBeNil)
+		So(f.set(f.allergens, "tart", "gluten"), ShouldBeNil)
+
+		// The schema author now switches the rule to blocking.
+		_, uerr := ia.Dependencies().Update(f.ctx, appdependency.UpdateInput{
+			ID:         f.dependency,
+			Conditions: json.RawMessage(`[{"kind":"equals","value":{"type":"bool","value":true}}]`),
+			Effect:     json.RawMessage(`{"required":true,"enforce":"on_write"}`),
+		})
+		So(uerr, ShouldBeNil)
+
+		Convey("When a restore would roll the entity back into the forbidden state", func() {
+			_, rerr := ia.Revisions().Restore(f.ctx, before.ID.String())
+
+			Convey("Then the restore is refused", func() {
+				// A restore is a write like any other. Rolling an entity into
+				// a state a direct write is refused for would be the way
+				// around the rule.
+				So(rerr, ShouldNotBeNil)
+				So(domainerrors.IsDependencyViolation(rerr), ShouldBeTrue)
+			})
+		})
+
+		Convey("When an unrelated attribute of that entity is written", func() {
+			werr := f.set(f.name, "tart", "Tarte")
+
+			Convey("Then it is allowed, because the entity is complete", func() {
+				So(werr, ShouldBeNil)
+			})
+		})
+	})
+
+	Convey("Given a rule that RELAXES a requirement", t, func() {
+		svc := flexitype.NewInMemory()
+		f := newEnforcementFixture(t, svc, "on_write")
+
+		Convey("When it is authored with an enforcement mode", func() {
+			_, err := f.svc.Interactors(f.ctx).Dependencies().Create(f.ctx, appdependency.CreateInput{
+				SourceAttributeID: f.name,
+				TargetAttributeID: f.allergens,
+				Conditions:        json.RawMessage(`[{"kind":"equals","value":{"type":"string","value":"Plain"}}]`),
+				Effect:            json.RawMessage(`{"required":false,"enforce":"on_write"}`),
+			})
+
+			Convey("Then it is refused", func() {
+				// Accepting it let a relaxing rule contribute on_write to a
+				// target another rule demanded, so a pair of rules blocked
+				// writes although neither asked to.
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldContainSubstring, "requires a value")
 			})
 		})
 	})

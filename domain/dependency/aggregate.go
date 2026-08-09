@@ -30,22 +30,32 @@ const (
 	// batch or an import row supplying the condition and the required
 	// attribute together passes whatever order its cells are written in.
 	//
-	// Use it when an entity must never be stored in the state the rule
-	// describes as incomplete.
+	// Reach for it when the CONDITION is a lifecycle state — status = active,
+	// published, approved. Entering that state is a decision, and a decision
+	// made against an incomplete record is the thing worth refusing.
 	EnforceOnWrite Enforcement = "on_write"
 	// EnforceOnRead never refuses a write for an ABSENT value. The requirement
-	// is reported by the effective schema and by completeness, and the host
-	// decides where to gate on it — at publish, at checkout, at submit.
+	// is reported by the effective schema and by completeness, and the
+	// application decides where to gate on it.
 	//
-	// Use it when a record is filled in over several steps and has to be
-	// allowed to be incomplete in between. This is the default, and the
-	// behaviour every dependency had before enforcement was configurable.
+	// Reach for it when the CONDITION is a fact somebody is entering — this
+	// dish contains allergens, this part is hazardous. The fact and what it
+	// demands arrive in that order, so refusing the fact refuses the truth for
+	// being early.
 	EnforceOnRead Enforcement = "on_read"
-	// DefaultEnforcement is what an effect means when it does not say. It is
-	// on_read because that is what the service has always done: a rule
-	// describes what an entity needs, and something else decides when the need
-	// becomes a refusal. Defaulting to on_write would have made every stored
-	// rule start blocking writes on upgrade.
+	// DefaultEnforcement is what an effect means when it does not say.
+	//
+	// It is on_read because that is this service's model: a schema DESCRIBES
+	// what an entity needs, completeness REPORTS what it is missing, and the
+	// application DECIDES when the gap matters. Entities here are assembled
+	// over time by several hands — a supplier feed, a translator, a
+	// merchandiser — and a store that refuses a half-assembled record has no
+	// use for a completeness score. Most conditions are facts being entered
+	// rather than states being entered, so reporting is the right default and
+	// blocking is the deliberate exception.
+	//
+	// It also means a rule stored before this field existed behaves exactly as
+	// it did, which is a consequence of the choice rather than the reason.
 	DefaultEnforcement = EnforceOnRead
 )
 
@@ -340,17 +350,37 @@ func validateRule(source, target *attribute.Definition, conditions []Condition, 
 			return err
 		}
 	}
-	if effect.isEmpty() {
-		return domainerrors.NewValidation("effect must narrow values, add constraints or override required")
-	}
+	// The enforce checks run BEFORE the empty check. An effect carrying only
+	// enforce is empty by the rule below, so the generic "effect must narrow
+	// values…" message answered first and never mentioned the field the author
+	// actually got wrong.
 	if !effect.Enforce.Valid() {
 		return domainerrors.NewValidation("enforce must be on_write or on_read", "enforce", string(effect.Enforce))
 	}
-	// enforce says when the REQUIRED override is enforced, so it means nothing
-	// without one. Storing it anyway would read as a configured rule that
-	// changes nothing — the shape of mistake this codebase keeps paying for.
-	if effect.Enforce != "" && effect.Required == nil {
-		return domainerrors.NewValidation("enforce applies to the required override, which this effect does not set")
+	// enforce says when a DEMAND for a value is enforced, so it means nothing
+	// on an effect that does not make one. An effect that only relaxes a
+	// requirement has nothing to enforce either, and accepting a mode there let
+	// a relaxing rule contribute on_write to a target another rule demanded —
+	// so a pair of rules blocked writes although neither asked to.
+	//
+	// Storing a setting that changes nothing reads as a configured rule, which
+	// is the shape of mistake this codebase keeps paying for.
+	if effect.Enforce != "" && !effect.DemandsValue() {
+		return domainerrors.NewValidation(
+			"enforce applies to an effect that requires a value, which this effect does not")
+	}
+	// A computed attribute is materialized AFTER the transaction commits, so a
+	// demand for one can never be met while the write is being judged: an
+	// entity that will be complete the instant it commits would be refused, and
+	// no ordering by the caller could help. Refused where it is authored rather
+	// than surfacing later as an unsatisfiable rule.
+	if effect.Enforcement() == EnforceOnWrite && effect.DemandsValue() && target.IsComputed() {
+		return domainerrors.NewValidation(
+			"a computed attribute cannot be required on write: its value is materialized after the write commits",
+			"attribute", target.InternalName())
+	}
+	if effect.isEmpty() {
+		return domainerrors.NewValidation("effect must narrow values, add constraints or override required")
 	}
 	for _, v := range effect.AllowedValues {
 		if v.DataType() != target.DataType() {

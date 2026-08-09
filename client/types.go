@@ -167,11 +167,14 @@ type Dependency struct {
 
 // EffectiveSchema is an attribute's dependency-resolved state for one entity.
 type EffectiveSchema struct {
-	AttributeDefinitionID string            `json:"attribute_definition_id"`
-	EntityID              string            `json:"entity_id"`
-	Required              bool              `json:"required"`
-	Restricted            bool              `json:"restricted"`
-	AllowedValues         []json.RawMessage `json:"allowed_values,omitempty"`
+	AttributeDefinitionID string `json:"attribute_definition_id"`
+	EntityID              string `json:"entity_id"`
+	// RequiredEnforcement says how Required is enforced: "on_write" refuses a
+	// write that leaves the value absent, "on_read" reports the gap.
+	RequiredEnforcement string            `json:"required_enforcement,omitempty"`
+	Required            bool              `json:"required"`
+	Restricted          bool              `json:"restricted"`
+	AllowedValues       []json.RawMessage `json:"allowed_values,omitempty"`
 }
 
 // RelationshipDefinition is a user-defined relationship type.

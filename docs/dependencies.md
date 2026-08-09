@@ -38,6 +38,28 @@ that is not there has to be answered somewhere else, and `enforce` says where.
 | `on_read` (default) | The write is accepted. The gap is reported by the effective schema and by completeness, and the caller decides where to gate on it. |
 | `on_write` | The write is refused while the value is missing. |
 
+### Choosing a mode
+
+Look at the **condition**, not the target.
+
+| The condition is… | Mode | Why |
+| --- | --- | --- |
+| A **lifecycle state** — `status = active`, published, approved | `on_write` | Entering the state is a decision. A decision taken against an incomplete record is the thing worth refusing. |
+| A **fact being entered** — `contains_allergens = true`, `hazardous = yes` | `on_read` | The fact and what it demands arrive in that order. Refusing the fact refuses the truth for being early. |
+
+`on_read` is the default because most conditions are facts rather than states.
+
+The shipped `ecommerce` template keeps its two `status = active` rules on
+`on_read`, even though the condition is a lifecycle state. A curated starting
+schema should not decide this for you: switching them to `on_write` changes
+what an existing catalogue accepts, and the population is the operator's to
+check. [`examples/kitchen`](../examples/kitchen/) shows the reporting side —
+a chef ticks "contains allergens", then types the list, and publishing turns
+the gap into a refusal.
+
+Before switching a rule to `on_write`, read
+[Adding a blocking rule to data that already exists](#adding-a-blocking-rule-to-data-that-already-exists).
+
 ### on_read: the rule describes, something else decides
 
 This is the default, and it is what every dependency did before `enforce`
@@ -45,7 +67,7 @@ existed. Setting `contains_allergens` to `true` on a dish with no allergens is
 accepted, and the dish is then reported incomplete:
 
 ```bash
-curl -s localhost:8080/entities/dish/tart/completeness
+curl -s localhost:8080/api/v1/entities/<dish-type-id>/tart/completeness
 # {"required":1,"filled":0,"score":0,
 #  "missing":[{"internal_name":"allergens", ...}]}
 ```
@@ -63,8 +85,8 @@ later is enforced with no change to that code.
 ```
 
 ```bash
-curl -s -X POST localhost:8080/values -d '{"attribute_definition_id":"<contains_allergens>","entity_id":"tart","value":true}'
-# 422 {"error":{"code":"dependency_violation",
+curl -s -X POST localhost:8080/api/v1/values -d '{"attribute_definition_id":"<contains_allergens>","entity_id":"tart","value":true}'
+# 422 {"error":{"code":"DEPENDENCY_VIOLATION",
 #      "message":"an attribute dependency requires a value for \"allergens\""}}
 ```
 
@@ -90,8 +112,10 @@ id,contains_allergens,allergens
 tart,true,
 ```
 
-In best-effort import mode each row is its own transaction, so one refused row
-does not cost the others.
+Best-effort import chunks on **entity** boundaries, never mid-entity, and
+retries a failed chunk one entity at a time. So a refused entity does not cost
+the others, and a file's outcome does not depend on where its rows happen to
+fall relative to a chunk size.
 
 **A single value write is a transaction of one.** A caller writing one
 attribute per request — the usual REST flow — cannot set the condition first
@@ -103,6 +127,27 @@ or use `on_read` and gate at a workflow boundary. This is the real cost of
 declares it has them leaves exactly the state the write was refused for, so it
 is refused on the same terms. Deleting the whole entity is allowed: an entity
 with nothing left is gone, not incomplete.
+
+### Adding a blocking rule to data that already exists
+
+Adding an `on_write` rule does **not** re-validate what is already stored.
+Nothing is rewritten, nothing is archived, and no read starts failing. Entities
+that already sit in the state the rule forbids stay exactly as they are, and
+completeness reports them the way it always did.
+
+The rule applies from the next write to each entity. A caller that touches such
+an entity — for any attribute — is refused until the gap is filled, so an
+existing violation surfaces when someone next edits that record rather than in
+a sweep.
+
+Two consequences worth planning for:
+
+- Check the population **before** switching a rule to `on_write`. Type
+  completeness (`GET /type-definitions/{id}/completeness`) tells you how many
+  entities the rule will start blocking.
+- The path that must never be blocked is not. **Erasure and purge are not
+  gated**: a tenant that cannot delete a record because a dependency says it is
+  incomplete has a compliance problem the schema created.
 
 ### What is never gated on write
 
@@ -120,7 +165,7 @@ The effective schema says which kind of requirement a caller is looking at, so
 a UI can tell a rule from a wall before it lets someone save half a record:
 
 ```bash
-curl -s "localhost:8080/dependencies/effective-schema?attribute_definition_id=<allergens>&entity_id=tart"
+curl -s "localhost:8080/api/v1/entities/<dish-type-id>/tart/attributes/<allergens>/effective-schema"
 # {"required":true,"required_enforcement":"on_write","restricted":false}
 ```
 
@@ -140,21 +185,45 @@ A rule that does not match contributes nothing — including its mode. A rule
 that *relaxes* a requirement has no enforcement to contribute either, so it
 cannot turn into a block.
 
+### What a restricted caller sees
+
+A rule is resolved over the values the **caller may read**, exactly as
+completeness and the effective schema are, and an attribute the caller cannot
+read is skipped. Two consequences, both deliberate:
+
+- A principal who cannot see a rule's source is not refused by it. Refusing
+  would answer, with one bit per entity, a question about a value the field ACL
+  hides everywhere else.
+- That principal can therefore write a state it cannot see is forbidden. This
+  is the same trade the read paths already make, and it is what keeps the gate,
+  the effective schema and completeness giving one answer.
+
+A caller with full read access gets the rule in full.
+
 ## Validation
 
 - `enforce` must be `on_write` or `on_read`.
-- `enforce` is refused on an effect that does not set `required`. A stored
-  setting that changes nothing reads as a configured rule, which is worse than
-  an error.
+- `enforce` is refused on an effect that does not **require** a value —
+  including one that sets `required: false`. A stored setting that changes
+  nothing reads as a configured rule, and a relaxing rule carrying a mode used
+  to drag an unrelated demanding rule into blocking.
+- A **computed** attribute cannot be required on write. Its value is
+  materialized after the write commits, so the demand could never be met while
+  the write is judged; the rule is refused where it is authored.
 - An effect must do something: narrow values, add constraints, or override
   required.
 
-## Compatibility
+## Why reporting is the default
 
-A rule stored without `enforce` behaves exactly as it did before the field
-existed, and is not rewritten with a mode. Blocking is opt-in per rule: the
-default could not be `on_write` without making every stored rule start refusing
-writes on upgrade.
+A schema here **describes** what an entity needs, completeness **reports** what
+it is missing, and the application **decides** when the gap matters. Entities
+are assembled over time by several hands — a supplier feed, a translator, a
+merchandiser — and a store that refuses a half-assembled record has no use for
+a completeness score.
+
+Blocking is therefore the deliberate exception, declared per rule. A rule
+stored without `enforce` behaves exactly as it did before the field existed and
+is not rewritten with a mode.
 
 ## See also
 

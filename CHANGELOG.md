@@ -2,7 +2,7 @@
 
 ### Added — A dependency chooses where its requirement is enforced
 
-A dependency's `required` effect now takes an `enforce` mode:
+A `required` effect now declares where it is enforced:
 
 ```json
 {"required": true, "enforce": "on_write"}
@@ -10,26 +10,38 @@ A dependency's `required` effect now takes an `enforce` mode:
 
 | Mode | Behaviour |
 | --- | --- |
-| `on_read` (default) | The write is accepted. The gap is reported by the effective schema and by completeness, and the caller gates on it. |
+| `on_read` (default) | The write is accepted. The gap is reported by the effective schema and by completeness, and the application decides where to gate on it. |
 | `on_write` | The write is refused while the value is missing. |
 
-`on_read` is what every dependency has always done, and it stays the default. A
-rule stored without `enforce` behaves exactly as before and is not rewritten
-with a mode. Blocking could not be the default without making every stored rule
-start refusing writes on upgrade.
+**Choose by the condition, not the target.** A condition that is a *lifecycle
+state* — `status = active`, published, approved — should block: entering the
+state is a decision, and a decision taken against an incomplete record is the
+thing worth refusing. A condition that is a *fact somebody is entering* —
+`contains_allergens = true` — should report: the fact and what it demands
+arrive in that order, so refusing the fact refuses the truth for being early.
+
+Reporting is the default because that is this service's model. A schema
+describes what an entity needs, completeness reports what it is missing, and
+the application decides when the gap matters. Entities here are assembled over
+time by several hands — a supplier feed, a translator, a merchandiser — and a
+store that refuses a half-assembled record has no use for a completeness score.
+Most conditions are facts rather than states.
 
 **The check runs at the end of the write transaction, not on each value.** A
 batch or an import row that supplies the condition and the required attribute
 together passes whatever order its cells are written in. A per-value check
 would have let a CSV's column order decide whether an import worked:
 `contains_allergens` usually lands before `allergens`, so the row would be
-refused for a state it was two cells away from leaving. In best-effort import
+refused for a state it was one cell away from leaving. In best-effort import
 mode each row is its own transaction, so one refused row does not cost the
 others.
 
-Removing a value is checked on the same terms — taking `allergens` away leaves
-exactly the state the write was refused for. Deleting the whole entity is
-allowed: an entity with nothing left is gone, not incomplete.
+Every path that changes an entity goes through the gate — a value write, a
+removal, a batch, an import, an applied default, a snapshot restore, and a
+change set publishing its mutations. A rule a change set can step around is not
+a rule. **Erasure and purge are deliberately exempt**: a tenant that cannot
+delete a record because a dependency says it is incomplete has a compliance
+problem the schema created.
 
 An attribute's OWN `required` flag is never gated on write. It describes the
 finished record, and gating it would make an entity impossible to create, since
@@ -37,19 +49,25 @@ the first value written always leaves the others empty. Only a requirement from
 a matched dependency can refuse a write, because that one is conditional on
 values the entity already holds.
 
-Two smaller decisions worth stating:
+Adding a blocking rule does not re-validate stored data. Nothing is rewritten
+and no read starts failing; the rule applies from the next write to each
+entity. Check the population with type completeness before switching a rule
+over.
 
-- `enforce` is refused on an effect that does not set `required`. Allowed
-  values and constraints are checked against a value the caller submitted, so
-  there is nothing to defer, and a stored setting that changes nothing reads as
-  a configured rule.
-- The rule is enforced whether or not the caller may READ the attribute it
-  demands — skipping it for a restricted principal would leave exactly one way
-  to write the state the rule forbids. The attribute's name is withheld from
-  the error in that case, as completeness already withholds it from `missing`.
+Two smaller decisions:
 
-`GET .../effective-schema` now returns `required_enforcement`, so a UI can tell
-a rule from a wall before it lets someone save half a record. New:
+- `enforce` is refused on an effect that does not **require** a value,
+  including one setting `required: false`. Allowed values and constraints are
+  checked against a value the caller submitted, so there is nothing to defer; a
+  setting that changes nothing reads as a configured rule; and a relaxing rule
+  carrying a mode used to drag an unrelated demanding rule into blocking.
+- A **computed** attribute cannot be required on write. Its value is
+  materialized after the write commits, so the demand could never be met while
+  the write is judged.
+
+`GET .../effective-schema` returns `required_enforcement`, so a UI can tell a
+rule from a wall before it lets someone save half a record. The console's
+dependency drawer edits the mode. Both SDKs and the OpenAPI spec carry it. New:
 [docs/dependencies.md](docs/dependencies.md).
 
 ### Fixed — Two examples described a requirement they did not enforce
@@ -59,11 +77,34 @@ a rule from a wall before it lets someone save half a record. New:
 service "refuses the incomplete write". Neither was true: both rules report,
 and setting the source alone was always accepted.
 
-The READMEs now say what the rules do, and the kitchen states
-`"enforce": "on_read"` explicitly — a chef ticks the allergen box and then
-types the list, so refusing the tick would make the form unusable. Publishing
-is what turns the gap into a refusal, from the service's own completeness
-report.
+Both now say what the rules do. The shipped templates are unchanged — a curated
+starting schema should not decide enforcement for you, and switching a rule to
+`on_write` changes what an existing catalogue accepts.
+
+### Fixed — A change set could publish a removal that a write would be refused for
+
+Value removals staged in a change set are applied through the mutation path,
+which did not run the dependency gate. Staging the removal of a demanded value,
+approving it and publishing it therefore left the entity in exactly the state a
+direct removal is refused for. The mutation path now goes through the same
+check.
+
+### Fixed — An import preview answered the one question it exists to answer, wrongly
+
+A dry-run import rolls back deliberately, and end-of-transaction checks ran only
+when the usecase succeeded — so the preview reported a row valid that the real
+import refuses.
+
+### Fixed — A file's import outcome depended on where its rows fell
+
+Best-effort import chunked at a fixed row count, so one entity's rows could
+straddle a boundary and be judged half at a time: the same pair of rows imported
+at rows 50/51 and failed at 100/101. Chunks now end on entity boundaries, and a
+failed chunk is retried one entity at a time.
+
+A transactional import refused by the check also blamed row 0 — the header,
+which is no data row — because the check fails after every row is written. It
+now names the row that first mentions the refused entity.
 
 ## [1.7.0] — 2026-08-09
 

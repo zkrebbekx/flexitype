@@ -198,6 +198,8 @@ export interface Effect {
   allowed_values?: TypedValue[]
   constraints?: Constraint[]
   required?: boolean
+  // When a required override is enforced. Absent means on_read.
+  enforce?: 'on_write' | 'on_read'
 }
 
 export interface Dependency {
@@ -218,6 +220,8 @@ export interface EffectiveSchema {
   attribute_definition_id: string
   entity_id: string
   required: boolean
+  /** How `required` is enforced: on_write refuses the write, on_read reports the gap. */
+  required_enforcement?: 'on_write' | 'on_read'
   restricted: boolean
   allowed_values?: unknown[]
 }

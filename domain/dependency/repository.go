@@ -36,6 +36,15 @@ type Repository interface {
 	// attribute (batched across sources).
 	ListBySource(ctx context.Context, sourceID valueobjects.AttributeDefinitionID) ([]*Dependency, error)
 
+	// ListEnforcedOnWrite loads every live dependency in a tenant whose effect
+	// refuses a write when its demand is unmet.
+	//
+	// The write path asks this ONCE per transaction, before doing anything
+	// else. Almost every tenant has none — enforcement is opt-in per rule — and
+	// this is what lets that answer cost one query instead of one per attribute
+	// on every entity written.
+	ListEnforcedOnWrite(ctx context.Context, tenant valueobjects.TenantID) ([]*Dependency, error)
+
 	// List returns a page of dependencies and the total count for the
 	// filter.
 	List(ctx context.Context, filter Filter, page db.Page) ([]*Dependency, int, error)

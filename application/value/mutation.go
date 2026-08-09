@@ -190,6 +190,14 @@ func (i *Interactor) removeScopedWithin(ctx context.Context, tx db.Transactor, c
 			return fmt.Errorf("archive value: %w", err)
 		}
 		i.gcMediaAfterCommit(tx, before.ID, before.Value)
+		// Same gate as Remove: a mutation that takes a demanded value away
+		// leaves the state a write would have been refused for, and a change
+		// set publishing that removal must not be the way around it.
+		i.noteWrite(c, tx, entityRef{
+			tenant: av.TenantID(),
+			typeID: av.TypeDefinitionID(),
+			entity: av.EntityID(),
+		}, def.IsComputed())
 		c.CollectEvents(evts...)
 		c.RecordChange(activity.Change{
 			Entity:   domainvalue.AggregateType,

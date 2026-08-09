@@ -190,6 +190,10 @@ export function buildCondition(row: ConditionRow, sourceType: DataType): Conditi
 export interface EffectForm {
   allowedValues: string[]
   requiredOverride: 'none' | 'true' | 'false'
+  // Where a "force required" override is enforced. Only meaningful with
+  // requiredOverride === 'true': the API refuses enforce on an effect that
+  // does not demand a value.
+  enforce: 'on_read' | 'on_write'
   oneOf: string[]
   minLength: string
   maxLength: string
@@ -205,6 +209,7 @@ export function emptyEffectForm(): EffectForm {
   return {
     allowedValues: [],
     requiredOverride: 'none',
+    enforce: 'on_read',
     oneOf: [],
     minLength: '',
     maxLength: '',
@@ -261,6 +266,7 @@ export function effectFormFromApi(
   passthrough.effect = effect
   form.allowedValues = (effect.allowed_values ?? []).map(renderTyped)
   form.requiredOverride = effect.required === undefined ? 'none' : (String(effect.required) as 'true' | 'false')
+  form.enforce = effect.enforce ?? 'on_read'
   const editable = editableConstraintKinds(targetType)
   for (const c of effect.constraints ?? []) {
     if (!editable.has(c.kind)) {
@@ -303,7 +309,7 @@ const CONSTRAINT_FIELDS = new Set(['kind', 'n', 'value', 'expr', 'substring', 'v
 
 // The effect fields the editor models. Any other field on a loaded effect
 // passes through unchanged.
-const EFFECT_FIELDS = new Set(['allowed_values', 'constraints', 'required'])
+const EFFECT_FIELDS = new Set(['allowed_values', 'constraints', 'required', 'enforce'])
 
 export function buildEffect(form: EffectForm, targetType: DataType, passthrough: EffectPassthrough): Effect {
   const editable = editableConstraintKinds(targetType)
@@ -322,10 +328,19 @@ export function buildEffect(form: EffectForm, targetType: DataType, passthrough:
   }
   cs.push(...passthrough.constraints)
   const allowed = form.allowedValues.map((v) => typedValue(targetType, v))
+  const required = form.requiredOverride === 'none' ? undefined : form.requiredOverride === 'true'
   const built: Effect = {
     allowed_values: allowed.length ? allowed : undefined,
     constraints: cs.length ? cs : undefined,
-    required: form.requiredOverride === 'none' ? undefined : form.requiredOverride === 'true',
+    required,
+    // Only a rule that DEMANDS a value carries a mode. The API refuses
+    // enforce without a required override, so a rule whose override is
+    // cleared — or set to "force optional" — must drop it rather than leave
+    // it behind in the passthrough and fail the save.
+    //
+    // on_read is the default and is left implicit, so opening and saving an
+    // untouched rule does not rewrite it.
+    enforce: required === true && form.enforce === 'on_write' ? 'on_write' : undefined,
   }
   return { ...unknownFields(passthrough.effect, EFFECT_FIELDS), ...built }
 }

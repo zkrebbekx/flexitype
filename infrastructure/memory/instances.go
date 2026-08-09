@@ -477,6 +477,13 @@ func (r *depRepo) ListByTarget(_ context.Context, targetID valueobjects.Attribut
 	return r.listBy(func(s domaindependency.Snapshot) bool { return s.TargetAttributeID.Equals(targetID) })
 }
 
+func (r *depRepo) ListEnforcedOnWrite(_ context.Context, tenant valueobjects.TenantID) ([]*domaindependency.Dependency, error) {
+	return r.listBy(func(s domaindependency.Snapshot) bool {
+		return s.TenantID == tenant && s.Effect.DemandsValue() &&
+			s.Effect.Enforcement() == domaindependency.EnforceOnWrite
+	})
+}
+
 func (r *depRepo) ListBySource(_ context.Context, sourceID valueobjects.AttributeDefinitionID) ([]*domaindependency.Dependency, error) {
 	return r.listBy(func(s domaindependency.Snapshot) bool { return s.SourceAttributeID.Equals(sourceID) })
 }

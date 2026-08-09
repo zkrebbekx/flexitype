@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/zkrebbekx/flexitype/application/appctx"
+	"github.com/zkrebbekx/flexitype/application/fieldacl"
 	apptypedef "github.com/zkrebbekx/flexitype/application/typedef"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainattribute "github.com/zkrebbekx/flexitype/domain/attribute"
@@ -83,10 +84,37 @@ func (i *Interactor) enforceRequiredOnWrite(ctx context.Context, tx db.Transacto
 	attrs := i.attrs.WithTx(tx)
 	typeDefs := i.typeDefs.WithTx(tx)
 	deps := i.deps.WithTx(tx)
-	reads, ok := i.values.WithTx(tx).(appctx.ValueReader)
-	if !ok {
+
+	// One question, once per transaction: does this tenant have any rule that
+	// refuses a write? Enforcement is opt-in per rule, so for almost every
+	// deployment the answer is no and the whole check costs a single indexed
+	// query.
+	//
+	// This walked the entity's full schema instead, asking for the
+	// dependencies targeting each attribute in turn. That is one query per
+	// attribute on EVERY value write — a 200-attribute type paid 213 queries
+	// where it used to pay 9 — and it was paid by tenants using no rules at
+	// all, inside the transaction, while the attribute-definition row lock
+	// was held. Measured, it took concurrent writes on such a type from 133/s
+	// to 8.6/s.
+	blocking, err := deps.ListEnforcedOnWrite(ctx, gate.order[0].tenant)
+	if err != nil {
+		return fmt.Errorf("load enforced dependencies: %w", err)
+	}
+	if len(blocking) == 0 {
 		return nil
 	}
+	// Only the attributes some rule actually blocks on are candidates. The
+	// rest of the schema is irrelevant no matter how large it is.
+	candidates := make(map[valueobjects.AttributeDefinitionID]bool, len(blocking))
+	for _, d := range blocking {
+		candidates[d.TargetAttributeID()] = true
+	}
+	// Asserted, not tested: everywhere else in this package the same
+	// assertion is unchecked. Returning nil on a failed assertion would make
+	// enforcement disappear silently on a backend that does not satisfy it,
+	// which is the one failure mode a rule that refuses writes must not have.
+	reads := i.values.WithTx(tx).(appctx.ValueReader)
 
 	// One transaction commonly writes many entities of the same type — an
 	// import chunk writes hundreds — so the schema walk is done once per type.
@@ -108,6 +136,28 @@ func (i *Interactor) enforceRequiredOnWrite(ctx context.Context, tx db.Transacto
 		if len(values) == 0 {
 			continue
 		}
+		// Resolve against the caller's READABLE values, which is what every
+		// other path that resolves a dependency does — completeness and the
+		// effective schema both filter, and both say why: a rule keyed on a
+		// value the caller cannot see turns the answer into an oracle over
+		// that value.
+		//
+		// This gate is a louder oracle than a report, because it answers with
+		// a refusal on a write to ANY attribute of the entity. Reading raw
+		// values here also made the gate disagree with the effective schema,
+		// which told the same caller the attribute was not required and then
+		// watched the write be refused for that requirement. A validation
+		// feature whose description and enforcement disagree is the specific
+		// failure this codebase keeps paying for.
+		//
+		// The cost is stated rather than hidden: a principal who cannot see a
+		// rule's source can write a state that principal cannot see is
+		// forbidden. That is the same trade the read paths already make, and
+		// it is the one that keeps the three answers consistent.
+		values, err = i.readableOnly(ctx, tx, values)
+		if err != nil {
+			return err
+		}
 		filled := make(map[valueobjects.AttributeDefinitionID][]valueobjects.Value, len(values))
 		for _, av := range values {
 			id := av.AttributeDefinitionID()
@@ -119,6 +169,19 @@ func (i *Interactor) enforceRequiredOnWrite(ctx context.Context, tx db.Transacto
 			return err
 		}
 		for _, a := range schema {
+			// Not a target of any blocking rule in this tenant — the common
+			// case for all but a handful of attributes.
+			if !candidates[a.ID()] {
+				continue
+			}
+			// An attribute the caller may not read is skipped entirely, the
+			// same way completeness leaves it out of Missing. With the value
+			// set filtered above, a restricted attribute always looks absent,
+			// so enforcing it would refuse every write this caller makes to
+			// the entity, for a requirement it cannot see, name or satisfy.
+			if !uow.AccessFromContext(ctx).CanRead(a.InternalName()) {
+				continue
+			}
 			targets, ok := targeting[a.ID()]
 			if !ok {
 				targets, err = deps.ListByTarget(ctx, a.ID())
@@ -138,28 +201,16 @@ func (i *Interactor) enforceRequiredOnWrite(ctx context.Context, tx db.Transacto
 			if err != nil {
 				return err
 			}
-			if !eff.RequiredByDependency || !eff.Required {
-				continue
-			}
-			if eff.RequiredEnforcement.Or(domaindependency.DefaultEnforcement) != domaindependency.EnforceOnWrite {
+			// Only a MATCHED dependency asking for on_write blocks. An
+			// attribute's own declared required flag never reaches here,
+			// because the resolver raises the mode only for a dependency that
+			// demanded the value — see EffectiveSchema.RequiredEnforcement.
+			if !eff.Required ||
+				eff.RequiredEnforcement.Or(domaindependency.DefaultEnforcement) != domaindependency.EnforceOnWrite {
 				continue
 			}
 			if _, ok := filled[a.ID()]; ok {
 				continue
-			}
-			// The rule is enforced whether or not the caller may READ the
-			// attribute it demands: it is an invariant about what gets stored,
-			// and skipping it for a restricted principal would leave exactly
-			// one way to write the state the rule forbids.
-			//
-			// Naming it is a different question. An unreadable attribute's
-			// name is not disclosed, for the same reason completeness leaves
-			// it out of Missing.
-			if !uow.AccessFromContext(ctx).CanRead(a.InternalName()) {
-				return domainerrors.NewDependencyViolation(
-					"an attribute dependency requires a value this entity does not have",
-					"entity", ref.entity.String(),
-				)
 			}
 			return domainerrors.NewDependencyViolation(
 				fmt.Sprintf("an attribute dependency requires a value for %q", a.InternalName()),
@@ -169,6 +220,34 @@ func (i *Interactor) enforceRequiredOnWrite(ctx context.Context, tx db.Transacto
 		}
 	}
 	return nil
+}
+
+// readableOnly drops the values of attributes the principal may not read, so
+// the gate resolves rules over the same value set the read paths do. It
+// mirrors application/dependency.readableOnly, bound to this transaction.
+func (i *Interactor) readableOnly(
+	ctx context.Context,
+	tx db.Transactor,
+	values []*domainvalue.AttributeValue,
+) ([]*domainvalue.AttributeValue, error) {
+	if len(values) == 0 || uow.AccessFromContext(ctx).Admin {
+		return values, nil
+	}
+	ids := make([]valueobjects.AttributeDefinitionID, 0, len(values))
+	for _, av := range values {
+		ids = append(ids, av.AttributeDefinitionID())
+	}
+	readable, err := fieldacl.New(i.attrs.WithTx(tx)).Readable(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := values[:0]
+	for _, av := range values {
+		if readable[av.AttributeDefinitionID().String()] {
+			out = append(out, av)
+		}
+	}
+	return out, nil
 }
 
 // gateSchema returns a type's full attribute set, including inherited ones,

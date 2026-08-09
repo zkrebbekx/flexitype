@@ -8,19 +8,31 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/zkrebbekx/flexitype/internal/telemetry"
 )
 
-// restoreGlobals snapshots the OpenTelemetry globals Init installs and puts
-// them back afterwards, so one test's wiring cannot leak into the next.
+// restoreGlobals puts the OpenTelemetry globals back after a test, so one
+// test's wiring cannot leak into the next.
+//
+// The tracer provider needs care. otel.GetTracerProvider() returns the global
+// DELEGATING wrapper, not whatever is behind it, so capturing that value and
+// setting it back is a no-op — the runtime says so: "Setting tracer provider
+// to its current value. No delegate will be configured". Once one test
+// installed an SDK provider as the delegate it was permanent for the process,
+// and a second run of this package saw a recording span where it expected
+// none.
+//
+// Installing an explicit no-op restores the observable behaviour instead: the
+// delegate is replaced, and spans stop recording, which is the state a fresh
+// process starts in.
 func restoreGlobals(t *testing.T) {
 	t.Helper()
 	propagator := otel.GetTextMapPropagator()
-	provider := otel.GetTracerProvider()
 	t.Cleanup(func() {
 		otel.SetTextMapPropagator(propagator)
-		otel.SetTracerProvider(provider)
+		otel.SetTracerProvider(noop.NewTracerProvider())
 	})
 }
 

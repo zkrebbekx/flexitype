@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+### Fixed — `internal/telemetry` failed on a second run in one process ([#578])
+
+`restoreGlobals` captured `otel.GetTracerProvider()`, which returns the global
+DELEGATING wrapper rather than what is behind it, so putting it back was a
+no-op — the runtime says as much: *"Setting tracer provider to its current
+value. No delegate will be configured"*. Once one test installed an SDK
+provider as the delegate it was permanent for the process, and a second run saw
+a recording span where it expected none.
+
+It now installs an explicit no-op, which restores the observable behaviour a
+fresh process starts with.
+
+With this and [#574], `go test ./... -count=2` passes, which it did not before.
+
+[#578]: https://github.com/zkrebbekx/flexitype/issues/578
+
 ### Added — `Service.Drain`, so background work can be waited for ([#574])
 
 A schema change schedules a rebuild of a type's computed values on a context

@@ -36,14 +36,31 @@ export interface ClientOptions {
    * The service-account bearer token, `ft_<account>_<secret>`.
    *
    * THE TOKEN CARRIES THE TENANT. The service reads the tenant from the
-   * authenticated account, not from a header or a parameter, so one client
-   * instance talks to exactly one tenant. An application that serves several
-   * tenants builds one client per tenant.
+   * authenticated account, so one client instance talks to exactly one
+   * tenant. An application that serves several tenants builds one client per
+   * tenant.
+   *
+   * The one exception is a credential holding the `read_any_tenant` scope,
+   * which reads every tenant and writes none: see `tenant` below.
    *
    * Omit the token only against a development service that runs with
    * authentication disabled.
    */
   token?: string | undefined
+
+  /**
+   * The tenant to READ, sent as `X-Flexitype-Tenant`.
+   *
+   * It is only meaningful for a credential holding the `read_any_tenant`
+   * scope — the one a cross-tenant read model uses. For every other
+   * credential the service ignores it and reads the token's own tenant, so it
+   * can never widen an ordinary credential.
+   *
+   * ```ts
+   * const reader = createClient({ baseUrl, token: readerToken, tenant: 'merchant-a' })
+   * ```
+   */
+  tenant?: string | undefined
 
   /**
    * The fetch implementation. It defaults to the global one, which Node 20 and
@@ -159,7 +176,13 @@ export function createClient(options: ClientOptions): FlexitypeClient {
     baseUrl: normalizeBaseUrl(options.baseUrl),
     token: options.token,
     userAgent: options.userAgent,
-    headers: options.headers ?? {},
+    // The tenant a cross-tenant reader wants. It rides as a default header,
+    // so every service on the client carries it without threading it through
+    // each call.
+    headers:
+      options.tenant === undefined || options.tenant === ''
+        ? (options.headers ?? {})
+        : { 'X-Flexitype-Tenant': options.tenant, ...(options.headers ?? {}) },
     retry: options.retry === false ? noRetryPolicy() : (options.retry ?? defaultRetryPolicy()),
     fetch: options.fetch ?? resolveFetch(),
   })

@@ -181,9 +181,12 @@ describe('the service surface', () => {
 
     const link = await client.entities.signMediaUrl('tenant/abc.png', { ttlSeconds: 600 })
 
-    expect(http.calls[0]?.method).toBe('POST')
-    expect(http.calls[0]?.url).toBe('https://example.test/api/v1/media/tenant%2Fabc.png/signed-url')
-    expect(JSON.parse(String(http.calls[0]?.body))).toEqual({ ttl_seconds: 600 })
+    // A GET: minting a link changes nothing, so a read-only credential can
+    // mint one.
+    expect(http.calls[0]?.method).toBe('GET')
+    expect(http.calls[0]?.url).toBe(
+      'https://example.test/api/v1/media/tenant%2Fabc.png/signed-url?ttl_seconds=600',
+    )
     // The link is relative to the service root, and the caller redeems it
     // without a token: the signature is the credential.
     expect(link.url).toBe('/media/signed/eyJ2IjoidjEifQ.abc')

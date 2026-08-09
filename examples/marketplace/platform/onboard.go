@@ -87,6 +87,12 @@ func (o *Onboarder) Onboard(ctx context.Context, in OnboardInput) (Merchant, err
 		tenant = in.ID
 	}
 
+	// Onboarding re-installs the reader, so a storefront that restarted (or
+	// was not up when this service started) gets it without an operator step.
+	if err := o.EnsureStorefrontReader(ctx); err != nil {
+		o.log.Warn("could not install the storefront's cross-tenant reader", "error", err)
+	}
+
 	existing, found, err := o.store.Get(ctx, in.ID)
 	if err != nil {
 		return Merchant{}, err
@@ -265,6 +271,19 @@ func NewStorefrontClient(baseURL, token string) *StorefrontClient {
 	}
 }
 
+// RegisterReader hands the storefront the ONE credential it reads every
+// tenant with.
+func (s *StorefrontClient) RegisterReader(ctx context.Context, token string) error {
+	body, err := json.Marshal(map[string]string{"token": token})
+	if err != nil {
+		return err
+	}
+	if _, err := s.do(ctx, http.MethodPut, "/internal/reader", body); err != nil {
+		return fmt.Errorf("register the cross-tenant reader with the storefront: %w", err)
+	}
+	return nil
+}
+
 // RegisterMerchant hands the storefront a merchant's credential.
 func (s *StorefrontClient) RegisterMerchant(ctx context.Context, m Merchant) error {
 	body, err := json.Marshal(map[string]string{
@@ -330,4 +349,53 @@ func (s *StorefrontClient) do(ctx context.Context, method, path string, body []b
 		return nil, fmt.Errorf("storefront %s %s: status %d", method, path, resp.StatusCode)
 	}
 	return out.Bytes(), nil
+}
+
+// readerTenant holds the cross-tenant reader account. It owns no catalog; it
+// exists because every service account belongs to some tenant.
+const readerTenant = "storefront-reader"
+
+// EnsureStorefrontReader creates the ONE credential the storefront reads every
+// merchant with, and hands it over.
+//
+// The storefront only ever RE-READS entities. Before this, it held one full
+// read/write token per merchant to do that, so a leak of its database handed
+// over every merchant's catalog — a standing risk that bought nothing. A
+// `read_any_tenant` account reads any tenant and writes none.
+//
+// It runs at start-up and is idempotent: an existing account is ROTATED
+// rather than duplicated, because its secret was returned once and this
+// service did not keep it.
+func (o *Onboarder) EnsureStorefrontReader(ctx context.Context) error {
+	if _, err := o.admin.Admin().CreateTenant(ctx, readerTenant); err != nil &&
+		!errors.Is(err, client.ErrConflict) {
+		return fmt.Errorf("create the reader tenant: %w", err)
+	}
+
+	accounts, err := o.admin.Admin().ListServiceAccounts(ctx, readerTenant)
+	if err != nil {
+		return fmt.Errorf("list reader accounts: %w", err)
+	}
+	for _, a := range accounts {
+		if a.Name != "storefront" {
+			continue
+		}
+		rotated, rerr := o.admin.Admin().RotateServiceAccount(ctx, a.ID)
+		if rerr != nil {
+			return fmt.Errorf("rotate the storefront reader: %w", rerr)
+		}
+		return o.storefront.RegisterReader(ctx, rotated.Token)
+	}
+
+	created, err := o.admin.Admin().CreateServiceAccount(ctx, client.CreateServiceAccountInput{
+		TenantName: readerTenant,
+		Name:       "storefront",
+		// Read every tenant, write none. The service refuses the combination
+		// with write or admin, so this cannot quietly become more.
+		Scopes: []string{"read_any_tenant"},
+	})
+	if err != nil {
+		return fmt.Errorf("create the storefront reader: %w", err)
+	}
+	return o.storefront.RegisterReader(ctx, created.Token)
 }

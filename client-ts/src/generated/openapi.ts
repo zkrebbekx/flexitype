@@ -2156,41 +2156,40 @@ export interface paths {
     };
     "/media/{objectKey}/signed-url": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description How long the link lasts. Absent or zero takes the short default (15 minutes); anything above the maximum (24 hours) is capped rather than refused. */
+                ttl_seconds?: number;
+            };
             header?: never;
             path: {
                 objectKey: string;
             };
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
          * Mint a signed, expiring link to a stored object
          * @description Media bytes sit behind the same authentication as the rest of the API, and the token carries the tenant, so a public surface cannot link to an image without proxying every request through a credentialed service. A signed link removes that proxy: it is issued here by an authenticated caller and redeemed by anyone holding it, at `GET /media/signed/{token}` — which is OUTSIDE `/api/v1` and takes no credential, because the signature is the credential.
          *
+         *     It is a GET because minting a link changes nothing: it hands back a capability to read an object the caller can already read. That also keeps it reachable by a read-only credential, including a read_any_tenant cross-tenant reader.
+         *
          *     The caller must be able to READ the object: the same ownership and field-permission check the authenticated download makes. Returns 501 when the deployment sets no signing secret.
          */
-        post: {
+        get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description How long the link lasts. Absent or zero takes the short default (15 minutes); anything above the maximum (24 hours) is capped rather than refused. */
+                    ttl_seconds?: number;
+                };
                 header?: never;
                 path: {
                     objectKey: string;
                 };
                 cookie?: never;
             };
-            requestBody?: {
-                content: {
-                    "application/json": {
-                        /** @description How long the link lasts. Absent or zero takes the short default (15 minutes); anything above the maximum (24 hours) is capped rather than refused. */
-                        ttl_seconds?: number;
-                    };
-                };
-            };
+            requestBody?: never;
             responses: {
                 /** @description The signed link */
-                201: {
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -2207,6 +2206,8 @@ export interface paths {
                 501: components["responses"]["Error"];
             };
         };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3425,7 +3426,7 @@ export interface paths {
                         /** @description Role names in the same tenant. The account gets the union of their scopes. */
                         roles?: string[];
                         /** @description Optional when roles are given: an account whose whole permission set comes from its roles needs no scope of its own. At least one scope or one role is required. */
-                        scopes?: ("read" | "write" | "admin")[];
+                        scopes?: ("read" | "write" | "admin" | "read_any_tenant")[];
                         tenant_name: string;
                     };
                 };

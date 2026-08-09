@@ -83,6 +83,17 @@ func run(log Logger) error {
 	}
 
 	projector := NewProjector(store, flexitypeURL, 30*time.Second)
+	// ONE credential that reads every tenant and writes none, instead of one
+	// full read/write token per merchant. A projection only ever re-reads, so
+	// holding a write-capable credential for every tenant is a standing risk
+	// that buys nothing. Without it, the per-merchant tokens are used as
+	// before.
+	if err := projector.UseCrossTenantReader(os.Getenv("FLEXITYPE_READER_TOKEN")); err != nil {
+		return err
+	}
+	if os.Getenv("FLEXITYPE_READER_TOKEN") != "" {
+		log.Info("reading every tenant with one cross-tenant credential; no merchant token is used for a read")
+	}
 	debouncer := NewDebouncer(debounce, func(ctx context.Context, key entityKey) error {
 		return projector.Project(ctx, key.Tenant, key.TypeID, key.EntityID)
 	}, log)

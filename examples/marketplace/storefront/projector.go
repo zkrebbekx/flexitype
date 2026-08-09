@@ -45,6 +45,17 @@ type Projector struct {
 	entityLocks *keyedMutex
 }
 
+// UseCrossTenantReader points every read at ONE credential that may read any
+// tenant and write none, instead of one full read/write token per merchant.
+//
+// It is the single biggest security improvement available to a service shaped
+// like this one: a projection re-reads entities and never writes them, so
+// holding a write-capable credential for every tenant is a standing risk that
+// buys nothing.
+func (p *Projector) UseCrossTenantReader(token string) error {
+	return p.clients.withReader(token)
+}
+
 // NewProjector wires a projector over a store.
 func NewProjector(store *Store, baseURL string, httpTimeout time.Duration) *Projector {
 	cache := newClientCache(store, baseURL, httpTimeout)
@@ -278,10 +289,29 @@ func (s *schemaCache) refresh(ctx context.Context, tenant, typeID string) (typeS
 // A token IS a tenant, so the storefront cannot read a merchant's data with
 // anything but that merchant's own credential. One client per tenant also
 // keeps one HTTP connection pool per tenant.
+// clientCache resolves the flexitype client to read one merchant's tenant
+// with.
+//
+// There are two ways to hold that credential, and the difference is the
+// biggest security decision in this example:
+//
+//   - A CROSS-TENANT READER (readerToken, the read_any_tenant scope). ONE
+//     credential that reads every tenant and writes none. The tenant travels
+//     per request, so this service holds no merchant secret at all.
+//   - One MERCHANT credential per tenant, read out of the merchant table.
+//     Each is a full read/write token, so a leak of this service's database
+//     hands over every merchant's catalog — for a projection that only ever
+//     reads.
+//
+// The reader is used when it is configured, and the per-merchant tokens
+// remain the fallback so the example still runs against a service that has no
+// such account.
 type clientCache struct {
 	store   *Store
 	baseURL string
 	timeout time.Duration
+	// reader is the cross-tenant credential, when the deployment has one.
+	reader  *client.Client
 	mu      sync.Mutex
 	clients map[string]*client.Client
 }
@@ -290,7 +320,31 @@ func newClientCache(store *Store, baseURL string, timeout time.Duration) *client
 	return &clientCache{store: store, baseURL: baseURL, timeout: timeout, clients: map[string]*client.Client{}}
 }
 
+// withReader attaches a cross-tenant reader credential. With one, no merchant
+// token is ever used for a read.
+func (c *clientCache) withReader(token string) error {
+	if token == "" {
+		return nil
+	}
+	opts := []client.Option{client.WithToken(token), client.WithUserAgent("marketplace-storefront")}
+	if c.timeout > 0 {
+		opts = append(opts, client.WithHTTPClient(&http.Client{Timeout: c.timeout}))
+	}
+	reader, err := client.New(c.baseURL, opts...)
+	if err != nil {
+		return fmt.Errorf("build the cross-tenant reader: %w", err)
+	}
+	c.reader = reader
+	return nil
+}
+
 func (c *clientCache) get(ctx context.Context, tenant string) (*client.Client, error) {
+	// One credential, pointed at the tenant this read is for. It can read
+	// every tenant and write none, so this service holds no merchant secret.
+	if c.reader != nil {
+		return c.reader.ForTenant(tenant), nil
+	}
+
 	c.mu.Lock()
 	if cl, ok := c.clients[tenant]; ok {
 		c.mu.Unlock()

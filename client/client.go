@@ -55,9 +55,15 @@ type Client struct {
 	base      string // service base including /api/v1, no trailing slash
 	http      *http.Client
 	token     string
+	tenant    string
 	userAgent string
 	retry     RetryPolicy
 }
+
+// tenantHeader names the tenant a cross-tenant reader wants to read. It is a
+// wire constant rather than an import, because this module deliberately
+// depends on nothing but the standard library.
+const tenantHeader = "X-Flexitype-Tenant"
 
 // Option configures a Client.
 type Option func(*Client)
@@ -67,6 +73,25 @@ type Option func(*Client)
 // authentication disabled.
 func WithToken(token string) Option {
 	return func(c *Client) { c.token = token }
+}
+
+// ForTenant returns a copy of the client that reads ONE named tenant.
+//
+// It is only meaningful for a credential holding the read_any_tenant scope —
+// the one a cross-tenant read model uses, which may read every tenant and
+// write none. For any other credential the service ignores the header and
+// reads the token's own tenant, so this can never widen an ordinary
+// credential.
+//
+// It returns a copy, so one process can hold one client and derive a
+// per-tenant view of it without a lock:
+//
+//	reader, _ := client.New(url, client.WithToken(readerToken))
+//	values, _ := reader.ForTenant("merchant-a").Entities().Values(ctx, typeID, "p-1")
+func (c *Client) ForTenant(tenant string) *Client {
+	copied := *c
+	copied.tenant = tenant
+	return &copied
 }
 
 // WithHTTPClient supplies a custom *http.Client (timeouts, transport,
@@ -401,5 +426,8 @@ func (c *Client) setHeaders(req *http.Request, hasBody bool) {
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if c.tenant != "" {
+		req.Header.Set(tenantHeader, c.tenant)
 	}
 }

@@ -362,6 +362,9 @@ export class EntitiesService extends Service {
    * is fetched with no credential at all, because the signature is the
    * credential.
    *
+   * Minting a link changes nothing, so this is a GET: a read-only credential
+   * — including a cross-tenant reader — can mint one.
+   *
    * `ttlSeconds` is how long it lasts. Absent or zero takes the service's short
    * default; anything above its maximum is capped rather than refused. The
    * caller must be able to read the object, and a deployment that sets no
@@ -372,9 +375,9 @@ export class EntitiesService extends Service {
     options: RequestOptions & { ttlSeconds?: number } = {},
   ): Promise<SignedMediaUrl> {
     return this.http.request<SignedMediaUrl>(
-      'POST',
+      'GET',
       `/media/${segment(objectKey)}/signed-url`,
-      { body: { ttl_seconds: options.ttlSeconds ?? 0 } },
+      { query: { ttl_seconds: options.ttlSeconds } },
       requestPart(options),
     )
   }

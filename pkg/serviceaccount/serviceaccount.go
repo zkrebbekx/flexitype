@@ -24,7 +24,55 @@ const (
 	ScopeRead  Scope = "read"
 	ScopeWrite Scope = "write"
 	ScopeAdmin Scope = "admin"
+	// ScopeReadAnyTenant lets ONE account read EVERY tenant, and write none.
+	//
+	// A tenant normally comes from the token, which is the property the whole
+	// design rests on: there is no request that reads two tenants. That makes
+	// a cross-tenant READ MODEL — a marketplace storefront, a group-wide
+	// search index, a billing rollup — hold one full read/write credential
+	// per tenant, purely to re-read entities. Concentrating every tenant's
+	// credential in one service is a far larger exposure than the read it
+	// needs.
+	//
+	// This scope is the narrow answer: read anything, write nothing. It is
+	// enforced twice — an account carrying it may not also hold write or
+	// admin (refused when the account is created), and the API refuses any
+	// method but GET and HEAD for it whatever its other scopes say.
+	//
+	// The tenant to read comes from the X-Flexitype-Tenant header. Without
+	// one, the account reads its own tenant like any other.
+	ScopeReadAnyTenant Scope = "read_any_tenant"
 )
+
+// TenantHeader names the tenant a cross-tenant reader wants to read. It is
+// ignored for every other kind of account, so it can never widen a normal
+// credential.
+const TenantHeader = "X-Flexitype-Tenant"
+
+// ReadsAnyTenant reports whether the account may read outside its own tenant.
+//
+// ScopeAdmin does NOT imply it. Admin is a platform-operator privilege over
+// the control plane — tenants and service accounts — and inheriting a silent
+// cross-tenant data read from it would be exactly the kind of implicit
+// widening this scope exists to make explicit.
+func (a Account) ReadsAnyTenant() bool {
+	for _, have := range a.Scopes {
+		if have == ScopeReadAnyTenant {
+			return true
+		}
+	}
+	return false
+}
+
+// WritesAnything reports whether the account holds a scope that mutates.
+func (a Account) WritesAnything() bool {
+	for _, have := range a.Scopes {
+		if have == ScopeWrite || have == ScopeAdmin {
+			return true
+		}
+	}
+	return false
+}
 
 // Account is one machine identity.
 type Account struct {
@@ -57,6 +105,11 @@ type Account struct {
 func (a Account) HasScope(s Scope) bool {
 	for _, have := range a.Scopes {
 		if have == s || have == ScopeAdmin {
+			return true
+		}
+		// A cross-tenant reader reads. It never writes, which the caller
+		// enforces separately by refusing every mutating method.
+		if have == ScopeReadAnyTenant && s == ScopeRead {
 			return true
 		}
 	}

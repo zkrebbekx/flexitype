@@ -98,6 +98,18 @@ func run(log Logger) error {
 		NewStorefrontClient(storefrontURL, internalToken), hookBase, log)
 	api := NewAPI(store, onboarder, apiToken, flexitypeURL, log)
 
+	// Hand the storefront the ONE credential it reads every merchant with, so
+	// it holds no merchant token for a read. It is best-effort at start-up:
+	// the storefront may not be up yet, and onboarding re-runs it. Without it
+	// the storefront falls back to per-merchant tokens, which is what it did
+	// before this existed.
+	go func() {
+		if err := onboarder.EnsureStorefrontReader(ctx); err != nil {
+			log.Warn("could not install the storefront's cross-tenant reader; "+
+				"it will fall back to per-merchant tokens", "error", err)
+		}
+	}()
+
 	srv := &http.Server{Addr: addr, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()

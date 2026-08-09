@@ -215,6 +215,7 @@ There are four in this example, and they are all demo values in
 | Credential | Held by | What it opens |
 | --- | --- | --- |
 | flexitype admin token | platform | creating tenants and service accounts |
+| cross-tenant reader token | storefront | READING every merchant's catalog, and writing none |
 | merchant service-account token | platform, storefront | one merchant's catalog |
 | `MARKETPLACE_INTERNAL_TOKEN` | platform → storefront | merchant registration, backfill |
 | `PLATFORM_API_TOKEN` | the console's nginx → platform | the merchant API |
@@ -374,11 +375,12 @@ Each one is filed, so it can be tracked rather than only recorded here.
    keeps authentication on without setting the variable that turns it off.
    `FLEXITYPE_DEV_INSECURE` still implies it. ([#548])
 
-4. **The projector needs one credential per tenant.** It holds every
-   merchant's token purely to re-read entities. A read-only, cross-tenant
-   consumer credential — or an event payload that carried the entity's full
-   value set — would let a projection service hold no merchant credential at
-   all. That is the single biggest security cost of this architecture. ([#549])
+4. ~~**The projector needs one credential per tenant.**~~ **Fixed.** The
+   `read_any_tenant` scope gives ONE credential that reads every tenant and
+   writes none. The platform mints it at start-up and hands it to the
+   storefront, which then uses no merchant token for a read. The per-merchant
+   tokens remain as a fallback, so the example still runs against a service
+   without such an account. ([#549])
 
 5. ~~**An event does not say which entity changed without a payload parse.**~~
    **Fixed.** `type_definition_id` and `entity_id` are on the envelope, so this

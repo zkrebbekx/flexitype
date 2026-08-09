@@ -94,12 +94,6 @@ func (s *server) downloadMedia(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, rc)
 }
 
-// signedURLRequest asks for a link. A zero or absent ttl_seconds takes the
-// short default; anything above the cap is capped rather than refused.
-type signedURLRequest struct {
-	TTLSeconds int `json:"ttl_seconds"`
-}
-
 // signedURLResponse is the link and when it stops working.
 type signedURLResponse struct {
 	URL       string `json:"url"`
@@ -107,6 +101,11 @@ type signedURLResponse struct {
 }
 
 // signMediaURL mints a signed, expiring link to one stored object.
+//
+// It is a GET because it CHANGES NOTHING: it hands back a capability to read
+// an object the caller can already read. As a POST it was unreachable to a
+// read-only credential — including the cross-tenant reader, which is the
+// caller with the strongest reason to want a link and no way to write.
 //
 // It is gated on exactly the check the authenticated download makes: the
 // caller's tenant must own a value referencing the key, and the caller must be
@@ -137,22 +136,24 @@ func (s *server) signMediaURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req signedURLRequest
-	if r.Body != nil && r.ContentLength != 0 {
-		if err := decode(r, &req); err != nil {
-			writeError(w, s.log, err)
+	ttl := 0
+	if raw := r.URL.Query().Get("ttl_seconds"); raw != "" {
+		parsed, perr := strconv.Atoi(raw)
+		if perr != nil || parsed < 0 {
+			writeError(w, s.log, domainerrors.NewValidation("ttl_seconds must be a non-negative integer"))
 			return
 		}
+		ttl = parsed
 	}
 
 	tenant := uow.TenantFromContext(r.Context()).String()
 	token, expires, err := s.mediaSigner.Sign(
-		tenant, key, time.Duration(req.TTLSeconds)*time.Second, s.now())
+		tenant, key, time.Duration(ttl)*time.Second, s.now())
 	if err != nil {
 		writeError(w, s.log, domainerrors.NewValidation(err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusCreated, signedURLResponse{
+	writeJSON(w, http.StatusOK, signedURLResponse{
 		URL:       "/media/signed/" + token,
 		ExpiresAt: expires.Format(time.RFC3339),
 	})

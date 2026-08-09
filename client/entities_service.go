@@ -10,6 +10,7 @@ import (
 	"iter"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -304,18 +305,22 @@ type SignedMediaURL struct {
 // proxy. It is redeemed at the returned URL with NO credential, because the
 // signature is the credential.
 //
+// Minting a link changes nothing, so this is a GET: a read-only credential —
+// including a cross-tenant reader — can mint one.
+//
 // ttl is how long the link lasts. Zero takes the service's short default;
 // anything above its maximum is capped rather than refused. The caller must be
 // able to read the object, and a deployment with no signing secret reports the
 // capability as disabled (501, FEATURE_DISABLED).
 func (c *Client) SignMediaURL(ctx context.Context, objectKey string, ttl time.Duration) (*SignedMediaURL, error) {
-	body := struct {
-		TTLSeconds int `json:"ttl_seconds"`
-	}{TTLSeconds: int(ttl.Seconds())}
+	q := url.Values{}
+	if seconds := int(ttl.Seconds()); seconds > 0 {
+		q.Set("ttl_seconds", strconv.Itoa(seconds))
+	}
 
 	var out SignedMediaURL
-	if err := c.do(ctx, http.MethodPost,
-		"/media/"+url.PathEscape(objectKey)+"/signed-url", nil, body, &out); err != nil {
+	if err := c.do(ctx, http.MethodGet,
+		"/media/"+url.PathEscape(objectKey)+"/signed-url", q, nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

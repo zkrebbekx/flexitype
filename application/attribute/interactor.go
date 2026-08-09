@@ -1244,14 +1244,30 @@ func (i *Interactor) assertRollupResolves(
 		return nil
 	}
 	spec := computed.Rollup
+	access := uow.AccessFromContext(ctx)
+
+	// A field-restricted principal must not learn the shape of what it cannot
+	// read, so every way this rollup can fail to resolve collapses into ONE
+	// refusal for such a caller. Four distinguishable outcomes — no such
+	// relationship, no such target, target not numeric, accepted — let it
+	// enumerate the counterpart type's attribute names and their types.
+	//
+	// The formula path does exactly this, for exactly this reason.
+	refuse := func(err error) error {
+		if access.Admin {
+			return err
+		}
+		return errUnresolvedRollup(spec)
+	}
+
 	def, err := i.relDefs.GetByInternalName(ctx, uow.TenantFromContext(ctx), spec.Relationship)
 	if err != nil || def == nil {
 		if err != nil && !domainerrors.IsNotFound(err) {
 			return err
 		}
-		return domainerrors.NewValidation(
+		return refuse(domainerrors.NewValidation(
 			"rollup relationship "+spec.Relationship+" does not exist",
-			"relationship", spec.Relationship)
+			"relationship", spec.Relationship))
 	}
 	snapshot := def.Snapshot()
 
@@ -1293,16 +1309,43 @@ func (i *Interactor) assertRollupResolves(
 		return err
 	}
 	if target == nil {
-		return domainerrors.NewValidation(
+		return refuse(domainerrors.NewValidation(
 			"rollup target "+spec.Target+" does not exist on the type "+spec.Relationship+" reaches",
-			"target", spec.Target)
+			"target", spec.Target))
+	}
+	// THE ROLLUP READS THIS ATTRIBUTE, so the caller defining it must be able
+	// to read it too.
+	//
+	// A rollup is materialized under system access and its result is stored as
+	// an ordinary attribute, born with no restriction of its own. So a
+	// principal denied `cost` could define sum(child(has_line).cost) and read
+	// the total; min and max are worse, republishing an exact hidden value
+	// verbatim. That is a full read bypass, and it is the same hole #509
+	// closed on the formula path — reopened here when rollups arrived.
+	//
+	// Refused with the SAME error as an unresolved rollup, and before the
+	// shape check below, so neither the outcome nor its metadata confirms the
+	// attribute exists. CanRead is always true for an admin.
+	if !access.CanRead(spec.Target) {
+		return refuse(domainerrors.NewValidation(
+			"rollup target "+spec.Target+" does not exist on the type "+spec.Relationship+" reaches",
+			"target", spec.Target))
 	}
 	if !isAggregatable(target.Snapshot().DataType) {
-		return domainerrors.NewValidation(
+		return refuse(domainerrors.NewValidation(
 			"rollup target "+spec.Target+" is not numeric, so it cannot be aggregated",
-			"target", spec.Target)
+			"target", spec.Target))
 	}
 	return nil
+}
+
+// errUnresolvedRollup is the single refusal a field-restricted principal gets
+// for every way a rollup fails to resolve, so the outcome carries no
+// information about what exists on the far side.
+func errUnresolvedRollup(spec *domainattribute.Rollup) error {
+	return domainerrors.NewValidation(
+		"this rollup does not resolve: check the relationship, the direction and the target",
+		"relationship", spec.Relationship)
 }
 
 // isAggregatable reports whether sum, min and max mean anything for a type.

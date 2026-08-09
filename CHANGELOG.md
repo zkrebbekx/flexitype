@@ -1,5 +1,30 @@
 ## [Unreleased]
 
+### Fixed — A migration can no longer build an index on a live table without CONCURRENTLY ([#577])
+
+`docs/upgrades.md` states the rule: an index built on a large table uses
+`CONCURRENTLY`, in a no-transaction file. Nothing enforced it. The existing
+check asks only whether the no-transaction directive MATCHES the SQL, so a
+plain `CREATE INDEX` inside a transactional file is consistent with itself and
+passes.
+
+It matters because `ACCESS EXCLUSIVE` queues ahead of everything behind it: a
+DDL blocked on one long transaction stalls every reader and writer of that
+table until it completes, and every replica runs `Migrate` at startup.
+
+A new test walks the migrations in order, tracks which tables an earlier file
+created, and requires `CONCURRENTLY` for an index built on one of them. It
+found **nine** such indexes across the history, not the two that prompted it —
+including one added in this same stretch of work, which is the clearest
+argument that a documented rule with no test is not a rule.
+
+The nine are grandfathered, deliberately and by name. Every one has shipped, so
+the deployments that would have been hurt already ran them, and rewriting an
+applied migration changes nothing while risking a checksum mismatch. The list
+is closed: it binds every future migration.
+
+[#577]: https://github.com/zkrebbekx/flexitype/issues/577
+
 ### Fixed — `internal/telemetry` failed on a second run in one process ([#578])
 
 `restoreGlobals` captured `otel.GetTracerProvider()`, which returns the global

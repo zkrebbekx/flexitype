@@ -270,6 +270,33 @@ func (r *dependencyRepository) ListByTarget(ctx context.Context, targetID valueo
 	return r.listByColumn(ctx, r.byTarget, "target_attribute_id", targetID.String())
 }
 
+// ListEnforcedOnWrite answers the write path's one question — does this tenant
+// have any rule that refuses a write — in a single indexed query.
+//
+// The predicate matches the domain's own reading of the effect: a rule blocks
+// only when it DEMANDS a value (required: true) and asks for on_write. An
+// absent mode means on_read, so a rule stored before the field existed is not
+// matched, and neither is a rule that merely relaxes a requirement.
+func (r *dependencyRepository) ListEnforcedOnWrite(ctx context.Context, tenant valueobjects.TenantID) ([]*domaindependency.Dependency, error) {
+	query := `SELECT ` + dependencyColumns + ` FROM flexitype_attribute_value_dependency
+	 WHERE tenant_id = ? AND archived_at IS NULL
+	   AND effect ->> 'enforce' = 'on_write'
+	   AND effect ->> 'required' = 'true'`
+	var rows []dependencyRow
+	if err := r.q.SelectContext(ctx, &rows, bind(query), tenant.String()); err != nil {
+		return nil, fmt.Errorf("list enforced dependencies: %w", err)
+	}
+	out := make([]*domaindependency.Dependency, 0, len(rows))
+	for _, row := range rows {
+		snap, err := row.snapshot()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, domaindependency.Rehydrate(snap))
+	}
+	return out, nil
+}
+
 func (r *dependencyRepository) ListBySource(ctx context.Context, sourceID valueobjects.AttributeDefinitionID) ([]*domaindependency.Dependency, error) {
 	return r.listByColumn(ctx, r.bySource, "source_attribute_id", sourceID.String())
 }

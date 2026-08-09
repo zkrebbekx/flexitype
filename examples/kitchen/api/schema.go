@@ -217,9 +217,9 @@ func ensureDependencies(ctx context.Context, c *client.Client, types map[string]
 	// publishing turns it into a refusal — POST /api/dishes/{id}/publish reads
 	// the service's own completeness report.
 	//
-	// The marketplace example takes the other branch of the same rule of
-	// thumb: its condition is status = active, a lifecycle state, so that rule
-	// declares "on_write" and refuses the write. See docs/dependencies.md.
+	// The other mode, "on_write", refuses the write instead. It fits a
+	// condition that is a lifecycle state — status = active — where the record
+	// must never enter the state incomplete. See docs/dependencies.md.
 	return ensureDependency(ctx, c, client.CreateDependencyInput{
 		SourceAttributeID: ids["contains_allergens"],
 		TargetAttributeID: ids["allergens"],

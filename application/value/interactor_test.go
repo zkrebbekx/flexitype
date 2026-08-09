@@ -344,6 +344,17 @@ func (r *fakeDepRepo) GetForUpdate(context.Context, valueobjects.DependencyID) (
 	return nil, domainerrors.NewNotFound(domaindependency.AggregateType, "unused")
 }
 
+func (r *fakeDepRepo) ListEnforcedOnWrite(_ context.Context, tenant valueobjects.TenantID) ([]*domaindependency.Dependency, error) {
+	var out []*domaindependency.Dependency
+	for _, d := range r.deps {
+		if d.TenantID() == tenant && d.Effect().DemandsValue() &&
+			d.Effect().Enforcement() == domaindependency.EnforceOnWrite {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeDepRepo) ListByTarget(_ context.Context, targetID valueobjects.AttributeDefinitionID) ([]*domaindependency.Dependency, error) {
 	var out []*domaindependency.Dependency
 	for _, d := range r.deps {

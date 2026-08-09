@@ -24,8 +24,8 @@
       { "internal_name": "made_by", "display_name": "Made by", "kind": "directed", "parent_type": "product", "child_type": "brand", "parent_label": "products", "child_label": "brand", "parent_version_policy": "latest", "child_version_policy": "latest", "max_children": 1 }
     ],
     "dependencies": [
-      { "source_type": "product", "source_attribute": "status", "target_type": "product", "target_attribute": "sku", "conditions": [{ "kind": "equals", "value": { "type": "enum", "value": "active" } }], "effect": { "required": true, "enforce": "on_write" }, "description": "An active product must carry a SKU. Enforced on write: active is a lifecycle state, and a product a shopper can buy without a SKU is not a product that should exist. Set both in one batch, or the SKU first." },
-      { "source_type": "product", "source_attribute": "status", "target_type": "product", "target_attribute": "price", "conditions": [{ "kind": "equals", "value": { "type": "enum", "value": "active" } }], "effect": { "required": true, "enforce": "on_write" }, "description": "An active product must carry a price. Enforced on write, for the same reason as the SKU rule." }
+      { "source_type": "product", "source_attribute": "status", "target_type": "product", "target_attribute": "sku", "conditions": [{ "kind": "equals", "value": { "type": "enum", "value": "active" } }], "effect": { "required": true }, "description": "An active product must carry a SKU" },
+      { "source_type": "product", "source_attribute": "status", "target_type": "product", "target_attribute": "price", "conditions": [{ "kind": "equals", "value": { "type": "enum", "value": "active" } }], "effect": { "required": true }, "description": "An active product must carry a price" }
     ]
   }
 }

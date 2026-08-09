@@ -47,16 +47,18 @@ Look at the **condition**, not the target.
 | A **lifecycle state** — `status = active`, published, approved | `on_write` | Entering the state is a decision. A decision taken against an incomplete record is the thing worth refusing. |
 | A **fact being entered** — `contains_allergens = true`, `hazardous = yes` | `on_read` | The fact and what it demands arrive in that order. Refusing the fact refuses the truth for being early. |
 
-Both shipped examples follow it:
-
-- [`examples/marketplace`](../examples/marketplace/) uses the `ecommerce`
-  template, whose rules block: a product cannot go `active` without a sku and a
-  price.
-- [`examples/kitchen`](../examples/kitchen/) reports: a chef ticks "contains
-  allergens" and then types the list, and publishing is what turns the gap into
-  a refusal.
-
 `on_read` is the default because most conditions are facts rather than states.
+
+The shipped `ecommerce` template keeps its two `status = active` rules on
+`on_read`, even though the condition is a lifecycle state. A curated starting
+schema should not decide this for you: switching them to `on_write` changes
+what an existing catalogue accepts, and the population is the operator's to
+check. [`examples/kitchen`](../examples/kitchen/) shows the reporting side —
+a chef ticks "contains allergens", then types the list, and publishing turns
+the gap into a refusal.
+
+Before switching a rule to `on_write`, read
+[Adding a blocking rule to data that already exists](#adding-a-blocking-rule-to-data-that-already-exists).
 
 ### on_read: the rule describes, something else decides
 

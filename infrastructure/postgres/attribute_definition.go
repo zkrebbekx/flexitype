@@ -565,6 +565,11 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 		s.UpdatedAt, nullableTime(s.ArchivedAt), s.Group, s.SortOrder, s.HelpText,
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return domainerrors.NewConflict(
+				"an attribute with this internal name already exists on this type",
+				"internal_name", s.InternalName)
+		}
 		return fmt.Errorf("save attribute definition: %w", err)
 	}
 	return nil

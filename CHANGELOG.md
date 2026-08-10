@@ -1,5 +1,36 @@
 ## [Unreleased]
 
+### Fixed — A lost race at a unique index returned 500 instead of 409 ([#615])
+
+Only the saved-view store translated SQLSTATE 23505. Every other insert behind
+a UNIQUE index wrapped it, so a caller that lost a race at the index got an
+opaque error — HTTP 500 — where the in-memory twin answers 409. The backend
+decided the status code, which a client cannot work around.
+
+The application layer checks first, so this is reachable only when two callers
+get past the same check concurrently. That makes it rare, not impossible.
+
+Now translated, each with a caller-facing message and never the constraint
+name, which is schema detail:
+
+| store | conflict |
+| --- | --- |
+| type definition | the internal name is taken |
+| attribute definition | the internal name is taken on that type |
+| relationship definition | the internal name is taken |
+| relationship | the two entities are already linked |
+| tenant | the tenant name is taken |
+| service account | the account name is taken in that tenant |
+| webhook subscription | the subscription name is taken |
+
+The role store needed nothing: it upserts with `ON CONFLICT (tenant_id, name)`,
+so 23505 cannot arise.
+
+The unit family was on the list and is **not** fixed, because there is nothing
+to fix: `flexitype_unit_family` (migration 000017) declares no unique index on
+`(tenant_id, name)`. Both backends accept a duplicate name today, so nothing
+diverges. Adding the constraint is a behaviour change and not this one.
+
 ### Added — Optimistic concurrency on attribute and saved-view writes ([#597])
 
 `PATCH /attributes/{id}` and `PATCH /saved-views/{id}` replace the whole
@@ -104,6 +135,7 @@ cannot be added to the enum and left out of the list again.
 That check immediately found a stale list in the SDK's own coercion test.
 
 [#597]: https://github.com/zkrebbekx/flexitype/issues/597
+[#615]: https://github.com/zkrebbekx/flexitype/issues/615
 [#602]: https://github.com/zkrebbekx/flexitype/issues/602
 [#603]: https://github.com/zkrebbekx/flexitype/issues/603
 [#591]: https://github.com/zkrebbekx/flexitype/issues/591

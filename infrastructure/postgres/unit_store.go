@@ -52,6 +52,9 @@ func (s *unitStore) Create(ctx context.Context, f unit.Family) error {
 		 VALUES (?, ?, ?, ?, ?)`),
 		f.ID, f.TenantID.String(), f.Name, f.BaseUnit, jsonbParam(units))
 	if err != nil {
+		// No unique-violation branch here on purpose: flexitype_unit_family
+		// declares no unique index on (tenant_id, name), so a duplicate name
+		// is accepted by both backends rather than refused by either.
 		return fmt.Errorf("insert unit family: %w", err)
 	}
 	return nil

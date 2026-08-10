@@ -381,6 +381,14 @@ func (r *typeDefinitionRepository) Save(ctx context.Context, t *domaintypedef.Ty
 		nullableTime(s.ArchivedAt),
 	)
 	if err != nil {
+		// A name already taken is the caller's conflict, not a server fault.
+		// The interactor checks first, so this is the RACE: two callers past
+		// the same check, one of which loses at the unique index.
+		if isUniqueViolation(err) {
+			return domainerrors.NewConflict(
+				"a type with this internal name already exists",
+				"internal_name", s.InternalName)
+		}
 		return fmt.Errorf("save type definition: %w", err)
 	}
 	return nil

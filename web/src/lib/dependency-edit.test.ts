@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Condition, Constraint, Effect } from './api'
 import {
+  TEXTUAL,
   buildCondition,
   buildEffect,
   conditionFromApi,
@@ -248,3 +249,15 @@ describe('where a required override is enforced', () => {
     expect(built.required).toBe(false)
   })
 })
+
+// Issue #603.1: TEXTUAL omitted 'text', so the dependency editor rendered the
+// length and pattern effect-constraints for a text target read-only. No data
+// was lost — the passthrough design preserved them — but the rule could not be
+// edited from the console at all.
+describe('text targets', () => {
+  it('offers the same constraints as any other textual type', () => {
+    expect(TEXTUAL).toContain('text')
+    expect([...editableConstraintKinds('text')]).toEqual([...editableConstraintKinds('string')])
+  })
+})
+

@@ -146,7 +146,29 @@ export class EventsService extends Service {
     )
   }
 
-  /** The URL of the server-sent-events tail, for an `EventSource`. */
+  /**
+   * The URL of the server-sent-events tail.
+   *
+   * `EventSource` CANNOT read this from a browser against an authenticated
+   * deployment. The service accepts a credential only in the `Authorization`
+   * header, and `EventSource` sends no custom headers — so an `EventSource`
+   * against this URL answers 401 unless authentication is off.
+   *
+   * Read it with `fetch` instead, which does carry the header:
+   *
+   * ```ts
+   * const res = await fetch(client.events.streamUrl(), {
+   *   headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+   * })
+   * const reader = res.body!.getReader()
+   * ```
+   *
+   * Resume by sending the last `feed_seq` you saw in the `Last-Event-ID`
+   * header.
+   *
+   * A browser that must not hold a service-account token should poll
+   * `list()` through its own backend rather than reaching this URL directly.
+   */
   streamUrl(): string {
     return this.http.url('/events/stream')
   }

@@ -27,6 +27,45 @@ is unaffected.
 - The Go client takes `Version *int`; the TypeScript client takes `version?:
   number`. See [docs/clients.md](docs/clients.md#concurrent-edits).
 
+### Fixed — Minor console, SDK, example and documentation defects ([#603])
+
+Six unrelated small defects from the v1.9.0 review, grouped as the tracker
+grouped them:
+
+- **The console dependency editor could not edit constraints for a `text`
+  target.** `TEXTUAL` in `web/src/lib/dependency-edit.ts` omitted `text`, so
+  the length and pattern effect-constraints rendered read-only. Nothing was
+  lost — the passthrough design preserved them — but the rule could not be
+  edited at all.
+- **`EventsService.streamUrl()` documented a usage that cannot authenticate.**
+  It pointed at an `EventSource`, which sends no custom headers, while the
+  service reads the credential from `Authorization` only. The doc comment and
+  the OpenAPI description now say so and give the `fetch` form that works.
+- **Every example published its ports on all interfaces.** The kitchen example
+  runs with `FLEXITYPE_DEV_INSECURE`, and the others print a demo credential in
+  the compose file, so anything that could reach the host reached the whole
+  API. All three compose files bind `127.0.0.1`, and a test holds it.
+- **`MigrateDown` never renewed its lease.** A down-run past the 15-minute
+  lease could be taken over while it was still reverting. It renews at every
+  version boundary now, unrated: a revert is rare and coarse, so a round trip
+  per version is cheap and a takeover is caught at once.
+- **The "gap-free `feed_seq`" claim was wrong.** `nextval` is
+  non-transactional, so a finalize that aborts burns the values it took. The
+  real guarantee is that `feed_seq` is monotonic and never back-filled, which
+  is what makes it a safe cursor; the numbering may skip. The migration
+  comment, the delivery design doc and the erasure doc now say that. No code
+  relied on contiguity, but a consumer built to the documented promise would
+  have waited for a number that never arrives.
+- **The `000036` index comment was inverted.** It claimed the partial predicate
+  keeps the index off the rows the relay writes most; a value event does carry
+  `payload->>'entity_id'` and is indexed. The index is right, the reason was
+  not.
+- **Dev-dependency advisories.** `esbuild` is pinned forward through an
+  `overrides` entry. The js-yaml advisory reached through
+  `@redocly/openapi-core` stays: both forced upgrades break the type
+  generator, and `client-ts/README.md` records the exact failures. The
+  published package still has no runtime dependencies.
+
 ### Fixed — A signed media link could not be cached by the CDN it exists for ([#602])
 
 `GET /media/signed/{token}` sent `Cache-Control: private`. That directive
@@ -66,6 +105,7 @@ That check immediately found a stale list in the SDK's own coercion test.
 
 [#597]: https://github.com/zkrebbekx/flexitype/issues/597
 [#602]: https://github.com/zkrebbekx/flexitype/issues/602
+[#603]: https://github.com/zkrebbekx/flexitype/issues/603
 [#591]: https://github.com/zkrebbekx/flexitype/issues/591
 [#592]: https://github.com/zkrebbekx/flexitype/issues/592
 [#596]: https://github.com/zkrebbekx/flexitype/issues/596

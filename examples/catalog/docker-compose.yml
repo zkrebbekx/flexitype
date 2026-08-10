@@ -50,5 +50,10 @@ services:
       FLEXITYPE_WEBHOOK_SECRET: catalog-demo-secret
       # The consumer runs on a private network address, so allow it.
       FLEXITYPE_WEBHOOK_ALLOW_PRIVATE: "true"
+    # LOOPBACK ONLY. This example ships with authentication off or with a
+    # demo credential printed in this file, so a port published on every
+    # interface would hand the whole API to anything that can reach this
+    # host. Every published port below is bound the same way. Change the
+    # host part deliberately, not by accident.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"

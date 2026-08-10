@@ -435,6 +435,26 @@ npm run build
 CI runs all of these on every pull request, in the `client-ts` job of
 `.github/workflows/ci.yml`.
 
+### Development dependencies
+
+Nothing here ships: the published package has **no runtime dependencies**, so
+`npm audit --omit=dev` is the number that matters and it is zero.
+
+Two advisories stand open against the dev chain, and both forced upgrades were
+tried and reverted:
+
+- **js-yaml** (`GHSA-5p4m-2wfm-xmqj`, quadratic CPU on `!!omap`), reached
+  through `@redocly/openapi-core` inside `openapi-typescript`. The fix exists
+  only in js-yaml 5. Overriding to 5 breaks the generator
+  (`TypeError: Cannot read properties of undefined (reading 'merge')`), and
+  overriding `@redocly/openapi-core` to 2.x breaks it differently
+  (`ERR_PACKAGE_PATH_NOT_EXPORTED`). The exposure is one command parsing one
+  file in this repository, so it waits for `openapi-typescript` to move.
+- **esbuild** (`GHSA-g7r4-m6w7-qqqr`, dev server on Windows) is pinned forward
+  with an `overrides` entry, because nothing here uses the API it changed.
+
+Re-check both on the next codegen run.
+
 The tests use a fetch mock, never a live service. They cover the error code for
 every documented failure, the retry policy, the pagination iterator across a
 page boundary, value coercion for every data type, effective-attribute

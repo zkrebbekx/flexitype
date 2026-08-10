@@ -83,8 +83,13 @@ services:
       FLEXITYPE_MEDIA_URL_SECRET: marketplace-demo-media-signing-secret-0123456789
     volumes:
       - blobs:/var/lib/flexitype/blobs
+    # LOOPBACK ONLY. This example ships with authentication off or with a
+    # demo credential printed in this file, so a port published on every
+    # interface would hand the whole API to anything that can reach this
+    # host. Every published port below is bound the same way. Change the
+    # host part deliberately, not by accident.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
 
   # ONE storefront per merchant. Each holds one credential, answers for one
   # catalog, and refuses anything that is not its merchant — so no service
@@ -108,8 +113,9 @@ services:
       MARKETPLACE_INTERNAL_TOKEN: marketplace-internal-demo-token
       STOREFRONT_DEBOUNCE: 250ms
       STOREFRONT_MEDIA_PUBLIC_BASE: http://localhost:8080
+    # Loopback only, for the reason given at the first published port.
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"
 
   storefront-bolt:
     build:
@@ -128,8 +134,9 @@ services:
       MARKETPLACE_INTERNAL_TOKEN: marketplace-internal-demo-token
       STOREFRONT_DEBOUNCE: 250ms
       STOREFRONT_MEDIA_PUBLIC_BASE: http://localhost:8080
+    # Loopback only, for the reason given at the first published port.
     ports:
-      - "9201:9200"
+      - "127.0.0.1:9201:9200"
 
   platform:
     build:
@@ -159,8 +166,9 @@ services:
       # deployment reads both from one secret, and can still use
       # FLEXITYPE_ADMIN_TOKEN_FILE to pick up a rotation without a restart.
       FLEXITYPE_ADMIN_TOKEN: "ft_01KZH2AG00DCWCTQBSWGC3G78F_marketplace-demo-admin-secret-not-for-real-use"
+    # Loopback only, for the reason given at the first published port.
     ports:
-      - "9300:9300"
+      - "127.0.0.1:9300:9300"
 
   # The merchant console: React on the TypeScript SDK, served by nginx.
   #
@@ -176,8 +184,9 @@ services:
     environment:
       PLATFORM_URL: http://platform:9300
       PLATFORM_API_TOKEN: platform-console-demo-token
+    # Loopback only, for the reason given at the first published port.
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
 
   # The shopper storefront: React over the storefront's own catalog. It needs
   # no credential at all, because the shopper API is public.
@@ -191,8 +200,9 @@ services:
     environment:
       # The shop is a merchant's own storefront UI.
       STOREFRONT_URL: http://storefront-alpine:9200
+    # Loopback only, for the reason given at the first published port.
     ports:
-      - "8082:8082"
+      - "127.0.0.1:8082:8082"
 
 volumes:
   blobs:

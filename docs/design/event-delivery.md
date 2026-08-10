@@ -135,7 +135,7 @@ last, DB-only one:
    database connection or blocks other relays.
 3. **Finalize** — under `pg_advisory_xact_lock` (blocking, since the batch
    is already dispatched and its outcome must be recorded), stamp a
-   gap-free `feed_seq` on each success in claim order, insert one
+   `feed_seq` on each success in claim order, insert one
    `webhook_delivery` row per active matching subscription, and mark the
    envelope dispatched. Failures have their attempt counted and their
    lease cleared so a later pass retries them. This step is pure
@@ -147,8 +147,16 @@ skipped forever") — while moving handler I/O off the critical section.
 Finalize re-reads the still-pending rows, so a batch that was
 double-claimed after a lease expiry is expanded at most once (no duplicate
 `feed_seq`, no duplicate delivery rows). With multiple relays, `feed_seq`
-order can differ from insert order but remains monotonic and gap-free;
-with a single relay it is identical to insert order.
+order can differ from insert order but remains monotonic; with a single
+relay it is identical to insert order.
+
+What `feed_seq` guarantees, exactly: it is **monotonic and never
+back-filled**. A row never appears below a value a consumer has already
+read past, which is what makes "resume from the last `feed_seq` I saw" a
+safe cursor. It is **not contiguous**. `nextval` is non-transactional, so a
+finalize transaction that aborts burns the values it took, and those
+numbers never appear on the feed. Treat `feed_seq` as a cursor, never as a
+count, and never wait for a missing number to arrive — it never will.
 
 #### Parked envelopes: the outbox lane's terminal state
 
@@ -275,7 +283,8 @@ GET  /api/v1/event-cursors/{consumer}
 ```
 
 Feed reads only expanded rows (`feed_seq IS NOT NULL`) ordered by
-`feed_seq` — gap-free by construction (§1). SSE is the live-updates path
+`feed_seq` — monotonic and never back-filled by construction (§1), so a
+cursor resumes safely; the numbering itself may skip values. SSE is the live-updates path
 for UIs and single-consumer services; replicated services poll the feed
 and commit the shared CAS cursor. Retention: a background job prunes
 delivered outbox rows past `FLEXITYPE_EVENT_RETENTION` (default 7 days);

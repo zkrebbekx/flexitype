@@ -213,6 +213,40 @@ func (s *cursorStore) Commit(ctx context.Context, tenant valueobjects.TenantID, 
 //
 // The cutoff is on updated_at, which is when the delivery last failed, so the
 // clock starts when the row went dead rather than when the event happened.
+// DeadLetterStranded marks the pending backlog of a long-inactive
+// subscription as dead, so retention can reach it.
+//
+// updated_at is the row's own clock: a delivery rested by a deactivation stops
+// being touched, so it ages from the moment the subscription went off. A
+// subscription reactivated inside the window keeps its backlog untouched and
+// resumes exactly as before.
+func (s *feedStore) DeadLetterStranded(ctx context.Context, cutoff time.Time) (int, error) {
+	total := 0
+	for {
+		res, err := s.q.ExecContext(ctx, bind(
+			`UPDATE flexitype_webhook_delivery
+			    SET status = 'dead', updated_at = now()
+			  WHERE id IN (
+			      SELECT d.id FROM flexitype_webhook_delivery d
+			       WHERE d.status = 'pending' AND d.updated_at < ?
+			         AND NOT EXISTS (SELECT 1 FROM flexitype_webhook_subscription s
+			                          WHERE s.id = d.subscription_id AND s.active)
+			       ORDER BY d.updated_at
+			       LIMIT ?)`), cutoff, pruneBatch)
+		if err != nil {
+			return total, fmt.Errorf("dead-letter stranded deliveries: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		total += int(n)
+		if int(n) < pruneBatch {
+			return total, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return total, nil
+		}
+	}
+}
+
 func (s *feedStore) PruneDeadLetters(ctx context.Context, cutoff time.Time) (int, error) {
 	total := 0
 	for {

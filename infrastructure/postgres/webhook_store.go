@@ -215,8 +215,15 @@ func (s *deliveryStore) ClaimDue(ctx context.Context, limit int, leaseFor time.D
 	// new fan-out only, so its queued backlog kept being delivered — an
 	// operator turning a subscription off during an incident still saw the
 	// endpoint called. The backlog RESTS rather than dies: the rows stay
-	// pending, so reactivating the subscription resumes them, and the
-	// retention pruner bounds them if it never comes back.
+	// pending, so reactivating the subscription resumes them.
+	//
+	// Nothing owned those rows after that, and this comment used to claim the
+	// retention pruner bounded them, which was false — a pending delivery of
+	// an inactive subscription satisfied none of the three prunes, so it and
+	// its envelope were pinned for ever. The pruner's DeadLetterStranded pass
+	// now takes them once the subscription has been off longer than the
+	// retention, which puts them on the dead-letter path and keeps redrive
+	// available until it collects them.
 	var ids []string
 	err := s.q.SelectContext(ctx, &ids, bind(`UPDATE flexitype_webhook_delivery t
 	 SET status = 'inflight', lease_expires_at = ?, updated_at = ?

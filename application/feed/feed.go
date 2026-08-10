@@ -48,6 +48,24 @@ type Store interface {
 	// deliveries have all settled. Returns rows removed.
 	Prune(ctx context.Context, cutoff time.Time) (int, error)
 
+	// DeadLetterStranded marks as DEAD the pending deliveries of a
+	// subscription that has been inactive since before the cutoff.
+	//
+	// Deactivating a subscription rests its backlog: the rows stay pending so
+	// reactivating resumes them. Nothing owned them after that. ClaimDue skips
+	// an inactive subscription, so they never transition; the envelope prune
+	// keeps any envelope with a pending delivery; and the dead-letter and
+	// parked prunes look at other states. A deactivated subscription therefore
+	// pinned its backlog, and its envelopes, for ever — retention stopped
+	// bounding the largest table, and the pinned set grew with every
+	// deactivation.
+	//
+	// Dead is the right terminus rather than a delete: it keeps the redrive
+	// path (reactivate, then RedeliverDead), and the existing dead-letter
+	// prune then reclaims the rows on its own schedule, which reclaims their
+	// envelopes in the pass after that.
+	DeadLetterStranded(ctx context.Context, cutoff time.Time) (int, error)
+
 	// PruneDeadLetters deletes DEAD delivery rows older than the cutoff, so
 	// their envelopes become prunable. Returns rows removed.
 	//
@@ -273,7 +291,13 @@ func (p *Pruner) Run(ctx context.Context) {
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 	for {
-		// Dead letters first: removing an expired one makes its envelope
+		// Stranded backlog first, so a subscription that has been off longer
+		// than the retention enters the dead-letter path in this pass and
+		// leaves it in a later one, instead of being pinned for ever.
+		if _, err := p.store.DeadLetterStranded(ctx, p.now().Add(-p.retention)); err != nil && p.onError != nil {
+			p.onError(err)
+		}
+		// Dead letters next: removing an expired one makes its envelope
 		// eligible in the same pass, rather than an hour later.
 		if _, err := p.store.PruneDeadLetters(ctx, p.now().Add(-p.deadLetterKeep)); err != nil && p.onError != nil {
 			p.onError(err)

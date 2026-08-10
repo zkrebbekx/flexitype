@@ -17,10 +17,11 @@ import (
 
 // fakeFeedStore serves a fixed ordered log.
 type fakeFeedStore struct {
-	events       []Event
-	pruned       int
-	deadPruned   int
-	parkedPruned int
+	events               []Event
+	pruned               int
+	deadPruned           int
+	parkedPruned         int
+	strandedDeadLettered int
 }
 
 func (s *fakeFeedStore) List(_ context.Context, _ valueobjects.TenantID, after int64, types []string, limit int) ([]Event, error) {
@@ -58,6 +59,11 @@ func (s *fakeFeedStore) Floor(context.Context, valueobjects.TenantID) (int64, er
 
 func (s *fakeFeedStore) Prune(context.Context, time.Time) (int, error) {
 	s.pruned++
+	return 0, nil
+}
+
+func (s *fakeFeedStore) DeadLetterStranded(context.Context, time.Time) (int, error) {
+	s.strandedDeadLettered++
 	return 0, nil
 }
 
@@ -261,7 +267,8 @@ type errFeedStore struct {
 	floor         int64
 	// lastLimit records the limit List was called with, so limit clamping is
 	// observable.
-	lastLimit int
+	lastLimit       int
+	strandedCutoffs []time.Time
 }
 
 func (s *errFeedStore) List(_ context.Context, _ valueobjects.TenantID, _ int64, _ []string, limit int) ([]Event, error) {
@@ -279,6 +286,13 @@ func (s *errFeedStore) Prune(_ context.Context, cutoff time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cutoffs = append(s.cutoffs, cutoff)
+	return 0, s.err
+}
+
+func (s *errFeedStore) DeadLetterStranded(_ context.Context, cutoff time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.strandedCutoffs = append(s.strandedCutoffs, cutoff)
 	return 0, s.err
 }
 

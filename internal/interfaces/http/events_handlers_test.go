@@ -231,6 +231,7 @@ func (f *feedStore) List(_ context.Context, _ valueobjects.TenantID, after int64
 func (f *feedStore) Floor(context.Context, valueobjects.TenantID) (int64, error) { return f.floor, nil }
 func (f *feedStore) Prune(context.Context, time.Time) (int, error)               { return 0, nil }
 func (f *feedStore) PruneDeadLetters(context.Context, time.Time) (int, error)    { return 0, nil }
+func (f *feedStore) DeadLetterStranded(context.Context, time.Time) (int, error)  { return 0, nil }
 func (f *feedStore) PruneParked(context.Context, time.Time) (int, error)         { return 0, nil }
 
 // cursorStore is an in-memory feed.CursorStore with real compare-and-swap.

@@ -21,7 +21,9 @@ func (st *searchStore) Upsert(_ context.Context, doc search.EntityDocument) erro
 		tenant: doc.TenantID.String(),
 		typeID: doc.TypeDefinitionID.String(),
 		entity: doc.EntityID.String(),
-		values: doc.Values,
+		// SearchableValues, not Values: see the Postgres store — both index
+		// the same set, so search reach does not depend on privilege.
+		values: doc.SearchableValues,
 		text:   doc.Text,
 	}
 	return nil

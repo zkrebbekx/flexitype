@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+### Fixed — `matches()` reach no longer depends on privilege ([#601])
+
+The entity-level search vector has always indexed textual values only. The
+per-attribute vectors indexed EVERY rendering, including numbers — so a
+field-restricted principal could find an entity by an integer that an admin
+could not. Nothing leaked, because the hit was on a readable attribute; the
+privilege simply ran backwards.
+
+Both index sets are now built from one rule. The document carries the textual
+subset explicitly (`SearchableValues`), so neither store has to know the rule
+and they cannot drift apart — which is how they came to disagree.
+
+The narrower behaviour was chosen over widening the entity-level vector: the
+textual-only rule is deliberate and long-standing, and the per-attribute split
+was meant to be a permission-aware equivalent of it, not a change of meaning.
+A restricted principal that relied on finding an entity by a number will no
+longer find it that way; nor will anyone else, which is the point.
+
+[#601]: https://github.com/zkrebbekx/flexitype/issues/601
+
 ### Fixed — `matches()` dropped cross-attribute hits for a restricted principal on Postgres ([#586])
 
 A field-restricted principal searches the PER-ATTRIBUTE vectors, and each holds

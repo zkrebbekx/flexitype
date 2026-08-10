@@ -30,8 +30,18 @@ type EntityDocument struct {
 	TenantID         valueobjects.TenantID
 	TypeDefinitionID valueobjects.TypeDefinitionID
 	EntityID         valueobjects.EntityID
-	// Values maps attribute internal names to the entity's value strings.
+	// Values maps attribute internal names to the entity's value strings. It
+	// is the stored document, so it carries EVERY value.
 	Values map[string][]string
+	// SearchableValues is the subset matches() indexes per attribute: the
+	// textual values only.
+	//
+	// It is separate from Values because the two answer different questions.
+	// Indexing every rendering per attribute made a field-restricted principal
+	// able to find an entity by a number that an admin could not — the
+	// entity-level Text has always been textual-only, so the privilege ran
+	// backwards. Both index sets are now built from one rule.
+	SearchableValues map[string][]string
 	// Text is the searchable flattening (entity id + every textual value).
 	Text      string
 	UpdatedAt time.Time
@@ -182,6 +192,7 @@ func (i *Indexer) Rebuild(ctx context.Context, tenant valueobjects.TenantID, typ
 		TypeDefinitionID: typeID,
 		EntityID:         entityID,
 		Values:           make(map[string][]string, len(names)),
+		SearchableValues: make(map[string][]string, len(names)),
 		UpdatedAt:        i.now(),
 	}
 	text := entityID.String()
@@ -191,6 +202,7 @@ func (i *Indexer) Rebuild(ctx context.Context, tenant valueobjects.TenantID, typ
 		doc.Values[name] = append(doc.Values[name], rendered)
 		if v.Value().DataType().IsTextual() {
 			text += " " + rendered
+			doc.SearchableValues[name] = append(doc.SearchableValues[name], rendered)
 		}
 	}
 	doc.Text = text

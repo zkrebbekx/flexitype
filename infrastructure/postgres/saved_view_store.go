@@ -65,6 +65,13 @@ func (s *savedViewStore) Create(ctx context.Context, v savedview.View) error {
 		v.ID, v.TenantID.String(), v.Name, v.RootType, v.Query, jsonbParam(cols), v.Sort,
 		v.CreatedAt, v.UpdatedAt, maxInt(v.Version, 1))
 	if err != nil {
+		// A duplicate name is a caller conflict, not a server fault. The
+		// in-memory store has always answered 409 here; without this
+		// translation Postgres answered 500 for the same request, so the
+		// backend decided the status code.
+		if isUniqueViolation(err) {
+			return domainerrors.NewConflict("a view with this name already exists", "name", v.Name)
+		}
 		return fmt.Errorf("insert saved view: %w", err)
 	}
 	return nil

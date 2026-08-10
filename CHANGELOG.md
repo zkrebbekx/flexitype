@@ -1,5 +1,24 @@
 ## [Unreleased]
 
+### Fixed — A duplicate saved-view name returned 500 on Postgres ([#599])
+
+The Postgres store wrapped every insert error, so a duplicate name arrived at
+the HTTP layer as an opaque error and became a 500. The in-memory store
+returned a domain conflict and produced a 409 — the backend decided the status
+code, which a client cannot work around.
+
+Postgres now maps SQLSTATE 23505 to a conflict. The match is on the code, never
+on the constraint name or the driver's message: the message is the server's
+localized text, and the constraint name is schema detail that must not reach a
+client.
+
+No other Postgres store translated 23505 either, which is [#615]. Those paths
+pre-check in the application layer, so the untranslated error is reachable only
+when two callers get past the same check at once — rare, not impossible.
+
+[#599]: https://github.com/zkrebbekx/flexitype/issues/599
+[#615]: https://github.com/zkrebbekx/flexitype/issues/615
+
 ### Fixed — `matches()` reach no longer depends on privilege ([#601])
 
 The entity-level search vector has always indexed textual values only. The

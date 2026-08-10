@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/lib/pq"
+
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/pkg/db"
 )
@@ -127,6 +129,22 @@ func jsonbParam(b []byte) any {
 }
 
 // isNoRows reports whether err is sql.ErrNoRows.
+// isUniqueViolation reports whether err is SQLSTATE 23505.
+//
+// A store that inserts against a UNIQUE index must translate it, or the caller
+// gets a generic 500 for something the in-memory twin answers as a 409. The
+// application layer normally checks first and returns a conflict itself, so
+// this is the RACE: two callers past the same check, one of which loses at the
+// index.
+//
+// Matched on the code, never on the constraint name or the driver's message —
+// the message is the server's localized text, and the constraint name is
+// schema detail that must not reach a client.
+func isUniqueViolation(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505"
+}
+
 func isNoRows(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
 }

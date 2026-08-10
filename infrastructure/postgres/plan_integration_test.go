@@ -114,16 +114,33 @@ func TestQueryPlansIntegration(t *testing.T) {
 			})
 		})
 
-		Convey("The FQL value scope reaches the entity+attribute index", func() {
-			// Without (tenant_id, entity_id, attribute_definition_id) the probe
-			// fetched the candidate entity's whole value set and filtered it by
-			// attribute, on every candidate entity.
+		Convey("The FQL value scope selects on attribute, in the index", func() {
+			// Without an index carrying the attribute, the probe fetched the
+			// candidate entity's whole value set and filtered it by attribute,
+			// on every candidate entity — visible as "Rows Removed by Filter"
+			// on hundreds of thousands of probes.
+			//
+			// The index NAME is deliberately not asserted. Two indexes carry
+			// (entity, attribute): idx_..._entity_attr from 000021 and
+			// idx_..._scope, and at this fixture's size they cost the same, so
+			// which one the planner takes is an arbitrary tie broken by
+			// creation order. #611 moved the scope index to a later migration
+			// and inverted that tie on a fresh database without changing what
+			// either index can serve. What must hold is the property: the
+			// attribute is an index CONDITION, never a per-row filter.
 			plan := explain(`SELECT 1 FROM flexitype_attribute_value v
 			  WHERE v.tenant_id = $1 AND v.entity_id = $2
 			    AND v.attribute_definition_id = $3 AND v.archived_at IS NULL`,
 				"default", f.entity, f.attrIDs[0])
-			So(plan, ShouldContainSubstring, "idx_flexitype_attribute_value_entity_attr")
-			So(plan, ShouldContainSubstring, "attribute_definition_id")
+			So(plan, ShouldContainSubstring, "Index Scan")
+			So(plan, ShouldNotContainSubstring, "Seq Scan")
+
+			cond := plan[strings.Index(plan, "Index Cond"):]
+			if filter := strings.Index(cond, "Filter:"); filter >= 0 {
+				cond = cond[:filter]
+			}
+			So(cond, ShouldContainSubstring, "attribute_definition_id")
+			So(cond, ShouldContainSubstring, "entity_id")
 		})
 
 		Convey("Archived-inclusive entity lookups reach a non-partial index", func() {

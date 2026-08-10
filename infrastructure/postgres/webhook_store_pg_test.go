@@ -212,7 +212,11 @@ func TestSubscriptionStoreIntegration(t *testing.T) {
 
 			Convey("Then the (tenant, name) uniqueness constraint rejects it", func() {
 				So(err, ShouldNotBeNil)
-				So(err.Error(), ShouldContainSubstring, "insert subscription")
+				// A duplicate name is the caller's conflict, not a server
+				// fault (#615). It used to arrive wrapped, which made it a
+				// 500 while the in-memory twin answered 409.
+				So(domainerrors.IsConflict(err), ShouldBeTrue)
+				So(err.Error(), ShouldNotContainSubstring, "flexitype_webhook_subscription")
 			})
 		})
 

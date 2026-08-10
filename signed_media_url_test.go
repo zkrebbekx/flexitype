@@ -231,6 +231,15 @@ func callMedia(handler http.Handler, method, path, body string) (int, map[string
 	return rec.Code, decoded
 }
 
+// callMediaRaw returns the status and the raw body, for a route that serves
+// bytes rather than JSON.
+func callMediaRaw(handler http.Handler, path string) (int, string) {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec.Code, rec.Body.String()
+}
+
 // uploadPhoto stores one file through the API and returns its object key.
 func uploadPhoto(handler http.Handler, typeID, entityID, attributeID, content string) string {
 	var buf bytes.Buffer
@@ -259,4 +268,68 @@ func uploadPhoto(handler http.Handler, typeID, entityID, attributeID, content st
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	return body.Value.ObjectKey
+}
+
+// TestSignedMediaEnforcesItsTenantClaim covers issue #600.
+//
+// pkg/mediaurl documents that the tenant is read back out of the verified
+// token, so a holder cannot point a signature at another tenant's object. The
+// redemption handler read only the object key.
+//
+// Nothing was exploitable: a token can only be minted for a key its tenant
+// already owns, and blob keys are globally unique ULIDs, so no key collides
+// across tenants. That is exactly what made it worth fixing — the guarantee
+// rested on the shape of the keyspace rather than on the claim the code makes,
+// and a keyspace unique only per tenant would turn it into a cross-tenant read
+// with nothing here to notice.
+func TestSignedMediaEnforcesItsTenantClaim(t *testing.T) {
+	Convey("Given an object owned by one tenant", t, func() {
+		svc := flexitype.NewInMemory()
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		handler := svc.APIHandler(flexitype.APIConfig{
+			AllowAnonymous: true,
+			MediaURLSecret: testMediaSecret,
+		})
+
+		ia := svc.Interactors(ctx)
+		product, err := ia.TypeDefinitions().Create(ctx, apptypedef.CreateInput{
+			InternalName: "product", DisplayName: "Product",
+		})
+		So(err, ShouldBeNil)
+		photo, err := ia.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: product.ID.String(), InternalName: "photo",
+			DisplayName: "Photo", DataType: "media",
+		})
+		So(err, ShouldBeNil)
+		objectKey := uploadPhoto(handler, product.ID.String(), "p-1", photo.ID.String(), "PNGDATA")
+		So(objectKey, ShouldNotBeEmpty)
+
+		signer, err := mediaurl.NewSigner(testMediaSecret)
+		So(err, ShouldBeNil)
+
+		Convey("When a token names the owning tenant", func() {
+			token, _, terr := signer.Sign(
+				valueobjects.DefaultTenant.String(), objectKey, time.Minute, time.Now())
+			So(terr, ShouldBeNil)
+			status, body := callMediaRaw(handler, "/media/signed/"+token)
+
+			Convey("Then the bytes are served", func() {
+				So(status, ShouldEqual, http.StatusOK)
+				So(body, ShouldContainSubstring, "PNGDATA")
+			})
+		})
+
+		Convey("When a validly-signed token names a DIFFERENT tenant", func() {
+			// Signed by this deployment's own secret, so the signature is
+			// genuine — only the tenant claim is wrong. That is the case the
+			// handler has to answer, and the one it never asked about.
+			token, _, terr := signer.Sign("tenant-b", objectKey, time.Minute, time.Now())
+			So(terr, ShouldBeNil)
+			status, _ := callMediaRaw(handler, "/media/signed/"+token)
+
+			Convey("Then it is refused", func() {
+				So(status, ShouldEqual, http.StatusNotFound)
+			})
+		})
+	})
 }

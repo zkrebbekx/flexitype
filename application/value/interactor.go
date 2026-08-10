@@ -1035,6 +1035,22 @@ func (i *Interactor) MediaKeyReadable(ctx context.Context, objectKey string) (bo
 	return fieldacl.New(i.attrs).CanRead(ctx, owner.AttributeDefinitionID)
 }
 
+// MediaKeyBelongsToTenant reports whether an object key is recorded under a
+// tenant, with no field-ACL check.
+//
+// It answers the one question a signed link needs: does this token's tenant
+// own this object. The permission question was already asked when the link was
+// minted (MediaKeyReadable), by a principal that no longer exists at
+// redemption — the signature is the credential, and it carries no field
+// permissions.
+func (i *Interactor) MediaKeyBelongsToTenant(ctx context.Context, tenant valueobjects.TenantID, objectKey string) (bool, error) {
+	_, ok, err := i.values.MediaValueForKey(ctx, tenant, objectKey)
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
 // ListByEntity loads every live value of one entity — the hydration hot
 // path; concurrent calls for different entities batch into one query.
 func (i *Interactor) ListByEntity(ctx context.Context, rawTypeDefID, rawEntityID string) ([]domainvalue.Snapshot, error) {

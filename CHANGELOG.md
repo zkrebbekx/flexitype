@@ -1,5 +1,26 @@
 ## [Unreleased]
 
+### Fixed — A migration could crash-loop startup in a multi-schema database ([#587])
+
+Migration 000034 carried a `DO` block that matched `pg_class.relname` with no
+`pg_namespace` join, so it saw every schema in the database, and the
+unqualified `DROP INDEX` it then ran resolved through `search_path`. With one
+schema per tenant — which the migration runner explicitly supports — an invalid
+namesake index in a SIBLING schema made the guard fire here: into a missing
+index (`42704`, and with `MigrateOnStart` a boot loop), or into this schema's
+own valid index, dropping it under live writes.
+
+That is the block [#517] removed from 000030, reintroduced in 000034. The
+runner already reaps an invalid index before replaying a no-transaction file,
+scoped to `current_schema()`, so a migration never needs its own guard — and
+000034 no longer has one.
+
+A test now refuses any migration that reads the catalogue without naming the
+schema it means, so this cannot come back a third time.
+
+[#587]: https://github.com/zkrebbekx/flexitype/issues/587
+[#517]: https://github.com/zkrebbekx/flexitype/issues/517
+
 ### Fixed — A `text` attribute could not hold a long value on Postgres ([#590])
 
 The uniqueness probe index was a plain btree over the raw value, so every

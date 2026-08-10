@@ -22,6 +22,7 @@ describe('coercion, per data type', () => {
     const covered: DataType[] = [
       'bool',
       'string',
+      'text',
       'enum',
       'url',
       'email',
@@ -46,6 +47,9 @@ describe('coercion, per data type', () => {
 
   it('encodes the textual types as strings', () => {
     expect(toWire('string', 'ABC-1')).toBe('ABC-1')
+    // text is a textual type on the wire like any other; it differs only in
+    // how much of it there tends to be.
+    expect(toWire('text', 'a long body')).toBe('a long body')
     // Long-form text travels exactly as a string does: only the declared
     // type differs, and that difference is for the renderer.
     expect(toWire('text', 'A long description.\nWith a second line.')).toBe(

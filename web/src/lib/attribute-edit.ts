@@ -1,0 +1,86 @@
+/**
+ * Form model helpers for the attribute drawer.
+ *
+ * These live here rather than inline in the component for the reason the
+ * dependency editor does: the update PATCH is a FULL REPLACE with no
+ * field-presence tracking, so anything the form fails to send is deleted. That
+ * rule is worth testing directly, and a component that builds its body inline
+ * cannot be.
+ */
+
+import type { ComputedSpec, Constraint, DataType, DefaultValue } from './api'
+
+/**
+ * The data types that carry length and pattern constraints.
+ *
+ * Mirrors `DataType.IsTextual` in `domain/valueobjects/datatype.go`. `text`
+ * belongs here: the server accepts these constraints on it, and omitting it
+ * made the drawer hide the inputs AND send an empty constraint list, which the
+ * full replace then applied.
+ */
+export const TEXTUAL: DataType[] = ['string', 'text', 'enum', 'url', 'email']
+
+/** The data types that carry min/max value constraints. */
+export const ORDERED: DataType[] = ['integer', 'float', 'decimal', 'date', 'time', 'datetime']
+
+/** isTextual reports whether a type takes length and pattern constraints. */
+export function isTextual(dataType: DataType): boolean {
+  return TEXTUAL.includes(dataType)
+}
+
+/** The fields the drawer shows but does not edit. */
+export interface AttributePassthrough {
+  computed?: ComputedSpec
+  defaultValue?: DefaultValue
+}
+
+/**
+ * carriedFields reads what an edit must hand back untouched.
+ *
+ * The drawer models only a formula, so saving a ROLLUP attribute turned it
+ * into a plain writable one; and it never modelled `default_value` at all, so
+ * a rename deleted the stored default. Renaming an attribute is not a request
+ * to change what it derives from.
+ */
+export function carriedFields(attribute?: {
+  computed?: ComputedSpec
+  default_value?: DefaultValue
+}): AttributePassthrough {
+  return { computed: attribute?.computed, defaultValue: attribute?.default_value }
+}
+
+/**
+ * computedForUpdate decides what `computed` an update sends.
+ *
+ * A formula the author typed wins. Otherwise whatever the attribute already
+ * had survives, so a rollup keeps deriving and an untouched formula keeps its
+ * shape.
+ */
+export function computedForUpdate(
+  formula: string,
+  carried: AttributePassthrough,
+): ComputedSpec | undefined {
+  const typed = formula.trim()
+  if (typed !== '') return { kind: 'formula', formula: typed }
+  return carried.computed
+}
+
+/** The subset of an update body these helpers own. */
+export interface CarriedUpdate {
+  computed?: ComputedSpec
+  default_value?: DefaultValue
+  constraints: Constraint[]
+}
+
+/** buildCarriedUpdate assembles the replace-sensitive part of an update. */
+export function buildCarriedUpdate(
+  formula: string,
+  constraints: Constraint[],
+  carried: AttributePassthrough,
+): CarriedUpdate {
+  return {
+    computed: computedForUpdate(formula, carried),
+    default_value: carried.defaultValue,
+    constraints,
+  }
+}

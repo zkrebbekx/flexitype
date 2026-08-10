@@ -40,6 +40,11 @@ func newMatchesFixture(t *testing.T, svc *flexitype.Service) matchesFixture {
 		})
 		So(aerr, ShouldBeNil)
 	}
+	_, err = ia.Attributes().Create(ctx, appattribute.CreateInput{
+		TypeDefinitionID: person.ID.String(), InternalName: "qty",
+		DisplayName: "Qty", DataType: "integer",
+	})
+	So(err, ShouldBeNil)
 	attrs, err := ia.TypeDefinitions().EffectiveAttributes(ctx, person.ID.String())
 	So(err, ShouldBeNil)
 	set := func(name, value string) {
@@ -57,6 +62,16 @@ func newMatchesFixture(t *testing.T, svc *flexitype.Service) matchesFixture {
 	set("first_name", "alice")
 	set("last_name", "smith")
 	set("secret_note", "confidential")
+	for _, a := range attrs {
+		if a.Attribute.InternalName == "qty" {
+			raw, _ := json.Marshal(424242)
+			_, werr := ia.Values().Set(ctx, appvalue.SetInput{
+				AttributeDefinitionID: a.Attribute.ID.String(), EntityID: "e1",
+				TypeDefinitionID: person.ID.String(), Value: raw,
+			})
+			So(werr, ShouldBeNil)
+		}
+	}
 	return matchesFixture{ctx: ctx, svc: svc, typeID: person.ID.String()}
 }
 
@@ -155,6 +170,67 @@ func TestMatchesAcrossTwoAttributesPostgres(t *testing.T) {
 
 		Convey("Then a word that appears nowhere does not match", func() {
 			So(f.run(restricted, `matches("nobody")`), ShouldBeEmpty)
+		})
+	})
+}
+
+// TestMatchesReachIsTheSameForEveryPrincipal covers issue #601.
+//
+// The entity-level vector has always indexed textual values only. The
+// per-attribute vectors indexed every rendering, including numbers — so a
+// field-restricted principal could find an entity by an integer that an admin
+// could not. Nothing leaked, because the hit was on a readable attribute; the
+// privilege simply ran backwards, which is its own kind of wrong.
+func TestMatchesReachIsTheSameForEveryPrincipal(t *testing.T) {
+	restrictedAccess := uow.Access{
+		Attr: map[string]uow.Perm{
+			"first_name": uow.PermRead, "last_name": uow.PermRead,
+			"qty": uow.PermRead, "secret_note": uow.PermNone,
+		},
+		Default: uow.PermNone,
+	}
+
+	Convey("Given an entity with an integer value (memory)", t, func() {
+		f := newMatchesFixture(t, flexitype.NewInMemory(flexitype.WithSearchIndex()))
+		restricted := uow.WithAccess(f.ctx, restrictedAccess)
+
+		Convey("Then both principals agree on a non-textual value", func() {
+			So(f.run(f.ctx, `matches("424242")`), ShouldResemble, f.run(restricted, `matches("424242")`))
+		})
+
+		Convey("Then a textual value still matches for both", func() {
+			So(f.run(f.ctx, `matches("alice")`), ShouldResemble, []string{"e1"})
+			So(f.run(restricted, `matches("alice")`), ShouldResemble, []string{"e1"})
+		})
+	})
+}
+
+// TestMatchesReachIsTheSameForEveryPrincipalPostgres is the same on the real
+// backend.
+func TestMatchesReachIsTheSameForEveryPrincipalPostgres(t *testing.T) {
+	pool := openTestDB(t)
+	svc := flexitype.New(pool, flexitype.WithSearchIndex())
+	if err := svc.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	Convey("Given an entity with an integer value (Postgres)", t, func() {
+		truncateAll(t, pool, svc)
+		f := newMatchesFixture(t, svc)
+		restricted := uow.WithAccess(f.ctx, uow.Access{
+			Attr: map[string]uow.Perm{
+				"first_name": uow.PermRead, "last_name": uow.PermRead,
+				"qty": uow.PermRead, "secret_note": uow.PermNone,
+			},
+			Default: uow.PermNone,
+		})
+
+		Convey("Then both principals agree on a non-textual value", func() {
+			So(f.run(f.ctx, `matches("424242")`), ShouldResemble, f.run(restricted, `matches("424242")`))
+		})
+
+		Convey("Then a textual value still matches for both", func() {
+			So(f.run(restricted, `matches("smith")`), ShouldResemble, []string{"e1"})
 		})
 	})
 }

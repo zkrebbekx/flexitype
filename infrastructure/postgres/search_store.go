@@ -64,11 +64,14 @@ func (s *searchStore) upsertAttrVectors(ctx context.Context, doc search.EntityDo
 		return fmt.Errorf("clear search attribute vectors: %w", err)
 	}
 
-	names := make([]string, 0, len(doc.Values)+1)
-	texts := make([]string, 0, len(doc.Values)+1)
+	// SearchableValues, not Values: the per-attribute vectors index exactly
+	// what the entity-level vector does, so a restricted principal cannot
+	// find an entity by something an admin cannot.
+	names := make([]string, 0, len(doc.SearchableValues)+1)
+	texts := make([]string, 0, len(doc.SearchableValues)+1)
 	names = append(names, "")
 	texts = append(texts, doc.EntityID.String())
-	for name, values := range doc.Values {
+	for name, values := range doc.SearchableValues {
 		names = append(names, name)
 		texts = append(texts, strings.Join(values, " "))
 	}

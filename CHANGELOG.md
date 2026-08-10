@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+### Fixed — Signed media links now enforce the tenant they carry ([#600])
+
+`pkg/mediaurl` documents that the tenant is read back out of the verified
+token, so a holder cannot point a signature at another tenant's object. The
+redemption handler read only the object key.
+
+Nothing was exploitable, and that is why it was worth fixing: a token can only
+be minted for a key its tenant already owns, and blob keys are globally unique
+ULIDs, so no key collides across tenants. The guarantee rested on the shape of
+the keyspace rather than on the claim the code makes — a keyspace unique only
+per tenant would have turned it into a cross-tenant read with nothing there to
+notice.
+
+Redemption now resolves the key's owner and compares it to the token's tenant.
+`docs/configuration.md` also called the mint route a `POST`; it is a `GET`.
+
+[#600]: https://github.com/zkrebbekx/flexitype/issues/600
+
 ### Fixed — A migration could crash-loop startup in a multi-schema database ([#587])
 
 Migration 000034 carried a `DO` block that matched `pg_class.relname` with no

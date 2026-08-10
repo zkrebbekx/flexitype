@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"github.com/zkrebbekx/flexitype/application"
 	"github.com/zkrebbekx/flexitype/application/uow"
 	domainerrors "github.com/zkrebbekx/flexitype/domain/errors"
+	"github.com/zkrebbekx/flexitype/domain/valueobjects"
 )
 
 // uploadMedia stores an uploaded file for a media attribute and writes the
@@ -169,6 +171,24 @@ func (s *server) signMediaURL(w http.ResponseWriter, r *http.Request) {
 // Every failure — malformed, forged, expired, unknown key, media disabled — is
 // the same 404. A link is a bearer credential, and distinguishing "expired"
 // from "forged" tells a probing holder which half to work on.
+// tokenOwnsKey reports whether an object key is recorded under the tenant a
+// signed token names.
+//
+// This route is outside authentication — the signature IS the credential — so
+// there is no principal on the context to read the tenant from. The tenant
+// comes from the verified claims, and nothing else.
+func (s *server) tokenOwnsKey(ctx context.Context, tenant, objectKey string) bool {
+	if s.factory == nil {
+		return false
+	}
+	owned, err := s.factory.New(uow.WithTenant(ctx, valueobjects.TenantID(tenant))).
+		Values().MediaKeyBelongsToTenant(ctx, valueobjects.TenantID(tenant), objectKey)
+	if err != nil {
+		return false
+	}
+	return owned
+}
+
 func (s *server) downloadSignedMedia(w http.ResponseWriter, r *http.Request) {
 	notFound := func() {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -179,6 +199,22 @@ func (s *server) downloadSignedMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, err := s.mediaSigner.Verify(chi.URLParam(r, "token"), s.now())
 	if err != nil {
+		notFound()
+		return
+	}
+	// ENFORCE the tenant the token carries.
+	//
+	// The signature covers the tenant and the key, and a token can only be
+	// minted for a key its tenant already owns — so today no token can name
+	// another tenant's object, because blob keys are globally unique ULIDs.
+	// That made this check redundant and its absence invisible: the guarantee
+	// rested on the shape of the keyspace rather than on the claim the
+	// package documents. A future keyspace that is unique only per tenant
+	// would turn that into a cross-tenant read with nothing here to stop it.
+	//
+	// The blob store is a flat global keyspace, so ownership is resolved
+	// through the value that records the key.
+	if !s.tokenOwnsKey(r.Context(), claims.Tenant, claims.ObjectKey) {
 		notFound()
 		return
 	}

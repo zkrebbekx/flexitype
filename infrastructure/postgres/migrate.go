@@ -122,6 +122,13 @@ func migrateInOneTransaction(ctx context.Context, tx db.Transactor) error {
 			return err
 		}
 		for _, m := range pending {
+			skip, err := extensionMissing(ctx, q, m)
+			if err != nil {
+				return err
+			}
+			if skip {
+				continue
+			}
 			if m.directives.NoTransaction {
 				return fmt.Errorf("migration %s declares no-transaction but this transactor cannot pin a connection", m.name)
 			}
@@ -561,6 +568,13 @@ func applyPending(ctx context.Context, q db.QueryExecer, lease *migrateLease) er
 		if err := lease.renew(ctx); err != nil {
 			return err
 		}
+		skip, err := extensionMissing(ctx, q, m)
+		if err != nil {
+			return err
+		}
+		if skip {
+			continue
+		}
 		if m.directives.NoTransaction {
 			if err := applyOutsideTransaction(ctx, q, m, lease); err != nil {
 				return err
@@ -572,6 +586,38 @@ func applyPending(ctx context.Context, q db.QueryExecer, lease *migrateLease) er
 		}
 	}
 	return nil
+}
+
+// extensionMissing reports whether a migration must be skipped because the
+// extension it declares is not installed.
+//
+// A skipped file is NOT recorded. The alternative — recording it as applied —
+// would mean a database that installs the extension a week later never builds
+// what the file exists to build, and nothing would say so. Leaving it pending
+// costs one catalogue query per boot and self-heals the moment the extension
+// appears.
+//
+// The skip is announced on stderr, because a silently absent index reads as a
+// query planner that has simply got worse.
+func extensionMissing(ctx context.Context, q db.QueryExecer, m migration) (bool, error) {
+	if m.directives.RequiresExtension == "" {
+		return false, nil
+	}
+	var installed bool
+	if err := q.GetContext(ctx, &installed,
+		`SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = $1)`,
+		m.directives.RequiresExtension); err != nil {
+		return false, fmt.Errorf("check extension %s for migration %s: %w",
+			m.directives.RequiresExtension, m.name, err)
+	}
+	if installed {
+		return false, nil
+	}
+	fmt.Fprintf(os.Stderr,
+		"flexitype: migration %s skipped: extension %q is not installed. "+
+			"It stays pending and applies on the next start after the extension exists.\n",
+		m.name, m.directives.RequiresExtension)
+	return true, nil
 }
 
 // applyInTransaction claims a migration and applies it in one transaction.

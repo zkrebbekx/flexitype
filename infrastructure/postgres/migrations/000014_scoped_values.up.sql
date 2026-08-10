@@ -7,8 +7,10 @@ ALTER TABLE flexitype_attribute_value
     ADD COLUMN channel TEXT NOT NULL DEFAULT '';
 
 -- Entity hydration and per-scope lookups filter by (entity, locale, channel).
-CREATE INDEX idx_flexitype_attribute_value_scope
-    ON flexitype_attribute_value (attribute_definition_id, entity_id, locale, channel);
+-- The index for that is built CONCURRENTLY in 000042: it is on the largest
+-- table in the database, and this file cannot be a no-transaction file
+-- because it also alters two tables. A database that already has the index
+-- from this file keeps it — 000042 is IF NOT EXISTS.
 
 -- Attribute-level scope enablement flags.
 ALTER TABLE flexitype_attribute_definition

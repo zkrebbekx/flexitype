@@ -40,8 +40,21 @@ CREATE INDEX idx_flexitype_entity_search_type
     ON flexitype_entity_search (tenant_id, type_definition_id);
 
 -- Trigram indexes make FQL contains/icontains index-assisted instead of
--- sequential. Extension creation needs elevated privileges on some managed
--- providers; degrade to a notice rather than failing the migration.
+-- sequential. This file installs the EXTENSION only; 000041 builds the
+-- indexes concurrently.
+--
+-- They were built here, plainly, inside the DO block below — on
+-- flexitype_attribute_value, the largest table in the database, taking a lock
+-- that conflicts with every write for the whole build. The build had to be
+-- conditional on the extension, the only conditional form is a DO block, and
+-- CREATE INDEX CONCURRENTLY cannot run inside one. 000041 carries the
+-- condition as a runner directive instead, so the builds are ordinary
+-- concurrent statements. A database that already has the indexes from this
+-- file keeps them: 000041 is IF NOT EXISTS.
+--
+-- Extension creation needs elevated privileges on some managed providers;
+-- degrade to a notice rather than failing the migration. 000041 is then
+-- skipped and stays pending until the extension exists.
 DO $$
 BEGIN
     BEGIN
@@ -49,13 +62,4 @@ BEGIN
     EXCEPTION WHEN insufficient_privilege THEN
         RAISE NOTICE 'pg_trgm unavailable (insufficient privileges); contains/icontains stay unindexed';
     END;
-
-    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
-        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_flexitype_attribute_value_trgm
-                 ON flexitype_attribute_value USING GIN (value_text gin_trgm_ops)
-                 WHERE value_text IS NOT NULL';
-        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_flexitype_attribute_value_trgm_lower
-                 ON flexitype_attribute_value USING GIN (lower(value_text) gin_trgm_ops)
-                 WHERE value_text IS NOT NULL';
-    END IF;
 END $$;

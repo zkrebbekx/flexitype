@@ -1,4 +1,4 @@
-DROP INDEX IF EXISTS idx_flexitype_attribute_value_scope;
+-- The scope index belongs to 000042, which drops it.
 ALTER TABLE flexitype_attribute_value
     DROP COLUMN IF EXISTS locale,
     DROP COLUMN IF EXISTS channel;

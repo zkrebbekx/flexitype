@@ -614,6 +614,22 @@ func relWindowArms(g relWindowGroup, selves []string, withKeyset bool) (string, 
 				return "", nil, err
 			}
 		}
+		// The counterpart must still EXIST.
+		//
+		// Removing an entity's last value leaves its relationships live, so
+		// the link still points at an entity that has nothing — a "ghost".
+		// FQL traversal has excluded those since #475; this path did not, so
+		// a GraphQL nested connection listed nodes with an id and null fields,
+		// and its totalCount counted them. Two APIs over one link table
+		// disagreed about what a counterpart is.
+		//
+		// Same probe, same projection, same index
+		// (idx_flexitype_entity_summary_entity, migration 000031): a
+		// counterpart is reachable here exactly when it is visible at the
+		// root.
+		where = append(where, `EXISTS (SELECT 1 FROM flexitype_entity_summary es
+		 WHERE es.tenant_id = flexitype_relationship.tenant_id
+		   AND es.entity_id = flexitype_relationship.`+otherCol+`)`)
 		q := `SELECT ` + selfCol + ` AS self, ` + otherCol + ` AS other, id AS link_id
 		 FROM flexitype_relationship
 		 WHERE ` + strings.Join(where, " AND ")

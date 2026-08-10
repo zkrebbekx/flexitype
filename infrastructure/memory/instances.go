@@ -714,8 +714,22 @@ func (r *relRepo) WindowedLinks(_ context.Context, w domainrelationship.LinkWind
 
 	r.s.mu.RLock()
 	others := make(map[valueobjects.EntityID][]valueobjects.EntityID, len(selves))
+	// A relationship can outlive its counterpart: removing an entity's last
+	// value makes it invisible at the root, but the link stays live. FQL
+	// traversal has skipped such value-less "ghost" counterparts since #475;
+	// this window did not, so a GraphQL nested connection listed nodes with an
+	// id and null fields and counted them in totalCount. Two APIs over one
+	// link table disagreed about what a counterpart is.
+	live := func(entity valueobjects.EntityID) bool {
+		for _, snap := range r.s.values {
+			if snap.TenantID == w.TenantID && snap.EntityID == entity && snap.ArchivedAt == nil {
+				return true
+			}
+		}
+		return false
+	}
 	add := func(self, other valueobjects.EntityID) {
-		if want[self] {
+		if want[self] && live(other) {
 			others[self] = append(others[self], other)
 		}
 	}

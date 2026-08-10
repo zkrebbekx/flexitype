@@ -1,5 +1,24 @@
 ## [Unreleased]
 
+### Fixed — GraphQL connections listed value-less ghost counterparts ([#594])
+
+Removing an entity's last value leaves its relationships live, so a link can
+point at an entity that has nothing. FQL traversal has excluded such ghosts
+since [#475]; the windowed path GraphQL pages nested connections through did
+not. A connection listed nodes with an `entityId` and null fields, and counted
+them in `totalCount` — two APIs over one link table disagreeing about what a
+counterpart is.
+
+Both backends now apply the guard the traversal uses: the same projection, so a
+counterpart appears in a connection exactly when it is visible at the root.
+`totalCount` shares the query, so the count and the page agree.
+
+A counterpart that regains a value is listed again — the guard is about
+liveness, not about the link.
+
+[#594]: https://github.com/zkrebbekx/flexitype/issues/594
+[#475]: https://github.com/zkrebbekx/flexitype/issues/475
+
 ### Fixed — A deactivated webhook subscription pinned its backlog for ever ([#588])
 
 Deactivating a subscription rests its backlog: the rows stay `pending` so

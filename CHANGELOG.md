@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+### Fixed — A signed media link could not be cached by the CDN it exists for ([#602])
+
+`GET /media/signed/{token}` sent `Cache-Control: private`. That directive
+forbids a shared cache, so every redemption of a signed link reached origin —
+and letting a CDN serve tenant bytes without a tenant credential is the whole
+reason the route exists. The header had been copied from the authenticated
+route, where `private` is correct.
+
+The route now sends `public, max-age=<seconds until the token expires>,
+immutable`. The signature is part of the URL, so it is the cache key; `max-age`
+never outlives the token; an object key names immutable bytes. The
+authenticated `GET /api/v1/media/{key}` is unchanged and stays `private`.
+
 ### Fixed — The console and the SDK lost what they did not model ([#591], [#592], [#596])
 
 Three faults with one shape: adding the `text` data type updated the schema and
@@ -24,6 +37,7 @@ cannot be added to the enum and left out of the list again.
 
 That check immediately found a stale list in the SDK's own coercion test.
 
+[#602]: https://github.com/zkrebbekx/flexitype/issues/602
 [#591]: https://github.com/zkrebbekx/flexitype/issues/591
 [#592]: https://github.com/zkrebbekx/flexitype/issues/592
 [#596]: https://github.com/zkrebbekx/flexitype/issues/596

@@ -233,9 +233,30 @@ func (s *server) downloadSignedMedia(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	w.Header().Set("Content-Disposition", "inline")
-	// A link already expires; let a cache hold it no longer than that.
-	w.Header().Set("Cache-Control", "private, max-age="+
-		strconv.Itoa(int(time.Until(claims.ExpiresAt).Seconds())))
+	// PUBLIC, because a shared cache holding this is the point.
+	//
+	// The whole reason a signed link exists is that a public surface — a
+	// storefront, a catalogue page, an email — can name an image without
+	// holding a tenant credential, and a CDN in front of it can serve the
+	// bytes. `private` forbids exactly that shared cache, so every redemption
+	// reached origin and the feature delivered none of what it was built for.
+	// It was copied from the authenticated route, where private IS right
+	// because that route needs a credential.
+	//
+	// Safe here because the URL is the capability: the signature is part of
+	// it, so it is the cache key, and max-age never outlives the token. Once
+	// the link expires a cache must revalidate, and the signature no longer
+	// verifies. immutable says what is already true — the object key is a
+	// ULID naming immutable bytes, so a cached response can never be stale.
+	//
+	// A negative age can only come from a token already past its expiry,
+	// which Verify has rejected above; clamping keeps a malformed header out
+	// of the response either way.
+	maxAge := int(time.Until(claims.ExpiresAt).Seconds())
+	if maxAge < 0 {
+		maxAge = 0
+	}
+	w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(maxAge)+", immutable")
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, rc); err != nil {
 		s.log.Error().Err(err).Msg("stream signed media")

@@ -378,6 +378,19 @@ What the design holds to:
 `GET /media/signed/{token}` is served outside `/api/v1`, and takes no
 credential — the signature is the credential.
 
+The redemption response is **publicly cacheable**: `Cache-Control: public,
+max-age=<seconds until the token expires>, immutable`. A shared cache is the
+point — a CDN can serve the bytes without the origin seeing every hit. The URL
+is the capability, so the signature is part of the cache key, and `max-age`
+never outlives the token. An object key names immutable bytes, so a cached
+response can never be stale. The authenticated `GET /api/v1/media/{key}` stays
+`private`, because that route needs a credential and its URL is the same for
+every caller.
+
+A CDN sits in front of this route only. If a shared cache must never hold
+tenant bytes at all, do not publish the route through one — the header assumes
+you meant to.
+
 ## Event delivery (with the outbox)
 
 | Variable | Default | Description |

@@ -1,5 +1,29 @@
 ## [Unreleased]
 
+### Fixed — A deactivated webhook subscription pinned its backlog for ever ([#588])
+
+Deactivating a subscription rests its backlog: the rows stay `pending` so
+reactivating resumes them. Nothing owned them after that. `ClaimDue` skips an
+inactive subscription, so they never transition; the envelope prune keeps any
+envelope with a pending delivery; and the dead-letter and parked prunes look at
+other states.
+
+So a deactivated subscription pinned its backlog AND its envelopes
+permanently. `FLEXITYPE_EVENT_RETENTION` stopped bounding the largest table,
+and the pinned set grew with every deactivation. `ClaimDue`'s own comment
+claimed retention bounded them, which was false.
+
+The pruner now dead-letters the backlog of a subscription that has been
+inactive since before the retention cutoff. Dead is the terminus rather than a
+delete, so redrive still works (reactivate, then `RedeliverDead`), and the
+existing dead-letter prune reclaims the rows on its own schedule — their
+envelopes in the pass after that.
+
+A subscription reactivated inside the window keeps its backlog untouched, which
+is the behaviour deactivation was built for.
+
+[#588]: https://github.com/zkrebbekx/flexitype/issues/588
+
 ### Fixed — A duplicate saved-view name returned 500 on Postgres ([#599])
 
 The Postgres store wrapped every insert error, so a duplicate name arrived at

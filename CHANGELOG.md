@@ -30,6 +30,7 @@ The unit family was on the list and is **not** fixed, because there is nothing
 to fix: `flexitype_unit_family` (migration 000017) declares no unique index on
 `(tenant_id, name)`. Both backends accept a duplicate name today, so nothing
 diverges. Adding the constraint is a behaviour change and not this one.
+
 ### Changed — The pg_trgm and scoped-value indexes build concurrently ([#611])
 
 Three released migrations built indexes on `flexitype_attribute_value`, the

@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { api, ApiError, DATA_TYPES, friendlyError } from '@/lib/api'
-import type { AttributeDefinition, Constraint, DataType } from '@/lib/api'
+import type { AttributeDefinition, ComputedSpec, Constraint, DataType, DefaultValue } from '@/lib/api'
 import { renderTyped, toApiValue, typedValue } from '@/lib/values'
 import { slug } from '@/lib/validation'
 import { useToasts } from '@/composables/useToasts'
@@ -26,8 +26,8 @@ const emit = defineEmits<{ close: [] }>()
 const toasts = useToasts()
 const queryClient = useQueryClient()
 
-const TEXTUAL: DataType[] = ['string', 'enum', 'url', 'email']
-const ORDERED: DataType[] = ['integer', 'float', 'decimal', 'date', 'time', 'datetime']
+import { ORDERED, TEXTUAL, buildCarriedUpdate, carriedFields } from '@/lib/attribute-edit'
+import type { AttributePassthrough } from '@/lib/attribute-edit'
 
 const form = reactive({
   internal_name: '',
@@ -80,6 +80,17 @@ watch(
     form.localizable = a?.localizable ?? false
     form.scopable = a?.scopable ?? false
     form.computedFormula = a?.computed?.formula ?? ''
+    // What this drawer does not model, it must still hand back.
+    //
+    // The PATCH is a full replace with no field-presence tracking, so an
+    // absent field reads as null and overwrites. The drawer models only a
+    // formula, so saving a ROLLUP attribute turned it into a plain writable
+    // one, and it never modelled default_value at all, so a rename deleted
+    // the stored default. Renaming an attribute is not a request to change
+    // what it derives from.
+    const carried = carriedFields(a)
+    passthrough.computed = carried.computed
+    passthrough.defaultValue = carried.defaultValue
     form.unitFamilyId = a?.unit_family_id ?? ''
     form.displayUnit = a?.display_unit ?? ''
     form.group = a?.group ?? ''
@@ -149,12 +160,14 @@ function addMember() {
   form.newMember = ''
 }
 
+// passthrough holds the fields the drawer shows but does not edit, so a full
+// replace cannot drop them. The dependency drawer already works this way.
+const passthrough = reactive<AttributePassthrough>({ computed: undefined, defaultValue: undefined })
+
 const save = useMutation({
   mutationFn: async () => {
     const constraints = buildConstraints()
-    const computed = form.computedFormula.trim()
-      ? ({ kind: 'formula', formula: form.computedFormula.trim() } as const)
-      : undefined
+    const carried = buildCarriedUpdate(form.computedFormula, constraints, passthrough)
     const presentation = {
       group: form.group || undefined,
       sort_order: form.sortOrder ? Number(form.sortOrder) : undefined,
@@ -171,8 +184,7 @@ const save = useMutation({
         scopable: form.scopable,
         unit_family_id: isQuantity.value ? form.unitFamilyId || undefined : undefined,
         display_unit: isQuantity.value ? form.displayUnit || undefined : undefined,
-        computed,
-        constraints,
+        ...carried,
         ...presentation,
       })
     }
@@ -189,7 +201,7 @@ const save = useMutation({
       scopable: form.scopable,
       unit_family_id: isQuantity.value ? form.unitFamilyId || undefined : undefined,
       display_unit: isQuantity.value ? form.displayUnit || undefined : undefined,
-      computed,
+      computed: carried.computed,
       constraints,
       ...presentation,
     })

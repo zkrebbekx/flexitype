@@ -181,9 +181,21 @@ export const DATA_TYPES = [
   'datetime',
   'url',
   'email',
+  'text',
   'json',
   'media',
 ] as const satisfies readonly DataType[]
+
+/**
+ * Fails to compile if DATA_TYPES ever misses a DataType again.
+ *
+ * `satisfies readonly DataType[]` checks each entry IS a DataType; it does not
+ * check the list is complete, which is how `text` was added to the type and
+ * omitted here. This asserts the other direction: every DataType appears.
+ */
+type MissingDataType = Exclude<DataType, (typeof DATA_TYPES)[number]>
+const _dataTypesAreExhaustive: MissingDataType extends never ? true : never = true
+void _dataTypesAreExhaustive
 
 /** The metadata a media value carries. The bytes live in object storage. */
 export interface MediaValue {

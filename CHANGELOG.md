@@ -1,5 +1,33 @@
 ## [Unreleased]
 
+### Fixed — The console and the SDK lost what they did not model ([#591], [#592], [#596])
+
+Three faults with one shape: adding the `text` data type updated the schema and
+the values module, and not every list that enumerates types — and the attribute
+PATCH is a full replace with no field-presence tracking, so anything the form
+omits is deleted.
+
+- **[#591]** The console's textual list omitted `text`, so it hid the length
+  and pattern inputs for a text attribute AND sent an empty constraint list.
+  Editing anything about a text attribute deleted its validation.
+- **[#592]** The drawer never modelled `default_value`, and modelled only a
+  FORMULA for computed attributes. So a rename deleted a stored default, and
+  saving a `rollup` attribute converted it into a plain writable one.
+- **[#596]** The TypeScript client's `DATA_TYPES` omitted `text`, so a form
+  built from the documented constant could not offer it.
+
+The replace-sensitive logic now lives in `web/src/lib/attribute-edit.ts` and is
+tested directly, which is how the dependency editor already works — a drawer
+that builds its body inline cannot be tested for what it forgets to send.
+`DATA_TYPES` gained a compile-time exhaustiveness check, so a new data type
+cannot be added to the enum and left out of the list again.
+
+That check immediately found a stale list in the SDK's own coercion test.
+
+[#591]: https://github.com/zkrebbekx/flexitype/issues/591
+[#592]: https://github.com/zkrebbekx/flexitype/issues/592
+[#596]: https://github.com/zkrebbekx/flexitype/issues/596
+
 ### Fixed — GraphQL connections listed value-less ghost counterparts ([#594])
 
 Removing an entity's last value leaves its relationships live, so a link can

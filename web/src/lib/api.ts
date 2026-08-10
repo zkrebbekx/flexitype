@@ -551,6 +551,11 @@ export const api = {
       group?: string
       sort_order?: number
       help_text?: string
+      /**
+       * The version the caller read. The write is refused with 409 if the
+       * stored version has moved on. Omit it for last-write-wins.
+       */
+      version?: number
     },
   ) => request<AttributeDefinition>('PATCH', `/attributes/${id}`, input),
   archiveAttribute: (id: string) => request<AttributeDefinition>('POST', `/attributes/${id}/archive`),
@@ -800,6 +805,7 @@ export const api = {
   listSavedViews: () => request<{ items: SavedView[] }>('GET', '/saved-views'),
   createSavedView: (input: SavedViewInput) => request<SavedView>('POST', '/saved-views', input),
   updateSavedView: (id: string, input: SavedViewInput) => request<SavedView>('PATCH', `/saved-views/${id}`, input),
+
   deleteSavedView: (id: string) => request<void>('DELETE', `/saved-views/${id}`),
 }
 
@@ -881,6 +887,8 @@ export interface SavedView {
   sort: string
   created_at: string
   updated_at: string
+  /** Bumped by every write. Send it back to compare-and-swap. */
+  version: number
 }
 
 export interface SavedViewInput {
@@ -889,6 +897,11 @@ export interface SavedViewInput {
   query?: string
   columns?: string[]
   sort?: string
+  /**
+   * The version the caller read. The patch is refused with 409 if another
+   * writer moved the view on. Omit it for last-write-wins.
+   */
+  version?: number
 }
 
 export interface Features {
@@ -919,6 +932,18 @@ export interface SchemaImportResult {
 export interface GraphQLResponse {
   data?: unknown
   errors?: { message: string }[]
+}
+
+/**
+ * isConflict reports a compare-and-swap failure: somebody else wrote the
+ * record between this operator's read and their save.
+ *
+ * The caller's job on seeing one is to pull the other writer's version into
+ * view, so the operator can re-apply their change on top of it rather than
+ * being told only that it failed.
+ */
+export function isConflict(e: unknown): boolean {
+  return e instanceof ApiError && e.code === 'CONFLICT'
 }
 
 // friendlyError renders an ApiError for inline display.

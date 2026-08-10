@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
-import { api, ApiError, DATA_TYPES, friendlyError } from '@/lib/api'
+import { api, ApiError, DATA_TYPES, friendlyError, isConflict } from '@/lib/api'
 import type { AttributeDefinition, ComputedSpec, Constraint, DataType, DefaultValue } from '@/lib/api'
 import { renderTyped, toApiValue, typedValue } from '@/lib/values'
 import { slug } from '@/lib/validation'
@@ -214,6 +214,17 @@ const save = useMutation({
     emit('close')
   },
   onError: (e) => {
+    if (isConflict(e)) {
+      // Somebody else saved this definition since the drawer loaded it. Pull
+      // their version into the cache and say what to do — the edits stay in
+      // the form, and the drawer deliberately does NOT re-arm the swap against
+      // the version it just fetched: this PATCH replaces the whole record, so
+      // saving again without seeing their change would erase fields this
+      // operator never looked at. Reopening reloads the record.
+      queryClient.invalidateQueries({ queryKey: ['attributes', props.typeId] })
+      error.value = `${friendlyError(e)} Close and reopen this attribute to load their version, then re-apply your change.`
+      return
+    }
     error.value = friendlyError(e)
   },
 })

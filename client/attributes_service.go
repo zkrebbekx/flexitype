@@ -53,6 +53,14 @@ type UpdateAttributeInput struct {
 	Group        string          `json:"group,omitempty"`
 	SortOrder    int             `json:"sort_order,omitempty"`
 	HelpText     string          `json:"help_text,omitempty"`
+
+	// Version is the version the caller read. Set it to compare-and-swap: a
+	// write against a definition somebody else has since changed answers
+	// CONFLICT instead of overwriting it. Leave it nil for last-write-wins.
+	//
+	// This request replaces the whole editable record, so a lost update loses
+	// fields the later writer never looked at.
+	Version *int `json:"version,omitempty"`
 }
 
 // ListAttributesOptions filters an attribute listing.

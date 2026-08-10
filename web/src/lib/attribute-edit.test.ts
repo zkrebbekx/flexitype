@@ -56,3 +56,19 @@ describe('an edit does not delete what the drawer does not model (#592)', () => 
     expect(body.constraints).toEqual([{ kind: 'max_length', n: 10 }])
   })
 })
+
+// Issue #597: an attribute update replaces the whole record, so a lost update
+// loses fields the later writer never looked at.
+describe('compare-and-swap baseline', () => {
+  it('carries the version of the record the edit was based on', () => {
+    const carried = carriedFields({ version: 4 })
+    expect(carried.version).toBe(4)
+    expect(buildCarriedUpdate('', [], carried).version).toBe(4)
+  })
+
+  it('sends no version for a record that has none, keeping last-write-wins', () => {
+    // A caller that never sent one must keep working; the swap is opt-in.
+    expect(buildCarriedUpdate('', [], carriedFields(undefined)).version).toBeUndefined()
+  })
+})
+

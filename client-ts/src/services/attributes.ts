@@ -57,6 +57,10 @@ export class AttributesService extends Service {
   /**
    * Updates an attribute. The body replaces the whole editable record, so send
    * the fields you want to keep as well as the ones you change.
+   *
+   * Set `version` to the version you read to compare-and-swap: a write against
+   * a definition somebody else has since changed answers 409 rather than
+   * overwriting it. Omit it for last-write-wins.
    */
   update(id: string, input: UpdateAttribute, options: RequestOptions = {}): Promise<Attribute> {
     return this.http.request<Attribute>('PATCH', `/attributes/${segment(id)}`, { body: input }, options)

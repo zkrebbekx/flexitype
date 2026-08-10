@@ -278,7 +278,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Update an attribute definition */
+        /**
+         * Update an attribute definition
+         * @description Replaces the whole editable record. A field the request omits is cleared, not kept — so read the attribute, change what you mean to change, and send it all back. Supply `version` to compare-and-swap against the record you read.
+         */
         patch: {
             parameters: {
                 query?: never;
@@ -295,6 +298,8 @@ export interface paths {
             };
             responses: {
                 200: components["responses"]["Attribute"];
+                409: components["responses"]["Error"];
+                422: components["responses"]["Error"];
             };
         };
         trace?: never;
@@ -5634,6 +5639,8 @@ export interface components {
             sort_order?: number;
             unique?: boolean;
             unit_family_id?: string;
+            /** @description The version the caller read. Supply it to compare-and-swap: a stale write answers 409 rather than discarding the other edit. Omit it for last-write-wins. This request replaces the whole editable record, so a lost update loses fields the later writer never looked at. */
+            version?: number;
         };
         /** @description The replacement conditions and effect of a rule. */
         UpdateDependency: {

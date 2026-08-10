@@ -1,5 +1,7 @@
 -- Per-row retry scheduling for the outbox lane.
 --
+-- +flexitype:no-transaction
+--
 -- The delivery lane already had next_attempt_at with exponential backoff and
 -- an attempt cap. The outbox lane had neither: a failed row kept its low id,
 -- claims are ordered by id, and there was no backoff and no cap — so the
@@ -26,6 +28,14 @@ ALTER TABLE flexitype_event_outbox
 -- ordered by id. A partial index over exactly the claimable rows keeps the
 -- scan proportional to the backlog rather than to the retained history, which
 -- matters because dispatched rows stay until retention prunes them.
-CREATE INDEX IF NOT EXISTS idx_flexitype_event_outbox_claimable
+--
+-- Built CONCURRENTLY for the reason 000033 records (issue #595): every write
+-- inserts into this table, so a plain build blocks all of them for its
+-- duration.
+--
+-- Both statements are idempotent, which is what makes running them outside a
+-- transaction safe: ADD COLUMN IF NOT EXISTS is a metadata-only change here,
+-- and the runner reaps an INVALID index before replaying the file.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_flexitype_event_outbox_claimable
     ON flexitype_event_outbox (next_attempt_at, id)
     WHERE dispatched_at IS NULL AND parked_at IS NULL;

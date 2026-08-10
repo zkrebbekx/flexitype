@@ -132,12 +132,15 @@ func TestQueryPlansIntegration(t *testing.T) {
 			  WHERE v.tenant_id = $1 AND v.entity_id = $2
 			    AND v.attribute_definition_id = $3 AND v.archived_at IS NULL`,
 				"default", f.entity, f.attrIDs[0])
-			So(plan, ShouldContainSubstring, "Index Scan")
 			So(plan, ShouldNotContainSubstring, "Seq Scan")
 
-			cond := plan[strings.Index(plan, "Index Cond"):]
-			if filter := strings.Index(cond, "Filter:"); filter >= 0 {
-				cond = cond[:filter]
+			// "Index Cond" appears only on an index scan, and covers the
+			// Index Only Scan the planner picks when the chosen index carries
+			// every column the query touches.
+			_, cond, matched := strings.Cut(plan, "Index Cond")
+			So(matched, ShouldBeTrue)
+			if before, _, hasFilter := strings.Cut(cond, "Filter:"); hasFilter {
+				cond = before
 			}
 			So(cond, ShouldContainSubstring, "attribute_definition_id")
 			So(cond, ShouldContainSubstring, "entity_id")

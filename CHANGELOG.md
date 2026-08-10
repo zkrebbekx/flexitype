@@ -1,5 +1,28 @@
 ## [Unreleased]
 
+### Fixed — Two outbox index builds stalled every write during an upgrade ([#595])
+
+Migrations 000023 and 000033 built indexes on `flexitype_event_outbox` without
+`CONCURRENTLY`, inside a transaction. Every product write inserts into that
+table, so the build held a `SHARE` lock over a full scan and blocked all of
+them — measured at 2.0s against a 16M-row table, against 2ms concurrently.
+
+Both are now built `CONCURRENTLY` in a no-transaction file.
+
+These were **grandfathered** when the `CONCURRENTLY` guard landed, on the
+reasoning that every deployment that would be hurt had already run them. That
+reasoning was wrong: it holds only for a deployment already PAST the version.
+One upgrading ACROSS it still pays the stall, and migration bookkeeping records
+the version with no checksum — so correcting an applied migration is a no-op
+for those who have it and a fix for those who have not.
+
+Two remain grandfathered because the file cannot simply gain the directive:
+000004 also creates tables, and 000014 mixes two `ALTER TABLE`s with its index.
+Splitting those is [#611].
+
+[#595]: https://github.com/zkrebbekx/flexitype/issues/595
+[#611]: https://github.com/zkrebbekx/flexitype/issues/611
+
 ### Fixed — Signed media links now enforce the tenant they carry ([#600])
 
 `pkg/mediaurl` documents that the tenant is read back out of the verified

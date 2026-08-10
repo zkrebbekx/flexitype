@@ -167,7 +167,19 @@ func TestEmbeddedMigrationDirectives(t *testing.T) {
 // entry here is the wrong fix — add CONCURRENTLY and the
 // +flexitype:no-transaction directive instead.
 //
-// The last entry is the instructive one: it was added while fixing an
+// The list shrank once already. The two outbox entries were removed when #595
+// showed the reasoning behind grandfathering them was wrong: "every deployment
+// that would be hurt has already run it" holds only for a deployment already
+// PAST that version, and a deployment upgrading across it still pays the
+// stall. Bookkeeping records the version and no checksum, so correcting an
+// applied migration is a no-op for those who have it and a fix for those who
+// have not.
+//
+// What remains is here because the file cannot simply be made concurrent:
+// 000004 creates tables, which a no-transaction file must not do, and 000014
+// mixes two ALTERs with its index. Splitting those is tracked separately.
+//
+// The 000039 entry is the instructive one: it was added while fixing an
 // unrelated review finding, in the same stretch of work that documented this
 // rule. The directive check passed it, because a plain CREATE INDEX inside a
 // transactional file is consistent with itself. That is the gap this test
@@ -178,9 +190,7 @@ var grandfatheredPlainIndexes = map[string][]string{
 	"000005_event_delivery.up.sql":           {"idx_flexitype_event_outbox_feed_seq"},
 	"000008_outbox_lease.up.sql":             {"idx_flexitype_event_outbox_pending"},
 	"000014_scoped_values.up.sql":            {"idx_flexitype_attribute_value_scope"},
-	"000023_outbox_backoff.up.sql":           {"idx_flexitype_event_outbox_claimable"},
 	"000027_role_index.up.sql":               {"idx_flexitype_service_account_roles"},
-	"000033_outbox_parked_index.up.sql":      {"idx_flexitype_event_outbox_parked"},
 	"000039_dependency_enforce_index.up.sql": {"idx_dependency_enforced_on_write"},
 	// 000021 builds these two inside a DO block, which is the one place
 	// CONCURRENTLY is not available. The file explains why at length: the

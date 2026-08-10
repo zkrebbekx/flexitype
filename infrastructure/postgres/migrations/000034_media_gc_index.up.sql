@@ -15,16 +15,20 @@
 --
 -- Built CONCURRENTLY: flexitype_attribute_value is the largest table in the
 -- database, where a plain CREATE INDEX would take a lock conflicting with
--- every write. The build drops an INVALID namesake first, because a failed
--- concurrent build leaves one behind that IF NOT EXISTS would skip forever.
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
-                WHERE c.relname = 'idx_flexitype_attribute_value_media_key_live' AND NOT i.indisvalid) THEN
-        EXECUTE 'DROP INDEX idx_flexitype_attribute_value_media_key_live';
-    END IF;
-END $$;
-
+-- every write.
+--
+-- A failed concurrent build leaves an INVALID namesake behind that
+-- IF NOT EXISTS would then skip forever. The runner reaps such an index before
+-- it replays this file (reapInvalidIndexes in migrate.go), scoped to
+-- current_schema(). This file must NOT carry its own catalogue guard, and once
+-- did: a DO block matched pg_class.relname with no pg_namespace join, so an
+-- invalid index in ANY schema of the database made it fire, and its
+-- unqualified DROP INDEX resolved through search_path — into a missing index
+-- (42704, and with MigrateOnStart a boot loop) or into THIS schema's valid
+-- index (a write-blocking drop).
+--
+-- That is the same block #517 removed from 000030, reintroduced here and
+-- removed again. See TestMigrationsDoNotQueryTheCatalogueBlind.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_flexitype_attribute_value_media_key_live
     ON flexitype_attribute_value ((value_json->>'object_key'))
     WHERE data_type = 'media' AND archived_at IS NULL;

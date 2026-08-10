@@ -302,3 +302,42 @@ func TestStripLineComments(t *testing.T) {
 		})
 	})
 }
+
+// TestMigrationsDoNotQueryTheCatalogueBlind stops a namespace-blind catalogue
+// guard reaching a release for a third time.
+//
+// A DO block that matches pg_class.relname without a pg_namespace join sees
+// every schema in the database, and the unqualified DROP INDEX it then runs
+// resolves through search_path. In a deployment with one schema per tenant —
+// which the migration runner explicitly supports — an invalid namesake in a
+// SIBLING schema makes the guard fire here: either into a missing index
+// (42704, a boot loop under MigrateOnStart) or into this schema's own valid
+// index, dropping it under live writes.
+//
+// #517 removed such a block from 000030. It came back in 000034. The runner
+// already reaps invalid indexes before replaying a no-transaction file, scoped
+// to current_schema(), so a migration never needs its own guard.
+func TestMigrationsDoNotQueryTheCatalogueBlind(t *testing.T) {
+	Convey("Given the embedded migrations", t, func() {
+		ups, err := upMigrations()
+		So(err, ShouldBeNil)
+		downs, err := listMigrations(".down.sql")
+		So(err, ShouldBeNil)
+
+		for _, name := range append(append([]string{}, ups...), downs...) {
+			body, rerr := migrationsFS.ReadFile("migrations/" + name)
+			So(rerr, ShouldBeNil)
+			sql := stripLineComments(string(body))
+			if !strings.Contains(sql, "pg_class") {
+				continue
+			}
+
+			Convey("Then "+name+" scopes its catalogue lookup to one schema", func() {
+				// pg_namespace is how a lookup names the schema it means. Any
+				// other way of getting there is welcome to relax this, but it
+				// should be a deliberate change, not a copied block.
+				So(strings.Contains(sql, "pg_namespace"), ShouldBeTrue)
+			})
+		}
+	})
+}

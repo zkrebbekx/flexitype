@@ -1,5 +1,32 @@
 ## [Unreleased]
 
+### Added — Optimistic concurrency on attribute and saved-view writes ([#597])
+
+`PATCH /attributes/{id}` and `PATCH /saved-views/{id}` replace the whole
+editable record. Neither had working concurrency control from a client: the
+attribute update had none at all, and the saved-view compare-and-swap existed
+on the server but the console never sent a version. Two operators editing one
+record each sent the whole thing, so the later write erased the earlier one —
+including fields that operator never looked at, with nothing reported.
+
+Both requests now take `version`, the version the caller read. A write against
+a record somebody else has since changed answers `409 CONFLICT` instead of
+overwriting it. Omitting `version` keeps last-write-wins, so an existing client
+is unaffected.
+
+- The attribute swap is checked **before every other rule**, so a stale caller
+  is told the record moved rather than told about a validation failure judged
+  against a baseline they never saw.
+- The console captures the version at LOAD time, not at save time. The record
+  it holds is refetched in the background, so a version read late would
+  describe a change the author never saw and guard nothing.
+- On a conflict the console pulls the other writer's version into the cache and
+  says what to do. The attribute drawer deliberately does not re-arm the swap
+  against the version it just fetched: saving again without seeing the other
+  change is the lost update this fixes.
+- The Go client takes `Version *int`; the TypeScript client takes `version?:
+  number`. See [docs/clients.md](docs/clients.md#concurrent-edits).
+
 ### Fixed — A signed media link could not be cached by the CDN it exists for ([#602])
 
 `GET /media/signed/{token}` sent `Cache-Control: private`. That directive
@@ -37,6 +64,7 @@ cannot be added to the enum and left out of the list again.
 
 That check immediately found a stale list in the SDK's own coercion test.
 
+[#597]: https://github.com/zkrebbekx/flexitype/issues/597
 [#602]: https://github.com/zkrebbekx/flexitype/issues/602
 [#591]: https://github.com/zkrebbekx/flexitype/issues/591
 [#592]: https://github.com/zkrebbekx/flexitype/issues/592

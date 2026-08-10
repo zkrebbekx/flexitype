@@ -177,6 +177,11 @@ type attributeRequest struct {
 	Group            string          `json:"group,omitempty"`
 	SortOrder        int             `json:"sort_order,omitempty"`
 	HelpText         string          `json:"help_text,omitempty"`
+
+	// Version is the version the caller read. On update it is a
+	// compare-and-swap: omit it and the write is last-write-wins. It is
+	// ignored on create, where there is nothing to swap against.
+	Version *int `json:"version,omitempty"`
 }
 
 func (s *server) createAttribute(w http.ResponseWriter, r *http.Request) {
@@ -244,6 +249,7 @@ func (s *server) updateAttribute(w http.ResponseWriter, r *http.Request) {
 		Group:        req.Group,
 		SortOrder:    req.SortOrder,
 		HelpText:     req.HelpText,
+		Version:      req.Version,
 	})
 	if err != nil {
 		writeError(w, s.log, err)

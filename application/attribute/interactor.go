@@ -382,6 +382,17 @@ type UpdateInput struct {
 	Group        string
 	SortOrder    int
 	HelpText     string
+
+	// Version, when set, is the version the CALLER read. The update is
+	// written only if the stored version still matches, and a conflict is
+	// reported otherwise.
+	//
+	// It is a pointer so that omitting it keeps last-write-wins, the same
+	// contract a saved-view patch offers. This request is a FULL REPLACE of
+	// the editable record, so without it two operators editing one attribute
+	// each write the whole record and the later write silently erases the
+	// earlier one — including fields that operator never looked at.
+	Version *int
 }
 
 // Update mutates an attribute definition, bumping its version.
@@ -412,6 +423,18 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domainattribu
 			return err
 		}
 		before := attr.Snapshot()
+
+		// COMPARE-AND-SWAP against the version the caller read, before any
+		// other check. A conflict means the record they are replacing is not
+		// the record they loaded, so every validation below would be judging
+		// the wrong baseline.
+		if in.Version != nil && *in.Version != before.Version {
+			return domainerrors.NewConflict(
+				"the attribute definition was modified by someone else; reload it and retry",
+				"attribute_definition_id", in.ID,
+				"expected_version", *in.Version,
+				"actual_version", before.Version)
+		}
 
 		if serr := i.assertStructuralChangeIsSafe(ctx, i.values.WithTx(tx), before, in, computed); serr != nil {
 			return serr

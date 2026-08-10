@@ -213,6 +213,11 @@ paths:
     patch:
       tags: [attributes]
       summary: Update an attribute definition
+      description: >
+        Replaces the whole editable record. A field the request omits is
+        cleared, not kept — so read the attribute, change what you mean to
+        change, and send it all back. Supply `version` to compare-and-swap
+        against the record you read.
       requestBody:
         required: true
         content:
@@ -220,6 +225,8 @@ paths:
             schema: { $ref: "#/components/schemas/UpdateAttribute" }
       responses:
         "200": { $ref: "#/components/responses/Attribute" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /attributes/{id}/archive:
     parameters: [{ $ref: "#/components/parameters/ID" }]
     post:
@@ -2181,6 +2188,14 @@ components:
         help_text: { type: string }
         constraints: { type: array, items: { $ref: "#/components/schemas/Constraint" } }
         default_value: { $ref: "#/components/schemas/DefaultValue" }
+        version:
+          type: integer
+          description: >
+            The version the caller read. Supply it to compare-and-swap: a
+            stale write answers 409 rather than discarding the other edit.
+            Omit it for last-write-wins. This request replaces the whole
+            editable record, so a lost update loses fields the later writer
+            never looked at.
     TypedValue:
       type: object
       description: >-

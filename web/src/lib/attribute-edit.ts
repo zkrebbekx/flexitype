@@ -32,6 +32,16 @@ export function isTextual(dataType: DataType): boolean {
 export interface AttributePassthrough {
   computed?: ComputedSpec
   defaultValue?: DefaultValue
+  /**
+   * The version of the record the edit was based on.
+   *
+   * Sent back as a compare-and-swap, so an edit made by another operator
+   * between this read and this save is reported rather than erased. It is
+   * captured with the rest of the load, NOT read at save time: the record the
+   * drawer holds is refetched in the background, so reading it late would send
+   * the version of a change the author never saw and swap against nothing.
+   */
+  version?: number
 }
 
 /**
@@ -45,8 +55,13 @@ export interface AttributePassthrough {
 export function carriedFields(attribute?: {
   computed?: ComputedSpec
   default_value?: DefaultValue
+  version?: number
 }): AttributePassthrough {
-  return { computed: attribute?.computed, defaultValue: attribute?.default_value }
+  return {
+    computed: attribute?.computed,
+    defaultValue: attribute?.default_value,
+    version: attribute?.version,
+  }
 }
 
 /**
@@ -70,6 +85,7 @@ export interface CarriedUpdate {
   computed?: ComputedSpec
   default_value?: DefaultValue
   constraints: Constraint[]
+  version?: number
 }
 
 /** buildCarriedUpdate assembles the replace-sensitive part of an update. */
@@ -82,5 +98,6 @@ export function buildCarriedUpdate(
     computed: computedForUpdate(formula, carried),
     default_value: carried.defaultValue,
     constraints,
+    version: carried.version,
   }
 }

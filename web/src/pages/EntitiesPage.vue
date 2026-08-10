@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
-import { api, friendlyError } from '@/lib/api'
+import { api, friendlyError, isConflict } from '@/lib/api'
 import type { SuggestSchema } from '@/lib/suggest'
 import type { SavedView } from '@/lib/api'
 import { useToasts } from '@/composables/useToasts'
@@ -141,11 +141,16 @@ function createEntity() {
   router.push(`/entities/${typeId.value}/${encodeURIComponent(id)}`)
 }
 
-const saveModal = reactive({ open: false, name: '', existingId: '' })
+// version is the version of the view the operator OPENED, captured here and
+// not read again at save time. The list refetches in the background, so a save
+// that read the version late would send the version of somebody else's change
+// and compare-and-swap against nothing.
+const saveModal = reactive({ open: false, name: '', existingId: '', version: undefined as number | undefined })
 function openSave() {
   const current = savedViews.data.value?.items.find((v) => v.id === selectedViewId.value)
   saveModal.existingId = current?.id ?? ''
   saveModal.name = current?.name ?? ''
+  saveModal.version = current?.version
   saveModal.open = true
 }
 const saveView = useMutation({
@@ -156,7 +161,9 @@ const saveView = useMutation({
       query: activeQuery.value || queryText.value,
       columns: gridColumns.value,
     }
-    return saveModal.existingId ? api.updateSavedView(saveModal.existingId, input) : api.createSavedView(input)
+    return saveModal.existingId
+      ? api.updateSavedView(saveModal.existingId, { ...input, version: saveModal.version })
+      : api.createSavedView(input)
   },
   onSuccess: (v) => {
     queryClient.invalidateQueries({ queryKey: ['saved-views'] })
@@ -165,7 +172,12 @@ const saveView = useMutation({
     router.replace({ query: { ...route.query, view: v.id } })
     toasts.success(`View "${v.name}" saved`)
   },
-  onError: (e) => toasts.error(friendlyError(e)),
+  onError: (e) => {
+    // A conflict means somebody else moved the view on. Pull their version in
+    // so the operator sees it, and leave the dialog open with what they typed.
+    if (isConflict(e)) queryClient.invalidateQueries({ queryKey: ['saved-views'] })
+    toasts.error(friendlyError(e))
+  },
 })
 const confirmDeleteView = ref(false)
 const deleteView = useMutation({

@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+### Fixed — A `text` attribute could not hold a long value on Postgres ([#590])
+
+The uniqueness probe index was a plain btree over the raw value, so every
+text-backed row had to fit a btree tuple. Postgres refused a write past roughly
+2.7KB with `index row size ... exceeds btree version 4 maximum` (SQLSTATE
+54000), which surfaced as HTTP 500. `text` exists to hold long-form values, so
+the storage class made the data type useless.
+
+It only ever failed on Postgres — the in-memory backend stores the value
+happily, which is why no existing test saw it.
+
+The probe asks for equality, so it does not need the value in the index.
+Migration 000040 indexes `md5(value_text)` instead, built `CONCURRENTLY`, and
+the query compares the hash AND the full value, so a collision cannot make two
+different values look equal.
+
+[#590]: https://github.com/zkrebbekx/flexitype/issues/590
+
 ### Fixed — The removal gate was a field-ACL oracle ([#598])
 
 1.9.0 made a removal fail closed over the entity's FULL value set, so a

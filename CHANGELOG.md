@@ -1,5 +1,29 @@
 ## [Unreleased]
 
+### Fixed — `matches()` dropped cross-attribute hits for a restricted principal on Postgres ([#586])
+
+A field-restricted principal searches the PER-ATTRIBUTE vectors, and each holds
+one attribute's lexemes. `plainto_tsquery` ANDs the words, so probing the
+vectors individually asked for every word in a SINGLE attribute:
+`matches("alice smith")` returned nothing when `first_name` held `alice` and
+`last_name` held `smith`.
+
+The in-memory backend joins the readable values into one document and matched,
+so the two backends answered differently and only Postgres was wrong — which is
+why no in-memory test saw it. An admin was unaffected, because that path probes
+the single entity-level vector.
+
+The restricted branch now requires every term to appear in SOME readable
+attribute, written as "no term is missing" so the inner probe stays a
+single-lexeme match and can still use the GIN index. The query is tokenised by
+Postgres with the configuration the vectors were built with, rather than split
+in Go, so the two cannot drift.
+
+A hidden attribute still satisfies nothing: `matches("alice confidential")`
+returns nothing when `confidential` lives only in an unreadable attribute.
+
+[#586]: https://github.com/zkrebbekx/flexitype/issues/586
+
 ### Fixed — Two outbox index builds stalled every write during an upgrade ([#595])
 
 Migrations 000023 and 000033 built indexes on `flexitype_event_outbox` without

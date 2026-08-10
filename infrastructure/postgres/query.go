@@ -264,11 +264,37 @@ func (r *queryRepository) compile(c *compiler, node query.BoundNode, e entityRef
 		// hides, so finding an entity by id keeps working for everyone.
 		if n.Attrs != nil {
 			names := append([]string{""}, n.Attrs...)
-			return fmt.Sprintf(`EXISTS (SELECT 1 FROM flexitype_entity_search_attr %s
-		 WHERE %s.tenant_id = %s AND %s.entity_id = %s
-		   AND %s.attribute_name = ANY(%s)
-		   AND %s.text_vector @@ plainto_tsquery('simple', %s))`,
-				s, s, e.tenant, s, e.entity, s, c.arg(pq.Array(names)), s, c.arg(n.Query)), nil
+			// EVERY term must appear in SOME readable attribute — not all of
+			// them in ONE.
+			//
+			// Each per-attribute vector holds one attribute's lexemes, and
+			// plainto_tsquery ANDs the words, so probing the vectors
+			// individually asked for every word in a single attribute:
+			// matches("alice smith") returned nothing when first_name held
+			// "alice" and last_name held "smith". The in-memory twin joins the
+			// readable values into one document and matched it, so the two
+			// backends answered differently and only Postgres was wrong.
+			//
+			// Written as "no term is missing" so the inner probe stays a
+			// single-lexeme @@ and can still use the GIN index, which
+			// aggregating the vectors first would have given up.
+			//
+			// The query is tokenised by Postgres with the same configuration
+			// the vectors were built with, rather than split in Go, so the two
+			// cannot drift apart.
+			// Each c.arg emits its own placeholder, so the query text is
+			// bound twice rather than reusing one.
+			guard := c.arg(n.Query)
+			terms := c.arg(n.Query)
+			nameArg := c.arg(pq.Array(names))
+			return fmt.Sprintf(`(to_tsvector('simple', %s) != ''::tsvector AND NOT EXISTS (
+		 SELECT 1 FROM unnest(tsvector_to_array(to_tsvector('simple', %s))) AS term
+		  WHERE NOT EXISTS (
+		    SELECT 1 FROM flexitype_entity_search_attr %s
+		     WHERE %s.tenant_id = %s AND %s.entity_id = %s
+		       AND %s.attribute_name = ANY(%s)
+		       AND %s.text_vector @@ plainto_tsquery('simple', term))))`,
+				guard, terms, s, s, e.tenant, s, e.entity, s, nameArg, s), nil
 		}
 		return fmt.Sprintf(`EXISTS (SELECT 1 FROM flexitype_entity_search %s
 		 WHERE %s.tenant_id = %s AND %s.entity_id = %s

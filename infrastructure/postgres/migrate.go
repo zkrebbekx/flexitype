@@ -346,6 +346,14 @@ func (l *migrateLease) renew(ctx context.Context) error {
 	if l.sinceRenewed() < leaseRenewGap {
 		return nil
 	}
+	return l.renewNow(ctx)
+}
+
+// renewNow renews without the rate limit and refuses to continue if another
+// runner has taken the lease over. The down path uses it directly: a revert is
+// rare and coarse, so one round trip per version is cheap, and it means a
+// takeover is caught at every version boundary rather than once a minute.
+func (l *migrateLease) renewNow(ctx context.Context) error {
 	held, err := l.renewOn(ctx, l.q)
 	if err != nil {
 		return fmt.Errorf("renew migration lease: %w", err)
@@ -781,6 +789,12 @@ func MigrateDown(ctx context.Context, tx db.Transactor, target int) error {
 		if err != nil {
 			return err
 		}
+		// Heartbeat on the POOL, for the reason MigrateUp does: a running
+		// statement occupies the pinned connection, so a renewal issued on it
+		// would queue behind the statement it is meant to outlive.
+		if pool, ok := tx.(db.QueryExecer); ok {
+			lease.pool = pool
+		}
 		defer lease.release(ctx)
 
 		var versions []int
@@ -791,6 +805,13 @@ func MigrateDown(ctx context.Context, tx db.Transactor, target int) error {
 		}
 
 		for _, version := range versions {
+			// RENEW between reverts, the way the up path does. A down-run of
+			// many versions can outlive the lease, and a lease nobody renews
+			// expires and lets a second runner start reverting the same
+			// schema underneath this one.
+			if err := lease.renewNow(ctx); err != nil {
+				return err
+			}
 			down, err := downMigration(version)
 			if err != nil {
 				return err

@@ -243,6 +243,46 @@ func TestMigrationLeaseIntegration(t *testing.T) {
 		})
 	})
 
+	// #603.4: the DOWN path never renewed between reverts, so a down-run past
+	// the fifteen-minute TTL could be taken over while it was still reverting.
+	// It renews at every version boundary now, WITHOUT the between-statement
+	// rate limit: a revert is rare and coarse, so a round trip per version is
+	// cheap and a takeover is caught at once rather than a minute later.
+	Convey("Given a lease this runner holds and a revert about to start", t, func() {
+		freeLease()
+		l := &migrateLease{q: pool, holder: "me", now: time.Now}
+		ok, err := l.tryAcquire(ctx)
+		So(err, ShouldBeNil)
+		So(ok, ShouldBeTrue)
+
+		Convey("When it renews at a version boundary", func() {
+			pool.MustExec(`UPDATE flexitype_schema_lock SET expires_at = now() + interval '1 second' WHERE id = 1`)
+			rerr := l.renewNow(ctx)
+
+			Convey("Then the expiry moves out, unlike the rate-limited renew", func() {
+				// renew would be a no-op here: it was acquired moments ago.
+				So(rerr, ShouldBeNil)
+				var seconds float64
+				So(pool.Get(&seconds,
+					`SELECT EXTRACT(EPOCH FROM (expires_at - now())) FROM flexitype_schema_lock WHERE id = 1`),
+					ShouldBeNil)
+				So(seconds, ShouldBeGreaterThan, 60)
+			})
+		})
+
+		Convey("When another runner took the lease over first", func() {
+			pool.MustExec(`UPDATE flexitype_schema_lock SET holder = 'someone-else' WHERE id = 1`)
+			rerr := l.renewNow(ctx)
+
+			Convey("Then the next version is not reverted underneath them", func() {
+				So(rerr, ShouldNotBeNil)
+				So(rerr.Error(), ShouldContainSubstring, "lost the migration lease")
+			})
+		})
+
+		Reset(func() { freeLease() })
+	})
+
 	Convey("Given a lease this runner holds", t, func() {
 		freeLease()
 		l := &migrateLease{q: pool, holder: "me", now: time.Now}

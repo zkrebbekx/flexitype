@@ -1836,6 +1836,8 @@ export interface paths {
         /**
          * Server-sent events tail of the feed
          * @description Streams text/event-stream. Resume with the Last-Event-ID header carrying the last feed_seq seen.
+         *
+         *     The credential is read from the Authorization header, like every other endpoint. A browser EventSource sends no custom headers, so it cannot authenticate here; read the stream with fetch, which can, or poll /events from your own backend.
          */
         get: {
             parameters: {

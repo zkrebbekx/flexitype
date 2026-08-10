@@ -102,9 +102,11 @@ report, err = it.Values().PurgeTenant(ctx) // tenant from ctx
 
   Both are redacted in the erasure transaction, and the count lands in
   `records_redacted`. **Redacted, not deleted**: the activity log has to
-  survive for the erasure to be provable, and the event feed's sequence is
-  gapless by design — deleting rows would break the one guarantee a consumer
-  relies on. The row and its identifiers stay; the value content becomes a
+  survive for the erasure to be provable, and a consumer walks the event feed
+  by cursor — a deleted row would vanish out of a range that consumer had not
+  read yet, with nothing to show it was ever there. (The feed's numbering is
+  monotonic, not contiguous: skipping a burnt value is expected, losing a row
+  a consumer was entitled to read is not.) The row and its identifiers stay; the value content becomes a
   marker. A tenant purge leaves schema history alone, because it erases entity
   data rather than definitions.
 

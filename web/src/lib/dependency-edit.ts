@@ -12,7 +12,7 @@ import { renderTyped, typedValue } from './values'
 
 // The backend's own capability gates, mirrored so the builder only offers
 // what the subject's data type supports (condition.Validate).
-export const TEXTUAL: DataType[] = ['string', 'enum', 'url', 'email']
+export const TEXTUAL: DataType[] = ['string', 'text', 'enum', 'url', 'email']
 export const ORDERED: DataType[] = ['integer', 'float', 'decimal', 'date', 'time', 'datetime', 'quantity']
 export const TEMPORAL: DataType[] = ['date', 'time', 'datetime']
 

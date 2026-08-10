@@ -1,8 +1,12 @@
 -- Event delivery to external services (design: docs/design/event-delivery.md).
 --
--- feed_seq is a gap-free sequence assigned by the expansion step (a single
--- advisory-locked sequencer) in commit order — the cursor space for the
--- events feed. NULL until the envelope has been expanded.
+-- feed_seq is the cursor space for the events feed. The expansion step (a
+-- single advisory-locked sequencer) assigns it in commit order, so it is
+-- MONOTONIC and never back-filled: no row ever appears below a value a
+-- consumer has already read past. It is not contiguous — nextval is
+-- non-transactional, so a finalize that aborts burns the values it took.
+-- Read the feed as a cursor, never as a count. NULL until the envelope has
+-- been expanded.
 ALTER TABLE flexitype_event_outbox ADD COLUMN feed_seq BIGINT;
 CREATE UNIQUE INDEX idx_flexitype_event_outbox_feed_seq
     ON flexitype_event_outbox (feed_seq)

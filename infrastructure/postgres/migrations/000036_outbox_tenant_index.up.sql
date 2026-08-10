@@ -13,9 +13,10 @@
 -- is what bounds the work overall.
 --
 -- The index is partial: a row whose payload carries no entity_id holds no
--- erasable value, and the redaction never touches it. That keeps the index
--- off the rows the relay writes most and small enough that maintaining it on
--- the outbox's insert path costs little.
+-- erasable value, and the redaction never touches it. That is a correctness
+-- statement, not a size one — a value event DOES carry entity_id and IS
+-- indexed, so this predicate excludes schema and relationship events rather
+-- than the rows the relay writes most.
 --
 -- +flexitype:no-transaction
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_flexitype_event_outbox_tenant

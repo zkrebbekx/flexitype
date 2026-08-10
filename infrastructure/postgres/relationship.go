@@ -323,6 +323,11 @@ func (r *relationshipDefinitionRepository) Save(ctx context.Context, d *domainre
 		nullableInt(s.MinChildren), nullableInt(s.MaxChildren), nullableInt(s.MinParents), nullableInt(s.MaxParents),
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return domainerrors.NewConflict(
+				"a relationship with this internal name already exists",
+				"internal_name", s.InternalName)
+		}
 		return fmt.Errorf("save relationship definition: %w", err)
 	}
 	return nil
@@ -980,6 +985,12 @@ func (r *relationshipRepository) Save(ctx context.Context, rel *domainrelationsh
 		s.CreatedAt, s.UpdatedAt, nullableTime(s.ArchivedAt),
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return domainerrors.NewConflict(
+				"these two entities are already linked by this relationship",
+				"parent_entity_id", s.ParentEntityID.String(),
+				"child_entity_id", s.ChildEntityID.String())
+		}
 		return fmt.Errorf("save relationship: %w", err)
 	}
 	return nil

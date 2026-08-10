@@ -132,6 +132,10 @@ func (s *subscriptionStore) Create(ctx context.Context, sub webhook.Subscription
 		sub.ID, sub.TenantID.String(), sub.Name, sub.URL, sub.Secret,
 		textArray(sub.EventTypes), sub.Active, sub.CreatedAt, sub.UpdatedAt)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return domainerrors.NewConflict(
+				"a subscription with this name already exists", "name", sub.Name)
+		}
 		return fmt.Errorf("insert subscription: %w", err)
 	}
 	return nil

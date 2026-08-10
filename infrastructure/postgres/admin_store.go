@@ -50,6 +50,9 @@ func (s *adminStore) CreateTenant(ctx context.Context, t admin.Tenant) error {
 		`INSERT INTO flexitype_tenant (id, name, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`),
 		t.ID, t.Name, t.Active, t.CreatedAt, t.UpdatedAt)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return domainerrors.NewConflict("a tenant with this name already exists", "name", t.Name)
+		}
 		return fmt.Errorf("insert tenant: %w", err)
 	}
 	return nil
@@ -145,6 +148,10 @@ func (s *adminStore) CreateAccount(ctx context.Context, a admin.ServiceAccount, 
 		pq.Array(nonNilRoles(a.Roles)), jsonbParam(perms),
 		a.Active, a.CreatedAt, a.UpdatedAt)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return domainerrors.NewConflict(
+				"a service account with this name already exists in this tenant", "name", a.Name)
+		}
 		return fmt.Errorf("insert service account: %w", err)
 	}
 	return nil

@@ -2,8 +2,16 @@ package postgres
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+// extensionName bounds what requires-extension accepts. The name reaches a
+// catalogue query as a parameter rather than as text, so this is not an
+// injection guard — it refuses a directive line that carries anything other
+// than one bare name, which would otherwise be read as an extension nobody
+// has and skip the file for ever.
+var extensionName = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // directivePrefix marks a runner instruction in a migration file. Directives
 // must appear before the first statement.
@@ -20,6 +28,24 @@ type migrationDirectives struct {
 	// that file applied and the file unrecorded, so the next run replays it.
 	// Every statement in such a file must therefore be idempotent.
 	NoTransaction bool
+
+	// RequiresExtension names a Postgres extension the file cannot run
+	// without. The runner SKIPS the file when the extension is absent, and
+	// does NOT record it — so a database that gains the extension later
+	// applies the file on its next boot rather than never.
+	//
+	// It exists for one shape: an index whose operator class comes from an
+	// optional extension. Such a build cannot be made conditional in SQL and
+	// concurrent at the same time, because the only conditional form is a DO
+	// block, a DO block is a transaction, and CREATE INDEX CONCURRENTLY
+	// refuses to run inside one. Migrations 000004 and 000021 resolved that by
+	// building the pg_trgm indexes plainly inside a DO block — on the largest
+	// table in the database, taking a lock that conflicts with every write for
+	// the whole build. Moving the condition up here lets the statement itself
+	// be an ordinary concurrent build.
+	//
+	// Empty means the file has no extension requirement.
+	RequiresExtension string
 }
 
 // parseDirectives reads the directive header of a migration file. Unknown
@@ -33,7 +59,17 @@ func parseDirectives(name, body string) (migrationDirectives, error) {
 		if !strings.HasPrefix(line, directivePrefix) {
 			continue
 		}
-		switch strings.TrimSpace(strings.TrimPrefix(line, directivePrefix)) {
+		directive := strings.TrimSpace(strings.TrimPrefix(line, directivePrefix))
+		if extension, ok := strings.CutPrefix(directive, "requires-extension"); ok {
+			extension = strings.TrimSpace(extension)
+			if !extensionName.MatchString(extension) {
+				return d, fmt.Errorf(
+					"migration %s: requires-extension needs one plain extension name, got %q", name, extension)
+			}
+			d.RequiresExtension = extension
+			continue
+		}
+		switch directive {
 		case "no-transaction":
 			d.NoTransaction = true
 		default:

@@ -30,6 +30,35 @@ The unit family was on the list and is **not** fixed, because there is nothing
 to fix: `flexitype_unit_family` (migration 000017) declares no unique index on
 `(tenant_id, name)`. Both backends accept a duplicate name today, so nothing
 diverges. Adding the constraint is a behaviour change and not this one.
+### Changed — The pg_trgm and scoped-value indexes build concurrently ([#611])
+
+Three released migrations built indexes on `flexitype_attribute_value`, the
+largest table in the database, with a plain `CREATE INDEX` — a lock that
+conflicts with every write, held for the whole build. A deployment upgrading
+*across* those versions still paid that stall.
+
+None of the three could be fixed in place. 000004 creates tables and 000014
+alters two, so neither can be a no-transaction file. 000004 and 000021 also
+had to make the `pg_trgm` build conditional on the extension, and the only
+conditional form in SQL is a `DO` block — which is a transaction, and
+`CREATE INDEX CONCURRENTLY` refuses to run inside one.
+
+- New file directive **`-- +flexitype:requires-extension <name>`**. The runner
+  skips a file whose extension is absent and does **not** record it, so a
+  database that installs the extension later applies the file on its next
+  start. The skip is announced on stderr. That moved the condition out of SQL
+  and let the build be an ordinary concurrent statement.
+- New migration **000041** builds both trigram indexes `CONCURRENTLY`, gated on
+  `pg_trgm`. New migration **000042** builds the scoped-value index
+  `CONCURRENTLY`. Both are `IF NOT EXISTS`, so a database that already has the
+  index from 000004, 000014 or 000021 is unaffected.
+- 000021's bespoke invalid-namesake reaper went with the builds it guarded: the
+  runner's own reap covers `CREATE INDEX CONCURRENTLY`, which these now are.
+- `grandfatheredPlainIndexes` shrank from seven files to five.
+
+Migration bookkeeping records the version and no checksum, so correcting an
+applied migration is a no-op for a deployment that has it and a fix for one
+that has not.
 
 ### Added — Optimistic concurrency on attribute and saved-view writes ([#597])
 
@@ -136,6 +165,7 @@ That check immediately found a stale list in the SDK's own coercion test.
 
 [#597]: https://github.com/zkrebbekx/flexitype/issues/597
 [#615]: https://github.com/zkrebbekx/flexitype/issues/615
+[#611]: https://github.com/zkrebbekx/flexitype/issues/611
 [#602]: https://github.com/zkrebbekx/flexitype/issues/602
 [#603]: https://github.com/zkrebbekx/flexitype/issues/603
 [#591]: https://github.com/zkrebbekx/flexitype/issues/591

@@ -73,51 +73,18 @@ BEGIN
     END;
 END $$;
 
--- Reap an INVALID trgm namesake in THIS schema before the conditional build
--- below. The runner's reap covers only CREATE INDEX CONCURRENTLY statements,
--- and these two builds are plain creates inside a DO block; an invalid one
--- can only come from the out-of-band CONCURRENTLY build documented below.
--- The check joins pg_namespace on current_schema() and the DROP is
--- schema-qualified, so another schema's index can neither trigger the drop
--- nor be touched by it.
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_class c
-                 JOIN pg_index i ON i.indexrelid = c.oid
-                 JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE c.relname IN ('idx_flexitype_attribute_value_trgm',
-                                    'idx_flexitype_attribute_value_trgm_lower')
-                  AND n.nspname = current_schema()
-                  AND NOT i.indisvalid) THEN
-        EXECUTE format('DROP INDEX IF EXISTS %I.%I',
-                       current_schema(), 'idx_flexitype_attribute_value_trgm');
-        EXECUTE format('DROP INDEX IF EXISTS %I.%I',
-                       current_schema(), 'idx_flexitype_attribute_value_trgm_lower');
-    END IF;
-END $$;
-
--- These two cannot be written as bare CREATE INDEX CONCURRENTLY statements,
--- because gin_trgm_ops does not exist when pg_trgm could not be installed. The
--- DO block is a transaction of its own, so CONCURRENTLY is not permitted
--- inside it; a plain build is acceptable here only because it is conditional
--- on an extension that a large managed deployment installs before upgrading.
--- Operators running at scale should create these out of band and let the
--- IF NOT EXISTS below find them:
+-- The two trgm builds that stood here moved to 000041, which builds them
+-- CONCURRENTLY. They were plain builds inside a DO block because the build had
+-- to be conditional on pg_trgm and a DO block is the only conditional form in
+-- SQL — and a DO block is a transaction, which CREATE INDEX CONCURRENTLY
+-- refuses to run inside. 000041 carries the condition as a runner directive
+-- (+flexitype:requires-extension), so the statements are ordinary concurrent
+-- builds and this file no longer takes a write-blocking lock on the largest
+-- table in the database.
 --
---   CREATE INDEX CONCURRENTLY idx_flexitype_attribute_value_trgm
---       ON flexitype_attribute_value USING GIN (value_text gin_trgm_ops)
---       WHERE value_text IS NOT NULL;
---   CREATE INDEX CONCURRENTLY idx_flexitype_attribute_value_trgm_lower
---       ON flexitype_attribute_value USING GIN (lower(value_text) gin_trgm_ops)
---       WHERE value_text IS NOT NULL;
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
-        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_flexitype_attribute_value_trgm
-                 ON flexitype_attribute_value USING GIN (value_text gin_trgm_ops)
-                 WHERE value_text IS NOT NULL';
-        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_flexitype_attribute_value_trgm_lower
-                 ON flexitype_attribute_value USING GIN (lower(value_text) gin_trgm_ops)
-                 WHERE value_text IS NOT NULL';
-    END IF;
-END $$;
+-- The bespoke invalid-namesake reaper went with them. It existed because the
+-- runner's reap covers CREATE INDEX CONCURRENTLY statements only, and these
+-- were not; in 000041 they are, so the runner reaps them.
+--
+-- A database that already ran this file keeps its indexes: 000041 is
+-- IF NOT EXISTS.

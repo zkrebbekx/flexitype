@@ -106,8 +106,29 @@ block:
 - `CREATE INDEX CONCURRENTLY` / `DROP INDEX CONCURRENTLY`
 - `ALTER TYPE ... ADD VALUE`
 
+A file may also declare an extension it cannot run without:
+
+```sql
+-- +flexitype:requires-extension pg_trgm
+```
+
+The runner **skips** the file where the extension is absent, and does not
+record it. A database that installs the extension later applies the file on
+its next start; a database that never installs it never runs the file, and the
+skip is announced on stderr at every start.
+
+It exists for one shape: an index whose operator class comes from an optional
+extension. That build cannot be conditional and concurrent at the same time —
+the only conditional form in SQL is a `DO` block, a `DO` block is a
+transaction, and `CREATE INDEX CONCURRENTLY` refuses to run inside one.
+Migrations 000004 and 000021 resolved that by building the `pg_trgm` indexes
+plainly, on the largest table in the database. Moving the condition to the
+runner let 000041 build them concurrently.
+
 An unknown directive is a hard error, so a typo cannot silently fall back to
-the blocking default.
+the blocking default. `requires-extension` takes exactly one bare extension
+name for the same reason: a name nobody has would read as "extension missing"
+and skip the file for ever.
 
 ### Rules for writing a migration
 
@@ -132,6 +153,10 @@ the blocking default.
 5. **Data movement is not a migration.** See below.
 6. **A new constraint is added `NOT VALID` first, then validated separately.**
    Adding a validated constraint scans and locks the table.
+7. **An index that needs an optional extension goes in its own file, gated by
+   `requires-extension`.** Do not build it inside a `DO` block to make it
+   conditional: that costs `CONCURRENTLY`, which is the expensive half of the
+   trade.
 
 `TestEmbeddedMigrationDirectives` enforces rules 1 and 4 in CI: a file that
 uses `CONCURRENTLY` must declare the directive, a file that declares it must

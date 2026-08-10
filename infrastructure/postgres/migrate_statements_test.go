@@ -133,7 +133,11 @@ func TestEmbeddedMigrationDirectives(t *testing.T) {
 			So(err, ShouldBeNil)
 			d, err := parseDirectives(name, string(body))
 			So(err, ShouldBeNil)
-			upper := strings.ToUpper(string(body))
+			// Comments are stripped first. A file that only MENTIONS
+			// CONCURRENTLY — to say which migration took its index over —
+			// declares nothing to the runner, and reading prose as a statement
+			// would force a directive onto a purely transactional file.
+			upper := strings.ToUpper(stripLineComments(string(body)))
 
 			Convey("Then "+name+" declares no-transaction if and only if it uses CONCURRENTLY", func() {
 				usesConcurrently := strings.Contains(upper, "CONCURRENTLY")
@@ -175,9 +179,14 @@ func TestEmbeddedMigrationDirectives(t *testing.T) {
 // applied migration is a no-op for those who have it and a fix for those who
 // have not.
 //
-// What remains is here because the file cannot simply be made concurrent:
-// 000004 creates tables, which a no-transaction file must not do, and 000014
-// mixes two ALTERs with its index. Splitting those is tracked separately.
+// It shrank a second time under #611, which split the three files whose index
+// builds could not be made concurrent in place. 000004 creates tables and
+// 000014 alters two, so neither can be a no-transaction file; both now leave
+// the build to a later one (000042, 000041). 000004 and 000021 also built the
+// pg_trgm pair plainly because the build had to be conditional on an
+// extension and the only conditional form in SQL is a DO block, which is a
+// transaction. The condition became a runner directive
+// (+flexitype:requires-extension), which let 000041 build them concurrently.
 //
 // The 000039 entry is the instructive one: it was added while fixing an
 // unrelated review finding, in the same stretch of work that documented this
@@ -186,17 +195,10 @@ func TestEmbeddedMigrationDirectives(t *testing.T) {
 // closes.
 var grandfatheredPlainIndexes = map[string][]string{
 	"000003_type_inheritance.up.sql":         {"idx_flexitype_type_definition_extends"},
-	"000004_outbox_search.up.sql":            {"idx_flexitype_attribute_value_trgm", "idx_flexitype_attribute_value_trgm_lower"},
 	"000005_event_delivery.up.sql":           {"idx_flexitype_event_outbox_feed_seq"},
 	"000008_outbox_lease.up.sql":             {"idx_flexitype_event_outbox_pending"},
-	"000014_scoped_values.up.sql":            {"idx_flexitype_attribute_value_scope"},
 	"000027_role_index.up.sql":               {"idx_flexitype_service_account_roles"},
 	"000039_dependency_enforce_index.up.sql": {"idx_dependency_enforced_on_write"},
-	// 000021 builds these two inside a DO block, which is the one place
-	// CONCURRENTLY is not available. The file explains why at length: the
-	// operator class depends on an extension whose presence has to be tested
-	// first, and a bare CONCURRENTLY statement cannot be conditional.
-	"000021_plan_indexes.up.sql": {"idx_flexitype_attribute_value_trgm", "idx_flexitype_attribute_value_trgm_lower"},
 }
 
 // stripLineComments removes `-- ...` to end of line. Migrations here use no

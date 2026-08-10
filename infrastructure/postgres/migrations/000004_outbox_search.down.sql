@@ -1,4 +1,3 @@
-DROP INDEX IF EXISTS idx_flexitype_attribute_value_trgm_lower;
-DROP INDEX IF EXISTS idx_flexitype_attribute_value_trgm;
+-- The trgm indexes belong to 000041, which drops them.
 DROP TABLE IF EXISTS flexitype_entity_search;
 DROP TABLE IF EXISTS flexitype_event_outbox;

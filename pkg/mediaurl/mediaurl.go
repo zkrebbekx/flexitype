@@ -8,6 +8,10 @@
 // carries the whole file through a process that has no other reason to touch
 // it and defeats any CDN in front of it.
 //
+// A redemption is served with `Cache-Control: public`, bounded by the token's
+// remaining life, so a CDN in front of the route can hold it: the signature is
+// part of the URL, so it is the cache key.
+//
 // A signed link is issued by an authenticated caller and redeemed by anyone
 // holding it. That is the point, so the rules are narrow:
 //

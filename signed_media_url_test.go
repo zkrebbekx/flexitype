@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -329,6 +330,87 @@ func TestSignedMediaEnforcesItsTenantClaim(t *testing.T) {
 
 			Convey("Then it is refused", func() {
 				So(status, ShouldEqual, http.StatusNotFound)
+			})
+		})
+	})
+}
+
+// TestSignedMediaIsPubliclyCacheable covers issue #602.
+//
+// A signed link exists so a public surface can name an image without holding a
+// tenant credential, and a CDN in front of it can serve the bytes. The route
+// sent `Cache-Control: private`, which forbids exactly that shared cache — so
+// every redemption reached origin and the feature delivered none of what it
+// was built for. The header had been copied from the authenticated route,
+// where private is correct.
+func TestSignedMediaIsPubliclyCacheable(t *testing.T) {
+	Convey("Given a signed link", t, func() {
+		svc := flexitype.NewInMemory()
+		ctx := uow.WithTenant(context.Background(), valueobjects.DefaultTenant)
+		handler := svc.APIHandler(flexitype.APIConfig{
+			AllowAnonymous: true,
+			MediaURLSecret: testMediaSecret,
+		})
+
+		ia := svc.Interactors(ctx)
+		product, err := ia.TypeDefinitions().Create(ctx, apptypedef.CreateInput{
+			InternalName: "product", DisplayName: "Product",
+		})
+		So(err, ShouldBeNil)
+		photo, err := ia.Attributes().Create(ctx, appattribute.CreateInput{
+			TypeDefinitionID: product.ID.String(), InternalName: "photo",
+			DisplayName: "Photo", DataType: "media",
+		})
+		So(err, ShouldBeNil)
+		objectKey := uploadPhoto(handler, product.ID.String(), "p-1", photo.ID.String(), "PNGDATA")
+		So(objectKey, ShouldNotBeEmpty)
+
+		signer, err := mediaurl.NewSigner(testMediaSecret)
+		So(err, ShouldBeNil)
+		token, _, terr := signer.Sign(
+			valueobjects.DefaultTenant.String(), objectKey, 10*time.Minute, time.Now())
+		So(terr, ShouldBeNil)
+
+		Convey("When it is redeemed", func() {
+			req := httptest.NewRequest(http.MethodGet, "/media/signed/"+token, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			cache := rec.Header().Get("Cache-Control")
+
+			Convey("Then a shared cache may hold it", func() {
+				So(rec.Code, ShouldEqual, http.StatusOK)
+				So(cache, ShouldContainSubstring, "public")
+				So(cache, ShouldNotContainSubstring, "private")
+			})
+
+			Convey("Then it is never cached past the token's expiry", func() {
+				// The URL is the capability and the signature is part of it,
+				// so the cache key dies with the link — but only if max-age
+				// does not outlive it.
+				So(cache, ShouldContainSubstring, "max-age=")
+				var seconds int
+				_, serr := fmt.Sscanf(strings.Split(cache, "max-age=")[1], "%d", &seconds)
+				So(serr, ShouldBeNil)
+				So(seconds, ShouldBeGreaterThan, 0)
+				So(seconds, ShouldBeLessThanOrEqualTo, 600)
+			})
+
+			Convey("Then it is still not renderable as active content", func() {
+				// public relaxes WHO may cache, nothing about what the bytes
+				// are allowed to do on this origin.
+				So(rec.Header().Get("X-Content-Type-Options"), ShouldEqual, "nosniff")
+				So(rec.Header().Get("Content-Security-Policy"), ShouldContainSubstring, "sandbox")
+			})
+		})
+
+		Convey("When the AUTHENTICATED route serves the same object", func() {
+			req := httptest.NewRequest(http.MethodGet,
+				"/api/v1/media/"+objectKey, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			Convey("Then it stays private — it needs a credential", func() {
+				So(rec.Header().Get("Cache-Control"), ShouldContainSubstring, "private")
 			})
 		})
 	})

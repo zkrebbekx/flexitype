@@ -450,6 +450,13 @@ func (r *attributeValueRepository) CountByDefinitionAndValue(ctx context.Context
 	col := valueColumnName(v.DataType())
 	cast := ""
 	extra := ""
+	// A text-backed value is probed through a HASH of the column, because the
+	// raw-value btree could not hold a long one — see migration 000040. The
+	// full value is still compared below, so the hash narrows the scan and
+	// decides nothing.
+	if col == "value_text" && v.DataType() != valueobjects.DataTypeDecimal {
+		extra = " AND md5(value_text) = md5(?)"
+	}
 	if v.DataType() == valueobjects.DataTypeDecimal {
 		col += "::numeric"
 		cast = "::numeric"
@@ -461,8 +468,13 @@ func (r *attributeValueRepository) CountByDefinitionAndValue(ctx context.Context
 	query := bind(`SELECT count(*) FROM flexitype_attribute_value
 	 WHERE attribute_definition_id = ? AND ` + col + ` = ?` + cast + extra + `
 	   AND entity_id <> ? AND locale = ? AND channel = ? AND archived_at IS NULL`)
+	args := []any{defID.String(), valueArg(v)}
+	if strings.Contains(extra, "md5(value_text)") {
+		args = append(args, valueArg(v))
+	}
+	args = append(args, excludeEntity.String(), scope.Locale, scope.Channel)
 	var count int
-	if err := r.q.GetContext(ctx, &count, query, defID.String(), valueArg(v), excludeEntity.String(), scope.Locale, scope.Channel); err != nil {
+	if err := r.q.GetContext(ctx, &count, query, args...); err != nil {
 		return 0, fmt.Errorf("count values by definition and value: %w", err)
 	}
 	return count, nil

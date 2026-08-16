@@ -137,7 +137,7 @@ func TestEmbeddedMigrationDirectives(t *testing.T) {
 			// CONCURRENTLY — to say which migration took its index over —
 			// declares nothing to the runner, and reading prose as a statement
 			// would force a directive onto a purely transactional file.
-			upper := strings.ToUpper(stripLineComments(string(body)))
+			upper := strings.ToUpper(stripComments(string(body)))
 
 			Convey("Then "+name+" declares no-transaction if and only if it uses CONCURRENTLY", func() {
 				usesConcurrently := strings.Contains(upper, "CONCURRENTLY")
@@ -201,20 +201,10 @@ var grandfatheredPlainIndexes = map[string][]string{
 	"000039_dependency_enforce_index.up.sql": {"idx_dependency_enforced_on_write"},
 }
 
-// stripLineComments removes `-- ...` to end of line. Migrations here use no
-// block comments, and none of the index names contain a quote, so this is
-// enough to keep example SQL out of the scan.
-func stripLineComments(sql string) string {
-	var b strings.Builder
-	for _, line := range strings.Split(sql, "\n") {
-		if i := strings.Index(line, "--"); i >= 0 {
-			line = line[:i]
-		}
-		b.WriteString(line)
-		b.WriteString("\n")
-	}
-	return b.String()
-}
+// The comment stripper lives in migrate_statements.go, beside the statement
+// scanner it shares its rules with. A second, simpler one here read a `--`
+// inside a string literal or a dollar-quoted body as the start of a comment,
+// and then hid every rule below from the SQL that followed it.
 
 // grandfathered reports whether a file is allowed to build this index plainly.
 func grandfathered(file, index string) bool {
@@ -254,7 +244,7 @@ func TestIndexesOnExistingTablesAreConcurrent(t *testing.T) {
 			// Comments carry example SQL — 000021 spells out the CONCURRENTLY
 			// form it cannot use — so scanning them reports statements no
 			// server ever sees.
-			sql := stripLineComments(string(body))
+			sql := stripComments(string(body))
 
 			here := map[string]bool{}
 			for _, m := range createTable.FindAllStringSubmatch(sql, -1) {
@@ -298,9 +288,9 @@ func TestIndexesOnExistingTablesAreConcurrent(t *testing.T) {
 // CONCURRENTLY form it cannot use. Scanning that text reports statements no
 // server ever executes, which would either fail the build for a file that is
 // correct or push someone to grandfather a phantom.
-func TestStripLineComments(t *testing.T) {
+func TestStripComments(t *testing.T) {
 	Convey("Given migration text that documents SQL it does not run", t, func() {
-		sql := stripLineComments(strings.Join([]string{
+		sql := stripComments(strings.Join([]string{
 			"-- CREATE INDEX CONCURRENTLY idx_example ON t (a);",
 			"CREATE INDEX idx_real ON t (a);",
 			"CREATE INDEX idx_trailing ON t (b); -- and a note",
@@ -311,6 +301,32 @@ func TestStripLineComments(t *testing.T) {
 			So(sql, ShouldContainSubstring, "idx_real")
 			So(sql, ShouldContainSubstring, "idx_trailing")
 			So(sql, ShouldNotContainSubstring, "and a note")
+		})
+	})
+
+	Convey("Given a `--` inside a string literal", t, func() {
+		// A naive stripper cut here and hid the rest of the file from every
+		// rule that scans it, including the one that requires CONCURRENTLY.
+		sql := stripComments(strings.Join([]string{
+			"SELECT 'a -- b';",
+			"CREATE INDEX idx_hidden ON t (a);",
+		}, "\n"))
+
+		Convey("Then the literal and the SQL after it both survive", func() {
+			So(sql, ShouldContainSubstring, "a -- b")
+			So(sql, ShouldContainSubstring, "idx_hidden")
+		})
+	})
+
+	Convey("Given a `--` inside a dollar-quoted body", t, func() {
+		sql := stripComments(strings.Join([]string{
+			"DO $$ BEGIN EXECUTE 'x -- y'; END $$;",
+			"CREATE INDEX idx_after ON t (a);",
+		}, "\n"))
+
+		Convey("Then the body and the SQL after it both survive", func() {
+			So(sql, ShouldContainSubstring, "x -- y")
+			So(sql, ShouldContainSubstring, "idx_after")
 		})
 	})
 }
@@ -339,7 +355,7 @@ func TestMigrationsDoNotQueryTheCatalogueBlind(t *testing.T) {
 		for _, name := range append(append([]string{}, ups...), downs...) {
 			body, rerr := migrationsFS.ReadFile("migrations/" + name)
 			So(rerr, ShouldBeNil)
-			sql := stripLineComments(string(body))
+			sql := stripComments(string(body))
 			if !strings.Contains(sql, "pg_class") {
 				continue
 			}

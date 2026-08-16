@@ -22,6 +22,14 @@ type CreateTypeInput struct {
 type UpdateTypeInput struct {
 	DisplayName string `json:"display_name"`
 	Description string `json:"description,omitempty"`
+
+	// Version is the version the caller read. Set it to compare-and-swap: a
+	// write against a record somebody else has since changed answers CONFLICT
+	// instead of overwriting it. Leave it nil for last-write-wins.
+	//
+	// This request replaces the whole editable record, so a lost update loses
+	// fields the later writer never looked at.
+	Version *int `json:"version,omitempty"`
 }
 
 // ListTypesOptions filters a type listing.

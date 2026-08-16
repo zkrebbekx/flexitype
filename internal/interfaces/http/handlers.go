@@ -77,6 +77,11 @@ type typeDefinitionRequest struct {
 	DisplayName  string `json:"display_name"`
 	Description  string `json:"description,omitempty"`
 	ExtendsID    string `json:"extends_id,omitempty"`
+
+	// Version is the version the caller read. On update it is a
+	// compare-and-swap: omit it and the write is last-write-wins. It is
+	// ignored on create, where there is nothing to swap against.
+	Version *int `json:"version,omitempty"`
 }
 
 func (s *server) createTypeDefinition(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +122,7 @@ func (s *server) updateTypeDefinition(w http.ResponseWriter, r *http.Request) {
 		ID:          chi.URLParam(r, "id"),
 		DisplayName: req.DisplayName,
 		Description: req.Description,
+		Version:     req.Version,
 	})
 	if err != nil {
 		writeError(w, s.log, err)
@@ -704,6 +710,11 @@ type dependencyRequest struct {
 	Conditions        json.RawMessage `json:"conditions,omitempty"`
 	Effect            json.RawMessage `json:"effect,omitempty"`
 	Description       string          `json:"description,omitempty"`
+
+	// Version is the version the caller read. On update it is a
+	// compare-and-swap: omit it and the write is last-write-wins. It is
+	// ignored on create, where there is nothing to swap against.
+	Version *int `json:"version,omitempty"`
 }
 
 func (s *server) createDependency(w http.ResponseWriter, r *http.Request) {
@@ -746,6 +757,7 @@ func (s *server) updateDependency(w http.ResponseWriter, r *http.Request) {
 		Conditions:  req.Conditions,
 		Effect:      req.Effect,
 		Description: req.Description,
+		Version:     req.Version,
 	})
 	if err != nil {
 		writeError(w, s.log, err)
@@ -795,6 +807,11 @@ type relationshipDefinitionRequest struct {
 	MaxChildren         *int   `json:"max_children,omitempty"`
 	MinParents          *int   `json:"min_parents,omitempty"`
 	MaxParents          *int   `json:"max_parents,omitempty"`
+
+	// Version is the version the caller read. On update it is a
+	// compare-and-swap: omit it and the write is last-write-wins. It is
+	// ignored on create, where there is nothing to swap against.
+	Version *int `json:"version,omitempty"`
 }
 
 func (s *server) createRelationshipDefinition(w http.ResponseWriter, r *http.Request) {
@@ -854,6 +871,7 @@ func (s *server) updateRelationshipDefinition(w http.ResponseWriter, r *http.Req
 		MaxChildren:         req.MaxChildren,
 		MinParents:          req.MinParents,
 		MaxParents:          req.MaxParents,
+		Version:             req.Version,
 	})
 	if err != nil {
 		writeError(w, s.log, err)

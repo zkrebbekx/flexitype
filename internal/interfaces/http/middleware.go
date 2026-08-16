@@ -404,6 +404,31 @@ func reqInfoFromContext(ctx context.Context) *reqInfo {
 	return nil
 }
 
+// signedMediaPrefix is the path prefix of the signed-media route. The rest of
+// that path is a BEARER CAPABILITY: anyone holding it can fetch the bytes with
+// no credential. It is defined here, beside the redaction that depends on it,
+// so the route and the redaction cannot drift apart.
+const signedMediaPrefix = "/media/signed/"
+
+// loggablePath is the request path with any credential removed.
+//
+// A request path is normally safe to log, and useful. The signed-media path is
+// the exception: the token IS the credential, so logging the path handed the
+// object to anyone who can read the log — a log aggregator, a SIEM, a support
+// engineer, a log-shipping vendor — for the rest of the token's life, which is
+// up to 24 hours. The project rule is that no credential reaches a log line.
+//
+// The prefix is matched on the raw path rather than on the resolved route, so
+// the redaction holds even when routing never matched — the route is not
+// registered at all when signed links are disabled, and a valid token sent to
+// that build would otherwise be logged in full.
+func loggablePath(r *http.Request) string {
+	if token, found := strings.CutPrefix(r.URL.Path, signedMediaPrefix); found && token != "" {
+		return signedMediaPrefix + "[redacted]"
+	}
+	return r.URL.Path
+}
+
 // requestLogger emits one structured line per request, with a generated
 // request id (also returned in the X-Request-Id header) and, once
 // authenticated, the tenant and actor.
@@ -419,7 +444,7 @@ func requestLogger(log *logger.Logger) func(http.Handler) http.Handler {
 			ev := log.Info().
 				Str("request_id", ri.id).
 				Str("method", r.Method).
-				Str("path", r.URL.Path).
+				Str("path", loggablePath(r)).
 				Int("status", rec.status).
 				Dur("duration", time.Since(start))
 			if ri.tenant != "" {
@@ -440,7 +465,7 @@ func recoverer(log *logger.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					log.Error().Any("panic", rec).Str("path", r.URL.Path).Msg("handler panic")
+					log.Error().Any("panic", rec).Str("path", loggablePath(r)).Msg("handler panic")
 					var body errorBody
 					body.Error.Code = "INTERNAL"
 					body.Error.Message = "internal error"

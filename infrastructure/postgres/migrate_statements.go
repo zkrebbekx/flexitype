@@ -56,6 +56,14 @@ func parseDirectives(name, body string) (migrationDirectives, error) {
 	var d migrationDirectives
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
+		// STOP at the first statement. The contract above says directives
+		// live in the header, and scanning the whole file made any prose
+		// mentioning one into a directive — an unrecognised one is a hard
+		// boot failure, so a sentence in a comment could stop every replica
+		// from starting. 000021 came within one character of exactly that.
+		if line != "" && !strings.HasPrefix(line, "--") {
+			break
+		}
 		if !strings.HasPrefix(line, directivePrefix) {
 			continue
 		}
@@ -152,6 +160,72 @@ func splitStatements(body string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// stripComments removes SQL line comments, leaving the statements untouched.
+//
+// It exists because a rule that scans a migration's SQL must not read the
+// prose beside it — and must not miss real SQL either. A naive "cut at the
+// first --" does both wrongly: it hides everything after a `--` that sits
+// inside a string literal or a dollar-quoted body, which is where a plain
+// index build could pass a CONCURRENTLY check unseen.
+//
+// It shares the scanner's rules: a line comment ends at the newline, and
+// neither a single-quoted literal nor a dollar-quoted body starts one.
+func stripComments(body string) string {
+	var (
+		out       strings.Builder
+		inSingle  bool
+		inComment bool
+		dollarTag string
+	)
+	runes := []rune(body)
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+
+		if inComment {
+			if c == '\n' {
+				inComment = false
+				out.WriteRune(c)
+			}
+			continue
+		}
+		if dollarTag != "" {
+			if tag, ok := dollarQuoteAt(runes, i); ok && tag == dollarTag {
+				out.WriteString(tag)
+				i += len([]rune(tag)) - 1
+				dollarTag = ""
+				continue
+			}
+			out.WriteRune(c)
+			continue
+		}
+		if inSingle {
+			out.WriteRune(c)
+			if c == '\'' {
+				inSingle = false
+			}
+			continue
+		}
+
+		switch {
+		case c == '-' && i+1 < len(runes) && runes[i+1] == '-':
+			inComment = true
+			i++
+		case c == '\'':
+			inSingle = true
+			out.WriteRune(c)
+		default:
+			if tag, ok := dollarQuoteAt(runes, i); ok {
+				dollarTag = tag
+				out.WriteString(tag)
+				i += len([]rune(tag)) - 1
+				continue
+			}
+			out.WriteRune(c)
+		}
+	}
+	return out.String()
 }
 
 // dollarQuoteAt reports whether a dollar-quote delimiter starts at i, and

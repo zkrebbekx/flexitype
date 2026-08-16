@@ -565,7 +565,7 @@ func (r *attributeDefinitionRepository) Save(ctx context.Context, a *domainattri
 		s.UpdatedAt, nullableTime(s.ArchivedAt), s.Group, s.SortOrder, s.HelpText,
 	)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if violates(err, "uq_flexitype_attribute_definition_name") {
 			return domainerrors.NewConflict(
 				"an attribute with this internal name already exists on this type",
 				"internal_name", s.InternalName)

@@ -128,6 +128,12 @@ generated file is checked in. A test regenerates it and fails when the
 checked-in output is stale, so the client cannot describe a shape the document
 does not.
 
+The React query keys are part of that surface, and they changed once: the
+client's `cacheKey` was inserted at position 2 so two clients cannot share a
+cache namespace. Every prefix moved, so hand-written invalidation keys from
+before that match nothing. Build keys with `flexitypeKeysFor(client.cacheKey)`
+and a future change of this kind cannot reach your code.
+
 ## Module layout
 
 The repository holds five Go modules. The split exists so that the library a

@@ -603,9 +603,20 @@ func extensionMissing(ctx context.Context, q db.QueryExecer, m migration) (bool,
 	if m.directives.RequiresExtension == "" {
 		return false, nil
 	}
+	// Resolvable on THIS connection's search_path, not merely present
+	// somewhere in the database. An extension installed into a schema the
+	// migrating session cannot see gives an operator class the statement
+	// cannot name: the gate would pass and the migration would fail hard with
+	// `operator class "gin_trgm_ops" does not exist`, which is the opposite of
+	// what this directive exists to do. One database holding several flexitype
+	// schemas is a supported deployment, so this is reachable.
 	var installed bool
 	if err := q.GetContext(ctx, &installed,
-		`SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = $1)`,
+		`SELECT EXISTS (
+		   SELECT 1 FROM pg_extension e
+		     JOIN pg_namespace n ON n.oid = e.extnamespace
+		    WHERE e.extname = $1
+		      AND n.nspname = ANY (current_schemas(true)))`,
 		m.directives.RequiresExtension); err != nil {
 		return false, fmt.Errorf("check extension %s for migration %s: %w",
 			m.directives.RequiresExtension, m.name, err)
@@ -870,7 +881,7 @@ func MigrateDown(ctx context.Context, tx db.Transactor, target int) error {
 			if err != nil {
 				return err
 			}
-			if err := revert(ctx, q, down, version, string(body), directives); err != nil {
+			if err := revert(ctx, q, lease, down, version, string(body), directives); err != nil {
 				return err
 			}
 		}
@@ -883,7 +894,7 @@ func MigrateDown(ctx context.Context, tx db.Transactor, target int) error {
 }
 
 // revert runs one down-migration and forgets its version.
-func revert(ctx context.Context, q db.QueryExecer, name string, version int, body string, d migrationDirectives) (err error) {
+func revert(ctx context.Context, q db.QueryExecer, lease *migrateLease, name string, version int, body string, d migrationDirectives) (err error) {
 	forget := func() error {
 		if _, err := q.ExecContext(ctx,
 			`DELETE FROM flexitype_schema_migrations WHERE version = $1`, version); err != nil {
@@ -893,11 +904,29 @@ func revert(ctx context.Context, q db.QueryExecer, name string, version int, bod
 	}
 
 	if d.NoTransaction {
+		// A down file builds indexes too — 000040's revert rebuilds the index
+		// 000040 replaced — so the down path needs both protections the up
+		// path has, for the same reasons.
+		//
+		// Reap first: a failed CREATE INDEX CONCURRENTLY leaves an INVALID
+		// namesake that IF NOT EXISTS then skips for ever, and this file is
+		// replayed in full after an interruption.
+		if err := reapInvalidIndexes(ctx, q, migration{body: body}); err != nil {
+			return err
+		}
 		for _, stmt := range splitStatements(body) {
 			if statementIsEmpty(stmt) {
 				continue
 			}
-			if _, err := q.ExecContext(ctx, stmt); err != nil {
+			// Renew between statements, and heartbeat DURING each one on the
+			// pooled executor: a concurrent build can outlive the lease, and
+			// the runner that took it over would reap the half-built index out
+			// from under this one. Setting lease.pool without routing the
+			// statements through here left that protection claimed but absent.
+			if err := lease.renew(ctx); err != nil {
+				return err
+			}
+			if err := lease.execWithHeartbeat(ctx, q, stmt); err != nil {
 				return fmt.Errorf("revert migration %s: %w", name, err)
 			}
 		}

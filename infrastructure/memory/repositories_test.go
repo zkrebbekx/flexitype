@@ -717,7 +717,12 @@ func TestRelationshipRepositoryList(t *testing.T) {
 			relSnap(ulidAt('2'), tenantA, defOne, "sku-2", "acme", nil),
 			relSnap(ulidAt('3'), tenantA, defTwo, "sku-1", "globex", nil),
 			relSnap(ulidAt('4'), tenantA, defOne, "sku-9", "acme", archivedAt(time.Hour)),
-			relSnap(ulidAt('5'), tenantB, defOne, "sku-1", "acme", nil),
+			// The other tenant's link names its own entities. The uniqueness
+			// the store now enforces is (definition, parent, child), with no
+			// tenant column — exactly as uq_flexitype_relationship_pair
+			// declares it — and a definition belongs to one tenant anyway, so
+			// the old fixture described a row Postgres would have refused.
+			relSnap(ulidAt('5'), tenantB, defOne, "sku-b1", "beta", nil),
 		)
 
 		Convey("When listing with only a tenant filter", func() {

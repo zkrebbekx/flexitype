@@ -1263,11 +1263,20 @@ func (i *Interactor) assertRollupResolves(
 	td *domaintypedef.TypeDefinition,
 	computed *domainattribute.Computed,
 ) error {
-	if i.relDefs == nil {
-		return nil
-	}
 	spec := computed.Rollup
 	access := uow.AccessFromContext(ctx)
+
+	// The nil check comes AFTER the field-permission check below, not before
+	// it. An interactor built without a relationship repository cannot resolve
+	// a rollup at all, and returning early here would have skipped the
+	// permission check too — a guard that fails open when a dependency is
+	// missing is the shape of guard that stops working quietly.
+	if i.relDefs == nil {
+		if !access.CanRead(spec.Target) {
+			return errUnresolvedRollup(spec)
+		}
+		return nil
+	}
 
 	// A field-restricted principal must not learn the shape of what it cannot
 	// read, so every way this rollup can fail to resolve collapses into ONE
@@ -1301,21 +1310,21 @@ func (i *Interactor) assertRollupResolves(
 	switch spec.Direction {
 	case "child":
 		if !isParent {
-			return domainerrors.NewValidation(
+			return refuse(domainerrors.NewValidation(
 				"a child rollup over "+spec.Relationship+" starts from its parent type, which this is not",
-				"direction", spec.Direction)
+				"direction", spec.Direction))
 		}
 	case "parent":
 		if !isChild {
-			return domainerrors.NewValidation(
+			return refuse(domainerrors.NewValidation(
 				"a parent rollup over "+spec.Relationship+" starts from its child type, which this is not",
-				"direction", spec.Direction)
+				"direction", spec.Direction))
 		}
 	default: // linked
 		if !isParent && !isChild {
-			return domainerrors.NewValidation(
+			return refuse(domainerrors.NewValidation(
 				"this type is not an endpoint of "+spec.Relationship,
-				"relationship", spec.Relationship)
+				"relationship", spec.Relationship))
 		}
 	}
 

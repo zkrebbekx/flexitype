@@ -45,6 +45,17 @@ func (s *savedViewStore) Update(_ context.Context, v savedview.View) error {
 	if !ok || stored.TenantID != v.TenantID {
 		return domainerrors.NewNotFound("saved_view", v.ID.String())
 	}
+	// Update writes the NAME, so it meets the same uniqueness Create does.
+	// Without this a rename onto another view's name succeeded here and
+	// produced two views sharing a name that Create refuses.
+	for id, other := range s.views {
+		if id == v.ID.String() {
+			continue
+		}
+		if other.TenantID == v.TenantID && other.Name == v.Name {
+			return domainerrors.NewConflict("a view with this name already exists", "name", v.Name)
+		}
+	}
 	want := v.Version
 	if want < 1 {
 		want = 1

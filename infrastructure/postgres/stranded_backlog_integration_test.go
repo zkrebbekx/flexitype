@@ -67,9 +67,22 @@ func TestStrandedBacklogIsBoundedPostgres(t *testing.T) {
 		Convey("When the pruner runs its full pass", func() {
 			stranded, err := store.DeadLetterStranded(ctx, time.Now().UTC().Add(-30*24*time.Hour))
 			So(err, ShouldBeNil)
-			_, err = store.PruneDeadLetters(ctx, time.Now().UTC())
+			// The cutoffs are a minute AHEAD, and that minute is not padding.
+			//
+			// DeadLetterStranded stamps updated_at with the DATABASE clock
+			// (`now()`), and these two calls pass a cutoff read from the
+			// APPLICATION clock microseconds later. Where the database clock
+			// leads the application's — a few milliseconds is ordinary between
+			// a host and a container — the row it just marked is not yet
+			// "older than the cutoff" and survives a prune that the test then
+			// reports as a product defect. In a deployment the two passes are
+			// minutes or days apart and retention is 30 days, so the skew is
+			// invisible; only a test that collapses them to one instant can
+			// see it.
+			soon := time.Now().UTC().Add(time.Minute)
+			_, err = store.PruneDeadLetters(ctx, soon)
 			So(err, ShouldBeNil)
-			_, err = store.Prune(ctx, time.Now().UTC())
+			_, err = store.Prune(ctx, soon)
 			So(err, ShouldBeNil)
 
 			Convey("Then the delivery and its envelope are gone", func() {

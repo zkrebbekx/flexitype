@@ -602,10 +602,29 @@ func (r *relDefRepo) List(_ context.Context, filter domainrelationship.Definitio
 	return pageItems, total, nil
 }
 
+// The uniqueness scan mirrors the unique index the Postgres schema declares.
+// Without it the two backends disagreed about what is even representable: the
+// interactor pre-checks and then saves, so two concurrent callers both cleared
+// the check and both wrote, leaving two live rows sharing a natural key that
+// Postgres refuses outright. Archived rows are skipped, because every one of
+// those indexes is partial on archived_at IS NULL, and a row never collides
+// with itself.
 func (r *relDefRepo) Save(_ context.Context, d *domainrelationship.Definition) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	snap := d.Snapshot()
+	if snap.ArchivedAt == nil {
+		for _, other := range r.s.relDefs {
+			if other.ID.Equals(snap.ID) || other.ArchivedAt != nil {
+				continue
+			}
+			if other.TenantID == snap.TenantID && other.InternalName == snap.InternalName {
+				return domainerrors.NewConflict(
+					"a relationship with this internal name already exists",
+					"internal_name", snap.InternalName)
+			}
+		}
+	}
 	captureMap(r.j, collRelDefs, r.s.relDefs, snap.ID.String())
 	r.s.relDefs[snap.ID.String()] = snap
 	r.s.bumpSchemaVersion(snap.TenantID.String()) // a relationship change adds/removes a connection field
@@ -837,6 +856,22 @@ func (r *relRepo) Save(_ context.Context, rel *domainrelationship.Relationship) 
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	id := rel.ID().String()
+	snap := rel.Snapshot()
+	if snap.ArchivedAt == nil {
+		for _, other := range r.s.rels {
+			if other.ID.Equals(snap.ID) || other.ArchivedAt != nil {
+				continue
+			}
+			if other.DefinitionID.Equals(snap.DefinitionID) &&
+				other.ParentEntityID == snap.ParentEntityID &&
+				other.ChildEntityID == snap.ChildEntityID {
+				return domainerrors.NewConflict(
+					"these two entities are already linked by this relationship",
+					"parent_entity_id", snap.ParentEntityID.String(),
+					"child_entity_id", snap.ChildEntityID.String())
+			}
+		}
+	}
 	captureMap(r.j, collRels, r.s.rels, id)
 	r.s.rels[id] = rel.Snapshot()
 	return nil

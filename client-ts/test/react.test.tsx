@@ -6,6 +6,7 @@ import { createClient, type FlexitypeClient } from '../src/client.js'
 import {
   flattenPages,
   flexitypeKeysFor,
+  invalidateAfterValueWrite,
   FlexitypeProvider,
   useEffectiveAttributes,
   useEntityValues,
@@ -350,5 +351,28 @@ describe('one cache, two tenants (#589)', () => {
   it('honours an explicit cacheKeyPrefix', () => {
     const client = createClient({ baseUrl: 'https://example.test', token: 't', cacheKeyPrefix: 'merchant-7' })
     expect(client.cacheKey).toBe('merchant-7')
+  })
+})
+
+// invalidateAfterValueWrite silently stopped working for any external caller
+// when the cache key was introduced: it defaulted to '', which builds keys
+// rooted at ['flexitype',''] — a prefix of nothing any hook registers. The call
+// invalidated nothing, raised nothing, and had worked before.
+describe('invalidateAfterValueWrite', () => {
+  it('refuses to run without the cache key that scopes it', async () => {
+    const queryClient = new QueryClient()
+    await expect(
+      // @ts-expect-error the omission is a compile error now; this proves the
+      // runtime answer for callers who are not type-checked.
+      invalidateAfterValueWrite(queryClient, { typeId: 't', entityId: 'e' }),
+    ).rejects.toThrow(/cacheKey is required/)
+  })
+
+  it('invalidates the entity it was given when the key is present', async () => {
+    const queryClient = new QueryClient()
+    const keys = flexitypeKeysFor('k')
+    queryClient.setQueryData(keys.entities.detail('t', 'e'), { stale: true })
+    await invalidateAfterValueWrite(queryClient, { typeId: 't', entityId: 'e', cacheKey: 'k' })
+    expect(queryClient.getQueryState(keys.entities.detail('t', 'e'))?.isInvalidated).toBe(true)
   })
 })

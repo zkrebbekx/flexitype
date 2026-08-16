@@ -107,6 +107,32 @@ func TestRollupCannotReadWhatTheCallerCannotRead(t *testing.T) {
 			})
 		})
 
+		Convey("When a restricted caller names the WRONG DIRECTION over a real relationship", func() {
+			// The direction branches returned their own message while every
+			// other way to fail collapsed into one. That told a restricted
+			// caller which relationships exist and which way round they run —
+			// a real relationship with the wrong direction answered
+			// differently from a relationship that is not there at all.
+			_, wrongWay := svc.Interactors(restricted).Attributes().Create(restricted, appattribute.CreateInput{
+				TypeDefinitionID: dish.ID.String(), InternalName: "total_reversed",
+				DisplayName: "Total", DataType: "decimal",
+				Computed: json.RawMessage(`{"kind":"rollup","rollup":{"relationship":"has_line",` +
+					`"direction":"parent","aggregate":"sum","target":"cost"}}`),
+			})
+			_, noSuchRel := svc.Interactors(restricted).Attributes().Create(restricted, appattribute.CreateInput{
+				TypeDefinitionID: dish.ID.String(), InternalName: "total_absent",
+				DisplayName: "Total", DataType: "decimal",
+				Computed: json.RawMessage(`{"kind":"rollup","rollup":{"relationship":"no_such_relationship",` +
+					`"direction":"child","aggregate":"sum","target":"cost"}}`),
+			})
+
+			Convey("Then it reads the same as a relationship that does not exist", func() {
+				So(wrongWay, ShouldNotBeNil)
+				So(noSuchRel, ShouldNotBeNil)
+				So(wrongWay.Error(), ShouldEqual, noSuchRel.Error())
+			})
+		})
+
 		Convey("When a restricted caller names a target that does not exist", func() {
 			_, missing := svc.Interactors(restricted).Attributes().Create(restricted, appattribute.CreateInput{
 				TypeDefinitionID: dish.ID.String(), InternalName: "total_ghost",

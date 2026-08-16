@@ -145,6 +145,20 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }
 
+// violates reports whether err is a 23505 raised by the NAMED constraint.
+//
+// The code alone is not enough to choose a message. An insert usually sits
+// behind more than one unique index — its primary key and its natural key —
+// and "a service account with this name already exists" sent for a primary-key
+// collision tells the caller to rename something that was never the problem,
+// while hiding the id clash that was. The constraint name stays inside the
+// store: it is schema detail, and it decides the wording rather than becoming
+// part of it.
+func violates(err error, constraint string) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == constraint
+}
+
 func isNoRows(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
 }

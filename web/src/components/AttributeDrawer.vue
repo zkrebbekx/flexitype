@@ -26,7 +26,7 @@ const emit = defineEmits<{ close: [] }>()
 const toasts = useToasts()
 const queryClient = useQueryClient()
 
-import { ORDERED, TEXTUAL, buildCarriedUpdate, carriedFields } from '@/lib/attribute-edit'
+import { ORDERED, TEXTUAL, buildCarriedUpdate, emptyPassthrough, loadPassthrough } from '@/lib/attribute-edit'
 import type { AttributePassthrough } from '@/lib/attribute-edit'
 
 const form = reactive({
@@ -62,6 +62,26 @@ const nameError = computed(() => (props.attribute ? '' : slug(form.internal_name
 const fieldErrors = computed(() => ({ internal_name: form.internal_name ? nameError.value : '' }))
 const canSubmit = computed(() => !!form.display_name.trim() && nameError.value === '')
 
+// passthrough holds what the drawer shows but does not edit, so a full replace
+// cannot drop it. The dependency drawer already works this way.
+//
+// Declared above the load watcher for the same reason `tester` is: the watcher
+// runs immediately and assigns into this.
+const passthrough = reactive<AttributePassthrough>(emptyPassthrough())
+
+// "Try a value" — dry-run against the saved definition.
+//
+// Declared ABOVE the load watcher, which runs immediately and clears it. A
+// `const` is not hoisted, so with the declaration below, mounting this drawer
+// already open threw "Cannot access 'tester' before initialization" during
+// setup. The page mounts it closed and the watcher returns early, which is the
+// only reason that never showed.
+const tester = reactive({
+  value: '',
+  result: null as null | { ok: boolean; message: string },
+  busy: false,
+})
+
 watch(
   () => [props.open, props.attribute?.id],
   () => {
@@ -88,9 +108,7 @@ watch(
     // one, and it never modelled default_value at all, so a rename deleted
     // the stored default. Renaming an attribute is not a request to change
     // what it derives from.
-    const carried = carriedFields(a)
-    passthrough.computed = carried.computed
-    passthrough.defaultValue = carried.defaultValue
+    Object.assign(passthrough, loadPassthrough(a, a?.data_type ?? form.data_type))
     form.unitFamilyId = a?.unit_family_id ?? ''
     form.displayUnit = a?.display_unit ?? ''
     form.group = a?.group ?? ''
@@ -148,7 +166,8 @@ function buildConstraints(): Constraint[] {
     cs.push({ kind: 'min_value', value: typedValue(form.data_type, form.minValue) })
   if (isOrdered.value && form.maxValue)
     cs.push({ kind: 'max_value', value: typedValue(form.data_type, form.maxValue) })
-  if (isTextual.value && form.pattern) cs.push({ kind: 'pattern', expr: form.pattern })
+  if (isTextual.value && form.pattern)
+    cs.push({ kind: 'pattern', expr: form.pattern, substring: passthrough.patternSubstring })
   if (isEnum.value && form.enumMembers.length)
     cs.push({ kind: 'one_of', values: form.enumMembers.map((m) => typedValue('enum', m)) })
   return cs
@@ -160,9 +179,6 @@ function addMember() {
   form.newMember = ''
 }
 
-// passthrough holds the fields the drawer shows but does not edit, so a full
-// replace cannot drop them. The dependency drawer already works this way.
-const passthrough = reactive<AttributePassthrough>({ computed: undefined, defaultValue: undefined })
 
 const save = useMutation({
   mutationFn: async () => {
@@ -229,12 +245,6 @@ const save = useMutation({
   },
 })
 
-// "Try a value" — dry-run against the saved definition.
-const tester = reactive({
-  value: '',
-  result: null as null | { ok: boolean; message: string },
-  busy: false,
-})
 
 async function tryValue() {
   if (!props.attribute) return

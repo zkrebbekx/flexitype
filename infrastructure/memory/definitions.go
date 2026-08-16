@@ -96,10 +96,29 @@ func (r *typeDefRepo) ListChildren(_ context.Context, parentID valueobjects.Type
 	return out, nil
 }
 
+// The uniqueness scan mirrors the unique index the Postgres schema declares.
+// Without it the two backends disagreed about what is even representable: the
+// interactor pre-checks and then saves, so two concurrent callers both cleared
+// the check and both wrote, leaving two live rows sharing a natural key that
+// Postgres refuses outright. Archived rows are skipped, because every one of
+// those indexes is partial on archived_at IS NULL, and a row never collides
+// with itself.
 func (r *typeDefRepo) Save(_ context.Context, t *domaintypedef.TypeDefinition) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	snap := t.Snapshot()
+	if snap.ArchivedAt == nil {
+		for _, other := range r.s.typeDefs {
+			if other.ID.Equals(snap.ID) || other.ArchivedAt != nil {
+				continue
+			}
+			if other.TenantID == snap.TenantID && other.InternalName == snap.InternalName {
+				return domainerrors.NewConflict(
+					"a type with this internal name already exists",
+					"internal_name", snap.InternalName)
+			}
+		}
+	}
 	captureMap(r.j, collTypeDefs, r.s.typeDefs, snap.ID.String())
 	r.s.typeDefs[snap.ID.String()] = snap
 	r.s.bumpSchemaVersion(snap.TenantID.String()) // a type change reshapes the GraphQL schema
@@ -232,6 +251,19 @@ func (r *attrRepo) Save(_ context.Context, a *domainattribute.Definition) error 
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	snap := a.Snapshot()
+	if snap.ArchivedAt == nil {
+		for _, other := range r.s.attrs {
+			if other.ID.Equals(snap.ID) || other.ArchivedAt != nil {
+				continue
+			}
+			if other.TypeDefinitionID.Equals(snap.TypeDefinitionID) &&
+				other.InternalName == snap.InternalName {
+				return domainerrors.NewConflict(
+					"an attribute with this internal name already exists on this type",
+					"internal_name", snap.InternalName)
+			}
+		}
+	}
 	captureMap(r.j, collAttrs, r.s.attrs, snap.ID.String())
 	r.s.attrs[snap.ID.String()] = snap
 	r.s.bumpSchemaVersion(snap.TenantID.String()) // an attribute change adds/removes a schema field

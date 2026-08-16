@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, DATA_TYPES, friendlyError } from '@/lib/api'
+import { baselineVersion, staleEditMessage } from '@/lib/concurrency'
 import type { AttributeDefinition, Condition, DataType, Dependency } from '@/lib/api'
 import { renderTyped } from '@/lib/values'
 import {
@@ -67,6 +68,8 @@ const form = reactive({
 // re-attaches it on save so an edit cannot silently subtract it.
 const effectPassthrough = ref<EffectPassthrough>(emptyEffectPassthrough())
 const error = ref('')
+// The version the drawer loaded, sent back as a compare-and-swap.
+const baseline = ref<number | undefined>()
 
 const attrOptions = computed(() =>
   props.attributes.filter((a) => !a.archived_at).map((a) => ({ value: a.id, label: `${a.display_name} (${a.data_type})` })),
@@ -133,6 +136,7 @@ watch(
     if (!props.open) return
     error.value = ''
     const d = props.dependency
+    baseline.value = baselineVersion(d)
     form.sourceId = d?.source_attribute_id ?? ''
     form.targetId = d?.target_attribute_id ?? ''
     form.description = d?.description ?? ''
@@ -166,7 +170,12 @@ const save = useMutation({
     const effect = buildEffect(form, target.value.data_type, effectPassthrough.value)
     const conditions = buildConditions()
     if (props.dependency) {
-      return api.updateDependency(props.dependency.id, { conditions, effect, description: form.description || undefined })
+      return api.updateDependency(props.dependency.id, {
+        conditions,
+        effect,
+        description: form.description || undefined,
+        version: baseline.value,
+      })
     }
     return api.createDependency({
       source_attribute_id: form.sourceId,
@@ -182,6 +191,12 @@ const save = useMutation({
     emit('close')
   },
   onError: (e) => {
+    const stale = staleEditMessage(e)
+    if (stale) {
+      queryClient.invalidateQueries({ queryKey: ['dependencies'] })
+      error.value = stale
+      return
+    }
     error.value = friendlyError(e)
   },
 })

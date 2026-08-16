@@ -384,7 +384,7 @@ func (r *typeDefinitionRepository) Save(ctx context.Context, t *domaintypedef.Ty
 		// A name already taken is the caller's conflict, not a server fault.
 		// The interactor checks first, so this is the RACE: two callers past
 		// the same check, one of which loses at the unique index.
-		if isUniqueViolation(err) {
+		if violates(err, "uq_flexitype_type_definition_name") {
 			return domainerrors.NewConflict(
 				"a type with this internal name already exists",
 				"internal_name", s.InternalName)

@@ -181,6 +181,17 @@ type UpdateDefinitionInput struct {
 	MaxChildren         *int
 	MinParents          *int
 	MaxParents          *int
+
+	// Version, when set, is the version the CALLER read. The update is
+	// written only if the stored version still matches, and a conflict is
+	// reported otherwise.
+	//
+	// It is a pointer so that omitting it keeps last-write-wins, which is what
+	// an existing caller depends on. This request is a FULL REPLACE, so
+	// without it two operators editing one record each write the whole record
+	// and the later write silently erases the earlier one — including fields
+	// that operator never looked at.
+	Version *int
 }
 
 // UpdateDefinition mutates a relationship definition.
@@ -202,6 +213,16 @@ func (i *Interactor) UpdateDefinition(ctx context.Context, in UpdateDefinitionIn
 			return err
 		}
 		before := def.Snapshot()
+
+		// COMPARE-AND-SWAP against the version the caller read, before the
+		// change is applied.
+		if in.Version != nil && *in.Version != before.Version {
+			return domainerrors.NewConflict(
+				"the relationship definition was modified by someone else; reload it and retry",
+				"relationship_definition_id", in.ID,
+				"expected_version", *in.Version,
+				"actual_version", before.Version)
+		}
 
 		evts, err := def.Update(domainrelationship.UpdateDefinitionInput{
 			DisplayName:         in.DisplayName,

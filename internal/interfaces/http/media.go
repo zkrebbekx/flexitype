@@ -155,8 +155,15 @@ func (s *server) signMediaURL(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.log, domainerrors.NewValidation(err.Error()))
 		return
 	}
+	// NO-STORE, because this response body contains a bearer capability.
+	//
+	// A shared cache should already decline it — the request carried an
+	// Authorization header — but a browser cache has no such rule, and a CDN
+	// configured to cover /api/v1 would happily keep it. Nothing about this
+	// answer is reusable anyway: each mint returns a different token.
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, signedURLResponse{
-		URL:       "/media/signed/" + token,
+		URL:       signedMediaPrefix + token,
 		ExpiresAt: expires.Format(time.RFC3339),
 	})
 }
@@ -188,6 +195,14 @@ func (s *server) tokenOwnsKey(ctx context.Context, tenant, objectKey string) boo
 	}
 	return owned
 }
+
+// signedMediaFreshness bounds how long a shared cache may serve a signed
+// object without asking the origin again. It is the lag between a tenant
+// erasing an object and every cache holding it stopping — so it is chosen as a
+// revocation budget, not as a performance number. Five minutes still absorbs
+// the burst a single page view produces across many readers, which is where
+// the saving is.
+const signedMediaFreshness = 300
 
 func (s *server) downloadSignedMedia(w http.ResponseWriter, r *http.Request) {
 	notFound := func() {
@@ -243,20 +258,35 @@ func (s *server) downloadSignedMedia(w http.ResponseWriter, r *http.Request) {
 	// It was copied from the authenticated route, where private IS right
 	// because that route needs a credential.
 	//
-	// Safe here because the URL is the capability: the signature is part of
-	// it, so it is the cache key, and max-age never outlives the token. Once
-	// the link expires a cache must revalidate, and the signature no longer
-	// verifies. immutable says what is already true — the object key is a
-	// ULID naming immutable bytes, so a cached response can never be stale.
+	// BOUNDED, because the bytes are immutable but the decision to serve them
+	// is not. The check above re-resolves ownership against live database
+	// state on every request, and erasure deletes the object outright — so
+	// once a tenant erases an entity, the origin answers 404 while a shared
+	// cache would go on serving the erased bytes to anyone holding the link.
+	// A token may live 24 hours; a right-to-erasure request cannot wait that
+	// long, and this service has no way to purge a cache it does not own.
 	//
-	// A negative age can only come from a token already past its expiry,
-	// which Verify has rejected above; clamping keeps a malformed header out
-	// of the response either way.
+	// So the freshness window is the REVOCATION window, not the token's life:
+	// a burst of readers on one storefront page still collapses to one origin
+	// fetch, which is where nearly all of the saving is, and a revocation
+	// takes effect everywhere within signedMediaFreshness. `must-revalidate`
+	// forbids serving it stale beyond that even when the origin is
+	// unreachable, and `immutable` is deliberately NOT sent: it tells a client
+	// not to revalidate even on a user-initiated reload, which is the opposite
+	// of what a revocable object needs.
+	//
+	// max-age never outlives the token either. A negative age can only come
+	// from a token already past its expiry, which Verify has rejected above;
+	// clamping keeps a malformed header out of the response either way.
 	maxAge := int(time.Until(claims.ExpiresAt).Seconds())
+	if maxAge > signedMediaFreshness {
+		maxAge = signedMediaFreshness
+	}
 	if maxAge < 0 {
 		maxAge = 0
 	}
-	w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(maxAge)+", immutable")
+	w.Header().Set("Cache-Control",
+		"public, max-age="+strconv.Itoa(maxAge)+", must-revalidate")
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, rc); err != nil {
 		s.log.Error().Err(err).Msg("stream signed media")

@@ -1,4 +1,4 @@
-## [Unreleased]
+## [1.10.0] — 2026-08-16
 
 ### Breaking — Three changes that reject what an earlier release accepted
 
@@ -3159,7 +3159,8 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 - Quantity `one_of` members and defaults are unit-rebased; equal quantities in
   different units compare equal.
 
-[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/zkrebbekx/flexitype/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/zkrebbekx/flexitype/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/zkrebbekx/flexitype/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/zkrebbekx/flexitype/compare/v1.7.0...v1.7.1

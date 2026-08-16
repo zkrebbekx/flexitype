@@ -323,7 +323,7 @@ func (r *relationshipDefinitionRepository) Save(ctx context.Context, d *domainre
 		nullableInt(s.MinChildren), nullableInt(s.MaxChildren), nullableInt(s.MinParents), nullableInt(s.MaxParents),
 	)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if violates(err, "uq_flexitype_relationship_definition_name") {
 			return domainerrors.NewConflict(
 				"a relationship with this internal name already exists",
 				"internal_name", s.InternalName)
@@ -985,7 +985,7 @@ func (r *relationshipRepository) Save(ctx context.Context, rel *domainrelationsh
 		s.CreatedAt, s.UpdatedAt, nullableTime(s.ArchivedAt),
 	)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if violates(err, "uq_flexitype_relationship_pair") {
 			return domainerrors.NewConflict(
 				"these two entities are already linked by this relationship",
 				"parent_entity_id", s.ParentEntityID.String(),

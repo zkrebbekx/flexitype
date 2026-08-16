@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { TEXTUAL, buildCarriedUpdate, carriedFields, isTextual } from './attribute-edit'
+import { ORDERED, TEXTUAL, buildCarriedUpdate, isTextual, loadPassthrough } from './attribute-edit'
 import type { ComputedSpec, DefaultValue } from './api'
 
 describe('a text attribute keeps its constraints (#591)', () => {
@@ -27,32 +27,32 @@ describe('an edit does not delete what the drawer does not model (#592)', () => 
   it('hands a rollup back unchanged when the formula box is empty', () => {
     // The drawer models only a formula, so a rollup read as "no computed" and
     // the full replace turned a derived attribute into a plain writable one.
-    const carried = carriedFields({ computed: rollup })
+    const carried = loadPassthrough({ computed: rollup }, 'string')
     const body = buildCarriedUpdate('', [], carried)
     expect(body.computed).toEqual(rollup)
   })
 
   it('hands back a stored default the drawer never shows', () => {
     // A rename was enough to delete this.
-    const carried = carriedFields({ default_value: fallback })
+    const carried = loadPassthrough({ default_value: fallback }, 'string')
     const body = buildCarriedUpdate('', [], carried)
     expect(body.default_value).toEqual(fallback)
   })
 
   it('lets a typed formula win over what was there', () => {
-    const carried = carriedFields({ computed: rollup })
+    const carried = loadPassthrough({ computed: rollup }, 'string')
     const body = buildCarriedUpdate('  price * 2 ', [], carried)
     expect(body.computed).toEqual({ kind: 'formula', formula: 'price * 2' })
   })
 
   it('sends no computed for an attribute that has none', () => {
-    const body = buildCarriedUpdate('', [], carriedFields({}))
+    const body = buildCarriedUpdate('', [], loadPassthrough({}, 'string'))
     expect(body.computed).toBeUndefined()
     expect(body.default_value).toBeUndefined()
   })
 
   it('passes the constraints it was given through untouched', () => {
-    const body = buildCarriedUpdate('', [{ kind: 'max_length', n: 10 }], carriedFields({}))
+    const body = buildCarriedUpdate('', [{ kind: 'max_length', n: 10 }], loadPassthrough({}, 'string'))
     expect(body.constraints).toEqual([{ kind: 'max_length', n: 10 }])
   })
 })
@@ -61,14 +61,14 @@ describe('an edit does not delete what the drawer does not model (#592)', () => 
 // loses fields the later writer never looked at.
 describe('compare-and-swap baseline', () => {
   it('carries the version of the record the edit was based on', () => {
-    const carried = carriedFields({ version: 4 })
+    const carried = loadPassthrough({ version: 4 }, 'string')
     expect(carried.version).toBe(4)
     expect(buildCarriedUpdate('', [], carried).version).toBe(4)
   })
 
   it('sends no version for a record that has none, keeping last-write-wins', () => {
     // A caller that never sent one must keep working; the swap is opt-in.
-    expect(buildCarriedUpdate('', [], carriedFields(undefined)).version).toBeUndefined()
+    expect(buildCarriedUpdate('', [], loadPassthrough(undefined, 'string')).version).toBeUndefined()
   })
 })
 

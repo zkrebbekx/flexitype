@@ -8,9 +8,11 @@
 // carries the whole file through a process that has no other reason to touch
 // it and defeats any CDN in front of it.
 //
-// A redemption is served with `Cache-Control: public`, bounded by the token's
-// remaining life, so a CDN in front of the route can hold it: the signature is
-// part of the URL, so it is the cache key.
+// A redemption is served with `Cache-Control: public`, so a CDN in front of
+// the route can hold it: the signature is part of the URL, so it is the cache
+// key. The freshness window is short and bounded by the token's remaining life
+// — an erasure must be able to take effect while a link is still valid, and
+// the service cannot purge a cache it does not own.
 //
 // A signed link is issued by an authenticated caller and redeemed by anyone
 // holding it. That is the point, so the rules are narrow:

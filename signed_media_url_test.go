@@ -383,6 +383,21 @@ func TestSignedMediaIsPubliclyCacheable(t *testing.T) {
 				So(cache, ShouldNotContainSubstring, "private")
 			})
 
+			Convey("Then a revocation cannot be outrun by the cache", func() {
+				// The bytes are immutable; the decision to serve them is not.
+				// Ownership is re-resolved on every request and erasure
+				// deletes the object, so a cache holding the response for the
+				// token's whole life would serve erased bytes long after the
+				// origin started refusing them — and this service cannot purge
+				// a cache it does not own.
+				So(cache, ShouldContainSubstring, "must-revalidate")
+				So(cache, ShouldNotContainSubstring, "immutable")
+				var seconds int
+				_, serr := fmt.Sscanf(strings.Split(cache, "max-age=")[1], "%d", &seconds)
+				So(serr, ShouldBeNil)
+				So(seconds, ShouldBeLessThanOrEqualTo, 300)
+			})
+
 			Convey("Then it is never cached past the token's expiry", func() {
 				// The URL is the capability and the signature is part of it,
 				// so the cache key dies with the link — but only if max-age
@@ -393,6 +408,7 @@ func TestSignedMediaIsPubliclyCacheable(t *testing.T) {
 				So(serr, ShouldBeNil)
 				So(seconds, ShouldBeGreaterThan, 0)
 				So(seconds, ShouldBeLessThanOrEqualTo, 600)
+				So(seconds, ShouldBeLessThanOrEqualTo, 300)
 			})
 
 			Convey("Then it is still not renderable as active content", func() {

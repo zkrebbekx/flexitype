@@ -125,10 +125,17 @@ Migrations 000004 and 000021 resolved that by building the `pg_trgm` indexes
 plainly, on the largest table in the database. Moving the condition to the
 runner let 000041 build them concurrently.
 
+A directive must appear in the **header**, above the first statement. The
+runner stops scanning at the first line that is neither blank nor a comment, so
+a directive written below a statement is silently ignored — the one place where
+a mistake here does not announce itself.
+
 An unknown directive is a hard error, so a typo cannot silently fall back to
 the blocking default. `requires-extension` takes exactly one bare extension
 name for the same reason: a name nobody has would read as "extension missing"
-and skip the file for ever.
+and skip the file for ever. Scanning the header only is also what stops a
+sentence of prose that mentions a directive from becoming one, which would fail
+every replica at boot.
 
 ### Rules for writing a migration
 
@@ -158,9 +165,18 @@ and skip the file for ever.
    conditional: that costs `CONCURRENTLY`, which is the expensive half of the
    trade.
 
-`TestEmbeddedMigrationDirectives` enforces rules 1 and 4 in CI: a file that
-uses `CONCURRENTLY` must declare the directive, a file that declares it must
-not, and no such file may create a table.
+Three tests hold these in CI, and it is worth knowing which binds what — a
+documented rule credited to a test that does not enforce it is not enforced:
+
+- `TestEmbeddedMigrationDirectives` — a file that uses `CONCURRENTLY` declares
+  the directive, a file that declares it uses `CONCURRENTLY`, and no such file
+  creates a table (rule 4).
+- `TestIndexesOnExistingTablesAreConcurrent` — the substance of rule 1: an
+  index built on a table an earlier migration created uses `CONCURRENTLY`.
+  Its `grandfatheredPlainIndexes` map is the closed list of exceptions.
+- `TestMigrationsDoNotQueryTheCatalogueBlind` — rule 3's prohibition on an
+  in-file catalogue guard that matches `pg_class.relname` without a
+  `pg_namespace` join.
 
 ## Backfills
 

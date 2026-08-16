@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
+import { baselineVersion, staleEditMessage } from '@/lib/concurrency'
 import type { TypeDefinition } from '@/lib/api'
 import { useToasts } from '@/composables/useToasts'
 import Drawer from '@/components/ui/Drawer.vue'
@@ -17,6 +18,8 @@ const queryClient = useQueryClient()
 
 const form = reactive({ display_name: '', description: '' })
 const error = ref('')
+// The version the drawer loaded, sent back as a compare-and-swap.
+const baseline = ref<number | undefined>()
 const canSubmit = computed(() => !!form.display_name.trim())
 
 watch(
@@ -26,6 +29,9 @@ watch(
     error.value = ''
     form.display_name = props.type?.display_name ?? ''
     form.description = props.type?.description ?? ''
+    // Captured at LOAD, never re-read at save: the record comes from a query
+    // cache that refetches in the background.
+    baseline.value = baselineVersion(props.type)
   },
   { immediate: true },
 )
@@ -36,6 +42,7 @@ const save = useMutation({
     return api.updateType(props.type.id, {
       display_name: form.display_name,
       description: form.description || undefined,
+      version: baseline.value,
     })
   },
   onSuccess: (t) => {
@@ -44,7 +51,15 @@ const save = useMutation({
     toasts.success(`"${t.display_name}" saved`)
     emit('close')
   },
-  onError: (e) => (error.value = friendlyError(e)),
+  onError: (e) => {
+    const stale = staleEditMessage(e)
+    if (stale) {
+      queryClient.invalidateQueries({ queryKey: ['types'] })
+      error.value = stale
+      return
+    }
+    error.value = friendlyError(e)
+  },
 })
 </script>
 

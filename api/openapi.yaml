@@ -111,6 +111,7 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/TypeDefinition" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /type-definitions/{id}/archive:
     parameters: [{ $ref: "#/components/parameters/ID" }]
     post:
@@ -633,6 +634,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Dependency"
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
     delete:
       tags: [dependencies]
       summary: Archive a dependency
@@ -699,7 +702,14 @@ paths:
     patch:
       tags: [relationships]
       summary: Update a relationship definition
-      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      description: >
+        Replaces the whole editable record. Supply `version` to
+        compare-and-swap against the record you read.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateRelationshipDefinition" }
       responses:
         "200":
           description: The updated definition
@@ -707,6 +717,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RelationshipDefinition"
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /relationship-definitions/{id}/archive:
     parameters: [{ $ref: "#/components/parameters/ID" }]
     post:
@@ -2116,6 +2128,14 @@ components:
       properties:
         display_name: { type: string }
         description: { type: string }
+        version:
+          type: integer
+          description: >
+            The version the caller read. Supply it to compare-and-swap: a
+            stale write answers 409 rather than discarding the other edit.
+            Omit it for last-write-wins. This request replaces the whole
+            editable record, so a lost update loses fields the later writer
+            never looked at.
     Attribute:
       type: object
       example:
@@ -2408,6 +2428,29 @@ components:
         conditions: { type: array, items: { $ref: "#/components/schemas/DependencyCondition" } }
         effect: { $ref: "#/components/schemas/DependencyEffect" }
         description: { type: string }
+    UpdateRelationshipDefinition:
+      type: object
+      description: The replacement editable fields of a relationship definition.
+      required: [display_name]
+      properties:
+        display_name: { type: string }
+        description: { type: string }
+        parent_label: { type: string }
+        child_label: { type: string }
+        parent_version_policy: { type: string, enum: [latest, pinned] }
+        child_version_policy: { type: string, enum: [latest, pinned] }
+        min_children: { type: integer, nullable: true }
+        max_children: { type: integer, nullable: true }
+        min_parents: { type: integer, nullable: true }
+        max_parents: { type: integer, nullable: true }
+        version:
+          type: integer
+          description: >
+            The version the caller read. Supply it to compare-and-swap: a
+            stale write answers 409 rather than discarding the other edit.
+            Omit it for last-write-wins. This request replaces the whole
+            editable record, so a lost update loses fields the later writer
+            never looked at.
     UpdateDependency:
       type: object
       description: The replacement conditions and effect of a rule.
@@ -2416,6 +2459,14 @@ components:
         conditions: { type: array, items: { $ref: "#/components/schemas/DependencyCondition" } }
         effect: { $ref: "#/components/schemas/DependencyEffect" }
         description: { type: string }
+        version:
+          type: integer
+          description: >
+            The version the caller read. Supply it to compare-and-swap: a
+            stale write answers 409 rather than discarding the other edit.
+            Omit it for last-write-wins. This request replaces the whole
+            editable record, so a lost update loses fields the later writer
+            never looked at.
     EffectiveSchema:
       type: object
       description: An attribute's dependency-resolved state for one entity.

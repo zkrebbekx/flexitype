@@ -88,3 +88,29 @@ describe('optimistic concurrency', () => {
     expect(isConflict(new Error('boom'))).toBe(false)
   })
 })
+
+// The relationship-definition PATCH never sent its body. Every console edit
+// therefore asked the server to replace the record with nothing, which the
+// full-replace semantics answer by clearing what the request omits — and
+// display_name is required, so the save simply failed.
+describe('request bodies', () => {
+  it('sends the body on a relationship-definition update', async () => {
+    const spy = vi.fn(async (..._args: unknown[]) => new Response(JSON.stringify({ id: 'r1' }), { status: 200 }))
+    vi.stubGlobal('fetch', spy)
+    await api.updateRelationshipDefinition('r1', { display_name: 'Goes with', version: 2 })
+    const init = spy.mock.calls[0]![1] as RequestInit
+    expect(init.body).toBeDefined()
+    const body = JSON.parse(init.body as string)
+    expect(body.display_name).toBe('Goes with')
+    expect(body.version).toBe(2)
+  })
+
+  it('sends the version on a type and a dependency update', async () => {
+    const spy = vi.fn(async (..._args: unknown[]) => new Response(JSON.stringify({ id: 'x' }), { status: 200 }))
+    vi.stubGlobal('fetch', spy)
+    await api.updateType('t1', { display_name: 'Product', version: 4 })
+    await api.updateDependency('d1', { conditions: [], effect: {}, version: 9 })
+    expect(JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string).version).toBe(4)
+    expect(JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string).version).toBe(9)
+  })
+})

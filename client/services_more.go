@@ -25,6 +25,16 @@ type CreateDependencyInput struct {
 	Conditions        json.RawMessage `json:"conditions,omitempty"`
 	Effect            json.RawMessage `json:"effect,omitempty"`
 	Description       string          `json:"description,omitempty"`
+
+	// Version is the version the caller read, and applies to Update ONLY —
+	// Create ignores it, because there is nothing to swap against. Set it on
+	// an update to compare-and-swap: a write against a record somebody else
+	// has since changed answers CONFLICT instead of overwriting it. Leave it
+	// nil for last-write-wins.
+	//
+	// It lives on the create input because Update takes the same type; that is
+	// the SDK's existing shape and changing it would break callers.
+	Version *int `json:"version,omitempty"`
 }
 
 // List returns one page of dependencies.
@@ -135,6 +145,11 @@ type SavedViewInput struct {
 	// field.
 	Columns []string `json:"columns"`
 	Sort    string   `json:"sort"`
+
+	// Version is the version the caller read. Set it to compare-and-swap: a
+	// write against a view somebody else has since changed answers CONFLICT
+	// instead of overwriting it. Leave it nil for last-write-wins.
+	Version *int `json:"version,omitempty"`
 }
 
 // MarshalJSON transmits a nil Columns as [], so Update replaces every field.
@@ -406,6 +421,16 @@ type CreateRelationshipDefinitionInput struct {
 	MaxChildren         *int   `json:"max_children,omitempty"`
 	MinParents          *int   `json:"min_parents,omitempty"`
 	MaxParents          *int   `json:"max_parents,omitempty"`
+
+	// Version is the version the caller read, and applies to Update ONLY —
+	// Create ignores it, because there is nothing to swap against. Set it on
+	// an update to compare-and-swap: a write against a record somebody else
+	// has since changed answers CONFLICT instead of overwriting it. Leave it
+	// nil for last-write-wins.
+	//
+	// It lives on the create input because Update takes the same type; that is
+	// the SDK's existing shape and changing it would break callers.
+	Version *int `json:"version,omitempty"`
 }
 
 // ListRelationshipDefinitionsOptions filters a definition listing.

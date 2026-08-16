@@ -131,7 +131,7 @@ func buildRouter(cfg ServerConfig) *chi.Mux {
 	// the link exists is that a public surface holds no tenant token. It
 	// carries its own tenant, expiry and object key, all covered by the
 	// signature.
-	r.Get("/media/signed/{token}", s.downloadSignedMedia)
+	r.Get(signedMediaPrefix+"{token}", s.downloadSignedMedia)
 
 	// The OpenAPI document is public (before auth) so client generators
 	// and mock servers can fetch the contract without credentials.

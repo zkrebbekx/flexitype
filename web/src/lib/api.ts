@@ -20,7 +20,15 @@ export type DataType =
   | 'json'
   | 'media'
 
-export const DATA_TYPES: DataType[] = [
+/**
+ * Every data type the picker offers.
+ *
+ * The compile-time check below is the point: a type added to `DataType` and
+ * forgotten here would otherwise vanish from the console silently, which is
+ * exactly how `text` came to be missing from three separate lists. The
+ * TypeScript client carries the same guard.
+ */
+export const DATA_TYPES = [
   'string',
   'text',
   'integer',
@@ -36,7 +44,20 @@ export const DATA_TYPES: DataType[] = [
   'email',
   'json',
   'media',
-]
+] as const satisfies readonly DataType[]
+
+/**
+ * Fails to compile if DATA_TYPES ever misses a DataType again.
+ *
+ * `satisfies readonly DataType[]` checks each entry IS a DataType; it does not
+ * check the list is COMPLETE, and an explicit `: DataType[]` annotation makes
+ * the assertion below vacuous — the reason a first attempt at this guard
+ * passed while the list was short. This asserts the other direction: every
+ * DataType appears.
+ */
+type MissingDataType = Exclude<DataType, (typeof DATA_TYPES)[number]>
+const _dataTypesAreExhaustive: MissingDataType extends never ? true : never = true
+void _dataTypesAreExhaustive
 
 export type ErrorCode =
   | 'VALIDATION'
@@ -486,8 +507,18 @@ export const api = {
     request<{ items: EffectiveAttribute[] }>('GET', `/type-definitions/${typeId}/effective-attributes`),
   typeChildren: (typeId: string) =>
     request<{ items: TypeDefinition[] }>('GET', `/type-definitions/${typeId}/children`),
-  updateType: (id: string, input: { display_name: string; description?: string }) =>
-    request<TypeDefinition>('PATCH', `/type-definitions/${id}`, input),
+  updateType: (
+    id: string,
+    input: {
+      display_name: string
+      description?: string
+      /**
+       * The version the caller read. The write is refused with 409 if the
+       * stored version has moved on. Omit it for last-write-wins.
+       */
+      version?: number
+    },
+  ) => request<TypeDefinition>('PATCH', `/type-definitions/${id}`, input),
   archiveType: (id: string) => request<TypeDefinition>('POST', `/type-definitions/${id}/archive`),
   restoreType: (id: string) => request<TypeDefinition>('POST', `/type-definitions/${id}/restore`),
   cloneType: (id: string, input: { internal_name: string; display_name?: string }) =>
@@ -690,7 +721,16 @@ export const api = {
   }) => request<Dependency>('POST', '/dependencies', input),
   updateDependency: (
     id: string,
-    input: { conditions: Condition[]; effect: Effect; description?: string },
+    input: {
+      conditions: Condition[]
+      effect: Effect
+      description?: string
+      /**
+       * The version the caller read. The write is refused with 409 if the
+       * stored version has moved on. Omit it for last-write-wins.
+       */
+      version?: number
+    },
   ) => request<Dependency>('PATCH', `/dependencies/${id}`, input),
   archiveDependency: (id: string) => request<Dependency>('DELETE', `/dependencies/${id}`),
 
@@ -729,8 +769,17 @@ export const api = {
       max_children?: number | null
       min_parents?: number | null
       max_parents?: number | null
+      /**
+       * The version the caller read. The write is refused with 409 if the
+       * stored version has moved on. Omit it for last-write-wins.
+       */
+      version?: number
     },
-  ) => request<RelationshipDefinition>('PATCH', `/relationship-definitions/${id}`),
+    // The body was omitted here, so every edit sent an empty PATCH: the
+    // server replaced the record with the zero value of each field it models,
+    // which fails validation on display_name. The console could not edit a
+    // relationship definition at all.
+  ) => request<RelationshipDefinition>('PATCH', `/relationship-definitions/${id}`, input),
   archiveRelationshipDefinition: (id: string) =>
     request<RelationshipDefinition>('POST', `/relationship-definitions/${id}/archive`),
   restoreRelationshipDefinition: (id: string) =>

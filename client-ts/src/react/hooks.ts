@@ -544,13 +544,17 @@ export type MutationHookOptions<TData, TVariables> = Omit<
  */
 export async function invalidateAfterValueWrite(
   queryClient: QueryClient,
-  input: { typeId?: string | undefined; entityId?: string | undefined; cacheKey?: string } = {},
+  input: { typeId?: string | undefined; entityId?: string | undefined; cacheKey: string },
 ): Promise<void> {
-  // Scoped to ONE client. Without the cache key this invalidated every
-  // tenant's entries in a shared cache — harmless for correctness, but it
-  // refetched data the caller has no business touching, and it is the same
-  // omission that let a read cross tenants.
-  const flexitypeKeys = flexitypeKeysFor(input.cacheKey ?? '')
+  // Scoped to ONE client, and cacheKey is REQUIRED to say which. Defaulting it
+  // to '' built keys rooted at ['flexitype',''], which is a prefix of nothing
+  // any hook registers — so a caller that omitted it invalidated nothing at
+  // all, silently, where the same call used to work. A compile error is the
+  // only honest answer.
+  if (!input.cacheKey) {
+    throw new Error('invalidateAfterValueWrite: cacheKey is required — pass client.cacheKey')
+  }
+  const flexitypeKeys = flexitypeKeysFor(input.cacheKey)
   const work: Promise<unknown>[] = [
     // A changed value can move the entity into or out of any result set, and
     // the client cannot evaluate FQL to know which, so every query, grid and

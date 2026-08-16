@@ -930,6 +930,8 @@ export interface paths {
                         "application/json": components["schemas"]["Dependency"];
                     };
                 };
+                409: components["responses"]["Error"];
+                422: components["responses"]["Error"];
             };
         };
         trace?: never;
@@ -2430,7 +2432,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Update a relationship definition */
+        /**
+         * Update a relationship definition
+         * @description Replaces the whole editable record. Supply `version` to compare-and-swap against the record you read.
+         */
         patch: {
             parameters: {
                 query?: never;
@@ -2442,7 +2447,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["UpdateRelationshipDefinition"];
                 };
             };
             responses: {
@@ -2455,6 +2460,8 @@ export interface paths {
                         "application/json": components["schemas"]["RelationshipDefinition"];
                     };
                 };
+                409: components["responses"]["Error"];
+                422: components["responses"]["Error"];
             };
         };
         trace?: never;
@@ -3864,6 +3871,7 @@ export interface paths {
             responses: {
                 200: components["responses"]["TypeDefinition"];
                 404: components["responses"]["Error"];
+                409: components["responses"]["Error"];
             };
         };
         trace?: never;
@@ -5649,10 +5657,31 @@ export interface components {
             conditions: components["schemas"]["DependencyCondition"][];
             description?: string;
             effect: components["schemas"]["DependencyEffect"];
+            /** @description The version the caller read. Supply it to compare-and-swap: a stale write answers 409 rather than discarding the other edit. Omit it for last-write-wins. This request replaces the whole editable record, so a lost update loses fields the later writer never looked at. */
+            version?: number;
         };
         UpdateDisplay: {
             description?: string;
             display_name: string;
+            /** @description The version the caller read. Supply it to compare-and-swap: a stale write answers 409 rather than discarding the other edit. Omit it for last-write-wins. This request replaces the whole editable record, so a lost update loses fields the later writer never looked at. */
+            version?: number;
+        };
+        /** @description The replacement editable fields of a relationship definition. */
+        UpdateRelationshipDefinition: {
+            child_label?: string;
+            /** @enum {string} */
+            child_version_policy?: "latest" | "pinned";
+            description?: string;
+            display_name: string;
+            max_children?: number | null;
+            max_parents?: number | null;
+            min_children?: number | null;
+            min_parents?: number | null;
+            parent_label?: string;
+            /** @enum {string} */
+            parent_version_policy?: "latest" | "pinned";
+            /** @description The version the caller read. Supply it to compare-and-swap: a stale write answers 409 rather than discarding the other edit. Omit it for last-write-wins. This request replaces the whole editable record, so a lost update loses fields the later writer never looked at. */
+            version?: number;
         };
         UpdateSubscription: {
             active?: boolean;
@@ -5876,6 +5905,7 @@ export type SchemaUnitFamily = components['schemas']['UnitFamily'];
 export type SchemaUpdateAttribute = components['schemas']['UpdateAttribute'];
 export type SchemaUpdateDependency = components['schemas']['UpdateDependency'];
 export type SchemaUpdateDisplay = components['schemas']['UpdateDisplay'];
+export type SchemaUpdateRelationshipDefinition = components['schemas']['UpdateRelationshipDefinition'];
 export type SchemaUpdateSubscription = components['schemas']['UpdateSubscription'];
 export type SchemaValidateValueResult = components['schemas']['ValidateValueResult'];
 export type SchemaValue = components['schemas']['Value'];

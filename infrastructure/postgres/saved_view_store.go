@@ -69,8 +69,11 @@ func (s *savedViewStore) Create(ctx context.Context, v savedview.View) error {
 		// in-memory store has always answered 409 here; without this
 		// translation Postgres answered 500 for the same request, so the
 		// backend decided the status code.
-		if isUniqueViolation(err) {
+		if violates(err, "flexitype_saved_view_tenant_id_name_key") {
 			return domainerrors.NewConflict("a view with this name already exists", "name", v.Name)
+		}
+		if isUniqueViolation(err) {
+			return domainerrors.NewConflict("a view with this id already exists", "id", v.ID.String())
 		}
 		return fmt.Errorf("insert saved view: %w", err)
 	}
@@ -89,6 +92,14 @@ func (s *savedViewStore) Update(ctx context.Context, v savedview.View) error {
 		v.Name, v.RootType, v.Query, jsonbParam(cols), v.Sort, v.UpdatedAt,
 		v.ID, v.TenantID.String(), maxInt(v.Version, 1))
 	if err != nil {
+		// Update writes the NAME, so it meets the same unique index Create
+		// does — renaming a view onto another view's name raised 23505 here
+		// and became a 500. Create translated it and Update did not, which is
+		// the half-fix that made one operation a conflict and the identical
+		// clash a server fault.
+		if violates(err, "flexitype_saved_view_tenant_id_name_key") {
+			return domainerrors.NewConflict("a view with this name already exists", "name", v.Name)
+		}
 		return fmt.Errorf("update saved view: %w", err)
 	}
 	n, err := res.RowsAffected()

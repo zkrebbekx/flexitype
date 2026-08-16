@@ -50,8 +50,11 @@ func (s *adminStore) CreateTenant(ctx context.Context, t admin.Tenant) error {
 		`INSERT INTO flexitype_tenant (id, name, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`),
 		t.ID, t.Name, t.Active, t.CreatedAt, t.UpdatedAt)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if violates(err, "flexitype_tenant_name_key") {
 			return domainerrors.NewConflict("a tenant with this name already exists", "name", t.Name)
+		}
+		if isUniqueViolation(err) {
+			return domainerrors.NewConflict("a tenant with this id already exists", "id", t.ID.String())
 		}
 		return fmt.Errorf("insert tenant: %w", err)
 	}
@@ -148,9 +151,16 @@ func (s *adminStore) CreateAccount(ctx context.Context, a admin.ServiceAccount, 
 		pq.Array(nonNilRoles(a.Roles)), jsonbParam(perms),
 		a.Active, a.CreatedAt, a.UpdatedAt)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if violates(err, "flexitype_service_account_tenant_id_name_key") {
 			return domainerrors.NewConflict(
 				"a service account with this name already exists in this tenant", "name", a.Name)
+		}
+		if isUniqueViolation(err) {
+			// The caller may supply the id — a bootstrap token carries one —
+			// so this is reachable, and reporting it as a duplicate NAME sent
+			// the operator to rename an account that was never the problem.
+			return domainerrors.NewConflict(
+				"a service account with this id already exists", "id", a.ID.String())
 		}
 		return fmt.Errorf("insert service account: %w", err)
 	}

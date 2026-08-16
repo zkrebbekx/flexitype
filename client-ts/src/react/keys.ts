@@ -14,24 +14,32 @@
  * from, which is why an entity's values live under the entity's own key rather
  * than beside it.
  *
+ * Every key carries the client's `cacheKey` second, so one cache can hold
+ * several clients without them reading each other's entries. Build keys with
+ * `flexitypeKeysFor(client.cacheKey)` rather than writing the arrays by hand.
+ *
  * | key | covers |
  * |---|---|
  * | `['flexitype']` | everything this package caches |
- * | `['flexitype','types']` | every type query |
- * | `['flexitype','types','list',opts]` | one page of types |
- * | `['flexitype','types','detail',id]` | one type AND everything derived from it |
- * | `['flexitype','types','detail',id,'effective-attributes']` | that type's effective attributes |
- * | `['flexitype','entities','list',typeId,opts]` | one page of a type's entities |
- * | `['flexitype','entities','detail',typeId,entityId]` | one entity and all its derived queries |
- * | `['flexitype','entities','detail',typeId,entityId,'values',opts]` | that entity's values |
- * | `['flexitype','query','run',type,q,opts]` | one FQL result set |
+ * | `['flexitype',cacheKey]` | everything ONE client caches |
+ * | `['flexitype',cacheKey,'types']` | every type query |
+ * | `['flexitype',cacheKey,'types','list',opts]` | one page of types |
+ * | `['flexitype',cacheKey,'types','detail',id]` | one type AND everything derived from it |
+ * | `['flexitype',cacheKey,'types','detail',id,'effective-attributes']` | that type's effective attributes |
+ * | `['flexitype',cacheKey,'entities','list',typeId,opts]` | one page of a type's entities |
+ * | `['flexitype',cacheKey,'entities','detail',typeId,entityId]` | one entity and all its derived queries |
+ * | `['flexitype',cacheKey,'entities','detail',typeId,entityId,'values',opts]` | that entity's values |
+ * | `['flexitype',cacheKey,'query','run',type,q,opts]` | one FQL result set |
  *
  * So `invalidateQueries({ queryKey: flexitypeKeys.entities.detail(t, e) })`
  * refreshes that entity's values, completeness, relationships and revisions in
  * one call, and touches no other entity.
  *
  * THE SCHEME IS STABLE API. A key's prefix does not change in a minor release,
- * so invalidation code written against it keeps working.
+ * so invalidation code written against it keeps working — with one exception,
+ * already taken: `cacheKey` was inserted at position 2 to stop two clients
+ * sharing a namespace, which moved every prefix. Hand-written keys from before
+ * that match nothing. Use the factory and this cannot happen again.
  */
 
 /** The first element of every key this package builds. */

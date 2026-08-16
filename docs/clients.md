@@ -99,16 +99,21 @@ Other useful targets: `python`, `java`, `rust`, `csharp`, and
 
 ## Concurrent edits
 
-Two of the write endpoints replace a whole record rather than merging fields:
-`PATCH /attributes/{id}` and `PATCH /saved-views/{id}`. A field the request
-omits is cleared. Two clients that each read a record, change one field and
+Four write endpoints replace a whole record rather than merging fields:
+`PATCH /type-definitions/{id}`, `PATCH /attributes/{id}`,
+`PATCH /relationship-definitions/{id}` and `PATCH /dependencies/{id}`. A field
+the request omits is cleared. `PATCH /saved-views/{id}` is sparse — an omitted
+field keeps its stored value — and still needs the same guard, because a sparse
+write can overwrite a field the other operator just changed. Two clients that each read a record, change one field and
 send it back therefore lose the earlier edit — including fields the later
 writer never looked at.
 
-Both accept a `version` field to prevent that:
+All five accept a `version` field to prevent that:
 
 1. Read the record and keep its `version`.
-2. Send the whole record back with that `version`.
+2. Send it back with that `version` — the whole record for the four
+   full-replace endpoints, just the fields you are changing for the saved
+   view.
 3. A `409 CONFLICT` means somebody wrote it in between. Re-read, re-apply the
    change on top of what you now see, and send it again.
 
@@ -116,8 +121,12 @@ Omitting `version` keeps last-write-wins, so an existing client keeps working.
 Send the version you READ, not one you fetched at save time: a version fetched
 late describes a change you never saw, and the swap then guards nothing.
 
-The Go client takes `Version *int`; the TypeScript client takes `version?:
-number`. The web console sends both.
+A dependency is the one worth being strict about. It decides which values the
+API accepts, so a lost update there changes validation for every later write.
+
+The Go client takes `Version *int` on each update input, including
+`SavedViewInput` and `SavedViewPatch`. The TypeScript client takes `version?:
+number`. The web console sends it from every editor.
 
 ## Browse the API
 

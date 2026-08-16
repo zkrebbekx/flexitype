@@ -378,14 +378,25 @@ What the design holds to:
 `GET /media/signed/{token}` is served outside `/api/v1`, and takes no
 credential — the signature is the credential.
 
-The redemption response is **publicly cacheable**: `Cache-Control: public,
-max-age=<seconds until the token expires>, immutable`. A shared cache is the
-point — a CDN can serve the bytes without the origin seeing every hit. The URL
-is the capability, so the signature is part of the cache key, and `max-age`
-never outlives the token. An object key names immutable bytes, so a cached
-response can never be stale. The authenticated `GET /api/v1/media/{key}` stays
-`private`, because that route needs a credential and its URL is the same for
-every caller.
+The redemption response is **publicly cacheable, briefly**: `Cache-Control:
+public, max-age=<at most 300>, must-revalidate`. A shared cache is the point —
+a CDN can serve a burst of readers without the origin seeing every hit — and
+the URL is the capability, so the signature is part of the cache key.
+
+The window is a **revocation budget**, not the token's lifetime. The bytes an
+object key names are immutable, but the decision to serve them is not: every
+redemption re-resolves ownership against live data, and an erasure deletes the
+object outright. A response cached for the token's full 24 hours would go on
+serving erased bytes long after the origin began refusing them, and this
+service cannot purge a cache it does not own. So a revocation takes effect
+everywhere within five minutes. `immutable` is deliberately not sent: it tells
+a client not to revalidate even on a reload, which is the opposite of what a
+revocable object needs.
+
+`max-age` never outlives the token either. The authenticated
+`GET /api/v1/media/{key}` stays `private`, because that route needs a
+credential and its URL is the same for every caller. The mint response is
+`no-store`, because its body is a capability.
 
 A CDN sits in front of this route only. If a shared cache must never hold
 tenant bytes at all, do not publish the route through one — the header assumes

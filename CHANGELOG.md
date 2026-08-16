@@ -1,5 +1,146 @@
 ## [Unreleased]
 
+### Breaking — Three changes that reject what an earlier release accepted
+
+Called out because `docs/api-stability.md` says a change that rejects a
+previously accepted request belongs here, and these three were filed under
+Fixed. Each is still the right change; each can break a working caller.
+
+- **A rollup over an attribute its author cannot read is refused** ([#585]).
+  A schema author with a field-level restriction who could previously define
+  such a rollup now gets a refusal. The definition it would have created
+  republished a value that author could not read.
+- **`matches()` no longer finds an entity by a non-textual value** ([#601]).
+  Anyone relying on full-text search to match a number, a date or a boolean
+  stops finding it that way. Query those with a field comparison instead.
+- **`safedial` no longer honours `HTTP_PROXY`/`HTTPS_PROXY`** ([#593]). A
+  deployment whose egress runs through an environment-configured proxy loses
+  webhook delivery until it sets `Options.UseEnvironmentProxy`. The guard could
+  otherwise be reopened by the environment, which is not a decision the
+  environment should make.
+
+[#585]: https://github.com/zkrebbekx/flexitype/issues/585
+[#593]: https://github.com/zkrebbekx/flexitype/issues/593
+[#601]: https://github.com/zkrebbekx/flexitype/issues/601
+
+### Fixed — Findings from the pre-release review
+
+An independent review of everything since v1.9.0, run before cutting the
+release. Each of these is a defect in work that had already been merged.
+
+**A signed media link could outlive its own revocation.** The redemption
+response was `public, max-age=<token life>, immutable`, on the reasoning that
+an object key names immutable bytes. The bytes are immutable; the decision to
+serve them is not. Every redemption re-resolves ownership against live data,
+and an erasure deletes the object — so a cache would have gone on serving
+erased bytes for up to 24 hours after the origin began refusing them, and this
+service cannot purge a cache it does not own. The window is now a revocation
+budget of at most five minutes with `must-revalidate`, and `immutable` is gone.
+A burst of readers on one page still collapses to one origin fetch, which is
+where the saving was. The mint response is now `no-store`: its body is a
+capability.
+
+**The signed-media token was written to the log on every redemption.** The
+request logger logged `r.URL.Path`, and on that one route the path IS the
+credential — anyone with log access could fetch the bytes for the rest of the
+token's life. The path is redacted there now, in both the request logger and
+the panic logger. Every other path is still logged in full; an id is not a
+credential.
+
+**Renaming a saved view onto an existing name answered 500.** [#599] fixed the
+create path and left the rename, so the identical clash was a conflict through
+one operation and a server fault through the other — and the in-memory store
+accepted the rename outright, producing two views sharing a name that its own
+create refuses. Both are fixed.
+
+**The in-memory repositories enforced no uniqueness at all.** Postgres declares
+a unique index for a type's internal name, an attribute's internal name, a
+relationship's internal name and a link's entity pair. The in-memory twins were
+a bare map assignment, so a state Postgres cannot represent was reachable in
+tests and in embedded use. They now enforce the same four.
+
+**A conflict could name the wrong field.** A store matched SQLSTATE 23505 and
+reported "the name is taken" whatever the constraint. A primary-key collision —
+reachable through a bootstrap token, which carries a caller-supplied id — sent
+the operator to rename an account that was never the problem. Each site now
+matches the constraint that actually fired, and the constraint name still never
+leaves the store.
+
+**`MigrateDown` claimed a heartbeat it did not have.** It set `lease.pool`, but
+`revert` executed statements directly, so the mid-statement renewal never ran —
+and a down file does build indexes concurrently. Reverts now go through the
+same heartbeat and invalid-index reap the up path uses.
+
+**The extension gate tested the wrong thing.** `requires-extension` asked
+whether the extension exists anywhere in the database. A migration needs it
+resolvable on the session's `search_path`, which is not the same in a database
+holding several flexitype schemas — the gate would pass and the migration would
+fail hard with `operator class "gin_trgm_ops" does not exist`, the opposite of
+what the directive is for.
+
+**A comment could stop every replica from starting.** `parseDirectives` scanned
+the whole file, so any prose line beginning `-- +flexitype:` became a directive,
+and an unknown directive is a hard boot failure. It reads the header only now,
+as its own contract always said. The migration-scanning test helper also
+respects string literals and dollar-quoted bodies, so it can no longer hide
+real SQL from the rule it enforces.
+
+**`000018`'s revert rebuilt indexes that no longer belong to it**, leaving two
+GIN indexes on the largest table that no up-migration at that version owns.
+
+**A rollup guard failed open** when built without a relationship repository,
+and three of its refusals bypassed the collapse that keeps the four failure
+modes indistinguishable — so a restricted caller could still tell a real
+relationship from an absent one.
+
+**The console could not edit a relationship definition at all.** `api.ts` built
+the PATCH without its body, so every save asked the server to replace the
+record with nothing.
+
+**The console's attribute compare-and-swap was never armed.** The drawer read
+the version it loaded and then threw it away, so every attribute save was still
+last-write-wins and the 409 branch was unreachable. The helper tests passed
+because they called the helper; nothing tested the component calling it. The
+drawer is now covered by tests that mount it and inspect the body it sends.
+
+**The attribute drawer deleted every constraint it has no input for.** A media
+attribute lost its MIME allow-list and size cap; a `one_of` allow-list on
+anything other than an enum was dropped; a quantity attribute's bounds were
+hidden and then deleted, because `ORDERED` omitted `quantity` while the
+dependency editor's copy of the same list had it; and a pattern lost the
+`substring` flag, silently re-anchoring it and rejecting values that used to
+pass. The drawer now carries every kind it cannot edit, verbatim.
+
+**A computed attribute could not be made plain again.** Clearing the formula
+box re-sent the formula that had just been deleted, so the save reported
+success and changed nothing.
+
+**`invalidateAfterValueWrite` became a silent no-op** for any caller that did
+not pass `cacheKey`, which was not required and defaulted to a value matching
+no key. It is required now. The key-scheme documentation also still described
+the pre-`cacheKey` shape, so invalidation code written against the table
+matched nothing.
+
+**The console had no exhaustiveness guard on its data-type list** — the gap
+that let `text` go missing from three separate lists. It has the same
+compile-time check the TypeScript client has. The first attempt at it was
+vacuous, because an explicit `: DataType[]` annotation makes the assertion
+trivially true; it is verified to fail when a type is removed.
+
+### Added — Optimistic concurrency covers every full-replace endpoint ([#597])
+
+[#597] shipped the compare-and-swap on attributes and saved views. The type
+definition, the relationship definition and the dependency are the same shape —
+a PATCH that replaces the whole editable record, on an aggregate whose domain
+already carried what its own comment calls "the optimistic version counter",
+with nothing in the application layer reading it.
+
+All five now take `version`, refuse a stale write with 409, and keep
+last-write-wins when it is omitted. The console sends the version each editor
+loaded, and a conflict tells the operator to reload rather than silently
+re-arming the swap. The dependency matters most: it decides which values the
+API accepts, so a lost update there changes validation for every later write.
+
 ### Fixed — A lost race at a unique index returned 500 instead of 409 ([#615])
 
 Only the saved-view store translated SQLSTATE 23505. Every other insert behind
@@ -55,7 +196,7 @@ conditional form in SQL is a `DO` block — which is a transaction, and
   index from 000004, 000014 or 000021 is unaffected.
 - 000021's bespoke invalid-namesake reaper went with the builds it guarded: the
   runner's own reap covers `CREATE INDEX CONCURRENTLY`, which these now are.
-- `grandfatheredPlainIndexes` shrank from seven files to five.
+- `grandfatheredPlainIndexes` shrank from eight files to five.
 
 Migration bookkeeping records the version and no checksum, so correcting an
 applied migration is a no-op for a deployment that has it and a fix for one
@@ -75,9 +216,10 @@ a record somebody else has since changed answers `409 CONFLICT` instead of
 overwriting it. Omitting `version` keeps last-write-wins, so an existing client
 is unaffected.
 
-- The attribute swap is checked **before every other rule**, so a stale caller
-  is told the record moved rather than told about a validation failure judged
-  against a baseline they never saw.
+- The attribute swap is checked **before every rule judged against the stored
+  record**, so a stale caller is told the record moved rather than told about a
+  validation failure judged against a baseline they never saw. A malformed body
+  is still refused first: decoding never reads the stored record.
 - The console captures the version at LOAD time, not at save time. The record
   it holds is refetched in the background, so a version read late would
   describe a change the author never saw and guard nothing.
@@ -135,10 +277,10 @@ and letting a CDN serve tenant bytes without a tenant credential is the whole
 reason the route exists. The header had been copied from the authenticated
 route, where `private` is correct.
 
-The route now sends `public, max-age=<seconds until the token expires>,
-immutable`. The signature is part of the URL, so it is the cache key; `max-age`
-never outlives the token; an object key names immutable bytes. The
-authenticated `GET /api/v1/media/{key}` is unchanged and stays `private`.
+The route was made publicly cacheable. The window was then bounded and
+`immutable` dropped during the pre-release review above, once it was clear that
+the bytes are immutable but the decision to serve them is not — see that entry
+for the header the release actually ships.
 
 ### Fixed — The console and the SDK lost what they did not model ([#591], [#592], [#596])
 

@@ -282,6 +282,17 @@ type UpdateInput struct {
 	Conditions  json.RawMessage
 	Effect      json.RawMessage
 	Description string
+
+	// Version, when set, is the version the CALLER read. The update is
+	// written only if the stored version still matches, and a conflict is
+	// reported otherwise.
+	//
+	// It is a pointer so that omitting it keeps last-write-wins, which is what
+	// an existing caller depends on. This request is a FULL REPLACE, so
+	// without it two operators editing one record each write the whole record
+	// and the later write silently erases the earlier one — including fields
+	// that operator never looked at.
+	Version *int
 }
 
 // Update replaces a dependency's conditions and effect.
@@ -308,6 +319,19 @@ func (i *Interactor) Update(ctx context.Context, in UpdateInput) (*domaindepende
 			return err
 		}
 		before := d.Snapshot()
+
+		// COMPARE-AND-SWAP against the version the caller read, before every
+		// other rule. A conflict means the rule being replaced is not the rule
+		// the caller loaded, so the checks below would judge the wrong
+		// baseline — and a dependency governs what values are accepted, so a
+		// lost update here silently changes validation for every later write.
+		if in.Version != nil && *in.Version != before.Version {
+			return domainerrors.NewConflict(
+				"the dependency was modified by someone else; reload it and retry",
+				"dependency_id", in.ID,
+				"expected_version", *in.Version,
+				"actual_version", before.Version)
+		}
 
 		source, err := attrs.Get(ctx, d.SourceAttributeID())
 		if err != nil {

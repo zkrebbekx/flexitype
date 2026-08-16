@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { api, friendlyError } from '@/lib/api'
+import { baselineVersion, staleEditMessage } from '@/lib/concurrency'
 import type { RelationshipDefinition, RelationshipKind, TypeDefinition, VersionPolicy } from '@/lib/api'
 import { slug } from '@/lib/validation'
 import { useToasts } from '@/composables/useToasts'
@@ -45,6 +46,8 @@ const form = reactive({
   max_parents: '',
 })
 const error = ref('')
+// The version the drawer loaded, sent back as a compare-and-swap.
+const baseline = ref<number | undefined>()
 
 // Name error only applies on create (immutable on edit); shown inline once
 // the user has typed. Endpoints and display name are required on create.
@@ -64,6 +67,7 @@ watch(
     if (!open) return
     error.value = ''
     const d = props.definition
+    baseline.value = baselineVersion(d)
     form.internal_name = d?.internal_name ?? ''
     form.display_name = d?.display_name ?? ''
     form.description = d?.description ?? ''
@@ -144,6 +148,7 @@ const save = useMutation({
         parent_version_policy: form.parent_version_policy,
         child_version_policy: form.child_version_policy,
         ...cardinality(),
+        version: baseline.value,
       })
     }
     return api.createRelationshipDefinition({
@@ -166,7 +171,15 @@ const save = useMutation({
     toasts.success(props.definition ? `Relationship "${d.display_name}" saved` : `Relationship "${d.display_name}" created`)
     emit('close')
   },
-  onError: (e) => (error.value = friendlyError(e)),
+  onError: (e) => {
+    const stale = staleEditMessage(e)
+    if (stale) {
+      queryClient.invalidateQueries({ queryKey: ['relationship-definitions'] })
+      error.value = stale
+      return
+    }
+    error.value = friendlyError(e)
+  },
 })
 </script>
 

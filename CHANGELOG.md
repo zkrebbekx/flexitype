@@ -1,4 +1,4 @@
-## [Unreleased]
+## [1.10.0] — 2026-09-10
 
 ### Breaking — Three changes that reject what an earlier release accepted
 
@@ -702,6 +702,29 @@ where the two took the same locks in opposite orders. The retry added in 1.9.0
 tolerated that race; draining removes it.
 
 [#574]: https://github.com/zkrebbekx/flexitype/issues/574
+
+### Security — Dependency advisories patched ([#639])
+
+`google.golang.org/grpc` moves from v1.83.0 to v1.83.2 in the root module, in
+`cmd/flexitype` and in `infrastructure/gcppubsub`. Each module carried two open
+advisories against the old version, one of them high.
+
+`vitest` moves from 3.2.7 to 5.0.0 in `client-ts`, in `web` and in the three
+example consoles. Below 4.1.11, `@vitest/mocker` registers the target path of a
+redirect mock without checking it against the file-serving allowlist of the dev
+server, so a crafted request can read an arbitrary file
+(GHSA-82fw-gwwq-j7x9). The scope is development only; nothing shipped carries
+it.
+
+`js-yaml` moves to 4.3.2 in the `client-ts` lock file, through
+`openapi-typescript` and `@eslint/eslintrc`. That closes two high advisories on
+quadratic CPU use.
+
+The dependency refresh also brings kin-openapi v0.149.0, chi v5.3.2, otelhttp
+v0.71.0, otlptracehttp v1.46.0 and `cloud.google.com/go/pubsub/v2` v2.7.0. The
+public API does not change.
+
+[#639]: https://github.com/zkrebbekx/flexitype/pull/639
 
 ## [1.9.0] — 2026-08-09
 
@@ -3159,7 +3182,8 @@ cross-backend FQL parity corpus). SemVer applies from this release.
 - Quantity `one_of` members and defaults are unit-rebased; equal quantities in
   different units compare equal.
 
-[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/zkrebbekx/flexitype/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/zkrebbekx/flexitype/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/zkrebbekx/flexitype/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/zkrebbekx/flexitype/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/zkrebbekx/flexitype/compare/v1.7.0...v1.7.1

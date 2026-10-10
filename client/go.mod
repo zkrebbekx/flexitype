@@ -1,6 +1,6 @@
 module github.com/zkrebbekx/flexitype/client
 
-go 1.25.0
+go 1.26.0
 
 // v1.6.0 carried Client.ForTenant, which sent the X-Flexitype-Tenant header
 // for the `read_any_tenant` scope. That scope is withdrawn — see the root

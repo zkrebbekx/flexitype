@@ -154,7 +154,7 @@ genproto}`, `googleapis`, `s2a-go`, `opencensus`) and declared a **patch-exact
 to every embedder: a monorepo pinned to a Go 1.25.0–1.25.7 SDK — and
 `rules_go` effectively runs `GOTOOLCHAIN=local` — could not build flexitype at
 all, for an optional publisher it never linked. The core module now requires
-124 modules rather than 271, needs `go 1.25`, and links no
+124 modules rather than 271, needs `go 1.26`, and links no
 `cloud.google.com` package.
 
 The server and adapter modules carry `replace` directives to the repository

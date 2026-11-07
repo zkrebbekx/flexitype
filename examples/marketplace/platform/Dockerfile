@@ -1,6 +1,6 @@
 # Build context is the repository root: this module `replace`s the core module
 # and the client SDK with the checkout beside it.
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 # Warm the module cache from the manifests of every module in the replace
 # graph, before the source is copied, so a source-only change reuses the layer.

@@ -2,7 +2,7 @@
 // development, so a change to the library is picked up by the server, the
 // client conformance suite and the Pub/Sub adapter without a replace
 // directive in any published go.mod.
-go 1.25.8
+go 1.26.0
 
 use (
 	.

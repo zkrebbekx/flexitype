@@ -9,7 +9,7 @@ COPY web/ ./
 RUN npm run build
 
 # 2. Build the statically linked Go binary with the console embedded.
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache git
 # The server is its own module (see cmd/flexitype/go.mod), so warm the cache
